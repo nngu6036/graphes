@@ -1,0 +1,45 @@
+# Directory to save the generated graphs
+output_dir = "generated_graphs"
+
+[[datasets]]
+type = "planar"
+count = 200
+nodes = 64
+edges = 181
+
+[[datasets]]
+type = "lobster"
+count = 100
+nodes = 100
+edges = 99
+
+[[datasets]]
+type = "sbm"
+count = 200
+nodes = 100
+block_sizes = [25, 25, 25, 25]
+probabilities = [[0.25, 0.05, 0.05, 0.05],
+                 [0.05, 0.25, 0.05, 0.05],
+                 [0.05, 0.05, 0.25, 0.05],
+                 [0.05, 0.05, 0.05, 0.25]]
+
+[[datasets]]
+type = "ego"
+count = 757
+nodes = 200
+
+[[datasets]]
+type = "grid"
+count = 100
+dim_x = 20
+dim_y = 20
+
+[[datasets]]
+type = "protein"
+count = 918
+nodes = 300
+
+[[datasets]]
+type = "point_cloud"
+count = 41
+nodes = 1000

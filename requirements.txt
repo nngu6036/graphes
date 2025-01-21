@@ -1,0 +1,9 @@
+tensorboard-logger
+tensorflow
+networkx==3.3
+pyemd
+matplotlib
+scipy
+numpy
+python-louvain
+torchvision 
