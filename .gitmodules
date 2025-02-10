@@ -1,0 +1,3 @@
+[submodule "setvae"]
+	path = setvae
+	url = https://github.com/jw9730/setvae

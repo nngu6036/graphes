@@ -3,6 +3,10 @@ import networkx as nx
 import random
 from pathlib import Path
 import toml
+import argparse
+import torch.nn.functional as F
+import torch
+import matplotlib.pyplot as plt
 
 def generate_planar_graph(node_count, edge_count):
     """Generate a planar graph using a Delaunay triangulation approach."""
@@ -39,8 +43,8 @@ def generate_grid_graph(dim_x, dim_y):
     """Generate a grid graph."""
     return nx.grid_2d_graph(dim_x, dim_y)
 
-def save_graphs(graphs, path, edge_list_dir):
-    """Save all graphs to edge list files and a single JSON file."""
+def save_graphs(graphs, edge_list_dir):
+    """Save all graphs to edge list files."""
     if edge_list_dir.exists():
         for file in edge_list_dir.iterdir():
             file.unlink()
@@ -59,28 +63,31 @@ def save_graphs(graphs, path, edge_list_dir):
         else:
             nx.write_edgelist(graph, edge_list_path, data=False)
 
-def main(input_file, prefix):
-    """Main function to generate datasets based on a configuration file."""
-    input_dir = Path("configs")
-    output_dir = Path("datasets")
 
-    config_path = input_dir / input_file
+def main(args):
+    """Main function to generate datasets based on a configuration file."""
+    config_dir = Path("configs")
+    dataset_dir = Path("datasets")
+    config_file = args.config_file
+    dataset_prefix = args.dataset_prefix
+
+    config_path = config_dir / config_file
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
     with open(config_path, 'r') as f:
         config = toml.load(f)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    dataset_dir.mkdir(parents=True, exist_ok=True)
 
     for dataset in config["datasets"]:
         graph_type = dataset["type"]
         graph_count = dataset["count"]
         node_count = dataset.get("nodes", None)
         edge_count = dataset.get("edges", None)
-        output_file = output_dir / f"{prefix}_{graph_type}.json"
 
         graphs = []
+        print(f"Generate datasets for graph type {graph_type}")
         for _ in range(graph_count):
             if graph_type == "planar":
                 G = generate_planar_graph(node_count, edge_count)
@@ -101,18 +108,16 @@ def main(input_file, prefix):
                 G = generate_point_cloud_graph(node_count)
             else:
                 raise ValueError(f"Unsupported graph type: {graph_type}")
-
             graphs.append(G)
 
-        edge_list_dir = output_dir / f"{prefix}_{graph_type}_edgelists"
-        save_graphs(graphs, output_file, edge_list_dir)
+        edge_list_dir = dataset_dir / f"{dataset_prefix}_{graph_type}_edgelists"
+        print(f"Saving datasets for graph type {graph_type}")
+        save_graphs(graphs, edge_list_dir)
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser(description="Generate graphs based on configuration.")
-    parser.add_argument("--config-path", type=str, required=True, help="Name of the TOML configuration file in the input folder.")
-    parser.add_argument("--output-prefix", type=str, required=True, help="Prefix for naming the output files.")
+    parser.add_argument("--config-file", type=str, required=True, help="Name of the TOML configuration file in the input folder.")
+    parser.add_argument("--dataset-prefix", type=str, required=True, help="Prefix for naming the dataset files.")
     args = parser.parse_args()
 
-    main(args.config_path, args.output_prefix)
+    main(args)

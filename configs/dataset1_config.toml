@@ -1,6 +1,3 @@
-# Directory to save the generated graphs
-output_dir = "generated_graphs"
-
 [[datasets]]
 type = "planar"
 count = 200
