@@ -9,20 +9,21 @@ from torch_geometric.utils import from_networkx
 import networkx as nx
 from scipy.optimize import linear_sum_assignment
 from torch.optim import Adam
-from torch_geometric.loader import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
-from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
-
+from sklearn.model_selection import train_test_split
+from collections import Counter
+import numpy as np
 
 class MSVAEEncoder(torch.nn.Module):
-    def __init__(self, input_dim, hidden_dim, latent_dim):
+    def __init__(self,  input_dim, hidden_dim, latent_dim):
         super(MSVAEEncoder, self).__init__()
         self.hidden_layer = torch.nn.Linear(input_dim, hidden_dim)
         self.mean_layer = torch.nn.Linear(hidden_dim, latent_dim)
         self.logvar_layer = torch.nn.Linear(hidden_dim, latent_dim)
 
-    def forward(self, x, batch):
+    def forward(self, x):
         h = F.relu(self.hidden_layer(x))
         mean, logvar = self.mean_layer(h), self.logvar_layer(h)
         return mean, logvar
@@ -31,20 +32,19 @@ class MSVAEDecoder(torch.nn.Module):
     def __init__(self, latent_dim, hidden_dim, max_output_dim):
         super(MSVAEDecoder, self).__init__()
         self.hidden_layer = torch.nn.Linear(latent_dim, hidden_dim)
-        self.degree_layer = torch.nn.Linear(hidden_dim, max_output_dim)
-        self.multiplicity_layer = torch.nn.Linear(hidden_dim, max_output_dim)
+        self.frequency_layer = torch.nn.Linear(hidden_dim, max_output_dim)
 
-    def forward(self, z, output_dim):
+    def forward(self, z, batch):
         h = F.relu(self.hidden_layer(z))
-        degrees = F.softmax(self.degree_layer(h), dim=-1)
-        multiplicities = F.softplus(self.multiplicity_layer(h))
-        return degrees, multiplicities
+        h = h.unsqueeze(1) 
+        multiplicities = F.softplus(self.frequency_layer(h))  # Ensure positive values
+        return multiplicities
 
 class MSVAE(torch.nn.Module):
     def __init__(self, max_input_dim, hidden_dim, latent_dim):
         super(MSVAE, self).__init__()
-        self.encoder = MSVAEEncoder(max_input_dim, hidden_dim, latent_dim)
-        self.decoder = MSVAEDecoder(latent_dim, hidden_dim, max_output_dim=max_input_dim)
+        self.encoder = MSVAEEncoder( max_input_dim, hidden_dim, latent_dim)
+        self.decoder = MSVAEDecoder(latent_dim, hidden_dim,max_input_dim)
         self.latent_dim = latent_dim
 
     def reparameterize(self, mean, logvar):
@@ -52,21 +52,19 @@ class MSVAE(torch.nn.Module):
         eps = torch.randn_like(std)
         return mean + eps * std
 
-    def forward(self, data):
-        x, batch = data.x, data.batch
-        mean, logvar = self.encoder(x, batch)
+    def forward(self, batch):
+        mean, logvar = self.encoder(batch)
         z = self.reparameterize(mean, logvar)
-        degrees, frequencies = self.decoder(z, x.size(0))
-        return degrees, frequencies, mean, logvar, x.size(0)
+        frequencies = self.decoder(z,batch)
+        return frequencies, mean, logvar
 
     def generate(self, num_samples):
         self.eval()
         with torch.no_grad():
             z = torch.randn((num_samples, self.latent_dim))
-            degrees, frequencies = self.decoder(z, self.decoder.degree_layer.out_features)
-            # Use reconstruct_multiset to get the degree multiset
-            degree_vec = reconstruct_degree_vector(degrees, frequencies,train_mode = False)
-            return decode_degree_sequence(degree_vec)
+            dummy_batch = torch.zeros((num_samples, self.decoder.frequency_layer.out_features))
+            frequencies = self.decoder(z, dummy_batch)
+            return frequencies.round()
 
     def save_model(self, file_path):
         torch.save(self.state_dict(), file_path)
@@ -75,67 +73,42 @@ class MSVAE(torch.nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-
-def relaxed_round(x):
-    return (x - x.detach()) + x.round()
-
 def encode_degree_sequence(degree_sequence , max_class):
     sorted_degree_sequence = sorted(degree_sequence, reverse=True)
     one_hot_tensor = torch.zeros(max_class, dtype=torch.float32)
     for deg in sorted_degree_sequence:
-        if 1 <= deg <= max_class:  # Only consider degrees within range
-            one_hot_tensor[deg - 1] += 1  # (i-th index represents degree i+1)
+        if 1 <= deg <= max_class:
+            one_hot_tensor[deg - 1] += 1
+        else:
+            raise ValueError(f'Invalid degree sequence {degree_sequence}')
     return one_hot_tensor
 
 def decode_degree_sequence(one_hot_tensor):
-    def decode_row(row):
-        """Helper function to decode a single row."""
-        degree_sequence = []
-        for i, count in enumerate(row):
-            degree = i + 1  # Degree is index + 1
-            count = int(count.item())  # Convert float to int
-            degree_sequence.extend([degree] * count)  # Append 'count' times
-        return degree_sequence
-
-    # Check if input is 1D or 2D
-    if one_hot_tensor.dim() == 1:  # Single degree sequence
-        return decode_row(one_hot_tensor)
-    elif one_hot_tensor.dim() == 2:  # Batch processing for multiple degree sequences
-        return [decode_row(row) for row in one_hot_tensor]
-    else:
-        raise ValueError("Input tensor must be 1D or 2D.")
+    degree_sequence = []
+    for i, count in enumerate(one_hot_tensor.squeeze()):
+        degree = i + 1  # Degree is index + 1
+        count = int(count.item())  # Convert float to int
+        degree_sequence.extend([degree] * count)  # Append 'count' times
+    return degree_sequence
 
 
-def load_graph_sequence_from_file(file_path, max_nodes):
-    """
-    Load a graph from a single file and apply one-hot encoding.
-    The file format should be compatible with NetworkX's read functions.
-    """
-    try:
-        graph = nx.read_edgelist(file_path, nodetype=int)
-        graph = nx.convert_node_labels_to_integers(graph)
-        x = encode_degree_sequence([deg for _, deg in graph.degree()],max_nodes)
-        batch = torch.zeros(max_nodes, dtype=torch.long)
-        return Data(x=x, batch=batch)
-    except Exception as e:
-        print(f"Error loading graph from {file_path}: {e}")
-        return None
-
-def create_graph_sequence_from_directory(directory_path):
-    graphs = []
-    max_nodes = 0
+def load_degree_sequence_from_directory(directory_path):
+    seqs = []
+    max_node = 0
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
-            max_nodes = max(max_nodes, graph.number_of_nodes())
+            max_node = max(max_node, graph.number_of_nodes())
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
-            graph = load_graph_sequence_from_file(file_path, max_nodes)
-            if graph is not None:
-                graphs.append(graph)
-    return graphs, max_nodes
+            graph = nx.read_edgelist(file_path, nodetype=int)
+            graph = nx.convert_node_labels_to_integers(graph)
+            seq = encode_degree_sequence([deg for _, deg in graph.degree()],max_node)
+            if seq is not None:
+                seqs.append(seq)
+    return seqs, max_node
 
 def compute_chamfer_distance(set1, set2):
     if len(set1) == 0 or len(set2) == 0:
@@ -157,105 +130,125 @@ def compute_earth_movers_distance(set1, set2):
     emd = cost_matrix[row_ind, col_ind].sum()
     return emd
 
-def check_sequence_validity(degree_sequence):
+def check_sequence_validity(seq):
     """Checks if a degree sequence is valid after removing all zeros."""
-    if len(degree_sequence) == 0:
-        return False
+    if len(seq) == 0:
+        return False,1
     # Degree sequence sum must be even
-    if sum(degree_sequence) % 2 != 0:
-        return False
+    if sum(seq) % 2 != 0:
+        return False,2
     # Sort in descending order
-    sorted_degrees = sorted(degree_sequence, reverse=True)
+    sorted_seq = sorted(seq, reverse=True)
     # Apply Erdős–Gallai theorem
-    for k in range(1, len(sorted_degrees) + 1):
-        lhs = sum(sorted_degrees[:k])
-        rhs = k * (k - 1) + sum(min(d, k) for d in sorted_degrees[k:])
+    for k in range(1, len(sorted_seq) + 1):
+        lhs = sum(sorted_seq[:k])
+        rhs = k * (k - 1) + sum(min(d, k) for d in sorted_seq[k:])
         if lhs > rhs:
-            return False
-    return True
+            return False,3
+    return True, 0
 
-def reconstruct_degree_vector(degrees, frequencies, train_mode = False):
-    # Compute the weighted degrees
-    degree_vec = degrees * frequencies
-    # Round to ensure discrete values (use relaxed_round during training if needed)
-    if train_mode:
-        degree_vec = relaxed_round(degree_vec)
-    else:
-        degree_vec = degree_vec.round()
-    return degree_vec
-
-
-def train_vae_decoder_for_degree_sequence(model, graphs, num_epochs, learning_rate, weights):
+def train_msvae(model, dataloader, num_epochs, learning_rate, weights):
     optimizer = Adam(model.parameters(), lr=learning_rate)
     model.train()
-    max_node = max([graph.num_nodes for graph in graphs])
     for epoch in range(num_epochs):
-        print("Traininig iteration ", epoch)
+        print("Traininig Multiset-VAE iteration ", epoch)
         total_loss = 0
-        for graph in graphs:
+        total_eg_loss = 0
+        for batch  in dataloader:
+            X = batch[0]
             optimizer.zero_grad()
-            degrees, frequencies, mean, logvar, set_size = model(graph)
-            # Reconstruct the multiset
-            recon_degree_vec = reconstruct_degree_vector(degrees, frequencies, train_mode = True)
+            frequencies, mean, logvar = model(X)
             # Compute the loss
-            loss = loss_function(recon_degree_vec, graph.x, mean, logvar, weights)
+            loss = loss_function(X, frequencies, mean, logvar, weights)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(graphs):.4f}")
 
-def loss_function(recon_degree_vec, target_degree_vec, mean, logvar, weights):
+        print(f"Epoch Multiset-VAE [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
+
+def eg_loss(frequencies):
+    N = frequencies.size(2)
+    indices = torch.arange(1, N+1).float().to(frequencies.device)
+
+    deg_sum = torch.sum(frequencies * indices, dim=2)
+    sum_modulo_loss = (1 - torch.cos(np.pi * deg_sum)) / 2
+
+    eg_inequality_loss = 0
+    for k in range(1, N+1):
+        lhs = torch.sum(frequencies[:, :, :k] * indices[:k], dim=2)
+        rhs = k * (k-1) + torch.sum(torch.minimum(indices[k:], torch.tensor(k, device=frequencies.device)) * frequencies[:, :, k:], dim=2)
+        eg_inequality_loss += F.relu(lhs - rhs)
+
+    return torch.sum(sum_modulo_loss + eg_inequality_loss)
+
+def loss_function(target_freq_vec, frequencies,mean, logvar, weights):
     recon_weight, kl_weight = weights.get('reconstruction', 1.0), weights.get('kl_divergence', 1.0)
     erdos_gallai_weight = weights.get('erdos_gallai', 1.0)
-    max_size = max(recon_degree_vec.size(0), target_degree_vec.size(0))
-    recon_degree_vec = F.pad(recon_degree_vec, (0, max_size - recon_degree_vec.size(0)))
-    target_degree_vec = F.pad(target_degree_vec, (0, max_size - target_degree_vec.size(0)))
-    recon_loss = torch.sum((recon_degree_vec - target_degree_vec) ** 2)
+    recon_loss = torch.sum( (target_freq_vec - frequencies)**2)
     kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-    degree_sequence = decode_degree_sequence(recon_degree_vec)
-    erdos_gallai_loss = sum(degree_sequence) if degree_sequence else max_size
+    erdos_gallai_loss = eg_loss(frequencies)
     return recon_weight * recon_loss + kl_weight * kl_loss + erdos_gallai_weight * erdos_gallai_loss
 
-def evaluate_generated_multisets(model, graphs, num_samples):
+def evaluate_generated_multisets(model,train_tensor, num_samples):
     model.eval()
     with torch.no_grad():
-        generated_sets = model.generate(num_samples)
-        reference_degrees = [graph.x.squeeze(0) for graph in graphs]
-        reference_sets = [decode_degree_sequence(deg) for deg in reference_degrees]
-        chamfer_distances = [compute_chamfer_distance(ref, gen) for ref in reference_sets for gen in generated_sets]
+        generated_tensor = model.generate(num_samples)
+        generated_seqs = [decode_degree_sequence(tensor) for tensor in generated_tensor]
+        train_seqs = [decode_degree_sequence(tensor) for tensor in train_tensor]
+        chamfer_distances = [compute_chamfer_distance(train_seq, gen_seq) for train_seq in train_seqs for gen_seq in generated_seqs]
         avg_chamfer_distance = sum(chamfer_distances) / len(chamfer_distances) if chamfer_distances else float('inf')
-        emd_distances = [compute_earth_movers_distance(ref, gen) for ref in reference_sets for gen in generated_sets]
+        emd_distances = [compute_earth_movers_distance(train_seq, gen_seq) for train_seq in train_seqs for gen_seq in generated_seqs]
         avg_emd_distance = sum(emd_distances) / len(emd_distances) if emd_distances else float('inf')
-        degree_validities = [check_sequence_validity(degree_sequence) for degree_sequence in generated_sets]
-        validity_percentage = (sum(degree_validities) / len(degree_validities)) * 100 if len(degree_validities) > 0 else 0
+        validity_checks = [check_sequence_validity(gen_seq) for gen_seq in generated_seqs]
+        degree_validities = [result for result, code in validity_checks if result]
+        error_codes = [code for result, code in validity_checks if not result]
+        error_count = Counter(error_codes)
+        empty_degree = [1] * error_count.get(1, 0)
+        odd_sum_degree = [1] * error_count.get(2, 0)
+        invalid_degree = [1] * error_count.get(3, 0)
+
+        validity_percentage = (sum(degree_validities) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
+        empty_percentage = (sum(empty_degree) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
+        odd_percentage = (sum(odd_sum_degree) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
+        invalidity_percentage = (sum(invalid_degree) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
         return {
             "Chamfer Distance": avg_chamfer_distance,
             "Earth Mover's Distance": avg_emd_distance,
-            "Degree Validity (%)": validity_percentage
+            "Degree Validity (%)": validity_percentage,
+            "Degree Empty (%)": empty_percentage,
+            "Degree Odd (%)": odd_percentage,
+            "Degree Invalidity (%)": invalidity_percentage
         }
 
-def split_graph_data(graphs, test_ratio=0.2):
-    """Splits graph dataset into training and test sets."""
-    train_graphs, test_graphs = train_test_split(graphs, test_size=test_ratio, random_state=42)
-    return train_graphs, test_graphs
 
-def evaluate_test_multisets(model, test_graphs):
+def evaluate_test_multisets(train_tensor, test_tensor):
     """Evaluates the model on test dataset."""
-    model.eval()
-    with torch.no_grad():
-        test_degrees = [graph.x.squeeze(0) for graph in test_graphs]
-        test_sets = [decode_degree_sequence(deg) for deg in test_degrees]
-        chamfer_distances = [compute_chamfer_distance(ref, gen) for ref in test_sets for gen in test_sets]
-        avg_chamfer_distance = sum(chamfer_distances) / len(chamfer_distances) if chamfer_distances else float('inf')
-        emd_distances = [compute_earth_movers_distance(ref, gen) for ref in test_sets for gen in test_sets]
-        avg_emd_distance = sum(emd_distances) / len(emd_distances) if emd_distances else float('inf')
-        degree_validities = [check_sequence_validity(degree_sequence) for degree_sequence in test_sets]
-        validity_percentage = (sum(degree_validities) / len(degree_validities)) * 100 if len(degree_validities) > 0 else 0
-        return {
-            "Chamfer Distance": avg_chamfer_distance,
-            "Earth Mover's Distance": avg_emd_distance,
-            "Degree Validity (%)": validity_percentage
-        }
+    train_seqs = [decode_degree_sequence(tensor) for tensor in train_tensor]
+    test_seqs = [decode_degree_sequence(tensor) for tensor in test_tensor]
+    chamfer_distances = [compute_chamfer_distance(train_seq, test_seq) for train_seq in train_seqs for test_seq in test_seqs]
+    avg_chamfer_distance = sum(chamfer_distances) / len(chamfer_distances) if chamfer_distances else float('inf')
+    emd_distances = [compute_earth_movers_distance(train_seq, test_seq) for train_seq in train_seqs for test_seq in test_seqs]
+    avg_emd_distance = sum(emd_distances) / len(emd_distances) if emd_distances else float('inf')
+    validity_checks = [check_sequence_validity(seq) for seq in test_seqs]
+    degree_validities = [result for result, code in validity_checks if result]
+    error_codes = [code for result, code in validity_checks if not result]
+    error_count = Counter(error_codes)
+    empty_degree = [1] * error_count.get(1, 0)
+    odd_sum_degree = [1] * error_count.get(2, 0)
+    invalid_degree = [1] * error_count.get(3, 0)
+
+    validity_percentage = (sum(degree_validities) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
+    empty_percentage = (sum(empty_degree) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
+    odd_percentage = (sum(odd_sum_degree) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
+    invalidity_percentage = (sum(invalid_degree) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
+    return {
+        "Chamfer Distance": avg_chamfer_distance,
+        "Earth Mover's Distance": avg_emd_distance,
+        "Degree Validity (%)": validity_percentage,
+        "Degree Empty (%)": empty_percentage,
+        "Degree Odd (%)": odd_percentage,
+        "Degree Invalidity (%)": invalidity_percentage
+    }
 
 def main(args):
     config_dir = Path("configs")
@@ -264,11 +257,11 @@ def main(args):
     config_file = config_dir / args.config_file
     config = toml.load(config_file)
     dataset_dir = dataset_dir / args.dataset_dir
-    graphs, max_node = create_graph_sequence_from_directory(dataset_dir)
-    if len(graphs) == 0:
-        print("No valid graph files found in the directory.")
-        return
-    train_graphs, test_graphs = split_graph_data(graphs)
+    batch_size = config['training']['batch_size']
+    tensor, max_node = load_degree_sequence_from_directory(dataset_dir)
+    train_tensor, test_tensor = train_test_split(tensor, test_size=0.2, random_state=42)
+    train_dataset = TensorDataset(torch.stack(train_tensor))
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
     input_dim = max_node  # input dimension matches one-hot encoded degrees
@@ -280,20 +273,18 @@ def main(args):
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
         weights = config['training']['weights']
-        train_vae_decoder_for_degree_sequence(model, train_graphs, num_epochs, learning_rate, weights)
+        train_msvae(model, train_dataloader, num_epochs, learning_rate, weights)
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
-
     if args.evaluate:
         print(f"Evaluate generated multiset")
-        generated_degrees = model.generate(config['inference']['generate_samples'])
-        evaluation_metrics = evaluate_generated_multisets(model, graphs, config['inference']['generate_samples'])
+        generated_seqs = model.generate(config['inference']['generate_samples'])
+        evaluation_metrics = evaluate_generated_multisets(model, generated_seqs, config['inference']['generate_samples'])
         for metric, value in evaluation_metrics.items():
             print(f"{metric}: {value:.4f}")
-
         print(f"Evaluate test multiset")
-        evaluation_metrics = evaluate_test_multisets(model, test_graphs)
+        evaluation_metrics = evaluate_test_multisets(train_tensor, test_tensor)
         for metric, value in evaluation_metrics.items():
             print(f"{metric}: {value:.4f}")
 

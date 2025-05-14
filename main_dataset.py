@@ -8,6 +8,23 @@ import torch.nn.functional as F
 import torch
 import matplotlib.pyplot as plt
 
+def check_sequence_validity(seq):
+    """Checks if a degree sequence is valid after removing all zeros."""
+    if len(seq) == 0:
+        return False,1
+    # Degree sequence sum must be even
+    if sum(seq) % 2 != 0:
+        return False,2
+    # Sort in descending order
+    sorted_seq = sorted(seq, reverse=True)
+    # Apply Erdős–Gallai theorem
+    for k in range(1, len(sorted_seq) + 1):
+        lhs = sum(sorted_seq[:k])
+        rhs = k * (k - 1) + sum(min(d, k) for d in sorted_seq[k:])
+        if lhs > rhs:
+            return False,3
+    return True, 0
+
 def generate_planar_graph(node_count, edge_count):
     """Generate a planar graph using a Delaunay triangulation approach."""
     points = [(random.random(), random.random()) for _ in range(node_count)]

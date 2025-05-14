@@ -13,12 +13,17 @@ pip install -r requirements.txt
 
 ## Generate input dataset
 ```bash
-python .\main_dataset.py --config-path dataset1_config.toml --output-prefix dataset1
+python main_dataset.py  --dataset-prefix dataset1 --config-file  dataset1_config.toml
+```
+
+## Training EG-Predictor model
+```bash
+ python main_eg_predictor.py  --dataset-dir dataset1_planar_edgelists --output-model eg_predictor
 ```
 
 ## Training MS-VAE model
 ```bash
-python .\main_dataset.py --config-path dataset1_config.toml --output-prefix dataset1
+ python main_msvae.py  --dataset-dir dataset1_planar_edgelists --config-file  msvae_config1.toml --output-model msvae_planar --evaluate
 ```
 
 ## Training GraphES model
