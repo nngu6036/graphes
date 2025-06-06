@@ -18,12 +18,16 @@ python main_dataset.py  --dataset-prefix dataset1 --config-file  dataset1_config
 
 ## Training EG-Predictor model
 ```bash
- python main_eg_predictor.py  --dataset-dir dataset1_planar_edgelists --output-model eg_predictor
+ python main_eg_predictor.py  --dataset-dir dataset1_planar_edgelists --output-model eg_planar_predictor
+
+ python main_eg_predictor.py  --dataset-dir dataset1_sbm_edgelists --output-model eg_sbm_predictor
 ```
 
 ## Training MS-VAE model
 ```bash
- python main_msvae.py  --dataset-dir dataset1_planar_edgelists --config-file  msvae_config1.toml --output-model msvae_planar --evaluate
+python main_msvae.py  --dataset-dir dataset1_planar_edgelists --config-file  msvae_config1.toml --output-model msvae_planar --evaluate
+python main_msvae.py  --dataset-dir dataset1_ego_edgelists --config-file  msvae_config1.toml --output-model msvae_ego --evaluate
+python main_msvae.py  --dataset-dir dataset1_sbm_edgelists --config-file  msvae_config1.toml --output-model msvae_sbm --evaluate
 ```
 
 ## Training GraphES model
