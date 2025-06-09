@@ -1,4 +1,4 @@
-# GraphDS: Generating Realistic Graphs from Degree of Sequqnces
+# GraphER: Generating Realistic Graphs from Degree of Sequqnces with Edge Rerewiring
 This repository is the official PyTorch implementation of GraphDS, a graph generative model using auto-regressive model.
 
 ## Installation
@@ -16,13 +16,6 @@ pip install -r requirements.txt
 python main_dataset.py  --dataset-prefix dataset1 --config-file  dataset1_config.toml
 ```
 
-## Training EG-Predictor model
-```bash
- python main_eg_predictor.py  --dataset-dir dataset1_planar_edgelists --output-model eg_planar_predictor
-
- python main_eg_predictor.py  --dataset-dir dataset1_sbm_edgelists --output-model eg_sbm_predictor
-```
-
 ## Training MS-VAE model
 ```bash
 python main_msvae.py  --dataset-dir dataset1_planar_edgelists --config-file  msvae_config1.toml --output-model msvae_planar --evaluate
@@ -30,7 +23,7 @@ python main_msvae.py  --dataset-dir dataset1_ego_edgelists --config-file  msvae_
 python main_msvae.py  --dataset-dir dataset1_sbm_edgelists --config-file  msvae_config1.toml --output-model msvae_sbm --evaluate
 ```
 
-## Training GraphES model
+## Training GraphER model
 ```bash
 python .\main_dataset.py --config-path dataset1_config.toml --output-prefix dataset1
 ```
