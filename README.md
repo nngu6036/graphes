@@ -21,6 +21,7 @@ python main_dataset.py  --dataset-prefix dataset1 --config-file  dataset1_config
 python main_msvae.py  --dataset-dir dataset1_planar_edgelists --config-file  msvae_config1.toml --output-model msvae_planar --evaluate
 python main_msvae.py  --dataset-dir dataset1_ego_edgelists --config-file  msvae_config1.toml --output-model msvae_ego --evaluate
 python main_msvae.py  --dataset-dir dataset1_sbm_edgelists --config-file  msvae_config1.toml --output-model msvae_sbm --evaluate
+python main_msvae.py  --dataset-dir dataset1_grid_edgelists --config-file  msvae_config1.toml --output-model msvae_grid --evaluate
 ```
 
 ## Training GraphER model

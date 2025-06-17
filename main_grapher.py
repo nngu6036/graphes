@@ -88,8 +88,8 @@ class MSVAE(torch.nn.Module):
             fixed_sequences = []
             for freq in frequencies:
                 freq_rounded = freq.squeeze().round()
-                freq_fixed = self.fix_degree_sum_even(freq_rounded)
-                fixed_sequences.append(freq_fixed)
+                #freq_fixed = self.fix_degree_sum_even(freq_rounded)
+                fixed_sequences.append(freq_rounded)
             return torch.stack(fixed_sequences)
 
     def save_model(self, file_path):
@@ -202,7 +202,7 @@ def check_sequence_validity(seq):
             return False,3
     return True, 0
 
-def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_epochs,max_node):
+def train_msvae(model, dataloader, num_epochs, learning_rate, weights, max_node):
     optimizer = Adam(model.parameters(), lr=learning_rate)
     model.train()
     for epoch in range(num_epochs):
@@ -214,71 +214,36 @@ def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_ep
             optimizer.zero_grad()
             frequencies, mean, logvar = model(X)
             # Compute the loss
-            loss = loss_function(X, frequencies, mean, logvar, weights,warmup_epochs, epoch, max_node)
+            loss = loss_function(X, frequencies, mean, logvar, weights, epoch, max_node)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
 
         print(f"Epoch Multiset-VAE [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
 
-def get_loss_weights(epoch, weights, warmup_epochs, base = 5.0):
-    if epoch < warmup_epochs:
-        # early phase — weak constraint
-        scale = epoch / warmup_epochs
-        beta_eg = weights['erdos_gallai'] * (math.exp(base * scale) - 1) / (math.exp(base) - 1)
-
-        return {
-            'reconstruction': weights['reconstruction'],
-            'kl_divergence': weights['kl_divergence'],
-            'erdos_gallai': beta_eg,
-        }
-    else:
-        return {
-            'reconstruction': weights['reconstruction'],
-            'kl_divergence': weights['kl_divergence'],
-            'erdos_gallai': weights['erdos_gallai'],
-        }
-
-def penalize_near_zero_inverse(x, epsilon=1e-6):
-    return 1.0 / (x ** 2 + epsilon)
-
-def even_loss_sigmoid(x, sharpness=10.0):
-    # Penalize when mod 2 is close to 1 (odd)
-    return (1 - torch.cos(np.pi * x)) / 2
-
-def invalid_eg_penlaty(frequencies, max_node):
+def eg_loss(frequencies, max_node):
     indices = torch.arange(1, max_node+1).float().to(frequencies.device)
-    deg_sum = torch.sum(frequencies * indices, dim=2)
-    even_loss = even_loss_sigmoid(deg_sum)
-    zero_loss = penalize_near_zero_inverse(deg_sum)
 
-    """
-    agg_loss = 0
-    for k in range(1, max_node+1):
-        alpha_V = torch.sum(frequencies * indices, dim=2) /2
-        beta_k = k * (k - 1) + k * (max_node - k) / 2
-        alpha_k = torch.sum(frequencies[:, :, :k] * indices[:k], dim=2)
-        agg_loss += torch.sigmoid(3 * alpha_k / 2 - beta_k - alpha_V / 2)
-    """
-    agg_loss = 0
+    deg_sum = torch.sum(frequencies * indices, dim=2)
+    sum_modulo_loss = (1 - torch.cos(np.pi * deg_sum)) / 2
+
+    eg_inequality_loss = 0
     for k in range(1, max_node+1):
         lhs = torch.sum(frequencies[:, :, :k] * indices[:k], dim=2)
         rhs = k * (k-1) + torch.sum(torch.minimum(indices[k:], torch.tensor(k, device=frequencies.device)) * frequencies[:, :, k:], dim=2)
-        agg_loss += F.relu(lhs - rhs)
-    return torch.sum(even_loss+ zero_loss + agg_loss)
+        eg_inequality_loss += F.relu(lhs - rhs)
 
+    return torch.sum(sum_modulo_loss+ eg_inequality_loss)
 
-def loss_function(target_freq_vec, frequencies,mean, logvar, weights,warmup_epochs, epoch,max_node):
-    loss_weights = get_loss_weights(epoch, weights,warmup_epochs)
+def loss_function(target_freq_vec, frequencies,mean, logvar, weights, epoch,max_node):
+    recon_weight, kl_weight, erdos_gallai_weight = weights.get('reconstruction', 1.0), weights.get('kl_divergence', 1.0),weights.get('erdos_gallai', 1.0)
+    recon_weight = max(0.1, recon_weight * (0.95 ** epoch))
+    kl_weight = min(kl_weight, epoch / 10)  
     recon_loss = torch.sum( (target_freq_vec - frequencies)**2)
     kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-    erdos_gallai_loss = invalid_eg_penlaty(frequencies, max_node)
-    
-    total_loss = (loss_weights['reconstruction'] * recon_loss +
-                  loss_weights['kl_divergence'] * kl_loss +
-                  loss_weights['erdos_gallai'] * erdos_gallai_loss)
+    erdos_gallai_loss = eg_loss(frequencies, max_node)
+    total_loss = recon_weight * recon_loss + kl_weight * kl_loss + erdos_gallai_weight * erdos_gallai_loss
     return total_loss
-
 
 def evaluate_multisets_distance(source_tensor, target_tensor,max_node):
     source_seqs = [decode_degree_sequence(tensor) for tensor in source_tensor]
@@ -328,7 +293,7 @@ def main(args):
     config = toml.load(config_file)
     dataset_dir = dataset_dir / args.dataset_dir
     batch_size = config['training']['batch_size']
-    tensor, max_node = load_degree_sequence_from_directory(dataset_dir)
+    tensor, max_node = load_graph_from_directory(dataset_dir)
     train_tensor, test_tensor = train_test_split(tensor, test_size=0.2, random_state=42)
     train_dataset = TensorDataset(torch.stack(train_tensor))
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -341,9 +306,8 @@ def main(args):
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        warmup_epochs = config['training']['warmup_epochs']
         weights = config['training']['weights']
-        train_msvae(model, train_dataloader, num_epochs, learning_rate, weights,warmup_epochs, max_node)
+        train_msvae(model, train_dataloader, num_epochs, learning_rate, weights, max_node)
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
@@ -369,11 +333,9 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='MS-VAE for Graph Generation')
+    parser = argparse.ArgumentParser(description='GRAPH-ER Model')
     parser.add_argument('--dataset-dir', type=str, help='Path to the directory containing graph files')
     parser.add_argument('--config-file', type=str, required=True, help='Path to the configuration file in TOML format')
-    parser.add_argument('--output-model', type=str, help='Path to save the trained model')
-    parser.add_argument('--input-model', type=str, help='Path to load a pre-trained model')
-    parser.add_argument('--evaluate', action='store_true', help='Whether we evaluate the model')
+    parser.add_argument('--input-msvae-model', type=str, help='Path to load a pre-trained MS-VAE model')
     args = parser.parse_args()
     main(args)
