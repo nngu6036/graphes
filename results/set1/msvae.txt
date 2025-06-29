@@ -118,3 +118,26 @@ KL Distance: 0.5275
 MMD: 0.0561
 
 python main_msvae.py  --dataset-dir dataset1_lobster_edgelists --config-file  msvae_config1.toml --output-model msvae_lobster --evaluate
+
+Evaluate generated degree sequence
+Degree Validity (%): 0.0000
+Degree Empty (%): 0.0000
+Degree Odd (%): 0.0000
+Degree Invalidity (%): 100.0000
+Evaluate baseline: train <-> test
+Chamfer Distance: 14.2413
+Earth Mover's Distance: 3.3294
+KL Distance: 0.6036
+MMD: 0.0031
+Evaluate fit: train <-> generated
+Chamfer Distance: 4204.9927
+Earth Mover's Distance: 3224.5219
+KL Distance: 3.0496
+MMD: 0.1332
+Evaluate fit: test <-> generated
+Chamfer Distance: 4202.6905
+Earth Mover's Distance: 3448.6822
+KL Distance: 2.9692
+MMD: 0.1301
+
+python main_msvae.py  --dataset-dir dataset1_point_cloud_edgelists --config-file  msvae_config1.toml --output-model msvae_point_cloud --evaluate

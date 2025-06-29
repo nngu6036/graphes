@@ -33,31 +33,23 @@ class MSVAEEncoder(torch.nn.Module):
         return mean, logvar
 
 class MSVAEDecoder(torch.nn.Module):
-    def __init__(self, latent_dim, hidden_dim, max_output_dim,max_multiplicity):
+    def __init__(self, latent_dim, hidden_dim, max_output_dim):
         super(MSVAEDecoder, self).__init__()
-        self.max_output_dim = max_output_dim
-        self.max_multiplicity = max_multiplicity
         self.hidden_layer = torch.nn.Linear(latent_dim, hidden_dim)
-        
-        # Predicts a distribution over {0, 1, ..., N-1} for each degree
-        self.logits_layer = torch.nn.Linear(hidden_dim, max_output_dim * max_multiplicity)
+        self.frequency_layer = torch.nn.Linear(hidden_dim, max_output_dim)
 
     def forward(self, z, batch):
-        h = F.relu(self.hidden_layer(z))                         # (B, H)
-        logits = self.logits_layer(h)                            # (B, D*N)
-        logits = logits.view(-1, self.max_output_dim, self.max_multiplicity)  # (B, D, N)
-
-        probs = F.softmax(logits, dim=-1)                        # (B, D, N)
-        values = torch.arange(self.max_multiplicity, dtype=probs.dtype, device=probs.device)  # (N,)
-        expected = torch.sum(probs * values, dim=-1)             # (B, D)
-        return expected  # shape: (batch_size, max_output_dim)
+        h = F.relu(self.hidden_layer(z))
+        h = h.unsqueeze(1) 
+        multiplicities = F.softplus(self.frequency_layer(h))  # Ensure positive values
+        return multiplicities
 
 class MSVAE(torch.nn.Module):
     def __init__(self, max_input_dim, hidden_dim, latent_dim):
         super(MSVAE, self).__init__()
         self.max_input_dim = max_input_dim
         self.encoder = MSVAEEncoder( max_input_dim, hidden_dim, latent_dim)
-        self.decoder = MSVAEDecoder(latent_dim, hidden_dim,max_input_dim,max_input_dim)
+        self.decoder = MSVAEDecoder(latent_dim, hidden_dim,max_input_dim)
         self.latent_dim = latent_dim
 
     def reparameterize(self, mean, logvar):
@@ -91,19 +83,12 @@ class MSVAE(torch.nn.Module):
         self.eval()
         with torch.no_grad():
             z = torch.randn((num_samples, self.latent_dim))
-            
-            # Get (B, D, N) probabilities from decoder
-            logits = self.decoder.hidden_layer(z)
-            logits = self.decoder.logits_layer(F.relu(logits))
-            logits = logits.view(-1, self.max_input_dim, self.max_input_dim)
-            probs = F.softmax(logits, dim=-1)
-
-            B, D, N = probs.shape
-            samples = torch.multinomial(probs.view(-1, N), num_samples=1).view(B, D)
-
+            dummy_batch = torch.zeros((num_samples, self.decoder.frequency_layer.out_features))
+            frequencies = self.decoder(z, dummy_batch)
             fixed_sequences = []
-            for freq in samples:
-                freq_fixed = self.fix_degree_sum_even(freq.float())
+            for freq in frequencies:
+                freq_rounded = freq.squeeze().round()
+                freq_fixed = self.fix_degree_sum_even(freq_rounded)
                 fixed_sequences.append(freq_fixed)
             return torch.stack(fixed_sequences)
 
@@ -116,13 +101,13 @@ class MSVAE(torch.nn.Module):
 
 def encode_degree_sequence(degree_sequence , max_class):
     sorted_degree_sequence = sorted(degree_sequence, reverse=True)
-    embeddings = torch.zeros(max_class, dtype=torch.float32)
+    one_hot_tensor = torch.zeros(max_class, dtype=torch.float32)
     for deg in sorted_degree_sequence:
         if 1 <= deg <= max_class:
-            embeddings[deg - 1] += 1
+            one_hot_tensor[deg - 1] += 1
         else:
-            raise ValueError(f'Invalid degree sequence {embeddings}')
-    return embeddings
+            raise ValueError(f'Invalid degree sequence {degree_sequence}')
+    return one_hot_tensor
 
 def decode_degree_sequence(one_hot_tensor):
     degree_sequence = []
@@ -149,7 +134,7 @@ def load_degree_sequence_from_directory(directory_path):
             seq = encode_degree_sequence([deg for _, deg in graph.degree()],max_node)
             if seq is not None:
                 seqs.append(seq)
-    return torch.stack(seqs), max_node
+    return seqs, max_node
 
 def compute_chamfer_distance(set1, set2):
     if len(set1) == 0 or len(set2) == 0:
@@ -263,25 +248,25 @@ def even_loss_sigmoid(x, sharpness=10.0):
 
 def invalid_eg_penlaty(frequencies, max_node):
     indices = torch.arange(1, max_node+1).float().to(frequencies.device)
-    deg_sum = torch.sum(frequencies * indices, dim=-1)
+    deg_sum = torch.sum(frequencies * indices, dim=2)
     even_loss = even_loss_sigmoid(deg_sum)
     zero_loss = penalize_near_zero_inverse(deg_sum)
 
     """
     agg_loss = 0
     for k in range(1, max_node+1):
-        alpha_V = torch.sum(frequencies * indices, dim=-1) /2
+        alpha_V = torch.sum(frequencies * indices, dim=2) /2
         beta_k = k * (k - 1) + k * (max_node - k) / 2
-        alpha_k = torch.sum(frequencies[:, :k] * indices[:k], dim=1)  # (B
+        alpha_k = torch.sum(frequencies[:, :, :k] * indices[:k], dim=2)
         agg_loss += torch.sigmoid(3 * alpha_k / 2 - beta_k - alpha_V / 2)
     """
     agg_loss = 0
     for k in range(1, max_node+1):
-        lhs = torch.sum(frequencies[:, :k] * indices[:k], dim=1) 
-        rhs = k * (k-1) + torch.sum(torch.minimum(indices[k:], torch.tensor(k, device=frequencies.device)) * frequencies[:, k:], dim=1)
+        lhs = torch.sum(frequencies[:, :, :k] * indices[:k], dim=2)
+        rhs = k * (k-1) + torch.sum(torch.minimum(indices[k:], torch.tensor(k, device=frequencies.device)) * frequencies[:, :, k:], dim=2)
         agg_loss += F.relu(lhs - rhs)
-    
     return torch.sum(even_loss+ zero_loss + agg_loss)
+
 
 
 def loss_function(target_freq_vec, frequencies,mean, logvar, weights,warmup_epochs, epoch,max_node):
@@ -294,6 +279,7 @@ def loss_function(target_freq_vec, frequencies,mean, logvar, weights,warmup_epoc
                   loss_weights['kl_divergence'] * kl_loss +
                   loss_weights['erdos_gallai'] * erdos_gallai_loss)
     return total_loss
+
 
 
 def evaluate_multisets_distance(source_tensor, target_tensor,max_node):
@@ -346,7 +332,7 @@ def main(args):
     batch_size = config['training']['batch_size']
     tensor, max_node = load_degree_sequence_from_directory(dataset_dir)
     train_tensor, test_tensor = train_test_split(tensor, test_size=0.2, random_state=42)
-    train_dataset = TensorDataset(train_tensor)
+    train_dataset = TensorDataset(torch.stack(train_tensor))
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']

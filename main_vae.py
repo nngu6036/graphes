@@ -20,7 +20,7 @@ from sklearn.metrics.pairwise import rbf_kernel
 
 
 
-class MSVAEEncoder(torch.nn.Module):
+class StdAEEncoder(torch.nn.Module):
     def __init__(self,  input_dim, hidden_dim, latent_dim):
         super(MSVAEEncoder, self).__init__()
         self.hidden_layer = torch.nn.Linear(input_dim, hidden_dim)
@@ -32,32 +32,32 @@ class MSVAEEncoder(torch.nn.Module):
         mean, logvar = self.mean_layer(h), self.logvar_layer(h)
         return mean, logvar
 
-class MSVAEDecoder(torch.nn.Module):
-    def __init__(self, latent_dim, hidden_dim, max_output_dim,max_multiplicity):
+class StdVAEDecoder(torch.nn.Module):
+    def __init__(self, latent_dim, hidden_dim, max_output_dim,max_degree):
         super(MSVAEDecoder, self).__init__()
         self.max_output_dim = max_output_dim
-        self.max_multiplicity = max_multiplicity
+        self.max_degree = max_degree
         self.hidden_layer = torch.nn.Linear(latent_dim, hidden_dim)
         
         # Predicts a distribution over {0, 1, ..., N-1} for each degree
-        self.logits_layer = torch.nn.Linear(hidden_dim, max_output_dim * max_multiplicity)
+        self.logits_layer = torch.nn.Linear(hidden_dim, max_output_dim * max_degree)
 
     def forward(self, z, batch):
         h = F.relu(self.hidden_layer(z))                         # (B, H)
         logits = self.logits_layer(h)                            # (B, D*N)
-        logits = logits.view(-1, self.max_output_dim, self.max_multiplicity)  # (B, D, N)
+        logits = logits.view(-1, self.max_output_dim, self.max_degree)  # (B, D, N)
 
         probs = F.softmax(logits, dim=-1)                        # (B, D, N)
-        values = torch.arange(self.max_multiplicity, dtype=probs.dtype, device=probs.device)  # (N,)
+        values = torch.arange(self.max_degree, dtype=probs.dtype, device=probs.device)  # (N,)
         expected = torch.sum(probs * values, dim=-1)             # (B, D)
         return expected  # shape: (batch_size, max_output_dim)
 
-class MSVAE(torch.nn.Module):
+class StdVAE(torch.nn.Module):
     def __init__(self, max_input_dim, hidden_dim, latent_dim):
         super(MSVAE, self).__init__()
         self.max_input_dim = max_input_dim
-        self.encoder = MSVAEEncoder( max_input_dim, hidden_dim, latent_dim)
-        self.decoder = MSVAEDecoder(latent_dim, hidden_dim,max_input_dim,max_input_dim)
+        self.encoder = StdVAEEncoder( max_input_dim, hidden_dim, latent_dim)
+        self.decoder = StdVAEDecoder(latent_dim, hidden_dim,max_input_dim,max_input_dim)
         self.latent_dim = latent_dim
 
     def reparameterize(self, mean, logvar):
@@ -91,6 +91,7 @@ class MSVAE(torch.nn.Module):
         self.eval()
         with torch.no_grad():
             z = torch.randn((num_samples, self.latent_dim))
+            dummy_batch = torch.zeros((num_samples, self.max_input_dim))
             
             # Get (B, D, N) probabilities from decoder
             logits = self.decoder.hidden_layer(z)
@@ -116,13 +117,13 @@ class MSVAE(torch.nn.Module):
 
 def encode_degree_sequence(degree_sequence , max_class):
     sorted_degree_sequence = sorted(degree_sequence, reverse=True)
-    embeddings = torch.zeros(max_class, dtype=torch.float32)
+    one_hot_tensor = torch.zeros(max_class, dtype=torch.float32)
     for deg in sorted_degree_sequence:
         if 1 <= deg <= max_class:
-            embeddings[deg - 1] += 1
+            one_hot_tensor[deg - 1] += 1
         else:
-            raise ValueError(f'Invalid degree sequence {embeddings}')
-    return embeddings
+            raise ValueError(f'Invalid degree sequence {degree_sequence}')
+    return one_hot_tensor
 
 def decode_degree_sequence(one_hot_tensor):
     degree_sequence = []
@@ -141,14 +142,17 @@ def load_degree_sequence_from_directory(directory_path):
         if os.path.isfile(file_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
             max_node = max(max_node, graph.number_of_nodes())
+    
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
             graph = nx.convert_node_labels_to_integers(graph)
-            seq = encode_degree_sequence([deg for _, deg in graph.degree()],max_node)
-            if seq is not None:
-                seqs.append(seq)
+            seq = torch.tensor([deg for _, deg in graph.degree()],max_node)
+            phi = torch.eye(max_node).to(seq).float()  
+            seq = seq.float()  
+            seq = torch.matmul(seq, phi)
+            seqs.append(seq)
     return torch.stack(seqs), max_node
 
 def compute_chamfer_distance(set1, set2):
@@ -221,7 +225,7 @@ def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_ep
     optimizer = Adam(model.parameters(), lr=learning_rate)
     model.train()
     for epoch in range(num_epochs):
-        print("Traininig Multiset-VAE iteration ", epoch)
+        print("Traininig Std-VAE iteration ", epoch)
         total_loss = 0
         total_eg_loss = 0
         for batch  in dataloader:
@@ -263,24 +267,24 @@ def even_loss_sigmoid(x, sharpness=10.0):
 
 def invalid_eg_penlaty(frequencies, max_node):
     indices = torch.arange(1, max_node+1).float().to(frequencies.device)
-    deg_sum = torch.sum(frequencies * indices, dim=-1)
+    deg_sum = torch.sum(frequencies * indices, dim=2)
     even_loss = even_loss_sigmoid(deg_sum)
     zero_loss = penalize_near_zero_inverse(deg_sum)
 
-    """
+   
     agg_loss = 0
     for k in range(1, max_node+1):
-        alpha_V = torch.sum(frequencies * indices, dim=-1) /2
+        alpha_V = torch.sum(frequencies * indices, dim=2) /2
         beta_k = k * (k - 1) + k * (max_node - k) / 2
-        alpha_k = torch.sum(frequencies[:, :k] * indices[:k], dim=1)  # (B
+        alpha_k = torch.sum(frequencies[:, :, :k] * indices[:k], dim=2)
         agg_loss += torch.sigmoid(3 * alpha_k / 2 - beta_k - alpha_V / 2)
     """
     agg_loss = 0
     for k in range(1, max_node+1):
-        lhs = torch.sum(frequencies[:, :k] * indices[:k], dim=1) 
-        rhs = k * (k-1) + torch.sum(torch.minimum(indices[k:], torch.tensor(k, device=frequencies.device)) * frequencies[:, k:], dim=1)
+        lhs = torch.sum(frequencies[:, :, :k] * indices[:k], dim=2)
+        rhs = k * (k-1) + torch.sum(torch.minimum(indices[k:], torch.tensor(k, device=frequencies.device)) * frequencies[:, :, k:], dim=2)
         agg_loss += F.relu(lhs - rhs)
-    
+     """
     return torch.sum(even_loss+ zero_loss + agg_loss)
 
 
@@ -350,7 +354,7 @@ def main(args):
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
-    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim)
+    model = StdVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
         print(f"Model loaded from {args.input_model}")
@@ -393,3 +397,9 @@ if __name__ == "__main__":
     parser.add_argument('--evaluate', action='store_true', help='Whether we evaluate the model')
     args = parser.parse_args()
     main(args)
+
+
+"""
+
+
+"""
