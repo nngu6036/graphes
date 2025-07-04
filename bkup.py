@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
 import os
@@ -33,23 +34,31 @@ class MSVAEEncoder(torch.nn.Module):
         return mean, logvar
 
 class MSVAEDecoder(torch.nn.Module):
-    def __init__(self, latent_dim, hidden_dim, max_output_dim):
+    def __init__(self, latent_dim, hidden_dim, max_output_dim,max_multiplicity):
         super(MSVAEDecoder, self).__init__()
+        self.max_output_dim = max_output_dim
+        self.max_multiplicity = max_multiplicity
         self.hidden_layer = torch.nn.Linear(latent_dim, hidden_dim)
-        self.frequency_layer = torch.nn.Linear(hidden_dim, max_output_dim)
+        
+        # Predicts a distribution over {0, 1, ..., N-1} for each degree
+        self.logits_layer = torch.nn.Linear(hidden_dim, max_output_dim * max_multiplicity)
 
     def forward(self, z, batch):
-        h = F.relu(self.hidden_layer(z))
-        h = h.unsqueeze(1) 
-        multiplicities = F.softplus(self.frequency_layer(h))  # Ensure positive values
-        return multiplicities
+        h = F.relu(self.hidden_layer(z))                         # (B, H)
+        logits = self.logits_layer(h)                            # (B, D*N)
+        logits = logits.view(-1, self.max_output_dim, self.max_multiplicity)  # (B, D, N)
+
+        probs = F.softmax(logits, dim=-1)                        # (B, D, N)
+        values = torch.arange(self.max_multiplicity, dtype=probs.dtype, device=probs.device)  # (N,)
+        soft_freq = torch.sum(probs * values, dim=-1)             # (B, D)
+        return logits,soft_freq
 
 class MSVAE(torch.nn.Module):
     def __init__(self, max_input_dim, hidden_dim, latent_dim):
         super(MSVAE, self).__init__()
         self.max_input_dim = max_input_dim
         self.encoder = MSVAEEncoder( max_input_dim, hidden_dim, latent_dim)
-        self.decoder = MSVAEDecoder(latent_dim, hidden_dim,max_input_dim)
+        self.decoder = MSVAEDecoder(latent_dim, hidden_dim,max_input_dim,max_input_dim)
         self.latent_dim = latent_dim
 
     def reparameterize(self, mean, logvar):
@@ -60,8 +69,8 @@ class MSVAE(torch.nn.Module):
     def forward(self, batch):
         mean, logvar = self.encoder(batch)
         z = self.reparameterize(mean, logvar)
-        frequencies = self.decoder(z,batch)
-        return frequencies, mean, logvar
+        logits,soft_freq = self.decoder(z,batch)
+        return logits,soft_freq, mean, logvar
 
     def fix_degree_sum_even(self, freq: torch.Tensor) -> torch.Tensor:
         """
@@ -83,14 +92,22 @@ class MSVAE(torch.nn.Module):
         self.eval()
         with torch.no_grad():
             z = torch.randn((num_samples, self.latent_dim))
-            dummy_batch = torch.zeros((num_samples, self.decoder.frequency_layer.out_features))
-            frequencies = self.decoder(z, dummy_batch)
+            
+            # Get (B, D, N) probabilities from decoder
+            logits = self.decoder.hidden_layer(z)
+            logits = self.decoder.logits_layer(F.relu(logits))
+            logits = logits.view(-1, self.max_input_dim, self.max_input_dim)
+            probs = F.softmax(logits, dim=-1)
+
+            B, D, N = probs.shape
+            samples = torch.multinomial(probs.view(-1, N), num_samples=1).view(B, D)
+
             fixed_sequences = []
-            for freq in frequencies:
-                freq_rounded = freq.squeeze().round()
-                freq_fixed = self.fix_degree_sum_even(freq_rounded)
+            for freq in samples:
+                freq_fixed = self.fix_degree_sum_even(freq.float())
                 fixed_sequences.append(freq_fixed)
             return torch.stack(fixed_sequences)
+
 
     def save_model(self, file_path):
         torch.save(self.state_dict(), file_path)
@@ -134,7 +151,7 @@ def load_degree_sequence_from_directory(directory_path):
             seq = encode_degree_sequence([deg for _, deg in graph.degree()],max_node)
             if seq is not None:
                 seqs.append(seq)
-    return seqs, max_node
+    return torch.stack(seqs), max_node
 
 def compute_chamfer_distance(set1, set2):
     if len(set1) == 0 or len(set2) == 0:
@@ -212,9 +229,9 @@ def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_ep
         for batch  in dataloader:
             X = batch[0]
             optimizer.zero_grad()
-            frequencies, mean, logvar = model(X)
+            logits, soft_freq,mean, logvar = model(X)
             # Compute the loss
-            loss = loss_function(X, frequencies, mean, logvar, weights,warmup_epochs, epoch, max_node)
+            loss = loss_function(X, logits,soft_freq, mean, logvar, weights,warmup_epochs, epoch, max_node)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -248,7 +265,7 @@ def even_loss_sigmoid(x, sharpness=10.0):
 
 def invalid_eg_penlaty(frequencies, max_node):
     indices = torch.arange(1, max_node+1).float().to(frequencies.device)
-    deg_sum = torch.sum(frequencies * indices, dim=2)
+    deg_sum = torch.sum(frequencies * indices, dim=-1)
     even_loss = even_loss_sigmoid(deg_sum)
     zero_loss = penalize_near_zero_inverse(deg_sum)
 
@@ -262,18 +279,21 @@ def invalid_eg_penlaty(frequencies, max_node):
     """
     agg_loss = 0
     for k in range(1, max_node+1):
-        lhs = torch.sum(frequencies[:, :, :k] * indices[:k], dim=2)
-        rhs = k * (k-1) + torch.sum(torch.minimum(indices[k:], torch.tensor(k, device=frequencies.device)) * frequencies[:, :, k:], dim=2)
+        lhs = torch.sum(frequencies[:, :k] * indices[:k], dim=-1)
+        rhs = k * (k-1) + torch.sum(torch.minimum(indices[k:], torch.tensor(k, device=frequencies.device)) * frequencies[:, k:], dim=-1)
         agg_loss += F.relu(lhs - rhs)
     return torch.sum(even_loss+ zero_loss + agg_loss)
 
 
 
-def loss_function(target_freq_vec, frequencies,mean, logvar, weights,warmup_epochs, epoch,max_node):
+def loss_function(target_freq, logits,soft_freq,mean, logvar, weights,warmup_epochs, epoch,max_node):
+    criterion = nn.CrossEntropyLoss()
     loss_weights = get_loss_weights(epoch, weights,warmup_epochs)
-    recon_loss = torch.sum( (target_freq_vec - frequencies)**2)
+    logits_flat = logits.view(-1, logits.size(-1))        # shape (B×D, N)
+    targets_flat = target_freq.long().view(-1)                    # shape (B×D,)
+    recon_loss = F.cross_entropy(logits_flat, targets_flat, reduction='sum')
     kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-    erdos_gallai_loss = invalid_eg_penlaty(frequencies, max_node)
+    erdos_gallai_loss = invalid_eg_penlaty(soft_freq, max_node)
     
     total_loss = (loss_weights['reconstruction'] * recon_loss +
                   loss_weights['kl_divergence'] * kl_loss +
@@ -332,7 +352,7 @@ def main(args):
     batch_size = config['training']['batch_size']
     tensor, max_node = load_degree_sequence_from_directory(dataset_dir)
     train_tensor, test_tensor = train_test_split(tensor, test_size=0.2, random_state=42)
-    train_dataset = TensorDataset(torch.stack(train_tensor))
+    train_dataset = TensorDataset(train_tensor)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']

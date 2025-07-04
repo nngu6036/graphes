@@ -3,13 +3,10 @@ num_epochs = 400     # Number of training epochs
 learning_rate = 0.001    # Learning rate for the optimizer
 hidden_dim = 32          # Hidden dimension size
 latent_dim = 16          # Latent dimension size
-batch_size = 1					 # Batch size
+batch_size = 4					 # Batch size
+num_layer = 4
 T = 1000
 
-[training.weights]
-reconstruction = 1.0     # Weight for reconstruction loss
-kl_divergence = 0.2     # Weight for KL divergence loss
-erdos_gallai = 5.0       # Weight for Erdős-Gallai loss
 
 [inference]
 generate_samples = 200    # Number of samples to generate

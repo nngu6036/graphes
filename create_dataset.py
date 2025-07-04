@@ -1,0 +1,147 @@
+import json
+import networkx as nx
+import random
+from pathlib import Path
+import toml
+import argparse
+import matplotlib.pyplot as plt
+from torch_geometric.datasets import Planetoid
+from torch_geometric.utils import to_networkx
+from scipy.spatial import Delaunay
+import numpy as np
+
+def generate_community_graph(min_node, max_node, p_intra=0.3, p_inter = 0.05):
+    """Generate a two-community graph with V nodes."""
+    V = random.randint(min_node, max_node)
+    n = V // 2  # nodes per community
+
+    # Create ER graphs for each community
+    G1 = nx.erdos_renyi_graph(n, p_intra)
+    G2 = nx.erdos_renyi_graph(n, p_intra)
+
+    # Relabel nodes in G2 to avoid overlap
+    G2 = nx.relabel_nodes(G2, lambda x: x + n)
+    G = nx.union(G1, G2)
+
+    # Add inter-community edges
+    inter_edges = int(p_inter * V)
+    for _ in range(inter_edges):
+        u = random.randint(0, n - 1)          # node from G1
+        v = random.randint(n, V - 1)          # node from G2
+        G.add_edge(u, v)
+    return G
+
+def generate_planar_graph(node_count, edge_count):
+    """Generate a planar graph using a Delaunay triangulation approach."""
+    # Step 1: Generate random 2D points
+    points = np.random.rand(node_count, 2)
+    # Step 2: Use Delaunay triangulation to ensure a planar graph
+    tri = Delaunay(points)
+    G = nx.Graph()
+    G.add_nodes_from(range(node_count))
+    # Step 3: Add edges from triangles
+    for triangle in tri.simplices:
+        edges = [(triangle[i], triangle[j]) for i in range(3) for j in range(i+1, 3)]
+        G.add_edges_from(edges)
+
+    # Step 4: Check planarity (should always be True)
+    is_planar, _ = nx.check_planarity(G)
+    assert is_planar, "Generated graph is not planar!"
+    
+    # Step 5: Prune edges if needed
+    if G.number_of_edges() > edge_count:
+        edges = list(G.edges)
+        random.shuffle(edges)
+        G.remove_edges_from(edges[:G.number_of_edges() - edge_count])
+    return G
+
+def generate_ego_graph(min_node, max_node, hop):
+    """Generate an ego graph."""
+    dataset = Planetoid(root='./datasets', name='Citeseer')
+    data = dataset[0]
+    G = to_networkx(data, to_undirected=True)
+    ego_graphs = []
+    for node in G.nodes:
+        ego = nx.ego_graph(G, node, radius=hop)
+        if ego.number_of_nodes() >= min_node and ego.number_of_nodes() <= max_node:  
+            ego_graphs.append(ego)
+    return ego_graphs
+
+def generate_sbm_graph(block_sizes, probabilities):
+    """Generate a Stochastic Block Model graph."""
+    import networkx as nx
+    return nx.stochastic_block_model(block_sizes, probabilities)
+
+def save_graphs(graphs, edge_list_dir):
+    """Save all graphs to edge list files."""
+    if edge_list_dir.exists():
+        for file in edge_list_dir.iterdir():
+            file.unlink()
+    else:
+        edge_list_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, graph in enumerate(graphs):
+        edge_list_path = edge_list_dir / f"graph_{i}.edgelist"
+
+        # For grid graphs, save the conventional edge-list format
+        if isinstance(graph, nx.Graph) and all(isinstance(n, tuple) for n in graph.nodes()):
+            # Convert tuple-based nodes to simple integers and map edges
+            mapping = {node: idx for idx, node in enumerate(graph.nodes())}
+            relabeled_graph = nx.relabel_nodes(graph, mapping)
+            nx.write_edgelist(relabeled_graph, edge_list_path, data=False)
+        else:
+            nx.write_edgelist(graph, edge_list_path, data=False)
+
+
+def main(args):
+    """Main function to generate datasets based on a configuration file."""
+    config_dir = Path("configs")
+    dataset_dir = Path("datasets")
+    config_file = args.config_file
+    dataset_prefix = args.dataset_prefix
+
+    config_path = config_dir / config_file
+    if not config_path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+
+    with open(config_path, 'r') as f:
+        config = toml.load(f)
+
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+
+    for dataset in config["datasets"]:
+        graph_type = dataset["type"]
+        node_count = dataset.get("nodes", None)
+        edge_count = dataset.get("edges", None)
+
+        graphs = []
+        if graph_type == "ego":
+            graphs = generate_ego_graph(dataset["min_node"],dataset["max_node"],dataset["hop"])
+        if graph_type == "planar":
+            graph_count = dataset["count"]
+            for _ in range(graph_count):
+                G = generate_planar_graph(node_count, edge_count)
+                graphs.append(G)
+        if graph_type == "sbm":
+            graph_count = dataset["count"]
+            for _ in range(graph_count):
+                G = generate_sbm_graph(dataset["block_sizes"], dataset["probabilities"])
+                graphs.append(G)
+        if graph_type == "community":
+            graph_count = dataset["count"]
+            for _ in range(graph_count):
+                G = generate_community_graph(dataset["min_node"],dataset["max_node"],dataset["p_intra"],dataset["p_inter"])
+                graphs.append(G)
+
+        print(f"Generate synthetic datasets for graph type {graph_type}")
+        edge_list_dir = dataset_dir / f"{dataset_prefix}_{graph_type}_edgelists"
+        print(f"Saving datasets for graph type {graph_type}")
+        save_graphs(graphs, edge_list_dir)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Generate graphs based on configuration.")
+    parser.add_argument("--config-file", type=str, required=True, help="Name of the TOML configuration file in the input folder.")
+    parser.add_argument("--dataset-prefix", type=str, required=True, help="Prefix for naming the dataset files.")
+    args = parser.parse_args()
+
+    main(args)

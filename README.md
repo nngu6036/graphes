@@ -13,7 +13,7 @@ pip install -r requirements.txt
 
 ## Generate input dataset
 ```bash
-python main_dataset.py  --dataset-prefix dataset1 --config-file  dataset1_config.toml
+python create_dataset.py  --dataset-prefix dataset1 --config-file  dataset1_config.toml
 ```
 
 ## Training MS-VAE model
@@ -21,12 +21,12 @@ python main_dataset.py  --dataset-prefix dataset1 --config-file  dataset1_config
 python main_msvae.py  --dataset-dir dataset1_planar_edgelists --config-file  msvae_config1.toml --output-model msvae_planar --evaluate
 python main_msvae.py  --dataset-dir dataset1_ego_edgelists --config-file  msvae_config1.toml --output-model msvae_ego --evaluate
 python main_msvae.py  --dataset-dir dataset1_sbm_edgelists --config-file  msvae_config1.toml --output-model msvae_sbm --evaluate
-python main_msvae.py  --dataset-dir dataset1_grid_edgelists --config-file  msvae_config1.toml --output-model msvae_grid --evaluate
+python main_msvae.py  --dataset-dir dataset1_community_edgelists --config-file  msvae_config1.toml --output-model msvae_community --evaluate
 ```
 
 ## Training GraphER model
 ```bash
-python .\main_dataset.py --config-path dataset1_config.toml --output-prefix dataset1
+python main_grapher.py --config-path grapher_config.toml  --dataset-dir dataset1_planar_edgelists --msvae-model msvae_planar --msvae-config-path msvae_config1.toml --output-model grapher_planar --evaluate
 ```
 
 

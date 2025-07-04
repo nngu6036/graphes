@@ -17,80 +17,42 @@ from sklearn.model_selection import train_test_split
 from collections import Counter
 import numpy as np
 from sklearn.metrics.pairwise import rbf_kernel
+from torch_geometric.nn import GINConv, global_mean_pool
+from .main_msvae import MSVAE
+from sklearn.metrics.pairwise import rbf_kernel
 
+class GINPredictor(nn.Module):
+    def __init__(self, in_channels, hidden_dim, num_layer):
+        super().__init__()
+        self.gin_layers = nn.ModuleList([
+            GINConv(nn.Sequential(nn.Linear(in_channels if i == 0 else hidden_dim, hidden_dim),
+                                  nn.ReLU(),
+                                  nn.Linear(hidden_dim, hidden_dim)))
+            for i in range(num_layer)
+        ])
+        self.edge_predictor = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
 
+    def forward(self, x, edge_index, edge_pairs, candidate_edges):
+        for gin in self.gin_layers:
+            x = gin(x, edge_index)
+        
+        u, v = edge_pairs[:, 0], edge_pairs[:, 1]
+        x_u, x_v = x[u], x[v]
+        target_edge = torch.cat([x_u, x_v], dim=-1)
 
-class MSVAEEncoder(torch.nn.Module):
-    def __init__(self,  input_dim, hidden_dim, latent_dim):
-        super(MSVAEEncoder, self).__init__()
-        self.hidden_layer = torch.nn.Linear(input_dim, hidden_dim)
-        self.mean_layer = torch.nn.Linear(hidden_dim, latent_dim)
-        self.logvar_layer = torch.nn.Linear(hidden_dim, latent_dim)
-
-    def forward(self, x):
-        h = F.relu(self.hidden_layer(x))
-        mean, logvar = self.mean_layer(h), self.logvar_layer(h)
-        return mean, logvar
-
-class MSVAEDecoder(torch.nn.Module):
-    def __init__(self, latent_dim, hidden_dim, max_output_dim):
-        super(MSVAEDecoder, self).__init__()
-        self.hidden_layer = torch.nn.Linear(latent_dim, hidden_dim)
-        self.frequency_layer = torch.nn.Linear(hidden_dim, max_output_dim)
-
-    def forward(self, z, batch):
-        h = F.relu(self.hidden_layer(z))
-        h = h.unsqueeze(1) 
-        multiplicities = F.softplus(self.frequency_layer(h))  # Ensure positive values
-        return multiplicities
-
-class MSVAE(torch.nn.Module):
-    def __init__(self, max_input_dim, hidden_dim, latent_dim):
-        super(MSVAE, self).__init__()
-        self.max_input_dim = max_input_dim
-        self.encoder = MSVAEEncoder( max_input_dim, hidden_dim, latent_dim)
-        self.decoder = MSVAEDecoder(latent_dim, hidden_dim,max_input_dim)
-        self.latent_dim = latent_dim
-
-    def reparameterize(self, mean, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mean + eps * std
-
-    def forward(self, batch):
-        mean, logvar = self.encoder(batch)
-        z = self.reparameterize(mean, logvar)
-        frequencies = self.decoder(z,batch)
-        return frequencies, mean, logvar
-
-    def fix_degree_sum_even(self, freq: torch.Tensor) -> torch.Tensor:
-        """
-        Ensures the sum of degrees in `freq` is even.
-        Subtracts 1 from the highest non-zero entry if sum is odd.
-        """
-        indices = torch.arange(1, self.max_input_dim+1).float().to(freq.device)
-        total = torch.sum(freq * indices).item()
-        if total % 2 != 0:
-            even_indices = torch.arange(0, freq.size(0), 2)  # get even indices: 0, 2, 4, ...
-            even_values = freq[even_indices]                # values at even indices
-            relative_max_idx = torch.argmax(even_values)    # index within the even subset
-            max_idx = even_indices[relative_max_idx]        # map back to original index
-            if freq[max_idx] > 0:
-                freq[max_idx] += 1
-        return freq
-
-    def generate(self, num_samples):
-        self.eval()
-        with torch.no_grad():
-            z = torch.randn((num_samples, self.latent_dim))
-            dummy_batch = torch.zeros((num_samples, self.decoder.frequency_layer.out_features))
-            frequencies = self.decoder(z, dummy_batch)
-            fixed_sequences = []
-            for freq in frequencies:
-                freq_rounded = freq.squeeze().round()
-                #freq_fixed = self.fix_degree_sum_even(freq_rounded)
-                fixed_sequences.append(freq_rounded)
-            return torch.stack(fixed_sequences)
+        scores = []
+        for edge in candidate_edges:
+            i, j = edge[0], edge[1]
+            xi, xj = x[i], x[j]
+            concat = torch.cat([xi, xj], dim=-1)
+            score = self.edge_predictor(torch.cat([target_edge, concat], dim=-1))
+            scores.append(score)
+        logits = torch.cat(scores, dim=1)  # shape: (batch_size, num_candidates)
+        return logits
 
     def save_model(self, file_path):
         torch.save(self.state_dict(), file_path)
@@ -99,28 +61,176 @@ class MSVAE(torch.nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-def encode_degree_sequence(degree_sequence , max_class):
-    sorted_degree_sequence = sorted(degree_sequence, reverse=True)
-    one_hot_tensor = torch.zeros(max_class, dtype=torch.float32)
-    for deg in sorted_degree_sequence:
-        if 1 <= deg <= max_class:
-            one_hot_tensor[deg - 1] += 1
-        else:
-            raise ValueError(f'Invalid degree sequence {degree_sequence}')
-    return one_hot_tensor
+    def generate(self, num_samples, msvae_model, num_steps=10):
+        self.eval()
+        degree_seqs = msvae_model.generate(num_samples)
+        generated_graphs = []
 
-def decode_degree_sequence(one_hot_tensor):
-    degree_sequence = []
-    for i, count in enumerate(one_hot_tensor.squeeze()):
-        degree = i + 1  # Degree is index + 1
-        count = int(count.item())  # Convert float to int
-        degree_sequence.extend([degree] * count)  # Append 'count' times
-    return degree_sequence
+        for seq in degree_seqs:
+            degrees = decode_degree_sequence(seq)
+            G = configuration_model_from_multiset(degrees)
+
+            for _ in range(num_steps):
+                edges = list(G.edges())
+                if len(edges) < 2:
+                    break
+
+                e1 = random.choice(edges)
+                u, v = e1
+                edge_candidates = [e for e in edges if e != e1 and len(set(e + e1)) == 4]
+
+                if not edge_candidates:
+                    continue
+
+                candidate_tensor = torch.tensor(edge_candidates, dtype=torch.long)
+                edge_pair = torch.tensor([[u, v]], dtype=torch.long)
+
+                data = graph_to_data(G)
+                edge_index = data.edge_index
+
+                scores = self(data.x, edge_index, edge_pair, candidate_tensor)
+                top_idx = torch.argmax(scores, dim=1).item()
+                x, y = candidate_tensor[top_idx].tolist()
+
+                if not G.has_edge(u, x) and not G.has_edge(v, y):
+                    G.remove_edges_from([e1, (x, y)])
+                    G.add_edges_from([(u, x), (v, y)])
+                elif not G.has_edge(u, y) and not G.has_edge(v, x):
+                    G.remove_edges_from([e1, (x, y)])
+                    G.add_edges_from([(u, y), (v, x)])
+
+            generated_graphs.append(G)
+
+        return generated_graphs
+
+def rewire_edges(G, num_rewirings=10):
+    edges = list(G.edges())
+    for _ in range(num_rewirings):
+        if len(edges) < 2:
+            break
+        e1, e2 = random.sample(edges, 2)
+        u, v = e1
+        x, y = e2
+        if len({u, v, x, y}) == 4:
+            if not G.has_edge(u, x) and not G.has_edge(v, y):
+                G.remove_edges_from([e1, e2])
+                G.add_edges_from([(u, x), (v, y)])
+            elif not G.has_edge(u, y) and not G.has_edge(v, x):
+                G.remove_edges_from([e1, e2])
+                G.add_edges_from([(u, y), (v, x)])
+        edges = list(G.edges())
+    return G
+
+def sample_edge_pairs(G, num_samples=16):
+    edges = list(G.edges())
+    edge_pairs = []
+    for _ in range(num_samples):
+        if len(edges) < 2:
+            break
+        e1, e2 = random.sample(edges, 2)
+        u, v = e1
+        x, y = e2
+        edge_pairs.append((random.choice([u, v]), random.choice([x, y])))
+    return torch.tensor(edge_pairs, dtype=torch.long)
+
+def graph_to_data(G):
+    for node in G.nodes:
+        G.nodes[node]['x'] = [1.0]
+    return from_networkx(G)
+
+def decode_degree_sequence(seq):
+    degrees = []
+    for degree, count in enumerate(seq):
+        degrees.extend([degree] * int(count))
+    return degrees
+
+def configuration_model_from_multiset(degrees):
+    G = nx.configuration_model(degrees)
+    G = nx.Graph(G)
+    G.remove_edges_from(nx.selfloop_edges(G))
+    return G
+
+def compute_mmd_degree(graphs_1, graphs_2, max_degree=None):
+
+    def degree_histogram(graphs, max_degree):
+        histograms = []
+        for G in graphs:
+            degree_sequence = [deg for _, deg in G.degree()]
+            hist = np.zeros(max_degree + 1)
+            for deg in degree_sequence:
+                if deg <= max_degree:
+                    hist[deg] += 1
+            hist /= hist.sum() + 1e-8
+            histograms.append(hist)
+        return np.array(histograms)
+
+    if max_degree is None:
+        max_d1 = max([max(dict(G.degree()).values()) for G in graphs_1])
+        max_d2 = max([max(dict(G.degree()).values()) for G in graphs_2])
+        max_degree = max(max_d1, max_d2)
+
+    H1 = degree_histogram(graphs_1, max_degree)
+    H2 = degree_histogram(graphs_2, max_degree)
+
+    K_xx = rbf_kernel(H1, H1, gamma=1.0)
+    K_yy = rbf_kernel(H2, H2, gamma=1.0)
+    K_xy = rbf_kernel(H1, H2, gamma=1.0)
+
+    mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
+    return float(mmd)
+
+def compute_mmd_cluster(graphs_1, graphs_2):
+    def clustering_histogram(graphs, bins=10):
+        histograms = []
+        for G in graphs:
+            clustering = list(nx.clustering(G).values())
+            hist, _ = np.histogram(clustering, bins=bins, range=(0, 1), density=True)
+            histograms.append(hist)
+        return np.array(histograms)
+
+    H1 = clustering_histogram(graphs_1)
+    H2 = clustering_histogram(graphs_2)
+
+    K_xx = rbf_kernel(H1, H1, gamma=1.0)
+    K_yy = rbf_kernel(H2, H2, gamma=1.0)
+    K_xy = rbf_kernel(H1, H2, gamma=1.0)
+
+    mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
+    return float(mmd)
 
 
-def load_degree_sequence_from_directory(directory_path):
+def compute_mmd_orbit(graphs_1, graphs_2):
+    from networkx.algorithms.graphlet import graphlet_degree_vectors
+
+    def orbit_histogram(graphs):
+        histograms = []
+        for G in graphs:
+            try:
+                gdv = graphlet_degree_vectors(G, 4)
+                counts = np.array([v for vec in gdv.values() for v in vec])
+                if len(counts) == 0:
+                    counts = np.zeros(1)
+            except Exception:
+                counts = np.zeros(1)
+            histograms.append(counts)
+
+        max_len = max(len(h) for h in histograms)
+        padded = [np.pad(h, (0, max_len - len(h))) for h in histograms]
+        return np.array(padded)
+
+    H1 = orbit_histogram(graphs_1)
+    H2 = orbit_histogram(graphs_2)
+
+    K_xx = rbf_kernel(H1, H1, gamma=1.0)
+    K_yy = rbf_kernel(H2, H2, gamma=1.0)
+    K_xy = rbf_kernel(H1, H2, gamma=1.0)
+
+    mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
+    return float(mmd)
+    
+def load_graph_from_directory(directory_path):
     max_node = 0 
-    seqs = []
+    graphs = []
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
@@ -131,109 +241,35 @@ def load_degree_sequence_from_directory(directory_path):
         if os.path.isfile(file_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
             graph = nx.convert_node_labels_to_integers(graph)
-            seq = encode_degree_sequence([deg for _, deg in graph.degree()],max_node)
-            if seq is not None:
-                seqs.append(seq)
-    return seqs, max_node
-
-def compute_chamfer_distance(set1, set2):
-    if len(set1) == 0 or len(set2) == 0:
-        return float('inf')  # If one of the sets is empty, the distance is undefined.
-    set1 = torch.tensor(set1, dtype=torch.float).unsqueeze(1)
-    set2 = torch.tensor(set2, dtype=torch.float).unsqueeze(1)
-    dists_1_to_2 = torch.min(torch.cdist(set1, set2, p=2), dim=1).values
-    dists_2_to_1 = torch.min(torch.cdist(set2, set1, p=2), dim=1).values
-    chamfer_distance = torch.sum(dists_1_to_2) + torch.sum(dists_2_to_1)
-    return chamfer_distance.item()
-
-def compute_degree_histograms(sequences, max_degree):
-    histograms = []
-    for seq in sequences:
-        hist = torch.zeros(max_degree + 1)
-        for deg in seq:
-            if 0 <= deg <= max_degree:
-                hist[deg] += 1
-        hist /= hist.sum() + 1e-8  # normalize + stability
-        histograms.append(hist)
-    return torch.stack(histograms)
-
-def compute_kl_divergence(p_hist, q_hist, eps=1e-8):
-    p_ = p_hist + eps
-    q_ = q_hist + eps
-    p_ = p_ / p_.sum()
-    q_ = q_ / q_.sum()
-    return torch.sum(p_ * torch.log(p_ / q_)).item()
+            graphs.append(graph)
+    return torch.stack(graphs), max_node
 
 
-def compute_mmd(X, Y, gamma=1.0):
-    X_np = X.detach().cpu().numpy()
-    Y_np = Y.detach().cpu().numpy()
-    K_xx = rbf_kernel(X_np, X_np, gamma=gamma)
-    K_yy = rbf_kernel(Y_np, Y_np, gamma=gamma)
-    K_xy = rbf_kernel(X_np, Y_np, gamma=gamma)
-
-    return float(K_xx.mean() + K_yy.mean() - 2 * K_xy.mean())
-
-
-def compute_earth_movers_distance(set1, set2):
-    if len(set1) == 0 or len(set2) == 0:
-        return float('inf')  # Undefined if one of the sets is empty.
-    set1 = torch.tensor(set1, dtype=torch.float).unsqueeze(1)
-    set2 = torch.tensor(set2, dtype=torch.float).unsqueeze(1)
-    cost_matrix = torch.cdist(set1, set2, p=2).cpu().numpy()
-    row_ind, col_ind = linear_sum_assignment(cost_matrix)
-    emd = cost_matrix[row_ind, col_ind].sum()
-    return emd
-
-def check_sequence_validity(seq):
-    """Checks if a degree sequence is valid after removing all zeros."""
-    if len(seq) == 0:
-        return False,1
-    # Degree sequence sum must be even
-    if sum(seq) % 2 != 0:
-        return False,2
-    # Sort in descending order
-    sorted_seq = sorted(seq, reverse=True)
-    # Apply Erdős–Gallai theorem
-    for k in range(1, len(sorted_seq) + 1):
-        lhs = sum(sorted_seq[:k])
-        rhs = k * (k - 1) + sum(min(d, k) for d in sorted_seq[k:])
-        if lhs > rhs:
-            return False,3
-    return True, 0
-
-def train_msvae(model, dataloader, num_epochs, learning_rate, weights, max_node):
+def train_grapher(model, graphs, num_epochs, learning_rate, max_node):
     optimizer = Adam(model.parameters(), lr=learning_rate)
+    criterion = nn.BCEWithLogitsLoss()
     model.train()
     for epoch in range(num_epochs):
-        print("Traininig Multiset-VAE iteration ", epoch)
-        total_loss = 0
-        total_eg_loss = 0
-        for batch  in dataloader:
-            X = batch[0]
+        epoch_loss = 0
+        for G in graphs:
+            # Simulate graph and diffusion corruption
+            G_corrupted = rewire_edges(G.copy())
+
+            data = graph_to_data(G_corrupted)
+            edge_pairs = sample_edge_pairs(G_corrupted, num_samples=16)
+
+            # Simulate ground-truth labels (dummy 0/1 for now)
+            labels = torch.randint(0, 2, (edge_pairs.size(0),), dtype=torch.float)
+
+            pred_scores = model(data.x, data.edge_index, edge_pairs)
+            loss = criterion(pred_scores, labels)
+
             optimizer.zero_grad()
-            frequencies, mean, logvar = model(X)
-            # Compute the loss
-            loss = loss_function(X, frequencies, mean, logvar, weights, epoch, max_node)
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
+            epoch_loss += loss.item()
 
-        print(f"Epoch Multiset-VAE [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
-
-def eg_loss(frequencies, max_node):
-    indices = torch.arange(1, max_node+1).float().to(frequencies.device)
-
-    deg_sum = torch.sum(frequencies * indices, dim=2)
-    sum_modulo_loss = (1 - torch.cos(np.pi * deg_sum)) / 2
-
-    eg_inequality_loss = 0
-    for k in range(1, max_node+1):
-        lhs = torch.sum(frequencies[:, :, :k] * indices[:k], dim=2)
-        rhs = k * (k-1) + torch.sum(torch.minimum(indices[k:], torch.tensor(k, device=frequencies.device)) * frequencies[:, :, k:], dim=2)
-        eg_inequality_loss += F.relu(lhs - rhs)
-
-    return torch.sum(sum_modulo_loss+ eg_inequality_loss)
+        print(f"Epoch {epoch+1}, Loss: {epoch_loss:.4f}")
 
 def loss_function(target_freq_vec, frequencies,mean, logvar, weights, epoch,max_node):
     recon_weight, kl_weight, erdos_gallai_weight = weights.get('reconstruction', 1.0), weights.get('kl_divergence', 1.0),weights.get('erdos_gallai', 1.0)
@@ -245,97 +281,64 @@ def loss_function(target_freq_vec, frequencies,mean, logvar, weights, epoch,max_
     total_loss = recon_weight * recon_loss + kl_weight * kl_loss + erdos_gallai_weight * erdos_gallai_loss
     return total_loss
 
-def evaluate_multisets_distance(source_tensor, target_tensor,max_node):
-    source_seqs = [decode_degree_sequence(tensor) for tensor in source_tensor]
-    target_seqs = [decode_degree_sequence(tensor) for tensor in target_tensor]
-    chamfer_distances = [compute_chamfer_distance(s, t) for s in source_seqs for t in target_seqs]
-    avg_chamfer_distance = sum(chamfer_distances) / len(chamfer_distances) if chamfer_distances else float('inf')
-    emd_distances = [compute_earth_movers_distance(s, t) for s in source_seqs for t in target_seqs]
-    avg_emd_distance = sum(emd_distances) / len(emd_distances) if emd_distances else float('inf')
-    source_hist = compute_degree_histograms(source_seqs,max_node)
-    target_hist = compute_degree_histograms(target_seqs,max_node)
-    kl = [compute_kl_divergence(s, t) for s in source_hist for t in target_hist]
-    avg_kl = sum(kl) / len(kl) if kl else float('inf')
-    mmd = compute_mmd(source_hist, target_hist)
+
+def evaluate_generated_graphs(generated_graphs, test_graphs):
+    mmd_degree = compute_mmd_degree(generated_graphs, test_graphs)
+    mmd_cluster = compute_mmd_cluster(generated_graphs, test_graphs)
+    mmd_orbit = compute_mmd_orbit(generated_graphs, test_graphs)
     return {
-        "Chamfer Distance": avg_chamfer_distance,
-        "Earth Mover's Distance": avg_emd_distance,
-        "KL Distance": avg_kl,
-        "MMD": mmd
+        "MMD Degree": mmd_degree,
+        "MMS Cluster": mmd_cluster,
+        "MMD Orbit": mmd_orbit,
     }
 
-
-def evaluate_generated_multisets(generated_tensor):
-    generated_seqs = [decode_degree_sequence(tensor) for tensor in generated_tensor]
-    validity_checks = [check_sequence_validity(gen_seq) for gen_seq in generated_seqs]
-    degree_validities = [result for result, code in validity_checks if result]
-    error_codes = [code for result, code in validity_checks if not result]
-    error_count = Counter(error_codes)
-    empty_degree = [1] * error_count.get(1, 0)
-    odd_sum_degree = [1] * error_count.get(2, 0)
-    invalid_degree = [1] * error_count.get(3, 0)
-    validity_percentage = (sum(degree_validities) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
-    empty_percentage = (sum(empty_degree) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
-    odd_percentage = (sum(odd_sum_degree) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
-    invalidity_percentage = (sum(invalid_degree) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
-    return {
-        "Degree Validity (%)": validity_percentage,
-        "Degree Empty (%)": empty_percentage,
-        "Degree Odd (%)": odd_percentage,
-        "Degree Invalidity (%)": invalidity_percentage
-    }
-
-def main(args):
-    config_dir = Path("configs")
-    dataset_dir = Path("datasets")
-    model_dir = Path("models")
-    config_file = config_dir / args.config_file
-    config = toml.load(config_file)
-    dataset_dir = dataset_dir / args.dataset_dir
-    batch_size = config['training']['batch_size']
-    tensor, max_node = load_graph_from_directory(dataset_dir)
-    train_tensor, test_tensor = train_test_split(tensor, test_size=0.2, random_state=42)
-    train_dataset = TensorDataset(torch.stack(train_tensor))
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+def load_msvae_from_file(max_node,config, model_path):
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
     model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim)
-    if args.input_model:
-        model.load_model(model_dir / args.input_model)
-        print(f"Model loaded from {args.input_model}")
+    model.load_model(model_path)
+    return model
+
+def main(args):
+    config_dir = Path("configs")
+    dataset_dir = Path("datasets") / args.dataset_dir
+    model_dir = Path("models")
+    config_file = config_dir / args.config_file
+    msvae_config_file = config_dir / args.msvae_config_file
+    msvae_model_file = config_dir / args.msvae_model
+    config = toml.load(config_file)
+    msvae_config = toml.load(msvae_config_file)
+    graphs, max_node = load_graph_from_directory(dataset_dir)
+    train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
+    msvae_model  = load_msvae_from_file(max_node, msvae_config,msvae_model_file)
+    hidden_dim = config['training']['hidden_dim']
+    latent_dim = config['training']['latent_dim']
+    num_layer = config['training']['num_layer']
+    model = GINPredictor(in_channels=max_node, hidden_dim=hidden_dim,num_layer=num_layer)
+    
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        weights = config['training']['weights']
-        train_msvae(model, train_dataloader, num_epochs, learning_rate, weights, max_node)
+        train_grapher(model, train_graphs, num_epochs, learning_rate, max_node)
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
     if args.evaluate:
         model.eval()
-        generated_tensor = model.generate(config['inference']['generate_samples'])
-        print(f"Evaluate generated degree sequence")
-        metrics =  evaluate_generated_multisets(generated_tensor)
+        generated_graphs = model.generate(config['inference']['generate_samples'])
+        print(f"Evaluate generated graphs")
+        metrics =  evaluate_generated_graphs(generated_graphs, test_graphs)
         for metric, value in metrics.items():
-            print(f"{metric}: {value:.4f}")
-        print(f"Evaluate baseline: train <-> test")
-        evaluation_metrics = evaluate_multisets_distance(train_tensor,test_tensor,max_node)
-        for metric, value in evaluation_metrics.items():
-            print(f"{metric}: {value:.4f}")
-        print(f"Evaluate fit: train <-> generated")
-        evaluation_metrics = evaluate_multisets_distance(train_tensor,generated_tensor,max_node)
-        for metric, value in evaluation_metrics.items():
-            print(f"{metric}: {value:.4f}")
-        print(f"Evaluate fit: test <-> generated")
-        evaluation_metrics = evaluate_multisets_distance(test_tensor,generated_tensor,max_node)
-        for metric, value in evaluation_metrics.items():
             print(f"{metric}: {value:.4f}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GRAPH-ER Model')
-    parser.add_argument('--dataset-dir', type=str, help='Path to the directory containing graph files')
-    parser.add_argument('--config-file', type=str, required=True, help='Path to the configuration file in TOML format')
-    parser.add_argument('--input-msvae-model', type=str, help='Path to load a pre-trained MS-VAE model')
+    parser.add_argument('--dataset-dir', type=str, required=True,help='Path to the directory containing graph files')
+    parser.add_argument('--config-file', type=str, required=True, help='Path to the configuration file in TOML format of Graph-ER')
+    parser.add_argument('--msvae-config-file', type=str, required=True, help='Path to the configuration file in TOML format of MS-VAE')
+    parser.add_argument('--msvae-model', type=str, required=True,help='Path to load a pre-trained MS-VAE model')
+    parser.add_argument('--output-model', type=str, help='Path to save the trained model')
+    parser.add_argument('--input-model', type=str, help='Path to load a pre-trained model')
     args = parser.parse_args()
     main(args)
