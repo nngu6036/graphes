@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
 import os
@@ -20,9 +21,9 @@ from sklearn.metrics.pairwise import rbf_kernel
 
 
 
-class StdAEEncoder(torch.nn.Module):
+class StdVAEEncoder(torch.nn.Module):
     def __init__(self,  input_dim, hidden_dim, latent_dim):
-        super(MSVAEEncoder, self).__init__()
+        super(StdVAEEncoder, self).__init__()
         self.hidden_layer = torch.nn.Linear(input_dim, hidden_dim)
         self.mean_layer = torch.nn.Linear(hidden_dim, latent_dim)
         self.logvar_layer = torch.nn.Linear(hidden_dim, latent_dim)
@@ -34,7 +35,7 @@ class StdAEEncoder(torch.nn.Module):
 
 class StdVAEDecoder(torch.nn.Module):
     def __init__(self, latent_dim, hidden_dim, max_output_dim,max_degree):
-        super(MSVAEDecoder, self).__init__()
+        super(StdVAEDecoder, self).__init__()
         self.max_output_dim = max_output_dim
         self.max_degree = max_degree
         self.hidden_layer = torch.nn.Linear(latent_dim, hidden_dim)
@@ -49,12 +50,12 @@ class StdVAEDecoder(torch.nn.Module):
 
         probs = F.softmax(logits, dim=-1)                        # (B, D, N)
         values = torch.arange(self.max_degree, dtype=probs.dtype, device=probs.device)  # (N,)
-        expected = torch.sum(probs * values, dim=-1)             # (B, D)
-        return expected  # shape: (batch_size, max_output_dim)
+        soft_freq = torch.sum(probs * values, dim=-1)             # (B, D)
+        return logits,soft_freq
 
 class StdVAE(torch.nn.Module):
     def __init__(self, max_input_dim, hidden_dim, latent_dim):
-        super(MSVAE, self).__init__()
+        super(StdVAE, self).__init__()
         self.max_input_dim = max_input_dim
         self.encoder = StdVAEEncoder( max_input_dim, hidden_dim, latent_dim)
         self.decoder = StdVAEDecoder(latent_dim, hidden_dim,max_input_dim,max_input_dim)
@@ -68,16 +69,15 @@ class StdVAE(torch.nn.Module):
     def forward(self, batch):
         mean, logvar = self.encoder(batch)
         z = self.reparameterize(mean, logvar)
-        frequencies = self.decoder(z,batch)
-        return frequencies, mean, logvar
+        logits,seq = self.decoder(z,batch)
+        return logits,seq, mean, logvar
 
-    def fix_degree_sum_even(self, freq: torch.Tensor) -> torch.Tensor:
+    def fix_degree_sum_even(self, seq: torch.Tensor) -> torch.Tensor:
         """
         Ensures the sum of degrees in `freq` is even.
         Subtracts 1 from the highest non-zero entry if sum is odd.
         """
-        indices = torch.arange(1, self.max_input_dim+1).float().to(freq.device)
-        total = torch.sum(freq * indices).item()
+        total = torch.sum(seq).item()
         if total % 2 != 0:
             even_indices = torch.arange(0, freq.size(0), 2)  # get even indices: 0, 2, 4, ...
             even_values = freq[even_indices]                # values at even indices
@@ -91,22 +91,22 @@ class StdVAE(torch.nn.Module):
         self.eval()
         with torch.no_grad():
             z = torch.randn((num_samples, self.latent_dim))
-            dummy_batch = torch.zeros((num_samples, self.max_input_dim))
             
             # Get (B, D, N) probabilities from decoder
             logits = self.decoder.hidden_layer(z)
             logits = self.decoder.logits_layer(F.relu(logits))
             logits = logits.view(-1, self.max_input_dim, self.max_input_dim)
             probs = F.softmax(logits, dim=-1)
-
+            temperature = 0.5
             B, D, N = probs.shape
-            samples = torch.multinomial(probs.view(-1, N), num_samples=1).view(B, D)
+            samples = torch.multinomial(probs.view(-1, N), 1).view(B, D)
 
             fixed_sequences = []
             for freq in samples:
                 freq_fixed = self.fix_degree_sum_even(freq.float())
                 fixed_sequences.append(freq_fixed)
             return torch.stack(fixed_sequences)
+
 
     def save_model(self, file_path):
         torch.save(self.state_dict(), file_path)
@@ -142,17 +142,14 @@ def load_degree_sequence_from_directory(directory_path):
         if os.path.isfile(file_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
             max_node = max(max_node, graph.number_of_nodes())
-    
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
             graph = nx.convert_node_labels_to_integers(graph)
-            seq = torch.tensor([deg for _, deg in graph.degree()],max_node)
-            phi = torch.eye(max_node).to(seq).float()  
-            seq = seq.float()  
-            seq = torch.matmul(seq, phi)
-            seqs.append(seq)
+            seq = encode_degree_sequence([deg for _, deg in graph.degree()],max_node)
+            if seq is not None:
+                seqs.append(seq)
     return torch.stack(seqs), max_node
 
 def compute_chamfer_distance(set1, set2):
@@ -190,7 +187,6 @@ def compute_mmd(X, Y, gamma=1.0):
     K_xx = rbf_kernel(X_np, X_np, gamma=gamma)
     K_yy = rbf_kernel(Y_np, Y_np, gamma=gamma)
     K_xy = rbf_kernel(X_np, Y_np, gamma=gamma)
-
     return float(K_xx.mean() + K_yy.mean() - 2 * K_xy.mean())
 
 
@@ -225,15 +221,14 @@ def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_ep
     optimizer = Adam(model.parameters(), lr=learning_rate)
     model.train()
     for epoch in range(num_epochs):
-        print("Traininig Std-VAE iteration ", epoch)
+        print("Traininig Multiset-VAE iteration ", epoch)
         total_loss = 0
-        total_eg_loss = 0
         for batch  in dataloader:
             X = batch[0]
             optimizer.zero_grad()
-            frequencies, mean, logvar = model(X)
+            logits, seq,mean, logvar = model(X)
             # Compute the loss
-            loss = loss_function(X, frequencies, mean, logvar, weights,warmup_epochs, epoch, max_node)
+            loss = loss_function(X, logits,seq, mean, logvar, weights,warmup_epochs, epoch, max_node)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -265,39 +260,18 @@ def even_loss_sigmoid(x, sharpness=10.0):
     # Penalize when mod 2 is close to 1 (odd)
     return (1 - torch.cos(np.pi * x)) / 2
 
-def invalid_eg_penlaty(frequencies, max_node):
-    indices = torch.arange(1, max_node+1).float().to(frequencies.device)
-    deg_sum = torch.sum(frequencies * indices, dim=2)
-    even_loss = even_loss_sigmoid(deg_sum)
-    zero_loss = penalize_near_zero_inverse(deg_sum)
 
-   
-    agg_loss = 0
-    for k in range(1, max_node+1):
-        alpha_V = torch.sum(frequencies * indices, dim=2) /2
-        beta_k = k * (k - 1) + k * (max_node - k) / 2
-        alpha_k = torch.sum(frequencies[:, :, :k] * indices[:k], dim=2)
-        agg_loss += torch.sigmoid(3 * alpha_k / 2 - beta_k - alpha_V / 2)
-    """
-    agg_loss = 0
-    for k in range(1, max_node+1):
-        lhs = torch.sum(frequencies[:, :, :k] * indices[:k], dim=2)
-        rhs = k * (k-1) + torch.sum(torch.minimum(indices[k:], torch.tensor(k, device=frequencies.device)) * frequencies[:, :, k:], dim=2)
-        agg_loss += F.relu(lhs - rhs)
-     """
-    return torch.sum(even_loss+ zero_loss + agg_loss)
-
-
-def loss_function(target_freq_vec, frequencies,mean, logvar, weights,warmup_epochs, epoch,max_node):
+def loss_function(target_freq, logits,soft_freq,mean, logvar, weights,warmup_epochs, epoch,max_node):
+    criterion = nn.CrossEntropyLoss()
     loss_weights = get_loss_weights(epoch, weights,warmup_epochs)
-    recon_loss = torch.sum( (target_freq_vec - frequencies)**2)
+    logits_flat = logits.view(-1, logits.size(-1))        # shape (B×D, N)
+    targets_flat = target_freq.long().view(-1)                    # shape (B×D,)
+    recon_loss = F.cross_entropy(logits_flat, targets_flat, reduction='sum')
     kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-    erdos_gallai_loss = invalid_eg_penlaty(frequencies, max_node)
-    
-    total_loss = (loss_weights['reconstruction'] * recon_loss +
-                  loss_weights['kl_divergence'] * kl_loss +
-                  loss_weights['erdos_gallai'] * erdos_gallai_loss)
+    total_loss = (weights['reconstruction'] * recon_loss +
+                  weights['kl_divergence'] * kl_loss )
     return total_loss
+
 
 
 def evaluate_multisets_distance(source_tensor, target_tensor,max_node):
@@ -342,11 +316,10 @@ def evaluate_generated_multisets(generated_tensor):
 
 def main(args):
     config_dir = Path("configs")
-    dataset_dir = Path("datasets")
+    dataset_dir = Path("datasets") / args.dataset_dir
     model_dir = Path("models")
     config_file = config_dir / args.config_file
     config = toml.load(config_file)
-    dataset_dir = dataset_dir / args.dataset_dir
     batch_size = config['training']['batch_size']
     tensor, max_node = load_degree_sequence_from_directory(dataset_dir)
     train_tensor, test_tensor = train_test_split(tensor, test_size=0.2, random_state=42)
@@ -354,7 +327,7 @@ def main(args):
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
-    model = StdVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim)
+    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
         print(f"Model loaded from {args.input_model}")
@@ -397,9 +370,3 @@ if __name__ == "__main__":
     parser.add_argument('--evaluate', action='store_true', help='Whether we evaluate the model')
     args = parser.parse_args()
     main(args)
-
-
-"""
-
-
-"""

@@ -98,9 +98,9 @@ class MSVAE(torch.nn.Module):
             logits = self.decoder.logits_layer(F.relu(logits))
             logits = logits.view(-1, self.max_input_dim, self.max_input_dim)
             probs = F.softmax(logits, dim=-1)
-
+            temperature = 0.5
             B, D, N = probs.shape
-            samples = torch.multinomial(probs.view(-1, N), num_samples=1).view(B, D)
+            samples = torch.multinomial(probs.view(-1, N), 1).view(B, D)
 
             fixed_sequences = []
             for freq in samples:
@@ -294,9 +294,14 @@ def loss_function(target_freq, logits,soft_freq,mean, logvar, weights,warmup_epo
     kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
     erdos_gallai_loss = invalid_eg_penlaty(soft_freq, max_node)
     
+    lambda_entropy = weights.get("entropy", 0.0)
+    probs = F.softmax(logits, dim=-1)  # shape: (B, D, N)
+    entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)  # shape: (B, D)
+    entropy = entropy.mean()  # scalar
     total_loss = (loss_weights['reconstruction'] * recon_loss +
                   loss_weights['kl_divergence'] * kl_loss +
-                  loss_weights['erdos_gallai'] * erdos_gallai_loss)
+                  loss_weights['erdos_gallai'] * erdos_gallai_loss +
+                  lambda_entropy * entropy)
     return total_loss
 
 
