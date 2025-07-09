@@ -21,9 +21,7 @@ min_node = 50
 hop = 3
 
 [[datasets]]
-type = "community"
-count = 500
-max_node = 160
-min_node = 60
-p_intra = 0.3
-p_inter = 0.05
+type = "qm9"
+
+[[datasets]]
+type = "zinc"

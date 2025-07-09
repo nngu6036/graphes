@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from torch_geometric.datasets import Planetoid
 from torch_geometric.utils import to_networkx
 from scipy.spatial import Delaunay
+from torch_geometric.datasets import QM9, ZINC
 import numpy as np
 
 def generate_community_graph(min_node, max_node, p_intra=0.3, p_inter = 0.05):
@@ -55,8 +56,8 @@ def generate_planar_graph(node_count, edge_count):
         G.remove_edges_from(edges[:G.number_of_edges() - edge_count])
     return G
 
-def generate_ego_graph(min_node, max_node, hop):
-    """Generate an ego graph."""
+def load_ego_graph(min_node, max_node, hop):
+    """Load ego graph dataset."""
     dataset = Planetoid(root='./datasets', name='Citeseer')
     data = dataset[0]
     G = to_networkx(data, to_undirected=True)
@@ -66,6 +67,24 @@ def generate_ego_graph(min_node, max_node, hop):
         if ego.number_of_nodes() >= min_node and ego.number_of_nodes() <= max_node:  
             ego_graphs.append(ego)
     return ego_graphs
+
+def load_qm9_graph():
+    """Load QM9 graph dataset."""
+    qm9_dataset = QM9(root='datasets/QM9')
+    qm9_graphs = []
+    for qm9_graph in qm9_dataset:
+        G = to_networkx(qm9_graph, to_undirected=True)
+        qm9_graphs.append(G)
+    return qm9_graphs
+
+def load_zinc_graph():
+    """Load ZINC graph dataset."""
+    zinc_dataset = ZINC(root='datasets/ZINC', subset=True)
+    zinc_graphs = []
+    for zinc_graph in zinc_dataset:
+        G = to_networkx(zinc_graph, to_undirected=True)
+        zinc_graphs.append(G)
+    return zinc_graphs
 
 def generate_sbm_graph(block_sizes, probabilities):
     """Generate a Stochastic Block Model graph."""
@@ -116,7 +135,11 @@ def main(args):
 
         graphs = []
         if graph_type == "ego":
-            graphs = generate_ego_graph(dataset["min_node"],dataset["max_node"],dataset["hop"])
+            graphs = load_ego_graph(dataset["min_node"],dataset["max_node"],dataset["hop"])
+        if graph_type == "qm9":
+            graphs = load_qm9_graph()
+        if graph_type == "zinc":
+            graphs = load_zinc_graph()
         if graph_type == "planar":
             graph_count = dataset["count"]
             for _ in range(graph_count):
