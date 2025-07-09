@@ -280,18 +280,17 @@ def invalid_eg_penlaty(frequencies, max_node):
 
 
 def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch,max_node):
-    import pdb
-    pdb.set_trace()
-    one_hot_freq = F.gumbel_softmax(logits, tau=0.5, hard=True)
-    indices = torch.arange(max_node, device=logits.device).float()
-    pred_freq = torch.sum(one_hot_freq * indices, dim=-1)  # shape: (B, D)
+
+    #one_hot_freq = F.gumbel_softmax(logits, tau=0.5, hard=True)
+    #indices = torch.arange(max_node, device=logits.device).float()
+    #pred_freq = torch.sum(one_hot_freq * indices, dim=-1)  # shape: (B, D)
 
     loss_weights = get_loss_weights(epoch, weights,warmup_epochs)
     logits_flat = logits.view(-1, logits.size(-1))        # shape (B×D, N)
     targets_flat = target_freq.long().view(-1)                    # shape (B×D,)
     recon_loss = F.cross_entropy(logits_flat, targets_flat, reduction='sum')
     kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-    erdos_gallai_loss = invalid_eg_penlaty(pred_freq, max_node)
+    #erdos_gallai_loss = invalid_eg_penlaty(pred_freq, max_node)
     
     lambda_entropy = weights.get("entropy", 0.0)
     probs = F.softmax(logits, dim=-1)  # shape: (B, D, N)
@@ -299,7 +298,7 @@ def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch
     entropy = entropy.mean()  # scalar
     total_loss = (loss_weights['reconstruction'] * recon_loss +
                   loss_weights['kl_divergence'] * kl_loss +
-                  loss_weights['erdos_gallai'] * erdos_gallai_loss +
+                  #loss_weights['erdos_gallai'] * erdos_gallai_loss +
                   lambda_entropy * entropy)
 
     return total_loss
