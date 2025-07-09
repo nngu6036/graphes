@@ -116,13 +116,6 @@ def encode_degree_sequence(degree_sequence , max_class):
     sorted_degree_sequence = sorted(degree_sequence, reverse=True)
     return torch.tensor(degree_sequence)
 
-def decode_degree_sequence(one_hot_tensor):
-    degree_sequence = []
-    for i, count in enumerate(one_hot_tensor.squeeze()):
-        degree = i + 1  # Degree is index + 1
-        count = int(count.item())  # Convert float to int
-        degree_sequence.extend([degree] * count)  # Append 'count' times
-    return degree_sequence
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
@@ -207,7 +200,7 @@ def check_sequence_validity(seq):
             return False,3
     return True, 0
 
-def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_epochs,max_node):
+def train_stdvae(model, dataloader, num_epochs, learning_rate, weights, warmup_epochs,max_node):
     optimizer = Adam(model.parameters(), lr=learning_rate)
     model.train()
     for epoch in range(num_epochs):

@@ -1,13 +1,13 @@
 [[datasets]]
 type = "planar"
 count = 500
-nodes = 64
-edges = 181
+nodes = 500
+edges = 1575
 
 [[datasets]]
 type = "sbm"
 count = 500
-nodes = 100
+nodes = 361
 block_sizes = [25, 25, 25, 25]
 probabilities = [[0.25, 0.05, 0.05, 0.05],
                  [0.05, 0.25, 0.05, 0.05],
@@ -25,3 +25,12 @@ type = "qm9"
 
 [[datasets]]
 type = "zinc"
+
+
+[[datasets]]
+type = "community"
+count = 500
+min_node = 60
+max_node = 160
+p_intra = 0.3
+p_inter = 0.05

@@ -1,0 +1,109 @@
+Evaluate generated degree sequence
+Degree Validity (%): 100.0000
+Degree Empty (%): 0.0000
+Degree Odd (%): 0.0000
+Degree Invalidity (%): 0.0000
+Evaluate baseline: train <-> test
+Chamfer Distance: 239.4857
+Earth Mover's Distance: 308.8302
+KL Distance: 4.9203
+MMD: 0.0004
+Evaluate fit: train <-> generated
+Chamfer Distance: 307.8845
+Earth Mover's Distance: 304.2990
+KL Distance: 4.4107
+MMD: 0.0015
+Evaluate fit: test <-> generated
+Chamfer Distance: 310.0741
+Earth Mover's Distance: 302.4210
+KL Distance: 4.4081
+MMD: 0.0016
+
+Max node:  160  Max edge: 1324
+
+
+Evaluate generated degree sequence
+Degree Validity (%): 99.5000
+Degree Empty (%): 0.0000
+Degree Odd (%): 0.0000
+Degree Invalidity (%): 0.5000
+Evaluate baseline: train <-> test
+Chamfer Distance: 239.4857
+Earth Mover's Distance: 308.8302
+KL Distance: 4.9203
+MMD: 0.0004
+Evaluate fit: train <-> generated
+Chamfer Distance: 257.3970
+Earth Mover's Distance: 314.9687
+KL Distance: 4.6502
+MMD: 0.0020
+Evaluate fit: test <-> generated
+Chamfer Distance: 260.1925
+Earth Mover's Distance: 312.2818
+KL Distance: 4.6560
+MMD: 0.0016
+
+
+Degree Validity (%): 100.0000
+Degree Empty (%): 0.0000
+Degree Odd (%): 0.0000
+Degree Invalidity (%): 0.0000
+Evaluate baseline: train <-> test
+Chamfer Distance: 239.4857
+Earth Mover's Distance: 308.8302
+KL Distance: 4.9203
+MMD: 0.0004
+Evaluate fit: train <-> generated
+Chamfer Distance: 270.6890
+Earth Mover's Distance: 309.1508
+KL Distance: 4.6533
+MMD: 0.0003
+Evaluate fit: test <-> generated
+Chamfer Distance: 273.7783
+Earth Mover's Distance: 306.9009
+KL Distance: 4.6609
+MMD: 0.0005
+
+
+Evaluate generated degree sequence
+Degree Validity (%): 100.0000
+Degree Empty (%): 0.0000
+Degree Odd (%): 0.0000
+Degree Invalidity (%): 0.0000
+Evaluate baseline: train <-> test
+Chamfer Distance: 239.4857
+Earth Mover's Distance: 308.8302
+KL Distance: 4.9203
+MMD: 0.0004
+Evaluate fit: train <-> generated
+Chamfer Distance: 226.7092
+Earth Mover's Distance: 311.1966
+KL Distance: 4.6505
+MMD: 0.0012
+Evaluate fit: test <-> generated
+Chamfer Distance: 229.8803
+Earth Mover's Distance: 308.5258
+KL Distance: 4.6591
+MMD: 0.0009
+
+
+Evaluate generated degree sequence
+Degree Validity (%): 100.0000
+Degree Empty (%): 0.0000
+Degree Odd (%): 0.0000
+Degree Invalidity (%): 0.0000
+Evaluate baseline: train <-> test
+Chamfer Distance: 239.4857
+Earth Mover's Distance: 308.8302
+KL Distance: 4.9203
+MMD: 0.0004
+Evaluate fit: train <-> generated
+Chamfer Distance: 209.3643
+Earth Mover's Distance: 304.7482
+KL Distance: 4.6737
+MMD: 0.0004
+Evaluate fit: test <-> generated
+Chamfer Distance: 212.4755
+Earth Mover's Distance: 303.3630
+KL Distance: 4.6853
+MMD: 0.0009

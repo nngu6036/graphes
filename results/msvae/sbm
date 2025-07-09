@@ -1,0 +1,44 @@
+Max node:  100  Max edge: 497
+
+Evaluate generated degree sequence
+Degree Validity (%): 100.0000
+Degree Empty (%): 0.0000
+Degree Odd (%): 0.0000
+Degree Invalidity (%): 0.0000
+Evaluate baseline: train <-> test
+Chamfer Distance: 6.1507
+Earth Mover's Distance: 59.1217
+KL Distance: 0.4547
+MMD: 0.0001
+Evaluate fit: train <-> generated
+Chamfer Distance: 6.3075
+Earth Mover's Distance: 40.7490
+KL Distance: 0.4683
+MMD: 0.0001
+Evaluate fit: test <-> generated
+Chamfer Distance: 6.1544
+Earth Mover's Distance: 40.7026
+KL Distance: 0.4725
+MMD: 0.0004
+
+
+Evaluate generated degree sequence
+Degree Validity (%): 100.0000
+Degree Empty (%): 0.0000
+Degree Odd (%): 0.0000
+Degree Invalidity (%): 0.0000
+Evaluate baseline: train <-> test
+Chamfer Distance: 6.1507
+Earth Mover's Distance: 59.1217
+KL Distance: 0.4547
+MMD: 0.0001
+Evaluate fit: train <-> generated
+Chamfer Distance: 6.1450
+Earth Mover's Distance: 40.5722
+KL Distance: 0.4486
+MMD: 0.0001
+Evaluate fit: test <-> generated
+Chamfer Distance: 5.9345
+Earth Mover's Distance: 40.5492
+KL Distance: 0.4506
+MMD: 0.0002

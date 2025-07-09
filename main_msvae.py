@@ -132,12 +132,15 @@ def decode_degree_sequence(one_hot_tensor):
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
+    max_edge = 0
     seqs = []
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
             max_node = max(max_node, graph.number_of_nodes())
+            max_edge = max(max_node, graph.number_of_edges())
+    print("Max node: ", max_node, " Max edge:", max_edge)
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
@@ -231,70 +234,14 @@ def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_ep
             total_loss += loss.item()
         print(f"Epoch Multiset-VAE [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
 
-def get_loss_weights(epoch, weights, warmup_epochs, base = 5.0):
-    if epoch < warmup_epochs:
-        # early phase — weak constraint
-        scale = epoch / warmup_epochs
-        beta_eg = weights['erdos_gallai'] * (math.exp(base * scale) - 1) / (math.exp(base) - 1)
-
-        return {
-            'reconstruction': weights['reconstruction'],
-            'kl_divergence': weights['kl_divergence'],
-            'erdos_gallai': beta_eg,
-        }
-    else:
-        return {
-            'reconstruction': weights['reconstruction'],
-            'kl_divergence': weights['kl_divergence'],
-            'erdos_gallai': weights['erdos_gallai'],
-        }
-
-def penalize_near_zero_inverse(x, epsilon=1e-6):
-    return 1.0 / (x ** 2 + epsilon)
-
-def even_loss_sigmoid(x, sharpness=10.0):
-    # Penalize when mod 2 is close to 1 (odd)
-    return (1 - torch.cos(np.pi * x)) / 2
-
-def invalid_eg_penlaty(frequencies, max_node):
-    indices = torch.arange(1, max_node+1).float().to(frequencies.device)
-    deg_sum = torch.sum(frequencies * indices, dim=-1)
-    even_loss = even_loss_sigmoid(deg_sum)
-    zero_loss = penalize_near_zero_inverse(deg_sum)
-
-    """
-    agg_loss = 0
-    for k in range(1, max_node+1):
-        alpha_V = torch.sum(frequencies * indices, dim=2) /2
-        beta_k = k * (k - 1) + k * (max_node - k) / 2
-        alpha_k = torch.sum(frequencies[:, :, :k] * indices[:k], dim=2)
-        agg_loss += torch.sigmoid(3 * alpha_k / 2 - beta_k - alpha_V / 2)
-    """
-    agg_loss = 0
-    for k in range(1, max_node+1):
-        lhs = torch.sum(frequencies[:, :k] * indices[:k], dim=-1)
-        rhs = k * (k-1) + torch.sum(torch.minimum(indices[k:], torch.tensor(k, device=frequencies.device)) * frequencies[:, k:], dim=-1)
-        agg_loss += F.relu(lhs - rhs)
-    return torch.sum(even_loss+ zero_loss + agg_loss)
-
 
 
 def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch,max_node):
-
-    #one_hot_freq = F.gumbel_softmax(logits, tau=0.5, hard=True)
-    #indices = torch.arange(max_node, device=logits.device).float()
-    #pred_freq = torch.sum(one_hot_freq * indices, dim=-1)  # shape: (B, D)
-
-    #probs = F.softmax(logits, dim=-1)                        # (B, D, N)
-    #values = torch.arange(max_node, dtype=probs.dtype, device=probs.device)  # (N,)
-    #soft_freq = torch.sum(probs * values, dim=-1)  
-
     loss_weights = get_loss_weights(epoch, weights,warmup_epochs)
     logits_flat = logits.view(-1, logits.size(-1))        # shape (B×D, N)
     targets_flat = target_freq.long().view(-1)                    # shape (B×D,)
     recon_loss = F.cross_entropy(logits_flat, targets_flat, reduction='sum')
     kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-    #erdos_gallai_loss = invalid_eg_penlaty(soft_freq, max_node)
     
     lambda_entropy = weights.get("entropy", 0.0)
     probs = F.softmax(logits, dim=-1)  # shape: (B, D, N)
@@ -302,7 +249,6 @@ def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch
     entropy = entropy.mean()  # scalar
     total_loss = (loss_weights['reconstruction'] * recon_loss +
                   loss_weights['kl_divergence'] * kl_loss +
-                 # loss_weights['erdos_gallai'] * erdos_gallai_loss +
                   lambda_entropy * entropy)
 
     return total_loss

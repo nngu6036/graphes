@@ -18,8 +18,10 @@ from collections import Counter
 import numpy as np
 from sklearn.metrics.pairwise import rbf_kernel
 from torch_geometric.nn import GINConv, global_mean_pool
+from scipy.stats import wasserstein_distance
+from networkx.algorithms.graphlet import graphlet_degree_vectors
 from .main_msvae import MSVAE
-from sklearn.metrics.pairwise import rbf_kernel
+
 
 class GINPredictor(nn.Module):
     def __init__(self, in_channels, hidden_dim, num_layer):
@@ -150,8 +152,15 @@ def configuration_model_from_multiset(degrees):
     G.remove_edges_from(nx.selfloop_edges(G))
     return G
 
-def compute_mmd_degree(graphs_1, graphs_2, max_degree=None):
+def gaussian_emd_kernel(X, Y, sigma=1.0):
+    K = np.zeros((len(X), len(Y)))
+    for i, x in enumerate(X):
+        for j, y in enumerate(Y):
+            emd = wasserstein_distance(np.arange(len(x)), np.arange(len(y)), x, y)
+            K[i, j] = np.exp(-emd**2 / (2 * sigma**2))
+    return K
 
+def compute_mmd_degree_emd(graphs_1, graphs_2, max_degree=None, sigma=1.0):
     def degree_histogram(graphs, max_degree):
         histograms = []
         for G in graphs:
@@ -160,48 +169,51 @@ def compute_mmd_degree(graphs_1, graphs_2, max_degree=None):
             for deg in degree_sequence:
                 if deg <= max_degree:
                     hist[deg] += 1
-            hist /= hist.sum() + 1e-8
+            if hist.sum() == 0:
+                hist[0] = 1.0
+            hist /= hist.sum()
             histograms.append(hist)
         return np.array(histograms)
 
     if max_degree is None:
-        max_d1 = max([max(dict(G.degree()).values()) for G in graphs_1])
-        max_d2 = max([max(dict(G.degree()).values()) for G in graphs_2])
+        max_d1 = max((max(dict(G.degree()).values()) if len(G) > 0 else 0) for G in graphs_1)
+        max_d2 = max((max(dict(G.degree()).values()) if len(G) > 0 else 0) for G in graphs_2)
         max_degree = max(max_d1, max_d2)
 
     H1 = degree_histogram(graphs_1, max_degree)
     H2 = degree_histogram(graphs_2, max_degree)
 
-    K_xx = rbf_kernel(H1, H1, gamma=1.0)
-    K_yy = rbf_kernel(H2, H2, gamma=1.0)
-    K_xy = rbf_kernel(H1, H2, gamma=1.0)
+    K_xx = gaussian_emd_kernel(H1, H1, sigma)
+    K_yy = gaussian_emd_kernel(H2, H2, sigma)
+    K_xy = gaussian_emd_kernel(H1, H2, sigma)
 
     mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
     return float(mmd)
 
-def compute_mmd_cluster(graphs_1, graphs_2):
+def compute_mmd_cluster(graphs_1, graphs_2, bins=10, sigma=1.0):
     def clustering_histogram(graphs, bins=10):
         histograms = []
         for G in graphs:
             clustering = list(nx.clustering(G).values())
             hist, _ = np.histogram(clustering, bins=bins, range=(0, 1), density=True)
+            if hist.sum() == 0:
+                hist[0] = 1.0
+            hist /= hist.sum()
             histograms.append(hist)
         return np.array(histograms)
 
-    H1 = clustering_histogram(graphs_1)
-    H2 = clustering_histogram(graphs_2)
+    H1 = clustering_histogram(graphs_1, bins)
+    H2 = clustering_histogram(graphs_2, bins)
 
-    K_xx = rbf_kernel(H1, H1, gamma=1.0)
-    K_yy = rbf_kernel(H2, H2, gamma=1.0)
-    K_xy = rbf_kernel(H1, H2, gamma=1.0)
+    K_xx = gaussian_emd_kernel(H1, H1, sigma)
+    K_yy = gaussian_emd_kernel(H2, H2, sigma)
+    K_xy = gaussian_emd_kernel(H1, H2, sigma)
 
     mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
     return float(mmd)
 
 
-def compute_mmd_orbit(graphs_1, graphs_2):
-    from networkx.algorithms.graphlet import graphlet_degree_vectors
-
+def compute_mmd_orbit(graphs_1, graphs_2, sigma=1.0):
     def orbit_histogram(graphs):
         histograms = []
         for G in graphs:
@@ -212,6 +224,8 @@ def compute_mmd_orbit(graphs_1, graphs_2):
                     counts = np.zeros(1)
             except Exception:
                 counts = np.zeros(1)
+            counts = counts.astype(float)
+            counts /= counts.sum() + 1e-8  # normalize to make it a histogram
             histograms.append(counts)
 
         max_len = max(len(h) for h in histograms)
@@ -221,9 +235,9 @@ def compute_mmd_orbit(graphs_1, graphs_2):
     H1 = orbit_histogram(graphs_1)
     H2 = orbit_histogram(graphs_2)
 
-    K_xx = rbf_kernel(H1, H1, gamma=1.0)
-    K_yy = rbf_kernel(H2, H2, gamma=1.0)
-    K_xy = rbf_kernel(H1, H2, gamma=1.0)
+    K_xx = gaussian_emd_kernel(H1, H1, sigma)
+    K_yy = gaussian_emd_kernel(H2, H2, sigma)
+    K_xy = gaussian_emd_kernel(H1, H2, sigma)
 
     mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
     return float(mmd)
