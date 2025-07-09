@@ -34,32 +34,30 @@ class MSVAEEncoder(torch.nn.Module):
         return mean, logvar
 
 class MSVAEDecoder(torch.nn.Module):
-    def __init__(self, latent_dim, hidden_dim, max_output_dim,max_multiplicity):
+    def __init__(self, latent_dim, hidden_dim, max_output_dim,max_frequency):
         super(MSVAEDecoder, self).__init__()
         self.max_output_dim = max_output_dim
-        self.max_multiplicity = max_multiplicity
+        self.max_frequency = max_frequency
         self.hidden_layer = torch.nn.Linear(latent_dim, hidden_dim)
         
-        # Predicts a distribution over {0, 1, ..., N-1} for each degree
-        self.logits_layer = torch.nn.Linear(hidden_dim, max_output_dim * max_multiplicity)
+        # Predicts a distribution over {0, 1, ..., N-1} for each degree frequency
+        self.logits_layer = torch.nn.Linear(hidden_dim, max_output_dim * max_frequency)
 
     def forward(self, z, batch):
         h = F.relu(self.hidden_layer(z))                         # (B, H)
         logits = self.logits_layer(h)                            # (B, D*N)
-        logits = logits.view(-1, self.max_output_dim, self.max_multiplicity)  # (B, D, N)
-
-        probs = F.softmax(logits, dim=-1)                        # (B, D, N)
-        values = torch.arange(self.max_multiplicity, dtype=probs.dtype, device=probs.device)  # (N,)
-        soft_freq = torch.sum(probs * values, dim=-1)             # (B, D)
-        return logits,soft_freq
+        logits = logits.view(-1, self.max_output_dim, self.max_frequency)  # (B, D, N)
+        return logits
 
 class MSVAE(torch.nn.Module):
-    def __init__(self, max_input_dim, hidden_dim, latent_dim):
+    def __init__(self, max_input_dim, hidden_dim, latent_dim, max_frequency):
         super(MSVAE, self).__init__()
         self.max_input_dim = max_input_dim
-        self.encoder = MSVAEEncoder( max_input_dim, hidden_dim, latent_dim)
-        self.decoder = MSVAEDecoder(latent_dim, hidden_dim,max_input_dim,max_input_dim)
         self.latent_dim = latent_dim
+        self.max_frequency = max_frequency
+        self.encoder = MSVAEEncoder( max_input_dim, hidden_dim, latent_dim)
+        self.decoder = MSVAEDecoder(latent_dim, hidden_dim,max_input_dim,max_frequency)
+        
 
     def reparameterize(self, mean, logvar):
         std = torch.exp(0.5 * logvar)
@@ -69,8 +67,8 @@ class MSVAE(torch.nn.Module):
     def forward(self, batch):
         mean, logvar = self.encoder(batch)
         z = self.reparameterize(mean, logvar)
-        logits,soft_freq = self.decoder(z,batch)
-        return logits,soft_freq, mean, logvar
+        logits = self.decoder(z,batch)
+        return logits, mean, logvar
 
     def fix_degree_sum_even(self, freq: torch.Tensor) -> torch.Tensor:
         """
@@ -94,11 +92,8 @@ class MSVAE(torch.nn.Module):
             z = torch.randn((num_samples, self.latent_dim))
             
             # Get (B, D, N) probabilities from decoder
-            logits = self.decoder.hidden_layer(z)
-            logits = self.decoder.logits_layer(F.relu(logits))
-            logits = logits.view(-1, self.max_input_dim, self.max_input_dim)
+            logits = self.decoder(z, None) 
             probs = F.softmax(logits, dim=-1)
-            temperature = 0.5
             B, D, N = probs.shape
             samples = torch.multinomial(probs.view(-1, N), 1).view(B, D)
 
@@ -228,13 +223,12 @@ def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_ep
         for batch  in dataloader:
             X = batch[0]
             optimizer.zero_grad()
-            logits, soft_freq,mean, logvar = model(X)
+            logits,mean, logvar = model(X)
             # Compute the loss
-            loss = loss_function(X, logits,soft_freq, mean, logvar, weights,warmup_epochs, epoch, max_node)
+            loss = loss_function(X, logits, mean, logvar, weights,warmup_epochs, epoch, max_node)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-
         print(f"Epoch Multiset-VAE [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
 
 def get_loss_weights(epoch, weights, warmup_epochs, base = 5.0):
@@ -285,14 +279,19 @@ def invalid_eg_penlaty(frequencies, max_node):
 
 
 
-def loss_function(target_freq, logits,soft_freq,mean, logvar, weights,warmup_epochs, epoch,max_node):
-    criterion = nn.CrossEntropyLoss()
+def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch,max_node):
+    import pdb
+    pdb.set_trace()
+    one_hot_freq = F.gumbel_softmax(logits, tau=0.5, hard=True)
+    indices = torch.arange(max_node, device=logits.device).float()
+    pred_freq = torch.sum(one_hot_freq * indices, dim=-1)  # shape: (B, D)
+
     loss_weights = get_loss_weights(epoch, weights,warmup_epochs)
     logits_flat = logits.view(-1, logits.size(-1))        # shape (B×D, N)
     targets_flat = target_freq.long().view(-1)                    # shape (B×D,)
     recon_loss = F.cross_entropy(logits_flat, targets_flat, reduction='sum')
     kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-    erdos_gallai_loss = invalid_eg_penlaty(soft_freq, max_node)
+    erdos_gallai_loss = invalid_eg_penlaty(pred_freq, max_node)
     
     lambda_entropy = weights.get("entropy", 0.0)
     probs = F.softmax(logits, dim=-1)  # shape: (B, D, N)
@@ -302,6 +301,7 @@ def loss_function(target_freq, logits,soft_freq,mean, logvar, weights,warmup_epo
                   loss_weights['kl_divergence'] * kl_loss +
                   loss_weights['erdos_gallai'] * erdos_gallai_loss +
                   lambda_entropy * entropy)
+
     return total_loss
 
 
@@ -359,7 +359,7 @@ def main(args):
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
-    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim)
+    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
         print(f"Model loaded from {args.input_model}")

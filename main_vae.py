@@ -47,11 +47,7 @@ class StdVAEDecoder(torch.nn.Module):
         h = F.relu(self.hidden_layer(z))                         # (B, H)
         logits = self.logits_layer(h)                            # (B, D*N)
         logits = logits.view(-1, self.max_output_dim, self.max_degree)  # (B, D, N)
-
-        probs = F.softmax(logits, dim=-1)                        # (B, D, N)
-        values = torch.arange(self.max_degree, dtype=probs.dtype, device=probs.device)  # (N,)
-        soft_freq = torch.sum(probs * values, dim=-1)             # (B, D)
-        return logits,soft_freq
+        return logits
 
 class StdVAE(torch.nn.Module):
     def __init__(self, max_input_dim, hidden_dim, latent_dim):
@@ -69,8 +65,8 @@ class StdVAE(torch.nn.Module):
     def forward(self, batch):
         mean, logvar = self.encoder(batch)
         z = self.reparameterize(mean, logvar)
-        logits,seq = self.decoder(z,batch)
-        return logits,seq, mean, logvar
+        logits = self.decoder(z,batch)
+        return logits, mean, logvar
 
     def fix_degree_sum_even(self, seq: torch.Tensor) -> torch.Tensor:
         """
@@ -116,14 +112,9 @@ class StdVAE(torch.nn.Module):
         self.eval()
 
 def encode_degree_sequence(degree_sequence , max_class):
+    degree_sequence += [0] * (M - len(degree_sequence))
     sorted_degree_sequence = sorted(degree_sequence, reverse=True)
-    one_hot_tensor = torch.zeros(max_class, dtype=torch.float32)
-    for deg in sorted_degree_sequence:
-        if 1 <= deg <= max_class:
-            one_hot_tensor[deg - 1] += 1
-        else:
-            raise ValueError(f'Invalid degree sequence {degree_sequence}')
-    return one_hot_tensor
+    return torch.tensor(degree_sequence)
 
 def decode_degree_sequence(one_hot_tensor):
     degree_sequence = []
@@ -132,7 +123,6 @@ def decode_degree_sequence(one_hot_tensor):
         count = int(count.item())  # Convert float to int
         degree_sequence.extend([degree] * count)  # Append 'count' times
     return degree_sequence
-
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
@@ -226,9 +216,9 @@ def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_ep
         for batch  in dataloader:
             X = batch[0]
             optimizer.zero_grad()
-            logits, seq,mean, logvar = model(X)
+            logits,mean, logvar = model(X)
             # Compute the loss
-            loss = loss_function(X, logits,seq, mean, logvar, weights,warmup_epochs, epoch, max_node)
+            loss = loss_function(X, logits, mean, logvar, weights,warmup_epochs, epoch, max_node)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -261,8 +251,7 @@ def even_loss_sigmoid(x, sharpness=10.0):
     return (1 - torch.cos(np.pi * x)) / 2
 
 
-def loss_function(target_freq, logits,soft_freq,mean, logvar, weights,warmup_epochs, epoch,max_node):
-    criterion = nn.CrossEntropyLoss()
+def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch,max_node):
     loss_weights = get_loss_weights(epoch, weights,warmup_epochs)
     logits_flat = logits.view(-1, logits.size(-1))        # shape (B×D, N)
     targets_flat = target_freq.long().view(-1)                    # shape (B×D,)
@@ -362,7 +351,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='MS-VAE for Graph Generation')
+    parser = argparse.ArgumentParser(description='Standard-VAE for Graph Generation')
     parser.add_argument('--dataset-dir', type=str, help='Path to the directory containing graph files')
     parser.add_argument('--config-file', type=str, required=True, help='Path to the configuration file in TOML format')
     parser.add_argument('--output-model', type=str, help='Path to save the trained model')
