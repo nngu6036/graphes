@@ -7,7 +7,6 @@ import argparse
 import toml
 import math
 from pathlib import Path
-from torch_geometric.utils import from_networkx
 import networkx as nx
 from scipy.optimize import linear_sum_assignment
 from torch.optim import Adam
@@ -19,93 +18,9 @@ from collections import Counter
 import numpy as np
 from sklearn.metrics.pairwise import rbf_kernel
 
+from model_msvae import MSVAE
+from utils import compute_chamfer_distance, compute_degree_histograms, compute_kl_divergence, compute_mmd, compute_earth_movers_distance
 
-class MSVAEEncoder(torch.nn.Module):
-    def __init__(self,  input_dim, hidden_dim, latent_dim):
-        super(MSVAEEncoder, self).__init__()
-        self.hidden_layer = torch.nn.Linear(input_dim, hidden_dim)
-        self.mean_layer = torch.nn.Linear(hidden_dim, latent_dim)
-        self.logvar_layer = torch.nn.Linear(hidden_dim, latent_dim)
-
-    def forward(self, x):
-        h = F.relu(self.hidden_layer(x))
-        mean, logvar = self.mean_layer(h), self.logvar_layer(h)
-        return mean, logvar
-
-class MSVAEDecoder(torch.nn.Module):
-    def __init__(self, latent_dim, hidden_dim, max_output_dim,max_frequency):
-        super(MSVAEDecoder, self).__init__()
-        self.max_output_dim = max_output_dim
-        self.max_frequency = max_frequency
-        self.hidden_layer = torch.nn.Linear(latent_dim, hidden_dim)
-        # Predicts a distribution over {0, 1, ..., N-1} for each degree frequency
-        self.logits_layer = torch.nn.Linear(hidden_dim, max_output_dim * max_frequency)
-
-    def forward(self, z, batch):
-        h = F.relu(self.hidden_layer(z))                         # (B, H)
-        logits = self.logits_layer(h)                            # (B, D*N)
-        logits = logits.view(-1, self.max_output_dim, self.max_frequency)  # (B, D, N)
-        return logits
-
-class MSVAE(torch.nn.Module):
-    def __init__(self, max_input_dim, hidden_dim, latent_dim, max_frequency):
-        super(MSVAE, self).__init__()
-        self.max_input_dim = max_input_dim
-        self.latent_dim = latent_dim
-        self.max_frequency = max_frequency
-        self.encoder = MSVAEEncoder( max_input_dim, hidden_dim, latent_dim)
-        self.decoder = MSVAEDecoder(latent_dim, hidden_dim,max_input_dim,max_frequency)
-    
-    def reparameterize(self, mean, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mean + eps * std
-
-    def forward(self, batch):
-        mean, logvar = self.encoder(batch)
-        z = self.reparameterize(mean, logvar)
-        logits = self.decoder(z,batch)
-        return logits, mean, logvar
-
-    def fix_degree_sum_even(self, freq: torch.Tensor) -> torch.Tensor:
-        """
-        Ensures the sum of degrees in `freq` is even.
-        Subtracts 1 from the highest non-zero entry if sum is odd.
-        """
-        indices = torch.arange(1, self.max_input_dim+1).float().to(freq.device)
-        total = torch.sum(freq * indices).item()
-        if total % 2 != 0:
-            even_indices = torch.arange(0, freq.size(0), 2)  # get even indices: 0, 2, 4, ...
-            even_values = freq[even_indices]                # values at even indices
-            relative_max_idx = torch.argmax(even_values)    # index within the even subset
-            max_idx = even_indices[relative_max_idx]        # map back to original index
-            if freq[max_idx] > 0:
-                freq[max_idx] += 1
-        return freq
-
-    def generate(self, num_samples):
-        self.eval()
-        with torch.no_grad():
-            z = torch.randn((num_samples, self.latent_dim))
-            
-            # Get (B, D, N) probabilities from decoder
-            logits = self.decoder(z, None) 
-            probs = F.softmax(logits, dim=-1)
-            B, D, N = probs.shape
-            samples = torch.multinomial(probs.view(-1, N), 1).view(B, D)
-
-            fixed_sequences = []
-            for freq in samples:
-                freq_fixed = self.fix_degree_sum_even(freq.float())
-                fixed_sequences.append(freq_fixed)
-            return torch.stack(fixed_sequences)
-
-    def save_model(self, file_path):
-        torch.save(self.state_dict(), file_path)
-
-    def load_model(self, file_path):
-        self.load_state_dict(torch.load(file_path))
-        self.eval()
 
 def encode_degree_sequence(degree_sequence , max_class):
     sorted_degree_sequence = sorted(degree_sequence, reverse=True)
@@ -146,51 +61,6 @@ def load_degree_sequence_from_directory(directory_path):
                 seqs.append(seq)
     return torch.stack(seqs), max_node
 
-def compute_chamfer_distance(set1, set2):
-    if len(set1) == 0 or len(set2) == 0:
-        return float('inf')  # If one of the sets is empty, the distance is undefined.
-    set1 = torch.tensor(set1, dtype=torch.float).unsqueeze(1)
-    set2 = torch.tensor(set2, dtype=torch.float).unsqueeze(1)
-    dists_1_to_2 = torch.min(torch.cdist(set1, set2, p=2), dim=1).values
-    dists_2_to_1 = torch.min(torch.cdist(set2, set1, p=2), dim=1).values
-    chamfer_distance = torch.sum(dists_1_to_2) + torch.sum(dists_2_to_1)
-    return chamfer_distance.item()
-
-def compute_degree_histograms(sequences, max_degree):
-    histograms = []
-    for seq in sequences:
-        hist = torch.zeros(max_degree + 1)
-        for deg in seq:
-            if 0 <= deg <= max_degree:
-                hist[deg] += 1
-        hist /= hist.sum() + 1e-8  # normalize + stability
-        histograms.append(hist)
-    return torch.stack(histograms)
-
-def compute_kl_divergence(p_hist, q_hist, eps=1e-8):
-    p_ = p_hist + eps
-    q_ = q_hist + eps
-    p_ = p_ / p_.sum()
-    q_ = q_ / q_.sum()
-    return torch.sum(p_ * torch.log(p_ / q_)).item()
-
-def compute_mmd(X, Y, gamma=1.0):
-    X_np = X.detach().cpu().numpy()
-    Y_np = Y.detach().cpu().numpy()
-    K_xx = rbf_kernel(X_np, X_np, gamma=gamma)
-    K_yy = rbf_kernel(Y_np, Y_np, gamma=gamma)
-    K_xy = rbf_kernel(X_np, Y_np, gamma=gamma)
-    return float(K_xx.mean() + K_yy.mean() - 2 * K_xy.mean())
-
-def compute_earth_movers_distance(set1, set2):
-    if len(set1) == 0 or len(set2) == 0:
-        return float('inf')  # Undefined if one of the sets is empty.
-    set1 = torch.tensor(set1, dtype=torch.float).unsqueeze(1)
-    set2 = torch.tensor(set2, dtype=torch.float).unsqueeze(1)
-    cost_matrix = torch.cdist(set1, set2, p=2).cpu().numpy()
-    row_ind, col_ind = linear_sum_assignment(cost_matrix)
-    emd = cost_matrix[row_ind, col_ind].sum()
-    return emd
 
 def check_sequence_validity(seq):
     """Checks if a degree sequence is valid after removing all zeros."""

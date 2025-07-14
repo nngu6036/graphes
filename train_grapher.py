@@ -6,6 +6,7 @@ import os
 import argparse
 import toml
 import math
+import random
 from pathlib import Path
 from torch_geometric.utils import from_networkx
 import networkx as nx
@@ -16,82 +17,10 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from collections import Counter
-import numpy as np
-from sklearn.metrics.pairwise import rbf_kernel
-from torch_geometric.nn import GINConv, global_mean_pool
-from scipy.stats import wasserstein_distance
-from networkx.algorithms.graphlet import graphlet_degree_vectors
-from .main_msvae import MSVAE
 
-
-class GINPredictor(nn.Module):
-    def __init__(self, in_channels, hidden_dim, num_layer):
-        super().__init__()
-        self.gin_layers = nn.ModuleList([
-            GINConv(nn.Sequential(nn.Linear(in_channels if i == 0 else hidden_dim, hidden_dim),
-                                  nn.ReLU(),
-                                  nn.Linear(hidden_dim, hidden_dim)))
-            for i in range(num_layer)
-        ])
-        self.edge_predictor = nn.Sequential(
-            nn.Linear(hidden_dim * 4, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
-
-    def forward(self, x, edge_index, edge_pairs, candidate_edges):
-        for gin in self.gin_layers:
-            x = gin(x, edge_index)
-        u, v = edge_pairs[:, 0], edge_pairs[:, 1]
-        x_u, x_v = x[u], x[v]
-        target_edge = get_edge_representation(x, u, v)
-        scores = []
-        for edge in candidate_edges:
-            i, j = edge[0], edge[1]
-            edge_feat = get_edge_representation(x, torch.tensor([i]), torch.tensor([j]))
-            score = self.edge_predictor(torch.cat([target_edge, edge_feat], dim=-1))
-            scores.append(score)
-        logits = torch.cat(scores, dim=1)  # shape: (batch_size, num_candidates)
-        return logits
-
-    def save_model(self, file_path):
-        torch.save(self.state_dict(), file_path)
-
-    def load_model(self, file_path):
-        self.load_state_dict(torch.load(file_path))
-        self.eval()
-
-    def generate(self, num_samples, num_steps, msvae_model = None):
-        self.eval()
-        degree_seqs = msvae_model.generate(num_samples)
-        generated_graphs = []
-
-        for seq in degree_seqs:
-            degrees = decode_degree_sequence(seq)
-            G = configuration_model_from_multiset(degrees)
-            for _ in range(num_steps):
-                edges = list(G.edges())
-                e1 = random.choice(edges)
-                u, v = e1
-                edge_candidates = [e for e in edges if e != e1 and len(set(e + e1)) == 4]
-                if not edge_candidates:
-                    continue
-                candidate_tensor = torch.tensor(edge_candidates, dtype=torch.long)
-                edge_pair = torch.tensor([[u, v]], dtype=torch.long)
-                data = graph_to_data(G)
-                edge_index = data.edge_index
-                scores = self(data.x, edge_index, edge_pair, candidate_tensor)
-                top_idx = torch.argmax(scores, dim=1).item()
-                x, y = candidate_tensor[top_idx].tolist()
-                if not G.has_edge(u, x) and not G.has_edge(v, y):
-                    G.remove_edges_from([e1, (x, y)])
-                    G.add_edges_from([(u, x), (v, y)])
-                elif not G.has_edge(u, y) and not G.has_edge(v, x):
-                    G.remove_edges_from([e1, (x, y)])
-                    G.add_edges_from([(u, y), (v, x)])
-            generated_graphs.append(G)
-
-        return generated_graphs
+from model_msvae import MSVAE
+from model_grapher import GraphER
+from utils import graph_to_data,compute_mmd_degree_emd,compute_mmd_cluster, compute_mmd_orbit
 
 def graph_structure_loss(G_orig, G_corrupted):
     A_orig = nx.to_numpy_array(G_orig)
@@ -103,21 +32,6 @@ def graph_structure_loss(G_orig, G_corrupted):
     # Binary matrix difference
     diff = torch.tensor(np.abs(A_orig - A_corrupt), dtype=torch.float32)
     return diff.mean()
-
-
-def get_edge_representation(x, u, v, method="sum_absdiff"):
-    x_u, x_v = x[u], x[v]
-    if method == "mean":
-        return (x_u + x_v) / 2
-    elif method == "sum":
-        return x_u + x_v
-    elif method == "max":
-        return torch.max(x_u, x_v)
-    elif method == "sum_absdiff":
-        return torch.cat([x_u + x_v, torch.abs(x_u - x_v)], dim=-1)
-    else:
-        return torch.cat([x_u, x_v], dim=-1)
-
 
 def rewire_edges(G, num_rewirings):
     edges = list(G.edges())
@@ -140,6 +54,7 @@ def rewire_edges(G, num_rewirings):
         edges = list(G.edges())
     return G, rewired_pairs
 
+
 def sample_edge_pairs(G, num_samples=16):
     edges = list(G.edges())
     edge_pairs = []
@@ -152,103 +67,7 @@ def sample_edge_pairs(G, num_samples=16):
         edge_pairs.append((random.choice([u, v]), random.choice([x, y])))
     return torch.tensor(edge_pairs, dtype=torch.long)
 
-def graph_to_data(G):
-    for node in G.nodes:
-        G.nodes[node]['x'] = [1.0]
-    return from_networkx(G)
 
-def decode_degree_sequence(seq):
-    degrees = []
-    for degree, count in enumerate(seq):
-        degrees.extend([degree] * int(count))
-    return degrees
-
-def configuration_model_from_multiset(degrees):
-    G = nx.configuration_model(degrees)
-    G = nx.Graph(G)
-    G.remove_edges_from(nx.selfloop_edges(G))
-    return G
-
-def gaussian_emd_kernel(X, Y, sigma=1.0):
-    K = np.zeros((len(X), len(Y)))
-    for i, x in enumerate(X):
-        for j, y in enumerate(Y):
-            emd = wasserstein_distance(np.arange(len(x)), np.arange(len(y)), x, y)
-            K[i, j] = np.exp(-emd**2 / (2 * sigma**2))
-    return K
-
-def compute_mmd_degree_emd(graphs_1, graphs_2, max_degree=None, sigma=1.0):
-    def degree_histogram(graphs, max_degree):
-        histograms = []
-        for G in graphs:
-            degree_sequence = [deg for _, deg in G.degree()]
-            hist = np.zeros(max_degree + 1)
-            for deg in degree_sequence:
-                if deg <= max_degree:
-                    hist[deg] += 1
-            if hist.sum() == 0:
-                hist[0] = 1.0
-            hist /= hist.sum()
-            histograms.append(hist)
-        return np.array(histograms)
-
-    if max_degree is None:
-        max_d1 = max((max(dict(G.degree()).values()) if len(G) > 0 else 0) for G in graphs_1)
-        max_d2 = max((max(dict(G.degree()).values()) if len(G) > 0 else 0) for G in graphs_2)
-        max_degree = max(max_d1, max_d2)
-    H1 = degree_histogram(graphs_1, max_degree)
-    H2 = degree_histogram(graphs_2, max_degree)
-    K_xx = gaussian_emd_kernel(H1, H1, sigma)
-    K_yy = gaussian_emd_kernel(H2, H2, sigma)
-    K_xy = gaussian_emd_kernel(H1, H2, sigma)
-    mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
-    return float(mmd)
-
-def compute_mmd_cluster(graphs_1, graphs_2, bins=10, sigma=1.0):
-    def clustering_histogram(graphs, bins=10):
-        histograms = []
-        for G in graphs:
-            clustering = list(nx.clustering(G).values())
-            hist, _ = np.histogram(clustering, bins=bins, range=(0, 1), density=True)
-            if hist.sum() == 0:
-                hist[0] = 1.0
-            hist /= hist.sum()
-            histograms.append(hist)
-        return np.array(histograms)
-    H1 = clustering_histogram(graphs_1, bins)
-    H2 = clustering_histogram(graphs_2, bins)
-    K_xx = gaussian_emd_kernel(H1, H1, sigma)
-    K_yy = gaussian_emd_kernel(H2, H2, sigma)
-    K_xy = gaussian_emd_kernel(H1, H2, sigma)
-    mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
-    return float(mmd)
-
-def compute_mmd_orbit(graphs_1, graphs_2, sigma=1.0):
-    def orbit_histogram(graphs):
-        histograms = []
-        for G in graphs:
-            try:
-                gdv = graphlet_degree_vectors(G, 4)
-                counts = np.array([v for vec in gdv.values() for v in vec])
-                if len(counts) == 0:
-                    counts = np.zeros(1)
-            except Exception:
-                counts = np.zeros(1)
-            counts = counts.astype(float)
-            counts /= counts.sum() + 1e-8  # normalize to make it a histogram
-            histograms.append(counts)
-
-        max_len = max(len(h) for h in histograms)
-        padded = [np.pad(h, (0, max_len - len(h))) for h in histograms]
-        return np.array(padded)
-    H1 = orbit_histogram(graphs_1)
-    H2 = orbit_histogram(graphs_2)
-    K_xx = gaussian_emd_kernel(H1, H1, sigma)
-    K_yy = gaussian_emd_kernel(H2, H2, sigma)
-    K_xy = gaussian_emd_kernel(H1, H2, sigma)
-    mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
-    return float(mmd)
-    
 def load_graph_from_directory(directory_path):
     max_node = 0 
     graphs = []
@@ -263,7 +82,7 @@ def load_graph_from_directory(directory_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
             graph = nx.convert_node_labels_to_integers(graph)
             graphs.append(graph)
-    return torch.stack(graphs), max_node
+    return graphs, max_node
 
 
 def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T):
@@ -347,24 +166,24 @@ def main(args):
     model_dir = Path("models")
     config_file = config_dir / args.config_file
     msvae_config_file = config_dir / args.msvae_config_file
-    msvae_model_file = config_dir / args.msvae_model
+    msvae_model_file = model_dir / args.msvae_model
     config = toml.load(config_file)
     msvae_config = toml.load(msvae_config_file)
     graphs, max_node = load_graph_from_directory(dataset_dir)
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
-    msvae_model  = load_msvae_from_file(max_node, msvae_config,msvae_model_file)
+    msvae_model  = load_msvae_from_file(max_node, config,msvae_model_file)
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
     num_layer = config['training']['num_layer']
-    T = config['training']['T']
-    model = GINPredictor(in_channels=max_node, hidden_dim=hidden_dim,num_layer=num_layer)
+    model = GraphER(in_channels=max_node, hidden_dim=hidden_dim,num_layer=num_layer)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
         print(f"Model Graph-ER loaded from {args.input_model}")
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_grapher(model, train_graphs, num_epochs, learning_rate, max_node)
+        T = config['training']['T']
+        train_grapher(model, train_graphs, num_epochs, learning_rate, max_node,T)
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
