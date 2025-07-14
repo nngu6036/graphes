@@ -27,6 +27,13 @@ python main_msvae.py  --dataset-dir dataset1_qm9_edgelists --config-file  msvae_
 python main_msvae.py  --dataset-dir dataset1_zinc_edgelists --config-file  msvae_config1.toml --output-model msvae_zinc --evaluate
 ```
 
+## Training Std-VAE model
+```bash
+python main_vae.py  --dataset-dir dataset1_planar_edgelists --config-file  msvae_config1.toml --evaluate
+python main_vae.py  --dataset-dir dataset1_ego_edgelists --config-file  msvae_config1.toml  --evaluate
+python main_vae.py  --dataset-dir dataset1_sbm_edgelists --config-file  msvae_config1.toml  --evaluate
+python main_vae.py  --dataset-dir dataset1_community_edgelists --config-file  msvae_config1.toml  --evaluate
+
 ## Training GraphER model
 ```bash
 python main_grapher.py --config-path grapher_config.toml  --dataset-dir dataset1_planar_edgelists --msvae-model msvae_planar --msvae-config-path msvae_config1.toml --output-model grapher_planar --evaluate

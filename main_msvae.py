@@ -20,7 +20,6 @@ import numpy as np
 from sklearn.metrics.pairwise import rbf_kernel
 
 
-
 class MSVAEEncoder(torch.nn.Module):
     def __init__(self,  input_dim, hidden_dim, latent_dim):
         super(MSVAEEncoder, self).__init__()
@@ -39,7 +38,6 @@ class MSVAEDecoder(torch.nn.Module):
         self.max_output_dim = max_output_dim
         self.max_frequency = max_frequency
         self.hidden_layer = torch.nn.Linear(latent_dim, hidden_dim)
-        
         # Predicts a distribution over {0, 1, ..., N-1} for each degree frequency
         self.logits_layer = torch.nn.Linear(hidden_dim, max_output_dim * max_frequency)
 
@@ -57,8 +55,7 @@ class MSVAE(torch.nn.Module):
         self.max_frequency = max_frequency
         self.encoder = MSVAEEncoder( max_input_dim, hidden_dim, latent_dim)
         self.decoder = MSVAEDecoder(latent_dim, hidden_dim,max_input_dim,max_frequency)
-        
-
+    
     def reparameterize(self, mean, logvar):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
@@ -103,7 +100,6 @@ class MSVAE(torch.nn.Module):
                 fixed_sequences.append(freq_fixed)
             return torch.stack(fixed_sequences)
 
-
     def save_model(self, file_path):
         torch.save(self.state_dict(), file_path)
 
@@ -128,7 +124,6 @@ def decode_degree_sequence(one_hot_tensor):
         count = int(count.item())  # Convert float to int
         degree_sequence.extend([degree] * count)  # Append 'count' times
     return degree_sequence
-
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
@@ -179,16 +174,13 @@ def compute_kl_divergence(p_hist, q_hist, eps=1e-8):
     q_ = q_ / q_.sum()
     return torch.sum(p_ * torch.log(p_ / q_)).item()
 
-
 def compute_mmd(X, Y, gamma=1.0):
     X_np = X.detach().cpu().numpy()
     Y_np = Y.detach().cpu().numpy()
     K_xx = rbf_kernel(X_np, X_np, gamma=gamma)
     K_yy = rbf_kernel(Y_np, Y_np, gamma=gamma)
     K_xy = rbf_kernel(X_np, Y_np, gamma=gamma)
-
     return float(K_xx.mean() + K_yy.mean() - 2 * K_xy.mean())
-
 
 def compute_earth_movers_distance(set1, set2):
     if len(set1) == 0 or len(set2) == 0:
@@ -234,26 +226,19 @@ def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_ep
             total_loss += loss.item()
         print(f"Epoch Multiset-VAE [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
 
-
-
 def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch,max_node):
-    loss_weights = get_loss_weights(epoch, weights,warmup_epochs)
     logits_flat = logits.view(-1, logits.size(-1))        # shape (B×D, N)
     targets_flat = target_freq.long().view(-1)                    # shape (B×D,)
     recon_loss = F.cross_entropy(logits_flat, targets_flat, reduction='sum')
     kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-    
     lambda_entropy = weights.get("entropy", 0.0)
     probs = F.softmax(logits, dim=-1)  # shape: (B, D, N)
     entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)  # shape: (B, D)
     entropy = entropy.mean()  # scalar
-    total_loss = (loss_weights['reconstruction'] * recon_loss +
-                  loss_weights['kl_divergence'] * kl_loss +
+    total_loss = (weights['reconstruction'] * recon_loss +
+                  weights['kl_divergence'] * kl_loss +
                   lambda_entropy * entropy)
-
     return total_loss
-
-
 
 def evaluate_multisets_distance(source_tensor, target_tensor,max_node):
     source_seqs = [decode_degree_sequence(tensor) for tensor in source_tensor]
@@ -273,7 +258,6 @@ def evaluate_multisets_distance(source_tensor, target_tensor,max_node):
         "KL Distance": avg_kl,
         "MMD": mmd
     }
-
 
 def evaluate_generated_multisets(generated_tensor):
     generated_seqs = [decode_degree_sequence(tensor) for tensor in generated_tensor]

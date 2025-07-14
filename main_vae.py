@@ -68,20 +68,15 @@ class StdVAE(torch.nn.Module):
         logits = self.decoder(z,batch)
         return logits, mean, logvar
 
-    def fix_degree_sum_even(self, seq: torch.Tensor) -> torch.Tensor:
-        """
-        Ensures the sum of degrees in `freq` is even.
-        Subtracts 1 from the highest non-zero entry if sum is odd.
-        """
-        total = torch.sum(seq).item()
-        if total % 2 != 0:
-            even_indices = torch.arange(0, freq.size(0), 2)  # get even indices: 0, 2, 4, ...
-            even_values = freq[even_indices]                # values at even indices
-            relative_max_idx = torch.argmax(even_values)    # index within the even subset
-            max_idx = even_indices[relative_max_idx]        # map back to original index
-            if freq[max_idx] > 0:
-                freq[max_idx] += 1
-        return freq
+    def fix_degree_sum_even(self, sequence: torch.Tensor) -> torch.Tensor:
+        total = sequence.sum().item()
+        if total % 2 == 0:
+            return sequence
+        # Find the largest odd value in the tensor
+        odd_mask = (sequence % 2 == 1)
+        odd_indices = torch.nonzero(odd_mask, as_tuple=True)[0]
+        sequence[odd_indices] += 1
+        return sequence
 
     def generate(self, num_samples):
         self.eval()
@@ -89,18 +84,15 @@ class StdVAE(torch.nn.Module):
             z = torch.randn((num_samples, self.latent_dim))
             
             # Get (B, D, N) probabilities from decoder
-            logits = self.decoder.hidden_layer(z)
-            logits = self.decoder.logits_layer(F.relu(logits))
+            logits = self.decoder(z, None)  
             logits = logits.view(-1, self.max_input_dim, self.max_input_dim)
             probs = F.softmax(logits, dim=-1)
-            temperature = 0.5
             B, D, N = probs.shape
             samples = torch.multinomial(probs.view(-1, N), 1).view(B, D)
-
             fixed_sequences = []
-            for freq in samples:
-                freq_fixed = self.fix_degree_sum_even(freq.float())
-                fixed_sequences.append(freq_fixed)
+            for seq in samples:
+                seq_fixed = self.fix_degree_sum_even(seq)
+                fixed_sequences.append(seq_fixed)
             return torch.stack(fixed_sequences)
 
 
@@ -112,19 +104,26 @@ class StdVAE(torch.nn.Module):
         self.eval()
 
 def encode_degree_sequence(degree_sequence , max_class):
-    degree_sequence += [0] * (M - len(degree_sequence))
-    sorted_degree_sequence = sorted(degree_sequence, reverse=True)
-    return torch.tensor(degree_sequence)
+    degree_sequence += [0] * (max_class - len(degree_sequence))
+    return torch.tensor(degree_sequence).float()
+
+def decode_degree_sequence(tensor):
+    tensor = tensor.long()
+    non_zero_tensor = tensor[tensor != 0]
+    return non_zero_tensor.tolist()
 
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
+    max_edge = 0
     seqs = []
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
             max_node = max(max_node, graph.number_of_nodes())
+            max_edge = max(max_node, graph.number_of_edges())
+    print("Max node: ", max_node, " Max edge:", max_edge)
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
@@ -163,7 +162,6 @@ def compute_kl_divergence(p_hist, q_hist, eps=1e-8):
     q_ = q_ / q_.sum()
     return torch.sum(p_ * torch.log(p_ / q_)).item()
 
-
 def compute_mmd(X, Y, gamma=1.0):
     X_np = X.detach().cpu().numpy()
     Y_np = Y.detach().cpu().numpy()
@@ -171,7 +169,6 @@ def compute_mmd(X, Y, gamma=1.0):
     K_yy = rbf_kernel(Y_np, Y_np, gamma=gamma)
     K_xy = rbf_kernel(X_np, Y_np, gamma=gamma)
     return float(K_xx.mean() + K_yy.mean() - 2 * K_xy.mean())
-
 
 def compute_earth_movers_distance(set1, set2):
     if len(set1) == 0 or len(set2) == 0:
@@ -204,7 +201,7 @@ def train_stdvae(model, dataloader, num_epochs, learning_rate, weights, warmup_e
     optimizer = Adam(model.parameters(), lr=learning_rate)
     model.train()
     for epoch in range(num_epochs):
-        print("Traininig Multiset-VAE iteration ", epoch)
+        print("Traininig Std-VAE iteration ", epoch)
         total_loss = 0
         for batch  in dataloader:
             X = batch[0]
@@ -215,37 +212,9 @@ def train_stdvae(model, dataloader, num_epochs, learning_rate, weights, warmup_e
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-
-        print(f"Epoch Multiset-VAE [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
-
-def get_loss_weights(epoch, weights, warmup_epochs, base = 5.0):
-    if epoch < warmup_epochs:
-        # early phase — weak constraint
-        scale = epoch / warmup_epochs
-        beta_eg = weights['erdos_gallai'] * (math.exp(base * scale) - 1) / (math.exp(base) - 1)
-
-        return {
-            'reconstruction': weights['reconstruction'],
-            'kl_divergence': weights['kl_divergence'],
-            'erdos_gallai': beta_eg,
-        }
-    else:
-        return {
-            'reconstruction': weights['reconstruction'],
-            'kl_divergence': weights['kl_divergence'],
-            'erdos_gallai': weights['erdos_gallai'],
-        }
-
-def penalize_near_zero_inverse(x, epsilon=1e-6):
-    return 1.0 / (x ** 2 + epsilon)
-
-def even_loss_sigmoid(x, sharpness=10.0):
-    # Penalize when mod 2 is close to 1 (odd)
-    return (1 - torch.cos(np.pi * x)) / 2
-
+        print(f"Epoch Std-VAE [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
 
 def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch,max_node):
-    loss_weights = get_loss_weights(epoch, weights,warmup_epochs)
     logits_flat = logits.view(-1, logits.size(-1))        # shape (B×D, N)
     targets_flat = target_freq.long().view(-1)                    # shape (B×D,)
     recon_loss = F.cross_entropy(logits_flat, targets_flat, reduction='sum')
@@ -253,8 +222,6 @@ def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch
     total_loss = (weights['reconstruction'] * recon_loss +
                   weights['kl_divergence'] * kl_loss )
     return total_loss
-
-
 
 def evaluate_multisets_distance(source_tensor, target_tensor,max_node):
     source_seqs = [decode_degree_sequence(tensor) for tensor in source_tensor]
@@ -309,7 +276,7 @@ def main(args):
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
-    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim)
+    model = StdVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
         print(f"Model loaded from {args.input_model}")
@@ -318,7 +285,7 @@ def main(args):
         learning_rate = config['training']['learning_rate']
         warmup_epochs = config['training']['warmup_epochs']
         weights = config['training']['weights']
-        train_msvae(model, train_dataloader, num_epochs, learning_rate, weights,warmup_epochs, max_node)
+        train_stdvae(model, train_dataloader, num_epochs, learning_rate, weights,warmup_epochs, max_node)
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")

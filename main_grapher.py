@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
 import os
@@ -33,7 +34,7 @@ class GINPredictor(nn.Module):
             for i in range(num_layer)
         ])
         self.edge_predictor = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.Linear(hidden_dim * 4, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1)
         )
@@ -41,17 +42,14 @@ class GINPredictor(nn.Module):
     def forward(self, x, edge_index, edge_pairs, candidate_edges):
         for gin in self.gin_layers:
             x = gin(x, edge_index)
-        
         u, v = edge_pairs[:, 0], edge_pairs[:, 1]
         x_u, x_v = x[u], x[v]
-        target_edge = torch.cat([x_u, x_v], dim=-1)
-
+        target_edge = get_edge_representation(x, u, v)
         scores = []
         for edge in candidate_edges:
             i, j = edge[0], edge[1]
-            xi, xj = x[i], x[j]
-            concat = torch.cat([xi, xj], dim=-1)
-            score = self.edge_predictor(torch.cat([target_edge, concat], dim=-1))
+            edge_feat = get_edge_representation(x, torch.tensor([i]), torch.tensor([j]))
+            score = self.edge_predictor(torch.cat([target_edge, edge_feat], dim=-1))
             scores.append(score)
         logits = torch.cat(scores, dim=1)  # shape: (batch_size, num_candidates)
         return logits
@@ -63,7 +61,7 @@ class GINPredictor(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate(self, num_samples, msvae_model, num_steps=10):
+    def generate(self, num_samples, num_steps, msvae_model = None):
         self.eval()
         degree_seqs = msvae_model.generate(num_samples)
         generated_graphs = []
@@ -71,42 +69,59 @@ class GINPredictor(nn.Module):
         for seq in degree_seqs:
             degrees = decode_degree_sequence(seq)
             G = configuration_model_from_multiset(degrees)
-
             for _ in range(num_steps):
                 edges = list(G.edges())
-                if len(edges) < 2:
-                    break
-
                 e1 = random.choice(edges)
                 u, v = e1
                 edge_candidates = [e for e in edges if e != e1 and len(set(e + e1)) == 4]
-
                 if not edge_candidates:
                     continue
-
                 candidate_tensor = torch.tensor(edge_candidates, dtype=torch.long)
                 edge_pair = torch.tensor([[u, v]], dtype=torch.long)
-
                 data = graph_to_data(G)
                 edge_index = data.edge_index
-
                 scores = self(data.x, edge_index, edge_pair, candidate_tensor)
                 top_idx = torch.argmax(scores, dim=1).item()
                 x, y = candidate_tensor[top_idx].tolist()
-
                 if not G.has_edge(u, x) and not G.has_edge(v, y):
                     G.remove_edges_from([e1, (x, y)])
                     G.add_edges_from([(u, x), (v, y)])
                 elif not G.has_edge(u, y) and not G.has_edge(v, x):
                     G.remove_edges_from([e1, (x, y)])
                     G.add_edges_from([(u, y), (v, x)])
-
             generated_graphs.append(G)
 
         return generated_graphs
 
-def rewire_edges(G, num_rewirings=10):
+def graph_structure_loss(G_orig, G_corrupted):
+    A_orig = nx.to_numpy_array(G_orig)
+    A_corrupt = nx.to_numpy_array(G_corrupted)
+    # Resize if node sets differ (padding)
+    max_size = max(A_orig.shape[0], A_corrupt.shape[0])
+    A_pad = lambda A: np.pad(A, ((0, max_size - A.shape[0]), (0, max_size - A.shape[1])), constant_values=0)
+    A_orig, A_corrupt = A_pad(A_orig), A_pad(A_corrupt)
+    # Binary matrix difference
+    diff = torch.tensor(np.abs(A_orig - A_corrupt), dtype=torch.float32)
+    return diff.mean()
+
+
+def get_edge_representation(x, u, v, method="sum_absdiff"):
+    x_u, x_v = x[u], x[v]
+    if method == "mean":
+        return (x_u + x_v) / 2
+    elif method == "sum":
+        return x_u + x_v
+    elif method == "max":
+        return torch.max(x_u, x_v)
+    elif method == "sum_absdiff":
+        return torch.cat([x_u + x_v, torch.abs(x_u - x_v)], dim=-1)
+    else:
+        return torch.cat([x_u, x_v], dim=-1)
+
+
+def rewire_edges(G, num_rewirings):
     edges = list(G.edges())
+    rewired_pairs = []
     for _ in range(num_rewirings):
         if len(edges) < 2:
             break
@@ -117,11 +132,13 @@ def rewire_edges(G, num_rewirings=10):
             if not G.has_edge(u, x) and not G.has_edge(v, y):
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, x), (v, y)])
+                rewired_pairs.append((e1, e2))
             elif not G.has_edge(u, y) and not G.has_edge(v, x):
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, y), (v, x)])
+                rewired_pairs.append((e1, e2))
         edges = list(G.edges())
-    return G
+    return G, rewired_pairs
 
 def sample_edge_pairs(G, num_samples=16):
     edges = list(G.edges())
@@ -179,14 +196,11 @@ def compute_mmd_degree_emd(graphs_1, graphs_2, max_degree=None, sigma=1.0):
         max_d1 = max((max(dict(G.degree()).values()) if len(G) > 0 else 0) for G in graphs_1)
         max_d2 = max((max(dict(G.degree()).values()) if len(G) > 0 else 0) for G in graphs_2)
         max_degree = max(max_d1, max_d2)
-
     H1 = degree_histogram(graphs_1, max_degree)
     H2 = degree_histogram(graphs_2, max_degree)
-
     K_xx = gaussian_emd_kernel(H1, H1, sigma)
     K_yy = gaussian_emd_kernel(H2, H2, sigma)
     K_xy = gaussian_emd_kernel(H1, H2, sigma)
-
     mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
     return float(mmd)
 
@@ -201,17 +215,13 @@ def compute_mmd_cluster(graphs_1, graphs_2, bins=10, sigma=1.0):
             hist /= hist.sum()
             histograms.append(hist)
         return np.array(histograms)
-
     H1 = clustering_histogram(graphs_1, bins)
     H2 = clustering_histogram(graphs_2, bins)
-
     K_xx = gaussian_emd_kernel(H1, H1, sigma)
     K_yy = gaussian_emd_kernel(H2, H2, sigma)
     K_xy = gaussian_emd_kernel(H1, H2, sigma)
-
     mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
     return float(mmd)
-
 
 def compute_mmd_orbit(graphs_1, graphs_2, sigma=1.0):
     def orbit_histogram(graphs):
@@ -231,14 +241,11 @@ def compute_mmd_orbit(graphs_1, graphs_2, sigma=1.0):
         max_len = max(len(h) for h in histograms)
         padded = [np.pad(h, (0, max_len - len(h))) for h in histograms]
         return np.array(padded)
-
     H1 = orbit_histogram(graphs_1)
     H2 = orbit_histogram(graphs_2)
-
     K_xx = gaussian_emd_kernel(H1, H1, sigma)
     K_yy = gaussian_emd_kernel(H2, H2, sigma)
     K_xy = gaussian_emd_kernel(H1, H2, sigma)
-
     mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
     return float(mmd)
     
@@ -259,31 +266,52 @@ def load_graph_from_directory(directory_path):
     return torch.stack(graphs), max_node
 
 
-def train_grapher(model, graphs, num_epochs, learning_rate, max_node):
+def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T):
     optimizer = Adam(model.parameters(), lr=learning_rate)
     criterion = nn.BCEWithLogitsLoss()
     model.train()
+
     for epoch in range(num_epochs):
-        epoch_loss = 0
+        epoch_loss = 0.0
         for G in graphs:
-            # Simulate graph and diffusion corruption
-            G_corrupted = rewire_edges(G.copy())
-
+            # Step 1: Corrupt the graph with random edge-rewiring
+            num_rewirings = random.randint(1, T)
+            G_corrupted, rewired_pairs  = rewire_edges(G.copy(), num_rewirings)
+            # Step 2: Convert to PyG data format
             data = graph_to_data(G_corrupted)
+            # Step 3: Sample edge pairs
             edge_pairs = sample_edge_pairs(G_corrupted, num_samples=16)
+            # Step 4: Prepare candidate edges
+            all_edges = list(G_corrupted.edges())
+            candidate_edges = [e for e in all_edges if len(set(e)) == 2]
+            candidate_tensor = torch.tensor(candidate_edges, dtype=torch.long)
+            data = data.to('cpu')  # or to device if GPU is used
+            batch_loss = 0.0
 
-            # Simulate ground-truth labels (dummy 0/1 for now)
-            labels = torch.randint(0, 2, (edge_pairs.size(0),), dtype=torch.float)
+            for edge_pair in edge_pairs:
+                labels = []
+                for candidate in candidate_edges:
+                    ep = tuple(edge_pair[0].tolist())
+                    ce = tuple(candidate.tolist())
+                    is_positive = (ep, ce) in rewired_pairs or (ce, ep) in rewired_pairs
+                    labels.append(1.0 if is_positive else 0.0)
+                labels = torch.tensor(labels, dtype=torch.float)
+                edge_pair = edge_pair.unsqueeze(0)  # shape: (1, 2)
+                scores = model(data.x, data.edge_index, edge_pair, candidate_tensor)
+                # Create dummy labels for each candidate edge (random)
+                loss = criterion(scores.squeeze(), labels)
+                batch_loss += loss
+                total_pairs += 1
 
-            pred_scores = model(data.x, data.edge_index, edge_pairs)
-            loss = criterion(pred_scores, labels)
-
+            # Step 5: Backpropagation
             optimizer.zero_grad()
-            loss.backward()
+            structure_loss = graph_structure_loss(G, G_corrupted)
+            total_loss = batch_loss + structure_loss
+            total_loss.backward()
             optimizer.step()
-            epoch_loss += loss.item()
+            epoch_loss += total_loss.item()
 
-        print(f"Epoch {epoch+1}, Loss: {epoch_loss:.4f}")
+        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
 
 def loss_function(target_freq_vec, frequencies,mean, logvar, weights, epoch,max_node):
     recon_weight, kl_weight, erdos_gallai_weight = weights.get('reconstruction', 1.0), weights.get('kl_divergence', 1.0),weights.get('erdos_gallai', 1.0)
@@ -302,14 +330,14 @@ def evaluate_generated_graphs(generated_graphs, test_graphs):
     mmd_orbit = compute_mmd_orbit(generated_graphs, test_graphs)
     return {
         "MMD Degree": mmd_degree,
-        "MMS Cluster": mmd_cluster,
+        "MMD Cluster": mmd_cluster,
         "MMD Orbit": mmd_orbit,
     }
 
 def load_msvae_from_file(max_node,config, model_path):
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
-    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim)
+    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node)
     model.load_model(model_path)
     return model
 
@@ -328,8 +356,11 @@ def main(args):
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
     num_layer = config['training']['num_layer']
+    T = config['training']['T']
     model = GINPredictor(in_channels=max_node, hidden_dim=hidden_dim,num_layer=num_layer)
-    
+    if args.input_model:
+        model.load_model(model_dir / args.input_model)
+        print(f"Model Graph-ER loaded from {args.input_model}")
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
@@ -339,7 +370,10 @@ def main(args):
         print(f"Model saved to {args.output_model}")
     if args.evaluate:
         model.eval()
-        generated_graphs = model.generate(config['inference']['generate_samples'])
+        if args.ablation:
+            generated_graphs = model.generate(config['inference']['generate_samples'],T,msvae_model = None)
+        else:
+            generated_graphs = model.generate(config['inference']['generate_samples'],T,msvae_model = msvae_model)
         print(f"Evaluate generated graphs")
         metrics =  evaluate_generated_graphs(generated_graphs, test_graphs)
         for metric, value in metrics.items():
@@ -354,5 +388,7 @@ if __name__ == "__main__":
     parser.add_argument('--msvae-model', type=str, required=True,help='Path to load a pre-trained MS-VAE model')
     parser.add_argument('--output-model', type=str, help='Path to save the trained model')
     parser.add_argument('--input-model', type=str, help='Path to load a pre-trained model')
+    parser.add_argument('--evaluate', action='store_true', help='Whether we evaluate the model')
+    parser.add_argument('--abalation', action='store_true', help='Whether to run ablation study')
     args = parser.parse_args()
     main(args)
