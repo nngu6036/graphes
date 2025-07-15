@@ -17,6 +17,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from collections import Counter
+import numpy as np
 
 from model_msvae import MSVAE
 from model_grapher import GraphER
@@ -62,9 +63,8 @@ def sample_edge_pairs(G, num_samples=16):
         if len(edges) < 2:
             break
         e1, e2 = random.sample(edges, 2)
-        u, v = e1
-        x, y = e2
-        edge_pairs.append((random.choice([u, v]), random.choice([x, y])))
+        if len(set(e1 + e2)) == 4:  # ensure they can be rewired
+            edge_pairs.append(e1)  # only include the first edge; the second goes to candidates
     return torch.tensor(edge_pairs, dtype=torch.long)
 
 
@@ -110,17 +110,16 @@ def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T):
             for edge_pair in edge_pairs:
                 labels = []
                 for candidate in candidate_edges:
-                    ep = tuple(edge_pair[0].tolist())
-                    ce = tuple(candidate.tolist())
+                    ep = tuple(edge_pair)
+                    ce = tuple(candidate)
                     is_positive = (ep, ce) in rewired_pairs or (ce, ep) in rewired_pairs
                     labels.append(1.0 if is_positive else 0.0)
                 labels = torch.tensor(labels, dtype=torch.float)
                 edge_pair = edge_pair.unsqueeze(0)  # shape: (1, 2)
-                scores = model(data.x, data.edge_index, edge_pair, candidate_tensor)
+                scores = model(data.x, data.edge_index, edge_pair, candidate_tensor,t=num_rewirings)
                 # Create dummy labels for each candidate edge (random)
                 loss = criterion(scores.squeeze(), labels)
                 batch_loss += loss
-                total_pairs += 1
 
             # Step 5: Backpropagation
             optimizer.zero_grad()
@@ -175,7 +174,7 @@ def main(args):
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
     num_layer = config['training']['num_layer']
-    model = GraphER(in_channels=max_node, hidden_dim=hidden_dim,num_layer=num_layer)
+    model = GraphER(in_channels=1, hidden_dim=hidden_dim,num_layer=num_layer)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
         print(f"Model Graph-ER loaded from {args.input_model}")
@@ -208,6 +207,6 @@ if __name__ == "__main__":
     parser.add_argument('--output-model', type=str, help='Path to save the trained model')
     parser.add_argument('--input-model', type=str, help='Path to load a pre-trained model')
     parser.add_argument('--evaluate', action='store_true', help='Whether we evaluate the model')
-    parser.add_argument('--abalation', action='store_true', help='Whether to run ablation study')
+    parser.add_argument('--ablation', action='store_true', help='Whether to run ablation study')
     args = parser.parse_args()
     main(args)

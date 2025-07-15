@@ -41,23 +41,34 @@ class GraphER(nn.Module):
                                   nn.Linear(hidden_dim, hidden_dim)))
             for i in range(num_layer)
         ])
+        # Update edge predictor to accommodate time embeddin
         self.edge_predictor = nn.Sequential(
-            nn.Linear(hidden_dim * 4, hidden_dim),
+            nn.Linear(hidden_dim * 4 + hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1)
         )
+        # Time embedding MLP: scalar t -> hidden_dim
+        self.time_embedding = nn.Sequential(
+            nn.Linear(1, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
 
-    def forward(self, x, edge_index, edge_pairs, candidate_edges):
+    def forward(self, x, edge_index, edge_pairs, candidate_edges,t):
         for gin in self.gin_layers:
             x = gin(x, edge_index)
         u, v = edge_pairs[:, 0], edge_pairs[:, 1]
         x_u, x_v = x[u], x[v]
         target_edge = get_edge_representation(x, u, v)
+        # Time embedding: [1] -> [hidden_dim]
+        t_tensor = torch.tensor([[t]], dtype=torch.float32, device=x.device)
+        t_embed = self.time_embedding(t_tensor)  # shape: [1, hidden_dim]
         scores = []
         for edge in candidate_edges:
             i, j = edge[0], edge[1]
-            edge_feat = get_edge_representation(x, torch.tensor([i]), torch.tensor([j]))
-            score = self.edge_predictor(torch.cat([target_edge, edge_feat], dim=-1))
+            edge_feat = get_edge_representation(x, torch.tensor([i], device=x.device), torch.tensor([j], device=x.device))  # shape: [1, 4*hidden_dim]
+            feat = torch.cat([target_edge, edge_feat, t_embed], dim=-1)  # shape: [1, 4*hidden_dim + hidden_dim]
+            score = self.edge_predictor(feat)
             scores.append(score)
         logits = torch.cat(scores, dim=1)  # shape: (batch_size, num_candidates)
         return logits
