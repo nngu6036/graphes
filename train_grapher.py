@@ -36,10 +36,8 @@ def graph_structure_loss(G_orig, G_corrupted):
 
 def rewire_edges(G, num_rewirings):
     edges = list(G.edges())
-    rewired_pairs = []
+    last_rewired_pair = None
     for _ in range(num_rewirings):
-        if len(edges) < 2:
-            break
         e1, e2 = random.sample(edges, 2)
         u, v = e1
         x, y = e2
@@ -47,26 +45,13 @@ def rewire_edges(G, num_rewirings):
             if not G.has_edge(u, x) and not G.has_edge(v, y):
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, x), (v, y)])
-                rewired_pairs.append((e1, e2))
+                last_rewired_pair = (e1, e2)
             elif not G.has_edge(u, y) and not G.has_edge(v, x):
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, y), (v, x)])
-                rewired_pairs.append((e1, e2))
+                last_rewired_pair = (e1, e2)
         edges = list(G.edges())
-    return G, rewired_pairs
-
-
-def sample_edge_pairs(G, num_samples=16):
-    edges = list(G.edges())
-    edge_pairs = []
-    for _ in range(num_samples):
-        if len(edges) < 2:
-            break
-        e1, e2 = random.sample(edges, 2)
-        if len(set(e1 + e2)) == 4:  # ensure they can be rewired
-            edge_pairs.append(e1)  # only include the first edge; the second goes to candidates
-    return torch.tensor(edge_pairs, dtype=torch.long)
-
+    return G, last_rewired_pair
 
 def load_graph_from_directory(directory_path):
     max_node = 0 
@@ -85,51 +70,33 @@ def load_graph_from_directory(directory_path):
     return graphs, max_node
 
 
-def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T):
-    optimizer = Adam(model.parameters(), lr=learning_rate)
+def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device):
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.BCEWithLogitsLoss()
+    model.to(device)
     model.train()
 
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for G in graphs:
-            # Step 1: Corrupt the graph with random edge-rewiring
-            num_rewirings = random.randint(1, T)
-            G_corrupted, rewired_pairs  = rewire_edges(G.copy(), num_rewirings)
-            # Step 2: Convert to PyG data format
-            data = graph_to_data(G_corrupted)
-            # Step 3: Sample edge pairs
-            edge_pairs = sample_edge_pairs(G_corrupted, num_samples=16)
-            # Step 4: Prepare candidate edges
-            all_edges = list(G_corrupted.edges())
-            candidate_edges = [e for e in all_edges if len(set(e)) == 2]
-            candidate_tensor = torch.tensor(candidate_edges, dtype=torch.long)
-            data = data.to('cpu')  # or to device if GPU is used
             batch_loss = 0.0
-
-            for edge_pair in edge_pairs:
-                labels = []
-                for candidate in candidate_edges:
-                    ep = tuple(edge_pair)
-                    ce = tuple(candidate)
-                    is_positive = (ep, ce) in rewired_pairs or (ce, ep) in rewired_pairs
-                    labels.append(1.0 if is_positive else 0.0)
-                labels = torch.tensor(labels, dtype=torch.float)
-                edge_pair = edge_pair.unsqueeze(0)  # shape: (1, 2)
-                scores = model(data.x, data.edge_index, edge_pair, candidate_tensor,t=num_rewirings)
-                # Create dummy labels for each candidate edge (random)
-                loss = criterion(scores.squeeze(), labels)
-                batch_loss += loss
-
-            # Step 5: Backpropagation
+            num_rewirings = random.randint(1, T)
+            G_corrupted, last_rewired_pair = rewire_edges(G.copy(), num_rewirings)
+            (u,v), (x,y) = last_rewired_pair
+            data = graph_to_data(G_corrupted).to(device)
+            candidate_edges = [e for e in G_corrupted.edges()]
+            positive_edges = {frozenset((u, x)), frozenset((u, y))}
+            labels = torch.tensor([1.0 if frozenset((s, t)) in positive_edges else 0.0 for (s, t) in candidate_edges])
+            scores = model(data.x, data.edge_index, last_rewired_pair, candidate_edges, t=num_rewirings)
+            loss = criterion(scores.squeeze(), labels)
+            batch_loss += loss
             optimizer.zero_grad()
-            structure_loss = graph_structure_loss(G, G_corrupted)
-            total_loss = batch_loss + structure_loss
-            total_loss.backward()
+            batch_loss.backward()
             optimizer.step()
-            epoch_loss += total_loss.item()
+            epoch_loss += batch_loss.item()
 
         print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
+
 
 def loss_function(target_freq_vec, frequencies,mean, logvar, weights, epoch,max_node):
     recon_weight, kl_weight, erdos_gallai_weight = weights.get('reconstruction', 1.0), weights.get('kl_divergence', 1.0),weights.get('erdos_gallai', 1.0)
@@ -182,7 +149,7 @@ def main(args):
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
         T = config['training']['T']
-        train_grapher(model, train_graphs, num_epochs, learning_rate, max_node,T)
+        train_grapher(model, train_graphs, num_epochs, learning_rate, max_node,T, 'cpu')
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")

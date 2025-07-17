@@ -25,7 +25,6 @@ def decode_degree_sequence(seq):
         degrees.extend([degree] * int(count))
     return degrees
 
-
 def configuration_model_from_multiset(degrees):
     G = nx.configuration_model(degrees)
     G = nx.Graph(G)
@@ -41,36 +40,32 @@ class GraphER(nn.Module):
                                   nn.Linear(hidden_dim, hidden_dim)))
             for i in range(num_layer)
         ])
-        # Update edge predictor to accommodate time embeddin
         self.edge_predictor = nn.Sequential(
             nn.Linear(hidden_dim * 4 + hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1)
         )
-        # Time embedding MLP: scalar t -> hidden_dim
         self.time_embedding = nn.Sequential(
             nn.Linear(1, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim)
         )
 
-    def forward(self, x, edge_index, edge_pairs, candidate_edges,t):
+    def forward(self, x, edge_index ,edge_pair ,candidate_edges, t):
+        device = x.device
         for gin in self.gin_layers:
             x = gin(x, edge_index)
-        u, v = edge_pairs[:, 0], edge_pairs[:, 1]
-        x_u, x_v = x[u], x[v]
-        target_edge = get_edge_representation(x, u, v)
-        # Time embedding: [1] -> [hidden_dim]
-        t_tensor = torch.tensor([[t]], dtype=torch.float32, device=x.device)
-        t_embed = self.time_embedding(t_tensor)  # shape: [1, hidden_dim]
+        first_edge, second_edge = edge_pair
+        first_edge_feat = get_edge_representation(x, first_edge[0], first_edge[1])
+        t_tensor = torch.tensor([[t]], dtype=torch.float32, device=device)
+        t_embed = self.time_embedding(t_tensor).squeeze(0) 
         scores = []
         for edge in candidate_edges:
-            i, j = edge[0], edge[1]
-            edge_feat = get_edge_representation(x, torch.tensor([i], device=x.device), torch.tensor([j], device=x.device))  # shape: [1, 4*hidden_dim]
-            feat = torch.cat([target_edge, edge_feat, t_embed], dim=-1)  # shape: [1, 4*hidden_dim + hidden_dim]
+            edge_feat = get_edge_representation(x, edge[0], edge[1])
+            feat = torch.cat([first_edge_feat, edge_feat, t_embed], dim=-1)
             score = self.edge_predictor(feat)
             scores.append(score)
-        logits = torch.cat(scores, dim=1)  # shape: (batch_size, num_candidates)
+        logits = torch.cat(scores)
         return logits
 
     def save_model(self, file_path):
@@ -80,8 +75,10 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate(self, num_samples, num_steps, msvae_model = None):
+    def generate(self, num_samples, num_steps, msvae_model=None):
+        import random
         self.eval()
+        device = next(self.parameters()).device
         degree_seqs = msvae_model.generate(num_samples)
         generated_graphs = []
 
@@ -95,11 +92,11 @@ class GraphER(nn.Module):
                 edge_candidates = [e for e in edges if e != e1 and len(set(e + e1)) == 4]
                 if not edge_candidates:
                     continue
-                candidate_tensor = torch.tensor(edge_candidates, dtype=torch.long)
-                edge_pair = torch.tensor([[u, v]], dtype=torch.long)
-                data = graph_to_data(G)
+                candidate_tensor = torch.tensor(edge_candidates, dtype=torch.long, device=device)
+                edge_pair = torch.tensor([[u, v]], dtype=torch.long, device=device)
+                data = graph_to_data(G).to(device)
                 edge_index = data.edge_index
-                scores = self(data.x, edge_index, edge_pair, candidate_tensor)
+                scores = self(data.x, edge_index, edge_pair, candidate_tensor, t=0)
                 top_idx = torch.argmax(scores, dim=1).item()
                 x, y = candidate_tensor[top_idx].tolist()
                 if not G.has_edge(u, x) and not G.has_edge(v, y):

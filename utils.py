@@ -116,8 +116,8 @@ def compute_mmd_cluster(graphs_1, graphs_2, bins=10, sigma=1.0):
 
 
 def compute_mmd_orbit(graphs_1, graphs_2, sigma=1.0):
-    def graphlet_degree_vectors(G, k=4):
-        raise NotImplementedError("graphlet_degree_vectors requires ORCA or a custom implementation.")
+    from networkx.algorithms import graphlet_degree_vectors
+    import numpy as np
     def orbit_histogram(graphs):
         histograms = []
         for G in graphs:
