@@ -4,7 +4,6 @@ import random
 from pathlib import Path
 import toml
 import argparse
-import matplotlib.pyplot as plt
 from torch_geometric.datasets import Planetoid
 from torch_geometric.utils import to_networkx
 from scipy.spatial import Delaunay
