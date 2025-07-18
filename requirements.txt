@@ -4,6 +4,7 @@ networkx==3.3
 pyemd
 matplotlib
 scipy
-numpy
+numpy==1.24.0
 python-louvain
-torchvision 
+torchvision
+torch_geometric

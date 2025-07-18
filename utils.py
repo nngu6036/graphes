@@ -3,6 +3,7 @@ from torch_geometric.utils import from_networkx
 import numpy as np
 from sklearn.metrics.pairwise import rbf_kernel
 from scipy.stats import wasserstein_distance
+from scipy.optimize import linear_sum_assignment
 
 
 def compute_chamfer_distance(set1, set2):
