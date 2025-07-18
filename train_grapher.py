@@ -149,7 +149,7 @@ def main(args):
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
         T = config['training']['T']
-        train_grapher(model, train_graphs, num_epochs, learning_rate, max_node,T, 'gpu')
+        train_grapher(model, train_graphs, num_epochs, learning_rate, max_node,T, 'cpu')
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
