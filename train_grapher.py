@@ -82,6 +82,9 @@ def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device)
             batch_loss = 0.0
             num_rewirings = random.randint(1, T)
             G_corrupted, last_rewired_pair = rewire_edges(G.copy(), num_rewirings)
+            if not last_rewired_pair:
+                print("Revire pair null")
+                continue
             (u,v), (x,y) = last_rewired_pair
             data = graph_to_data(G_corrupted).to(device)
             candidate_edges = [e for e in G_corrupted.edges()]

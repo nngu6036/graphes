@@ -37,6 +37,12 @@ python train_stdvae.py  --dataset-dir dataset1_community_edgelists --config-file
 ## Training GraphER model
 ```bash
 python train_grapher.py --config-file grapher_config.toml  --dataset-dir dataset1_planar_edgelists --msvae-model msvae_planar --msvae-config-file msvae_config1.toml --output-model grapher_planar --evaluate
+
+python train_grapher.py --config-file grapher_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config-file msvae_config1.toml --output-model grapher_community --evaluate 
+
+
+
+
 ```
 
 
