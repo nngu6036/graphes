@@ -2,6 +2,27 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# one-hot enconding 
+
+def encode_degree_sequence(degree_sequence , max_class):
+    sorted_degree_sequence = sorted(degree_sequence, reverse=True)
+    one_hot_tensor = torch.zeros(max_class, dtype=torch.float32)
+    for deg in sorted_degree_sequence:
+        if 1 <= deg <= max_class:
+            one_hot_tensor[deg - 1] += 1
+        else:
+            raise ValueError(f'Invalid degree sequence {degree_sequence}')
+    return one_hot_tensor
+
+def decode_degree_sequence(one_hot_tensor):
+    degree_sequence = []
+    for i, count in enumerate(one_hot_tensor.squeeze()):
+        degree = i + 1  # Degree is index + 1
+        count = int(count.item())  # Convert float to int
+        degree_sequence.extend([degree] * count)  # Append 'count' times
+    return degree_sequence
+
+
 class MSVAEEncoder(torch.nn.Module):
     def __init__(self,  input_dim, hidden_dim, latent_dim):
         super(MSVAEEncoder, self).__init__()
@@ -65,7 +86,7 @@ class MSVAE(torch.nn.Module):
                 freq[max_idx] += 1
         return freq
 
-    def generate(self, num_samples):
+    def generate(self, num_samples ):
         self.eval()
         with torch.no_grad():
             z = torch.randn((num_samples, self.latent_dim))
@@ -79,9 +100,9 @@ class MSVAE(torch.nn.Module):
             fixed_sequences = []
             for freq in samples:
                 freq_fixed = self.fix_degree_sum_even(freq.float())
-                fixed_sequences.append(freq_fixed)
-            return torch.stack(fixed_sequences)
-
+                fixed_sequences.append(decode_degree_sequence(freq_fixed))
+            return fixed_sequences
+            
     def save_model(self, file_path):
         torch.save(self.state_dict(), file_path)
 

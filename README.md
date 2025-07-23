@@ -13,36 +13,74 @@ pip install -r requirements.txt
 
 ## Generate input dataset
 ```bash
-python create_dataset.py  --dataset-prefix dataset1 --config-file  dataset1_config.toml
+python create_dataset.py  --dataset-prefix dataset1 --config  dataset1_config.toml
 ```
 
-## Training MS-VAE model
+## Train and evaluate MS-VAE model
 ```bash
-python train_msvae.py  --dataset-dir dataset1_planar_edgelists --config-file  msvae_config1.toml --output-model msvae_planar --evaluate
-python train_msvae.py  --dataset-dir dataset1_ego_edgelists --config-file  msvae_config1.toml --output-model msvae_ego --evaluate
-python train_msvae.py  --dataset-dir dataset1_sbm_edgelists --config-file  msvae_config1.toml --output-model msvae_sbm --evaluate
-python train_msvae.py  --dataset-dir dataset1_community_edgelists --config-file  msvae_config1.toml --output-model msvae_community --evaluate
-
-python train_msvae.py  --dataset-dir dataset1_qm9_edgelists --config-file  msvae_config1.toml --output-model msvae_qm9 --evaluate
-python train_msvae.py  --dataset-dir dataset1_zinc_edgelists --config-file  msvae_config1.toml --output-model msvae_zinc --evaluate
+python train_msvae.py  --dataset-dir dataset1_planar_edgelists --config  msvae_config1.toml --output-model msvae_planar --evaluate
+```
+```bash
+python train_msvae.py  --dataset-dir dataset1_ego_edgelists --config  msvae_config1.toml --output-model msvae_ego --evaluate
+```
+```bash
+python train_msvae.py  --dataset-dir dataset1_sbm_edgelists --config  msvae_config1.toml --output-model msvae_sbm --evaluate
+```
+```bash
+python train_msvae.py  --dataset-dir dataset1_community_edgelists --config  msvae_config1.toml --output-model msvae_community --evaluate
+```
+```bash
+python train_msvae.py  --dataset-dir dataset1_qm9_edgelists --config  msvae_config1.toml --output-model msvae_qm9 --evaluate
+```
+```bash
+python train_msvae.py  --dataset-dir dataset1_zinc_edgelists --config  msvae_config1.toml --output-model msvae_zinc --evaluate
 ```
 
-## Training Std-VAE model
+## Evaluate MS-VAE model
 ```bash
-python train_stdvae.py  --dataset-dir dataset1_planar_edgelists --config-file  msvae_config1.toml --evaluate
-python train_stdvae.py  --dataset-dir dataset1_ego_edgelists --config-file  msvae_config1.toml  --evaluate
-python train_stdvae.py  --dataset-dir dataset1_sbm_edgelists --config-file  msvae_config1.toml  --evaluate
-python train_stdvae.py  --dataset-dir dataset1_community_edgelists --config-file  msvae_config1.toml  --evaluate
-
-## Training GraphER model
+python train_msvae.py  --dataset-dir dataset1_planar_edgelists --config  msvae_config1.toml --input-model msvae_planar --evaluate
+```
 ```bash
-python train_grapher.py --config-file grapher_config.toml  --dataset-dir dataset1_planar_edgelists --msvae-model msvae_planar --msvae-config-file msvae_config1.toml --output-model grapher_planar --evaluate
-
-python train_grapher.py --config-file grapher_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config-file msvae_config1.toml --output-model grapher_community --evaluate 
-
-
-
-
+python train_msvae.py  --dataset-dir dataset1_ego_edgelists --config  msvae_config1.toml --input-model msvae_ego --evaluate
+```
+```bash
+python train_msvae.py  --dataset-dir dataset1_sbm_edgelists --config  msvae_config1.toml --input-model msvae_sbm --evaluate
+```
+```bash
+python train_msvae.py  --dataset-dir dataset1_community_edgelists --config  msvae_config1.toml --input-model msvae_community --evaluate
+```
+```bash
+python train_msvae.py  --dataset-dir dataset1_qm9_edgelists --config  msvae_config1.toml --input-model msvae_qm9 --evaluate
+```
+```bash
+python train_msvae.py  --dataset-dir dataset1_zinc_edgelists --config  msvae_config1.toml --input-model msvae_zinc --evaluate
 ```
 
+## Train and evaluate Std-VAE model
+```bash
+python train_stdvae.py  --dataset-dir dataset1_planar_edgelists --config  msvae_config1.toml --evaluate
+```
+```bash
+python train_stdvae.py  --dataset-dir dataset1_ego_edgelists --config  msvae_config1.toml  --evaluate
+```
+```bash
+python train_stdvae.py  --dataset-dir dataset1_sbm_edgelists --config  msvae_config1.toml  --evaluate
+```
+```bash
+python train_stdvae.py  --dataset-dir dataset1_community_edgelists --config  msvae_config1.toml  --evaluate
+```
 
+## Training and evaluate GraphER model
+```bash
+python train_grapher.py --config grapher_config.toml  --dataset-dir dataset1_planar_edgelists --msvae-model msvae_planar --msvae-config msvae_config1.toml --output-model grapher_planar --evaluate
+```
+```bash
+python train_grapher.py --config grapher_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config msvae_config1.toml --output-model grapher_community --evaluate 
+```
+## Evaluate GraphER model
+```bash
+python train_grapher.py --config grapher_config.toml  --dataset-dir dataset1_planar_edgelists --msvae-model msvae_planar --msvae-config msvae_config1.toml --input-model grapher_planar --evaluate
+```
+```bash
+python train_grapher.py --config grapher_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config msvae_config1.toml --input-model grapher_community --evaluate 
+```

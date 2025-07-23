@@ -21,18 +21,9 @@ import numpy as np
 
 from model_msvae import MSVAE
 from model_grapher import GraphER
-from utils import graph_to_data,compute_mmd_degree_emd,compute_mmd_cluster, compute_mmd_orbit
+from eval import DegreeSequenceEvaluator, GraphsEvaluator
+from utils import *
 
-def graph_structure_loss(G_orig, G_corrupted):
-    A_orig = nx.to_numpy_array(G_orig)
-    A_corrupt = nx.to_numpy_array(G_corrupted)
-    # Resize if node sets differ (padding)
-    max_size = max(A_orig.shape[0], A_corrupt.shape[0])
-    A_pad = lambda A: np.pad(A, ((0, max_size - A.shape[0]), (0, max_size - A.shape[1])), constant_values=0)
-    A_orig, A_corrupt = A_pad(A_orig), A_pad(A_corrupt)
-    # Binary matrix difference
-    diff = torch.tensor(np.abs(A_orig - A_corrupt), dtype=torch.float32)
-    return diff.mean()
 
 def rewire_edges(G, num_rewirings):
     edges = list(G.edges())
@@ -53,29 +44,11 @@ def rewire_edges(G, num_rewirings):
         edges = list(G.edges())
     return G, last_rewired_pair
 
-def load_graph_from_directory(directory_path):
-    max_node = 0 
-    graphs = []
-    for filename in os.listdir(directory_path):
-        file_path = os.path.join(directory_path, filename)
-        if os.path.isfile(file_path):
-            graph = nx.read_edgelist(file_path, nodetype=int)
-            max_node = max(max_node, graph.number_of_nodes())
-    for filename in os.listdir(directory_path):
-        file_path = os.path.join(directory_path, filename)
-        if os.path.isfile(file_path):
-            graph = nx.read_edgelist(file_path, nodetype=int)
-            graph = nx.convert_node_labels_to_integers(graph)
-            graphs.append(graph)
-    return graphs, max_node
-
-
 def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.BCEWithLogitsLoss()
     model.to(device)
     model.train()
-
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for G in graphs:
@@ -90,16 +63,14 @@ def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device)
             candidate_edges = [e for e in G_corrupted.edges()]
             positive_edges = {frozenset((u, x)), frozenset((u, y))}
             labels = torch.tensor([1.0 if frozenset((s, t)) in positive_edges else 0.0 for (s, t) in candidate_edges])
-            scores = model(data.x, data.edge_index, last_rewired_pair, candidate_edges, t=num_rewirings)
+            scores = model(data.x, data.edge_index, (u,v), candidate_edges, t=num_rewirings)
             loss = criterion(scores.squeeze(), labels)
             batch_loss += loss
             optimizer.zero_grad()
             batch_loss.backward()
             optimizer.step()
             epoch_loss += batch_loss.item()
-
         print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
-
 
 def loss_function(target_freq_vec, frequencies,mean, logvar, weights, epoch,max_node):
     recon_weight, kl_weight, erdos_gallai_weight = weights.get('reconstruction', 1.0), weights.get('kl_divergence', 1.0),weights.get('erdos_gallai', 1.0)
@@ -110,7 +81,6 @@ def loss_function(target_freq_vec, frequencies,mean, logvar, weights, epoch,max_
     erdos_gallai_loss = eg_loss(frequencies, max_node)
     total_loss = recon_weight * recon_loss + kl_weight * kl_loss + erdos_gallai_weight * erdos_gallai_loss
     return total_loss
-
 
 def evaluate_generated_graphs(generated_graphs, test_graphs):
     mmd_degree = compute_mmd_degree(generated_graphs, test_graphs)
@@ -126,21 +96,19 @@ def load_msvae_from_file(max_node,config, model_path):
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
     model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node)
+    print(f"MS-VAE Model loaded from {model_path}")
     model.load_model(model_path)
-    return model
+    return model                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
 
 def main(args):
     config_dir = Path("configs")
     dataset_dir = Path("datasets") / args.dataset_dir
     model_dir = Path("models")
-    config_file = config_dir / args.config_file
-    msvae_config_file = config_dir / args.msvae_config_file
-    msvae_model_file = model_dir / args.msvae_model
-    config = toml.load(config_file)
-    msvae_config = toml.load(msvae_config_file)
+    config = toml.load(config_dir / args.config)
+    msvae_config = toml.load(config_dir / args.msvae_config)
     graphs, max_node = load_graph_from_directory(dataset_dir)
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
-    msvae_model  = load_msvae_from_file(max_node, config,msvae_model_file)
+    msvae_model  = load_msvae_from_file(max_node, msvae_config, model_dir /args.msvae_model)
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
     num_layer = config['training']['num_layer']
@@ -157,22 +125,23 @@ def main(args):
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
     if args.evaluate:
-        model.eval()
+        graph_eval = GraphsEvaluator()
+        T = config['training']['T']
         if args.ablation:
             generated_graphs = model.generate(config['inference']['generate_samples'],T,msvae_model = None)
         else:
             generated_graphs = model.generate(config['inference']['generate_samples'],T,msvae_model = msvae_model)
         print(f"Evaluate generated graphs")
-        metrics =  evaluate_generated_graphs(generated_graphs, test_graphs)
-        for metric, value in metrics.items():
-            print(f"{metric}: {value:.4f}")
+        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs)}")
+        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
+        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,test_data,generated_graphs)}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GRAPH-ER Model')
     parser.add_argument('--dataset-dir', type=str, required=True,help='Path to the directory containing graph files')
-    parser.add_argument('--config-file', type=str, required=True, help='Path to the configuration file in TOML format of Graph-ER')
-    parser.add_argument('--msvae-config-file', type=str, required=True, help='Path to the configuration file in TOML format of MS-VAE')
+    parser.add_argument('--config', type=str, required=True, help='Path to the configuration file in TOML format of Graph-ER')
+    parser.add_argument('--msvae-config', type=str, required=True, help='Path to the configuration file in TOML format of MS-VAE')
     parser.add_argument('--msvae-model', type=str, required=True,help='Path to load a pre-trained MS-VAE model')
     parser.add_argument('--output-model', type=str, help='Path to save the trained model')
     parser.add_argument('--input-model', type=str, help='Path to load a pre-trained model')

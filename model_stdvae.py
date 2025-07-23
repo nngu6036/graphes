@@ -1,5 +1,17 @@
 import torch
 
+# padding 0 to the sequence
+def encode_degree_sequence(degree_sequence , max_class):
+    degree_sequence += [0] * (max_class - len(degree_sequence))
+    return torch.tensor(degree_sequence).float()
+
+
+def decode_degree_sequence(tensor):
+    tensor = tensor.long()
+    non_zero_tensor = tensor[tensor != 0]
+    return non_zero_tensor.tolist()
+
+
 class StdVAEEncoder(torch.nn.Module):
     def __init__(self,  input_dim, hidden_dim, latent_dim):
         super(StdVAEEncoder, self).__init__()
@@ -71,9 +83,8 @@ class StdVAE(torch.nn.Module):
             fixed_sequences = []
             for seq in samples:
                 seq_fixed = self.fix_degree_sum_even(seq)
-                fixed_sequences.append(seq_fixed)
-            return torch.stack(fixed_sequences)
-
+                fixed_sequences.append(decode_degree_sequence(seq_fixed))
+            return fixed_sequences
 
     def save_model(self, file_path):
         torch.save(self.state_dict(), file_path)

@@ -115,10 +115,9 @@ def main(args):
     """Main function to generate datasets based on a configuration file."""
     config_dir = Path("configs")
     dataset_dir = Path("datasets")
-    config_file = args.config_file
     dataset_prefix = args.dataset_prefix
 
-    config_path = config_dir / config_file
+    config_path = config_dir / args.config_file
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
@@ -162,7 +161,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate graphs based on configuration.")
-    parser.add_argument("--config-file", type=str, required=True, help="Name of the TOML configuration file in the input folder.")
+    parser.add_argument("--config", type=str, required=True, help="Name of the TOML configuration file in the input folder.")
     parser.add_argument("--dataset-prefix", type=str, required=True, help="Prefix for naming the dataset files.")
     args = parser.parse_args()
 
