@@ -117,7 +117,7 @@ def main(args):
     dataset_dir = Path("datasets")
     dataset_prefix = args.dataset_prefix
 
-    config_path = config_dir / args.config_file
+    config_path = config_dir / args.config
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
 

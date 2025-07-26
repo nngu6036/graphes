@@ -1,5 +1,9 @@
 from typing import List
 import numpy as np
+import tempfile
+import subprocess
+import os
+import networkx as nx
 from sklearn.metrics.pairwise import rbf_kernel
 from scipy.stats import wasserstein_distance
 from scipy.optimize import linear_sum_assignment
@@ -8,6 +12,7 @@ import torch
 #from networkx.algorithms import graphlet_degree_vectors
 
 from utils import check_sequence_validity
+ORCA_EXEC = os.environ.get('ORCA_EXEC', None)
 
 def gaussian_emd_kernel(X, Y, sigma=1.0):
     K = np.zeros((len(X), len(Y)))
@@ -31,7 +36,7 @@ def compute_degree_histograms(sets, max_degree):
 
 class GraphsEvaluator():
 
-	def compute_mmd_degree_emd(graphs_1, graphs_2, max_degree=None, sigma=1.0):
+	def compute_mmd_degree_emd(self, graphs_1, graphs_2, max_degree=None, sigma=1.0):
 	    def degree_histogram(graphs, max_degree):
 	        histograms = []
 	        for G in graphs:
@@ -57,7 +62,7 @@ class GraphsEvaluator():
 	    mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
 	    return float(mmd)
 
-	def compute_mmd_cluster(graphs_1, graphs_2, bins=10, sigma=1.0):
+	def compute_mmd_cluster(self, graphs_1, graphs_2, bins=10, sigma=1.0):
 	    def clustering_histogram(graphs, bins=10):
 	        histograms = []
 	        for G in graphs:
@@ -76,31 +81,69 @@ class GraphsEvaluator():
 	    mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
 	    return float(mmd)
 
-	def compute_mmd_orbit(graphs_1, graphs_2, sigma=1.0):
-	    def orbit_histogram(graphs):
-	        histograms = []
-	        for G in graphs:
-	            try:
-	                gdv = graphlet_degree_vectors(G, 4)
-	                counts = np.array([v for vec in gdv.values() for v in vec])
-	                if len(counts) == 0:
-	                    counts = np.zeros(1)
-	            except Exception:
-	                counts = np.zeros(1)
-	            counts = counts.astype(float)
-	            counts /= counts.sum() + 1e-8  # normalize to make it a histogram
-	            histograms.append(counts)
+	def compute_mmd_orbit(self, graphs_1, graphs_2, sigma=1.0):
+		if not ORCA_EXEC:
+			raise Exception("ORCA module is not found")
+		def count_graphlets_orbit(graph, orbit_size: int = 4):
+			"""
+			Count graphlet orbits occurence using ORCA executable
+			Args:
+			G (nx.Graph): NetworkX undirected graph.
+			orbit_size (int): Size of the graphlets to count (typically 3, 4, or 5). Default is 4.
+			"""
+			with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp1,tempfile.NamedTemporaryFile(mode='r', delete=False) as temp2:
+				temp1_path = temp1.name
+				temp2_path = temp2.name
+				# Write graph in required format: first line n e, then e lines of edges
+				nodes = sorted(graph.nodes())
+				node_map = {node: idx for idx, node in enumerate(nodes)}
+				n = graph.number_of_nodes()
+				e = graph.number_of_edges()
+				temp1.write(f"{n} {e}\n")
+				for u, v in graph.edges():
+					temp1.write(f"{node_map[u]} {node_map[v]}\n")
+				temp1.flush()
+				# Run ORCA
+				try:
+					subprocess.run([ORCA_EXEC, "node", str(orbit_size), temp1_path, temp2_path],check=True, capture_output=True)
+				except subprocess.CalledProcessError as e:
+				    raise RuntimeError(f"ORCA execution failed: {e.stderr.decode()}")
 
-	        max_len = max(len(h) for h in histograms)
-	        padded = [np.pad(h, (0, max_len - len(h))) for h in histograms]
-	        return np.array(padded)
-	    H1 = orbit_histogram(graphs_1)
-	    H2 = orbit_histogram(graphs_2)
-	    K_xx = gaussian_emd_kernel(H1, H1, sigma)
-	    K_yy = gaussian_emd_kernel(H2, H2, sigma)
-	    K_xy = gaussian_emd_kernel(H1, H2, sigma)
-	    mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
-	    return float(mmd)
+			# Read orbit counts
+			with open(temp2_path, 'r') as f:
+				orbit_counts = [list(map(int, line.strip().split())) for line in f.readlines()]
+			# Clean up
+			os.remove(temp1_path)
+			os.remove(temp2_path)
+			# Sum counts across all nodes
+			total_counts = [0] * len(orbit_counts[0])
+			for node_orbit in orbit_counts:
+				for i, val in enumerate(node_orbit):
+					total_counts[i] += val
+			# Divide by multiplicity to get true occurrence count
+				orbit_multiplicity = [2, 2, 1, 6, 2, 1, 2, 4, 2, 1, 1, 2, 2, 4, 1]  # 15 orbits
+			true_occurrences = [
+			    total_counts[i] // orbit_multiplicity[i] for i in range(len(total_counts))
+			]
+			return true_occurrences
+
+		def orbit_histogram(graphs):
+			histograms = []
+			for G in graphs:
+				counts = torch.tensor(count_graphlets_orbit(G))
+				counts = counts.float()
+				counts /= counts.sum() + 1e-8  # normalize to make it a histogram
+				histograms.append(counts)
+			max_len = max(len(h) for h in histograms)
+			padded = [np.pad(h, (0, max_len - len(h))) for h in histograms]
+			return np.array(padded)
+		H1 = orbit_histogram(graphs_1)
+		H2 = orbit_histogram(graphs_2)
+		K_xx = gaussian_emd_kernel(H1, H1, sigma)
+		K_yy = gaussian_emd_kernel(H2, H2, sigma)
+		K_xy = gaussian_emd_kernel(H1, H2, sigma)
+		mmd = K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
+		return float(mmd)
 
 
 class DegreeSequenceEvaluator():

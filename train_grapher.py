@@ -28,7 +28,7 @@ from utils import *
 def rewire_edges(G, num_rewirings):
     edges = list(G.edges())
     last_rewired_pair = None
-    for _ in range(num_rewirings):
+    while num_rewirings > 0:
         e1, e2 = random.sample(edges, 2)
         u, v = e1
         x, y = e2
@@ -37,10 +37,12 @@ def rewire_edges(G, num_rewirings):
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, x), (v, y)])
                 last_rewired_pair = (e1, e2)
+                num_rewirings-= 1
             elif not G.has_edge(u, y) and not G.has_edge(v, x):
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, y), (v, x)])
                 last_rewired_pair = (e1, e2)
+                num_rewirings-= 1
         edges = list(G.edges())
     return G, last_rewired_pair
 
@@ -52,7 +54,6 @@ def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device)
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for G in graphs:
-            batch_loss = 0.0
             num_rewirings = random.randint(1, T)
             G_corrupted, last_rewired_pair = rewire_edges(G.copy(), num_rewirings)
             if not last_rewired_pair:
@@ -65,32 +66,12 @@ def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device)
             labels = torch.tensor([1.0 if frozenset((s, t)) in positive_edges else 0.0 for (s, t) in candidate_edges])
             scores = model(data.x, data.edge_index, (u,v), candidate_edges, t=num_rewirings)
             loss = criterion(scores.squeeze(), labels)
-            batch_loss += loss
             optimizer.zero_grad()
-            batch_loss.backward()
+            loss.backward()
             optimizer.step()
-            epoch_loss += batch_loss.item()
+            epoch_loss += loss.item()
         print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
 
-def loss_function(target_freq_vec, frequencies,mean, logvar, weights, epoch,max_node):
-    recon_weight, kl_weight, erdos_gallai_weight = weights.get('reconstruction', 1.0), weights.get('kl_divergence', 1.0),weights.get('erdos_gallai', 1.0)
-    recon_weight = max(0.1, recon_weight * (0.95 ** epoch))
-    kl_weight = min(kl_weight, epoch / 10)  
-    recon_loss = torch.sum( (target_freq_vec - frequencies)**2)
-    kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-    erdos_gallai_loss = eg_loss(frequencies, max_node)
-    total_loss = recon_weight * recon_loss + kl_weight * kl_loss + erdos_gallai_weight * erdos_gallai_loss
-    return total_loss
-
-def evaluate_generated_graphs(generated_graphs, test_graphs):
-    mmd_degree = compute_mmd_degree(generated_graphs, test_graphs)
-    mmd_cluster = compute_mmd_cluster(generated_graphs, test_graphs)
-    mmd_orbit = compute_mmd_orbit(generated_graphs, test_graphs)
-    return {
-        "MMD Degree": mmd_degree,
-        "MMD Cluster": mmd_cluster,
-        "MMD Orbit": mmd_orbit,
-    }
 
 def load_msvae_from_file(max_node,config, model_path):
     hidden_dim = config['training']['hidden_dim']
@@ -134,7 +115,7 @@ def main(args):
         print(f"Evaluate generated graphs")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,test_data,generated_graphs)}")
+        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
 
 
 if __name__ == "__main__":

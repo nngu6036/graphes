@@ -1,4 +1,6 @@
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 # padding 0 to the sequence
 def encode_degree_sequence(degree_sequence , max_class):

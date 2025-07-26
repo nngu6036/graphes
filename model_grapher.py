@@ -81,11 +81,12 @@ class GraphER(nn.Module):
         device = next(self.parameters()).device
         generated_graphs = []
         generated_seqs = msvae_model.generate(num_samples)
-        for seq in generated_seqs:
+        for idx,seq in enumerate(generated_seqs):
             valid, _ = check_sequence_validity(seq)
             if not valid:
                 print("Invalid degree")
                 continue
+            print(f"Generating graph {idx+1}")
             G = configuration_model_from_multiset(seq)
             for t in reversed(range(num_steps +1)):
                 edges = list(G.edges())

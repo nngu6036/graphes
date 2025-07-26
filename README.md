@@ -75,6 +75,9 @@ python train_stdvae.py  --dataset-dir dataset1_community_edgelists --config  msv
 python train_grapher.py --config grapher_config.toml  --dataset-dir dataset1_planar_edgelists --msvae-model msvae_planar --msvae-config msvae_config1.toml --output-model grapher_planar --evaluate
 ```
 ```bash
+python train_grapher.py --config grapher_config.toml  --dataset-dir dataset1_ego_edgelists --msvae-model msvae_ego --msvae-config msvae_config1.toml --output-model grapher_ego --evaluate 
+```
+```bash
 python train_grapher.py --config grapher_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config msvae_config1.toml --output-model grapher_community --evaluate 
 ```
 ## Evaluate GraphER model

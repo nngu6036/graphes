@@ -16,8 +16,8 @@ probabilities = [[0.25, 0.05, 0.05, 0.05],
 
 [[datasets]]
 type = "ego"
-max_node = 399
-min_node = 50
+max_node = 18
+min_node = 4
 hop = 3
 
 [[datasets]]
@@ -30,7 +30,7 @@ type = "zinc"
 [[datasets]]
 type = "community"
 count = 500
-min_node = 60
-max_node = 160
+min_node = 12
+max_node = 20
 p_intra = 0.3
 p_inter = 0.05
