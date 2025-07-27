@@ -21,6 +21,9 @@ python create_dataset.py  --dataset-prefix dataset1 --config  dataset1_config.to
 python train_msvae.py  --dataset-dir dataset1_ego_edgelists --config  msvae_config1.toml --output-model msvae_ego --evaluate
 ```
 ```bash
+python train_msvae.py  --dataset-dir dataset1_grid_edgelists --config  msvae_config1.toml --output-model msvae_grid --evaluate
+```
+```bash
 python train_msvae.py  --dataset-dir dataset1_community_edgelists --config  msvae_config1.toml --output-model msvae_community --evaluate
 ```
 ```bash
@@ -59,9 +62,6 @@ python train_stdvae.py  --dataset-dir dataset1_community_edgelists --config  msv
 ```
 
 ## Training and evaluate GraphER model
-```bash
-python train_grapher.py --config grapher_config.toml  --dataset-dir dataset1_planar_edgelists --msvae-model msvae_planar --msvae-config msvae_config1.toml --output-model grapher_planar --evaluate
-```
 ```bash
 python train_grapher.py --config grapher_config.toml  --dataset-dir dataset1_ego_edgelists --msvae-model msvae_ego --msvae-config msvae_config1.toml --output-model grapher_ego --evaluate 
 ```
