@@ -18,13 +18,7 @@ python create_dataset.py  --dataset-prefix dataset1 --config  dataset1_config.to
 
 ## Train and evaluate MS-VAE model
 ```bash
-python train_msvae.py  --dataset-dir dataset1_planar_edgelists --config  msvae_config1.toml --output-model msvae_planar --evaluate
-```
-```bash
 python train_msvae.py  --dataset-dir dataset1_ego_edgelists --config  msvae_config1.toml --output-model msvae_ego --evaluate
-```
-```bash
-python train_msvae.py  --dataset-dir dataset1_sbm_edgelists --config  msvae_config1.toml --output-model msvae_sbm --evaluate
 ```
 ```bash
 python train_msvae.py  --dataset-dir dataset1_community_edgelists --config  msvae_config1.toml --output-model msvae_community --evaluate
@@ -38,13 +32,7 @@ python train_msvae.py  --dataset-dir dataset1_zinc_edgelists --config  msvae_con
 
 ## Evaluate MS-VAE model
 ```bash
-python train_msvae.py  --dataset-dir dataset1_planar_edgelists --config  msvae_config1.toml --input-model msvae_planar --evaluate
-```
-```bash
 python train_msvae.py  --dataset-dir dataset1_ego_edgelists --config  msvae_config1.toml --input-model msvae_ego --evaluate
-```
-```bash
-python train_msvae.py  --dataset-dir dataset1_sbm_edgelists --config  msvae_config1.toml --input-model msvae_sbm --evaluate
 ```
 ```bash
 python train_msvae.py  --dataset-dir dataset1_community_edgelists --config  msvae_config1.toml --input-model msvae_community --evaluate

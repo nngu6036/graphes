@@ -10,6 +10,13 @@ from scipy.spatial import Delaunay
 from torch_geometric.datasets import QM9, ZINC
 import numpy as np
 
+def generate_grid_graph(min_node, max_node):
+    """Generate a grid graph."""
+    r = random.randint(min_node, max_node)
+    c = random.randint(min_node, max_node)
+    G = nx.grid_2d_graph(r, c, periodic=False)
+    return G
+
 def generate_community_graph(min_node, max_node, p_intra=0.3, p_inter = 0.05):
     """Generate a two-community graph with V nodes."""
     V = random.randint(min_node, max_node)
@@ -55,7 +62,7 @@ def generate_planar_graph(node_count, edge_count):
         G.remove_edges_from(edges[:G.number_of_edges() - edge_count])
     return G
 
-def load_ego_graph(min_node, max_node, hop):
+def load_ego_graph(min_node, max_node, hop, count):
     """Load ego graph dataset."""
     dataset = Planetoid(root='./datasets', name='Citeseer')
     data = dataset[0]
@@ -65,6 +72,9 @@ def load_ego_graph(min_node, max_node, hop):
         ego = nx.ego_graph(G, node, radius=hop)
         if ego.number_of_nodes() >= min_node and ego.number_of_nodes() <= max_node:  
             ego_graphs.append(ego)
+            count-= 1
+            if count == 0 :
+                break
     return ego_graphs
 
 def load_qm9_graph():
@@ -133,7 +143,8 @@ def main(args):
 
         graphs = []
         if graph_type == "ego":
-            graphs = load_ego_graph(dataset["min_node"],dataset["max_node"],dataset["hop"])
+            graph_count = dataset["count"]
+            graphs = load_ego_graph(dataset["min_node"],dataset["max_node"],dataset["hop"],graph_count)
         if graph_type == "qm9":
             graphs = load_qm9_graph()
         if graph_type == "zinc":
@@ -147,6 +158,11 @@ def main(args):
             graph_count = dataset["count"]
             for _ in range(graph_count):
                 G = generate_sbm_graph(dataset["block_sizes"], dataset["probabilities"])
+                graphs.append(G)
+        if graph_type == "grid":
+            graph_count = dataset["count"]
+            for _ in range(graph_count):
+                G = generate_grid_graph(dataset["min_node"],dataset["max_node"])
                 graphs.append(G)
         if graph_type == "community":
             graph_count = dataset["count"]
