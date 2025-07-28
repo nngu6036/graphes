@@ -88,6 +88,7 @@ def main(args):
     config = toml.load(config_dir / args.config)
     msvae_config = toml.load(config_dir / args.msvae_config)
     graphs, max_node = load_graph_from_directory(dataset_dir)
+    print(f"Loading graphs dataset {len(graphs)}")
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
     msvae_model  = load_msvae_from_file(max_node, msvae_config, model_dir /args.msvae_model)
     hidden_dim = config['training']['hidden_dim']

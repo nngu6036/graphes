@@ -49,13 +49,10 @@ python train_msvae.py  --dataset-dir dataset1_zinc_edgelists --config  msvae_con
 
 ## Train and evaluate Std-VAE model
 ```bash
-python train_stdvae.py  --dataset-dir dataset1_planar_edgelists --config  msvae_config1.toml --evaluate
+python train_stdvae.py  --dataset-dir dataset1_grid_edgelists --config  msvae_config1.toml --evaluate
 ```
 ```bash
 python train_stdvae.py  --dataset-dir dataset1_ego_edgelists --config  msvae_config1.toml  --evaluate
-```
-```bash
-python train_stdvae.py  --dataset-dir dataset1_sbm_edgelists --config  msvae_config1.toml  --evaluate
 ```
 ```bash
 python train_stdvae.py  --dataset-dir dataset1_community_edgelists --config  msvae_config1.toml  --evaluate
@@ -67,6 +64,9 @@ python train_grapher.py --config grapher_config.toml  --dataset-dir dataset1_ego
 ```
 ```bash
 python train_grapher.py --config grapher_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config msvae_config1.toml --output-model grapher_community --evaluate 
+```
+```bash
+python train_grapher.py --config grapher_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_grid --msvae-config msvae_config1.toml --output-model grapher_grid --evaluate 
 ```
 ## Evaluate GraphER model
 ```bash
