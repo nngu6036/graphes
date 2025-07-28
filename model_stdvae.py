@@ -4,8 +4,8 @@ import torch.nn.functional as F
 
 # padding 0 to the sequence
 def encode_degree_sequence(degree_sequence , max_class):
-    degree_sequence += [0] * (max_class - len(degree_sequence))
-    return torch.tensor(degree_sequence).float()
+    sequence = degree_sequence + [0] * (max_class - len(degree_sequence))
+    return torch.tensor(sequence).float()
 
 
 def decode_degree_sequence(tensor):
