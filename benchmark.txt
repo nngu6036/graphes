@@ -1,0 +1,9 @@
+GraphVAE : QM9 and ZINC
+GraphRNN : Community, Grid, B/A, Protein, Ego
+GNF: Ego, Community
+MolGAN: QM9
+SPECTRE: Community, QM9, Planar, SBM, Protein
+
+DiGress: QM9, Planar, SBM
+GraphGUIDE: SBM, Community small
+GDSS: Ego, Community, Enzyme, Grid, QM9, ZINC
