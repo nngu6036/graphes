@@ -45,7 +45,7 @@ def rewire_edges(G, num_rewirings):
                 last_rewired_pair = (e1, e2)
                 timestep+= 1
         edges = list(G.edges())
-    return G, last_rewired_pair,timestep
+    return G, last_rewired_pair, timestep
 
 def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -53,8 +53,10 @@ def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device)
     model.to(device)
     model.train()
     for epoch in range(num_epochs):
+        print("Epoch ", epoch)
         epoch_loss = 0.0
         for idx,G in enumerate(graphs):
+            print("Graph ", idx)
             num_rewirings = random.randint(1, T)
             G_corrupted, last_rewired_pair, timestep = rewire_edges(G.copy(), num_rewirings)
             if not last_rewired_pair:
@@ -88,8 +90,10 @@ def main(args):
     model_dir = Path("models")
     config = toml.load(config_dir / args.config)
     msvae_config = toml.load(config_dir / args.msvae_config)
-    graphs, max_node = load_graph_from_directory(dataset_dir)
+    graphs, max_node, max_lambda_2 = load_graph_from_directory(dataset_dir)
+    mixing_time = round(1/(1-max_lambda_2)*math.log(1/max_node/config['training']['epsilon']))
     print(f"Loading graphs dataset {len(graphs)}")
+    print("Mixing time ", mixing_time)
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
     msvae_model  = load_msvae_from_file(max_node, msvae_config, model_dir /args.msvae_model)
     hidden_dim = config['training']['hidden_dim']
@@ -102,20 +106,18 @@ def main(args):
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        T = config['training']['T']
-        train_grapher(model, train_graphs, num_epochs, learning_rate, max_node,T, 'cpu')
+        train_grapher(model, train_graphs, num_epochs, learning_rate, max_node,mixing_time, 'cpu')
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
     if args.evaluate:
         graph_eval = GraphsEvaluator()
-        T = config['training']['T']
         if args.ablation:
             sample_graphs = random.sample(train_graphs,min(len(train_graphs),config['inference']['generate_samples']))
             degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
-            generated_graphs = model.generate(config['inference']['generate_samples'],T,degree_sequences = degree_sequences, msvae_model = None)
+            generated_graphs = model.generate(config['inference']['generate_samples'],mixing_time,degree_sequences = degree_sequences, msvae_model = None)
         else:
-            generated_graphs = model.generate(config['inference']['generate_samples'],T,degree_sequences = None, msvae_model = msvae_model)
+            generated_graphs = model.generate(config['inference']['generate_samples'],mixing_time,degree_sequences = None, msvae_model = msvae_model)
         print(f"Evaluate generated graphs")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")

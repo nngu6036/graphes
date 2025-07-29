@@ -18,24 +18,29 @@ def generate_grid_graph(min_node, max_node):
     return G
 
 def generate_community_graph(min_node, max_node, p_intra=0.3, p_inter = 0.05):
-    """Generate a two-community graph with V nodes."""
+    def generate_connected_er_graph(n, p):
+        """Retry ER graph generation until a connected graph is produced."""
+        while True:
+            G = nx.erdos_renyi_graph(n, p)
+            if nx.is_connected(G):
+                return G
+
     V = random.randint(min_node, max_node)
     n = V // 2  # nodes per community
-
-    # Create ER graphs for each community
-    G1 = nx.erdos_renyi_graph(n, p_intra)
-    G2 = nx.erdos_renyi_graph(n, p_intra)
-
+    # Generate connected intra-community graphs
+    G1 = generate_connected_er_graph(n, p_intra)
+    G2 = generate_connected_er_graph(V - n, p_intra)
     # Relabel nodes in G2 to avoid overlap
     G2 = nx.relabel_nodes(G2, lambda x: x + n)
     G = nx.union(G1, G2)
-
-    # Add inter-community edges
-    inter_edges = int(p_inter * V)
-    for _ in range(inter_edges):
-        u = random.randint(0, n - 1)          # node from G1
-        v = random.randint(n, V - 1)          # node from G2
-        G.add_edge(u, v)
+    # Add inter-community edges and ensure connectivity
+    inter_edges = set()
+    while not nx.is_connected(G) or len(inter_edges) < int(p_inter * V):
+        u = random.randint(0, n - 1)
+        v = random.randint(n, V - 1)
+        if not G.has_edge(u, v):
+            G.add_edge(u, v)
+            inter_edges.add((u, v))
     return G
 
 def generate_planar_graph(node_count, edge_count):

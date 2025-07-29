@@ -5,7 +5,7 @@ hidden_dim = 64          # Hidden dimension size
 latent_dim = 32          # Latent dimension size
 batch_size = 1					 # Batch size
 num_layer = 3					   # GIN layer
-T = 200
+epsilon = 0.01
 
 
 [inference]
