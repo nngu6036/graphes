@@ -1,11 +1,11 @@
 [training]
-num_epochs = 800     # Number of training epochs
+num_epochs = 5000     # Number of training epochs
 learning_rate = 0.001    # Learning rate for the optimizer
 hidden_dim = 64          # Hidden dimension size
 latent_dim = 32          # Latent dimension size
 batch_size = 1					 # Batch size
-num_layer = 3					   # GIN layer
-T = 200
+num_layer = 5					   # GIN layer
+T = 1000
 
 
 [inference]
