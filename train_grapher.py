@@ -28,7 +28,8 @@ from utils import *
 def rewire_edges(G, num_rewirings):
     edges = list(G.edges())
     last_rewired_pair = None
-    while num_rewirings > 0:
+    timestep = 0
+    for _ in range(num_rewirings):
         e1, e2 = random.sample(edges, 2)
         u, v = e1
         x, y = e2
@@ -37,14 +38,14 @@ def rewire_edges(G, num_rewirings):
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, x), (v, y)])
                 last_rewired_pair = (e1, e2)
-                num_rewirings-= 1
+                timestep+= 1
             elif not G.has_edge(u, y) and not G.has_edge(v, x):
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, y), (v, x)])
                 last_rewired_pair = (e1, e2)
-                num_rewirings-= 1
+                timestep+= 1
         edges = list(G.edges())
-    return G, last_rewired_pair
+    return G, last_rewired_pair,timestep
 
 def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -53,9 +54,9 @@ def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device)
     model.train()
     for epoch in range(num_epochs):
         epoch_loss = 0.0
-        for G in graphs:
+        for idx,G in enumerate(graphs):
             num_rewirings = random.randint(1, T)
-            G_corrupted, last_rewired_pair = rewire_edges(G.copy(), num_rewirings)
+            G_corrupted, last_rewired_pair, timestep = rewire_edges(G.copy(), num_rewirings)
             if not last_rewired_pair:
                 print("Revire pair null")
                 continue
@@ -64,7 +65,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device)
             candidate_edges = [e for e in G_corrupted.edges()]
             positive_edges = {frozenset((u, x)), frozenset((u, y))}
             labels = torch.tensor([1.0 if frozenset((s, t)) in positive_edges else 0.0 for (s, t) in candidate_edges])
-            scores = model(data.x, data.edge_index, (u,v), candidate_edges, t=num_rewirings)
+            scores = model(data.x, data.edge_index, (u,v), candidate_edges, t=timestep)
             loss = criterion(scores.squeeze(), labels)
             optimizer.zero_grad()
             loss.backward()
