@@ -54,8 +54,6 @@ def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device)
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for G in graphs:
-            import pdb
-            pdb.set_trace()
             num_rewirings = random.randint(1, T)
             G_corrupted, last_rewired_pair = rewire_edges(G.copy(), num_rewirings)
             if not last_rewired_pair:
