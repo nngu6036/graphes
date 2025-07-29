@@ -76,11 +76,11 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate(self, num_samples, num_steps, msvae_model=None):
+    def generate(self, num_samples, num_steps, degree_sequences = None, msvae_model = None):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
-        generated_seqs = msvae_model.generate(num_samples)
+        generated_seqs = degree_sequences if degree_sequences else msvae_model.generate(num_samples)
         for idx,seq in enumerate(generated_seqs):
             valid, _ = check_sequence_validity(seq)
             if not valid:

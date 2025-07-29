@@ -54,6 +54,8 @@ def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device)
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for G in graphs:
+            import pdb
+            pdb.set_trace()
             num_rewirings = random.randint(1, T)
             G_corrupted, last_rewired_pair = rewire_edges(G.copy(), num_rewirings)
             if not last_rewired_pair:
@@ -110,9 +112,11 @@ def main(args):
         graph_eval = GraphsEvaluator()
         T = config['training']['T']
         if args.ablation:
-            generated_graphs = model.generate(config['inference']['generate_samples'],T,msvae_model = None)
+            sample_graphs = random.sample(train_graphs,min(len(train_graphs),config['inference']['generate_samples']))
+            degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
+            generated_graphs = model.generate(config['inference']['generate_samples'],T,degree_sequences = degree_sequences, msvae_model = None)
         else:
-            generated_graphs = model.generate(config['inference']['generate_samples'],T,msvae_model = msvae_model)
+            generated_graphs = model.generate(config['inference']['generate_samples'],T,degree_sequences = None, msvae_model = msvae_model)
         print(f"Evaluate generated graphs")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
