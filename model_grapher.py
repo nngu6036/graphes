@@ -107,4 +107,4 @@ class GraphER(nn.Module):
                     G.remove_edges_from([(u,v), (x, y)])
                     G.add_edges_from([(u, y), (v, x)])
             generated_graphs.append(G)
-        return generated_graphs
+        return generated_graphs, generated_seqs
