@@ -88,6 +88,10 @@ class GraphER(nn.Module):
                 continue
             print(f"Generating graph {idx+1}")
             G = configuration_model_from_multiset(seq)
+            pre_seq = [deg for _, deg in G.degree()]
+            if set(pre_seq) != set(seq):
+                import pdb
+                pdb.set_trace()
             for t in reversed(range(num_steps +1)):
                 edges = list(G.edges())
                 u,v = random.choice(edges)
@@ -106,5 +110,9 @@ class GraphER(nn.Module):
                 elif not G.has_edge(u, y) and not G.has_edge(v, x):
                     G.remove_edges_from([(u,v), (x, y)])
                     G.add_edges_from([(u, y), (v, x)])
+            post_seq = [deg for _, deg in G.degree()]
+            if set(pre_seq) != set(post_seq):
+                import pdb
+                pdb.set_trace()
             generated_graphs.append(G)
-        return generated_graphs, generated_seqs
+        return generated_graphs
