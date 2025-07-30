@@ -69,13 +69,31 @@ def generate_planar_graph(node_count, edge_count):
 
 def load_ego_graph(min_node, max_node, hop, count):
     """Load ego graph dataset."""
+    def can_be_rewired(G):
+        """Return True if the graph G can be rewired."""
+        edges = list(G.edges())
+        if len(edges) < 2:
+            return False
+        # Try to find two edges with 4 distinct nodes
+        for i in range(len(edges)):
+            for j in range(i + 1, len(edges)):
+                e1, e2 = edges[i], edges[j]
+                u, v = e1
+                x, y = e2
+                if len({u, v, x, y}) == 4:
+                    if not G.has_edge(u, x) and not G.has_edge(v, y):
+                        return True
+                    elif not G.has_edge(u, y) and not G.has_edge(v, x):
+                        return True
+        return False
+        
     dataset = Planetoid(root='./datasets', name='Citeseer')
     data = dataset[0]
     G = to_networkx(data, to_undirected=True)
     ego_graphs = []
     for node in G.nodes:
         ego = nx.ego_graph(G, node, radius=hop)
-        if ego.number_of_nodes() >= min_node and ego.number_of_nodes() <= max_node:  
+        if ego.number_of_nodes() >= min_node and ego.number_of_nodes() <= max_node and can_be_rewired(ego):  
             ego_graphs.append(ego)
             count-= 1
             if count == 0 :
