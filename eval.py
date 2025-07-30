@@ -36,7 +36,7 @@ def compute_degree_histograms(sets, max_degree):
 
 class GraphsEvaluator():
 
-	def compute_mmd_degree_emd(self, graphs_1, graphs_2, max_degree=None, sigma=1.0):
+	def compute_mmd_degree_emd(self, graphs_1, graphs_2, max_degree, sigma=1.0):
 	    def degree_histogram(graphs, max_degree):
 	        histograms = []
 	        for G in graphs:
@@ -50,10 +50,6 @@ class GraphsEvaluator():
 	            hist /= hist.sum()
 	            histograms.append(hist)
 	        return np.array(histograms)
-	    if max_degree is None:
-	        max_d1 = max((max(dict(G.degree()).values()) if len(G) > 0 else 0) for G in graphs_1)
-	        max_d2 = max((max(dict(G.degree()).values()) if len(G) > 0 else 0) for G in graphs_2)
-	        max_degree = max(max_d1, max_d2)
 	    H1 = degree_histogram(graphs_1, max_degree)
 	    H2 = degree_histogram(graphs_2, max_degree)
 	    K_xx = gaussian_emd_kernel(H1, H1, sigma)
