@@ -6,7 +6,7 @@ import numpy as np
 from scipy.sparse.linalg import eigs
 import math
 
-def estimate_mixing_time(G, epsilon=0.0001):
+def estimate_mixing_time(G, epsilon=0.01):
     A = nx.adjacency_matrix(G).astype(float)
     D = np.array(A.sum(axis=1)).flatten()
     D_inv = np.diag(1.0 / D)
@@ -23,7 +23,7 @@ def estimate_mixing_time(G, epsilon=0.0001):
     pi_min = np.min(D / np.sum(D))
     t_mix = (1 / gap) * np.log(1 / (epsilon * pi_min))
 
-    return t_mix
+    return round(t_mix)
 
 
 def load_degree_sequence_from_directory(directory_path):
