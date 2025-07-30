@@ -28,12 +28,14 @@ def decode_degree_sequence(seq):
     return degrees
 
 def configuration_model_from_multiset(degrees):
-    retry = len(degrees)
+    retry = sum(degrees)
     while retry > 0:
         G = nx.configuration_model(degrees)
         if nx.is_connected(G) and nx.number_of_selfloops(G) == 0 and not isinstance(G, nx.MultiGraph):
             return G
         retry-= 1
+    import pdb
+    pdb.set_trace()
     return None
 
 class GraphER(nn.Module):
@@ -89,10 +91,10 @@ class GraphER(nn.Module):
             if not valid:
                 print("Invalid degree")
                 continue
-            print(f"Generating graph {idx+1}")
             G = configuration_model_from_multiset(seq)
             if not G:
                 continue
+            print(f"Generating graph {idx+1}")
             pre_seq = [deg for _, deg in G.degree()]
             if set(pre_seq) != set(seq):
                 import pdb
