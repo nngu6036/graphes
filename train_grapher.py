@@ -97,6 +97,7 @@ def main(args):
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
     num_layer = config['training']['num_layer']
+    T = config['training']['T']
     model = GraphER(in_channels=1, hidden_dim=hidden_dim,num_layer=num_layer)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
@@ -104,7 +105,7 @@ def main(args):
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_grapher(model, train_graphs, num_epochs, learning_rate, max_node,mixing_time, 'cpu')
+        train_grapher(model, train_graphs, num_epochs, learning_rate, max_node,T, 'cpu')
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
@@ -113,9 +114,9 @@ def main(args):
         if args.ablation:
             sample_graphs = random.sample(train_graphs,min(len(train_graphs),config['inference']['generate_samples']))
             degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
-            generated_graphs = model.generate(config['inference']['generate_samples'],mixing_time,degree_sequences = degree_sequences, msvae_model = None)
+            generated_graphs = model.generate(config['inference']['generate_samples'],T,degree_sequences = degree_sequences, msvae_model = None)
         else:
-            generated_graphs = model.generate(config['inference']['generate_samples'],mixing_time,degree_sequences = None, msvae_model = msvae_model)
+            generated_graphs = model.generate(config['inference']['generate_samples'],T,degree_sequences = None, msvae_model = msvae_model)
         print(f"Evaluate generated graphs")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
