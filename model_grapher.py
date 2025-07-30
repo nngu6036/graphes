@@ -31,7 +31,7 @@ def configuration_model_from_multiset(degrees):
     retry = len(degrees)
     while retry > 0:
         G = nx.configuration_model(degrees)
-        if nx.is_connected(G) and nx.number_of_selfloops(G) == 0 and not isinstance(G, nx.MultiGraph)::
+        if nx.is_connected(G) and nx.number_of_selfloops(G) == 0 and not isinstance(G, nx.MultiGraph):
             return G
         retry-= 1
     return None
