@@ -22,9 +22,9 @@ def gaussian_emd_kernel(X, Y, sigma=1.0):
             K[i, j] = np.exp(-emd**2 / (2 * sigma**2))
     return K
 
-def compute_degree_histograms(sets, max_degree):
+def compute_degree_histograms(seqs, max_degree):
     histograms = []
-    for seq in sets:
+    for seq in seqs:
         hist = torch.zeros(max_degree + 1)
         for deg in seq:
             if 0 <= deg <= max_degree:
@@ -174,11 +174,11 @@ class DegreeSequenceEvaluator():
 
 	def evaluate_multisets_kl_distance(self, sets1, sets2,max_node):
 		def compute_kl_divergence(p_hist, q_hist, eps=1e-8):
-				p_ = torch.tensor(p_hist) + eps
-				q_ = torch.tensor(q_hist) + eps
-				p_ = p_ / p_.sum()
-				q_ = q_ / q_.sum()
-				return torch.sum(p_ * torch.log(p_ / q_)).item()
+			p_ = torch.tensor(p_hist) + eps
+			q_ = torch.tensor(q_hist) + eps
+			p_ = p_ / p_.sum()
+			q_ = q_ / q_.sum()
+			return torch.sum(p_ * torch.log(p_ / q_)).item()
 		source_hist = compute_degree_histograms(sets1,max_node)
 		target_hist = compute_degree_histograms(sets2,max_node)
 		kl = [compute_kl_divergence(s, t) for s in source_hist for t in target_hist]
