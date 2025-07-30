@@ -6,7 +6,7 @@ latent_dim = 32          # Latent dimension size
 batch_size = 1					 # Batch size
 num_layer = 5					   # GIN layer
 epsilon = 0.0001
-
+T = 1000
 
 [inference]
 generate_samples = 200    # Number of samples to generate
