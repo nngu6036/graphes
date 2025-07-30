@@ -88,8 +88,7 @@ def main(args):
     model_dir = Path("models")
     config = toml.load(config_dir / args.config)
     msvae_config = toml.load(config_dir / args.msvae_config)
-    graphs, max_node, max_lambda_2 = load_graph_from_directory(dataset_dir)
-    mixing_time = round(1/(1-max_lambda_2)*math.log(1/max_node/config['training']['epsilon']))
+    graphs, max_node, max_mix_time = load_graph_from_directory(dataset_dir)
     print(f"Loading graphs dataset {len(graphs)}")
     print("Mixing time ", mixing_time)
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
@@ -114,13 +113,15 @@ def main(args):
         if args.ablation:
             sample_graphs = random.sample(train_graphs,min(len(train_graphs),config['inference']['generate_samples']))
             degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
-            generated_graphs = model.generate(config['inference']['generate_samples'],T,degree_sequences = degree_sequences, msvae_model = None)
+            generated_graphs = model.generate(config['inference']['generate_samples'],max_mix_time,degree_sequences = degree_sequences, msvae_model = None)
         else:
-            generated_graphs = model.generate(config['inference']['generate_samples'],T,degree_sequences = None, msvae_model = msvae_model)
+            generated_graphs = model.generate(config['inference']['generate_samples'],max_mix_time,degree_sequences = None, msvae_model = msvae_model)
             generated_seqs = [[deg for _, deg in graph.degree()] for graph in generated_graphs]
             test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs]
             deg_eval = DegreeSequenceEvaluator()
-            print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
+            generated_seqs2 = msvae_model.generate(config['inference']['generate_samples'])
+            print(f"MMD Distance by graphs: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
+            print(f"MMD Distance by seqs: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs2,max_node)}")
         print(f"Evaluate generated graphs")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
