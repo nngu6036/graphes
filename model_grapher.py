@@ -34,8 +34,6 @@ def configuration_model_from_multiset(degrees):
         if nx.is_connected(G) and nx.number_of_selfloops(G) == 0 and not isinstance(G, nx.MultiGraph):
             return G
         retry-= 1
-    import pdb
-    pdb.set_trace()
     return None
 
 class GraphER(nn.Module):
