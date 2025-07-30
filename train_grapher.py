@@ -117,6 +117,10 @@ def main(args):
             generated_graphs = model.generate(config['inference']['generate_samples'],T,degree_sequences = degree_sequences, msvae_model = None)
         else:
             generated_graphs = model.generate(config['inference']['generate_samples'],T,degree_sequences = None, msvae_model = msvae_model)
+            generated_seqs = [[deg for _, deg in graph.degree()] for graph in generated_graphs]
+            test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs]
+            deg_eval = DegreeSequenceEvaluator()
+            print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
         print(f"Evaluate generated graphs")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
