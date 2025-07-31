@@ -201,13 +201,6 @@ class DegreeSequenceEvaluator():
 	def evaluate_sequences(self, sets:List):
 	    validity_checks = [check_sequence_validity(seq) for seq in sets]
 	    degree_validities = [result for result, code in validity_checks if result]
-	    error_codes = [code for result, code in validity_checks if not result]
-	    error_count = Counter(error_codes)
-	    empty_degree = [1] * error_count.get(1, 0)
-	    odd_sum_degree = [1] * error_count.get(2, 0)
-	    invalid_degree = [1] * error_count.get(3, 0)
+		print(degree_validities)
 	    validity_percentage = (sum(degree_validities) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
-	    empty_percentage = (sum(empty_degree) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
-	    odd_percentage = (sum(odd_sum_degree) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
-	    invalidity_percentage = (sum(invalid_degree) / len(validity_checks)) * 100 if len(validity_checks) > 0 else 0
 	    return validity_percentage
