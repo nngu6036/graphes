@@ -27,13 +27,24 @@ def decode_degree_sequence(seq):
         degrees.extend([degree] * int(count))
     return degrees
 
+def has_self_loops(G):
+    return any(u == v for u, v in G.edges())
+
+def has_duplicate_edges(G):
+    if not isinstance(G, nx.MultiGraph):
+        return False
+    for u, v in G.edges():
+        if G.number_of_edges(u, v) > 1:
+            return True
+    return False
+
 def configuration_model_from_multiset(degrees):
     retry = sum(degrees)
     while retry > 0:
         G = nx.configuration_model(degrees)
-        if nx.is_connected(G) and nx.number_of_selfloops(G) == 0 and not isinstance(G, nx.MultiGraph):
-            return G
-        retry-= 1
+        if nx.number_of_selfloops(G) > 0 or has_duplicate_edges(G) :
+            retry-= 1
+            continue
     return None
 
 class GraphER(nn.Module):
@@ -79,15 +90,11 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate(self, num_samples, num_steps, degree_sequences = None, msvae_model = None):
+    def generate_without_msvae(self, num_samples, num_steps, degree_sequences):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
-        generated_seqs = degree_sequences if degree_sequences else msvae_model.generate(num_samples)
-        validity_checks = [check_sequence_validity(seq) for seq in generated_seqs]
-        degree_validities = [result for result, code in validity_checks if result]
-        print(degree_validities)
-        for idx,seq in enumerate(generated_seqs):
+        for idx,seq in enumerate(degree_sequences):
             valid, _ = check_sequence_validity(seq)
             if not valid:
                 print("Invalid degree")
@@ -96,10 +103,6 @@ class GraphER(nn.Module):
             if not G:
                 continue
             print(f"Generating graph {idx+1}")
-            pre_seq = [deg for _, deg in G.degree()]
-            if set(pre_seq) != set(seq):
-                import pdb
-                pdb.set_trace()
             for t in reversed(range(num_steps +1)):
                 edges = list(G.edges())
                 u,v = random.choice(edges)
@@ -118,9 +121,43 @@ class GraphER(nn.Module):
                 elif not G.has_edge(u, y) and not G.has_edge(v, x):
                     G.remove_edges_from([(u,v), (x, y)])
                     G.add_edges_from([(u, y), (v, x)])
-            post_seq = [deg for _, deg in G.degree()]
-            if set(pre_seq) != set(post_seq):
-                import pdb
-                pdb.set_trace()
             generated_graphs.append(G)
+        return generated_graphs
+
+    def generate(self, num_samples, num_steps, msvae_model):
+        self.eval()
+        device = next(self.parameters()).device
+        generated_graphs = []
+        for _ in range(num_samples):
+            generated_seqs = msvae_model.generate(num_samples)
+            for idx,seq in enumerate(generated_seqs):
+                valid, _ = check_sequence_validity(seq)
+                if not valid:
+                    print("Invalid degree")
+                    continue
+                G = configuration_model_from_multiset(seq)
+                if not G:
+                    continue
+                print(f"Generating graph {idx+1}")
+                for t in reversed(range(num_steps +1)):
+                    edges = list(G.edges())
+                    u,v = random.choice(edges)
+                    edge_candidates = [e for e in edges if e != (u,v) and len(set(e + (u,v))) == 4]
+                    if not edge_candidates:
+                        continue
+                    candidate_tensor = torch.tensor(edge_candidates, dtype=torch.long, device=device)
+                    data = graph_to_data(G).to(device)
+                    edge_index = data.edge_index
+                    scores = self(data.x, edge_index, (u,v), candidate_tensor, t)
+                    top_idx = torch.argmax(scores).item()
+                    x, y = candidate_tensor[top_idx].tolist()
+                    if not G.has_edge(u, x) and not G.has_edge(v, y):
+                        G.remove_edges_from([(u,v), (x, y)])
+                        G.add_edges_from([(u, x), (v, y)])
+                    elif not G.has_edge(u, y) and not G.has_edge(v, x):
+                        G.remove_edges_from([(u,v), (x, y)])
+                        G.add_edges_from([(u, y), (v, x)])
+                generated_graphs.append(G)
+            if len(generated_graphs) > num_samples:
+                break
         return generated_graphs

@@ -88,7 +88,4 @@ def check_sequence_validity(seq):
         rhs = k * (k - 1) + sum(min(d, k) for d in sorted_seq[k:])
         if lhs > rhs:
             return False,3
-    n = len(seq)
-    if sum(seq) < 2*(n-1):
-        return False, 4
     return True, 0
