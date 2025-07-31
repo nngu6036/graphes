@@ -36,10 +36,14 @@ def has_duplicate_edges(G):
     return False
 
 def configuration_model_from_multiset(degrees):
-    G = nx.configuration_model(degrees)
-    G = nx.Graph(G)
-    G.remove_edges_from(nx.selfloop_edges(G))
-    return G
+    retry = sum(degrees)
+    while retry > 0:
+        G = nx.configuration_model(degrees)
+        if nx.number_of_selfloops(G) > 0 or has_duplicate_edges(G) :
+            retry-= 1
+            continue
+        return G
+    return None
 
 class GraphER(nn.Module):
     def __init__(self, in_channels, hidden_dim, num_layer):
@@ -104,7 +108,9 @@ class GraphER(nn.Module):
             elif not G.has_edge(u, y) and not G.has_edge(v, x):
                 G.remove_edges_from([(u,v), (x, y)])
                 G.add_edges_from([(u, y), (v, x)])
-        return G if nx.is_connected(G) else None
+        if nx.is_connected(G) and not isinstance(G, nx.MultiGraph):
+            return G
+        return None
 
     def generate_without_msvae(self, num_steps, degree_sequences):
         self.eval()
@@ -115,6 +121,8 @@ class GraphER(nn.Module):
                 print("Invalid degree")
                 continue
             G = configuration_model_from_multiset(seq)
+            if not G:
+                continue
             gen_graph = self.reverse_rewiring(G,num_steps)
             if gen_graph:
                 print(f"Generating graph {len(generated_graphs)+1}")
@@ -131,6 +139,8 @@ class GraphER(nn.Module):
                 if not valid:
                     continue
                 G = configuration_model_from_multiset(seq)
+                if not G:
+                    continue
                 print(f"Initialize graph {len(generated_graphs)+1}")
                 gen_graph = self.reverse_rewiring(G,num_steps)
                 if gen_graph:
