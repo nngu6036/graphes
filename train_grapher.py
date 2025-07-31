@@ -112,9 +112,9 @@ def main(args):
         if args.ablation:
             sample_graphs = random.sample(train_graphs,min(len(train_graphs),config['inference']['generate_samples']))
             degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
-            generated_graphs = model.generate(config['inference']['generate_samples'],max_mix_time,degree_sequences = degree_sequences, msvae_model = None)
+            generated_graphs = model.generate_without_msvae(config['inference']['generate_samples'],max_mix_time,degree_sequences)
         else:
-            generated_graphs = model.generate(config['inference']['generate_samples'],max_mix_time,degree_sequences = None, msvae_model = msvae_model)
+            generated_graphs = model.generate(config['inference']['generate_samples'],max_mix_time, msvae_model)
         print(f"Evaluate generated graphs")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
