@@ -19,7 +19,7 @@ type = "ego"
 count = 200
 max_node = 18
 min_node = 4
-hop = 3
+
 
 [[datasets]]
 type = "qm9"

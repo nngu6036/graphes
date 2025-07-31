@@ -27,9 +27,6 @@ def decode_degree_sequence(seq):
         degrees.extend([degree] * int(count))
     return degrees
 
-def has_self_loops(G):
-    return any(u == v for u, v in G.edges())
-
 def has_duplicate_edges(G):
     if not isinstance(G, nx.MultiGraph):
         return False
@@ -39,10 +36,14 @@ def has_duplicate_edges(G):
     return False
 
 def configuration_model_from_multiset(degrees):
-    G = nx.configuration_model(degrees)
-    G = nx.Graph(G)
-    G.remove_edges_from(nx.selfloop_edges(G))
-    return G
+    retry = sum(degrees)
+    while retry > 0:
+        G = nx.configuration_model(degrees)
+        if nx.number_of_selfloops(G) > 0 or has_duplicate_edges(G) :
+            retry-= 1
+            continue
+        return G
+    return None
 
 class GraphER(nn.Module):
     def __init__(self, in_channels, hidden_dim, num_layer):
@@ -140,6 +141,7 @@ class GraphER(nn.Module):
                 G = configuration_model_from_multiset(seq)
                 if not G:
                     continue
+                print(f"Initialize graph {len(generated_graphs)+1}")
                 gen_graph = self.reverse_rewiring(G,num_steps)
             if gen_graph:
                 print(f"Generating graph {len(generated_graphs)+1}")

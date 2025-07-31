@@ -67,7 +67,7 @@ def generate_planar_graph(node_count, edge_count):
         G.remove_edges_from(edges[:G.number_of_edges() - edge_count])
     return G
 
-def load_ego_graph(min_node, max_node, hop, count):
+def load_ego_graph(min_node, max_node, count):
     """Load ego graph dataset."""
     def can_be_rewired(G):
         """Return True if the graph G can be rewired."""
@@ -92,7 +92,7 @@ def load_ego_graph(min_node, max_node, hop, count):
     G = to_networkx(data, to_undirected=True)
     ego_graphs = []
     for node in G.nodes:
-        ego = nx.ego_graph(G, node, radius=hop)
+        ego = nx.ego_graph(G, node, radius=1)
         if ego.number_of_nodes() >= min_node and ego.number_of_nodes() <= max_node and can_be_rewired(ego):  
             ego_graphs.append(ego)
             count-= 1
