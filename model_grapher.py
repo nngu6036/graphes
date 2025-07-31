@@ -108,7 +108,7 @@ class GraphER(nn.Module):
             elif not G.has_edge(u, y) and not G.has_edge(v, x):
                 G.remove_edges_from([(u,v), (x, y)])
                 G.add_edges_from([(u, y), (v, x)])
-        return G if nx.connected(G) else None
+        return G if nx.is_connected(G) else None
 
     def generate_without_msvae(self, num_steps, degree_sequences):
         self.eval()

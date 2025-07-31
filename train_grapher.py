@@ -88,7 +88,7 @@ def main(args):
     model_dir = Path("models")
     config = toml.load(config_dir / args.config)
     msvae_config = toml.load(config_dir / args.msvae_config)
-    graphs, max_node, max_mix_time = load_graph_from_directory(dataset_dir)
+    graphs, max_node = load_graph_from_directory(dataset_dir)
     print(f"Loading graphs dataset {len(graphs)}")
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
     msvae_model  = load_msvae_from_file(max_node, msvae_config, model_dir /args.msvae_model)
@@ -111,9 +111,9 @@ def main(args):
         if args.ablation:
             sample_graphs = random.sample(train_graphs,min(len(train_graphs),config['inference']['generate_samples']))
             degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
-            generated_graphs = model.generate_without_msvae(max_mix_time,degree_sequences)
+            generated_graphs = model.generate_without_msvae(T,degree_sequences)
         else:
-            generated_graphs = model.generate(config['inference']['generate_samples'],max_mix_time, msvae_model)
+            generated_graphs = model.generate(config['inference']['generate_samples'],T, msvae_model)
         print(f"Evaluate generated graphs")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")

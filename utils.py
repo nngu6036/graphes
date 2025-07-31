@@ -4,26 +4,6 @@ import networkx as nx
 from torch_geometric.utils.convert import from_networkx
 import numpy as np
 from scipy.sparse.linalg import eigs
-import math
-
-def estimate_mixing_time(G, epsilon=0.01):
-    A = nx.adjacency_matrix(G).astype(float)
-    D = np.array(A.sum(axis=1)).flatten()
-    D_inv = np.diag(1.0 / D)
-    P = D_inv @ A.toarray()
-
-    # Lazy walk: P_lazy = 0.5 * (I + P)
-    P_lazy = 0.5 * (np.eye(G.number_of_nodes()) + P)
-
-    # Compute second largest eigenvalue
-    eigenvalues = eigs(P_lazy, k=2, which='LM', return_eigenvectors=False)
-    lambda_2 = sorted(np.abs(eigenvalues))[-2]
-    gap = 1 - lambda_2
-
-    pi_min = np.min(D / np.sum(D))
-    t_mix = (1 / gap) * np.log(1 / (epsilon * pi_min))
-
-    return round(t_mix)
 
 
 def load_degree_sequence_from_directory(directory_path):
@@ -49,23 +29,20 @@ def load_degree_sequence_from_directory(directory_path):
 
 def load_graph_from_directory(directory_path):
     max_node = 0 
-    max_mix_time = 0
     graphs = []
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
             max_node = max(max_node, graph.number_of_nodes())
-            mix_time = estimate_mixing_time(graph)
-            max_mix_time = max(mix_time,max_mix_time)
-    print("Max node: ", max_node, "Max mix time:", max_mix_time)
+    print("Max node: ", max_node)
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
             graph = nx.convert_node_labels_to_integers(graph)
             graphs.append(graph)
-    return graphs, max_node, max_mix_time
+    return graphs, max_node
 
 def graph_to_data(G):
     for node in G.nodes:
