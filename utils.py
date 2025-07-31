@@ -3,7 +3,6 @@ import os
 import networkx as nx
 from torch_geometric.utils.convert import from_networkx
 import numpy as np
-from scipy.sparse.linalg import eigs
 
 
 def load_degree_sequence_from_directory(directory_path):
