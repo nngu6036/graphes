@@ -33,6 +33,49 @@ def configuration_model_from_multiset(degrees):
     G.remove_edges_from(nx.selfloop_edges(G))
     return G
 
+def havel_hakimi_construction(degree_sequence):
+    """
+    Constructs a simple undirected graph from a given degree sequence
+    using the Havel-Hakimi algorithm.
+
+    Args:
+        degree_sequence (list): A list of non-negative integers sorted in non-increasing order.
+
+    Returns:
+        G (nx.Graph): A simple undirected graph with the given degree sequence,
+                      or None if the sequence is not graphical.
+    """
+    # Check if the degree sequence is graphical
+    if not nx.is_valid_degree_sequence_havel_hakimi(degree_sequence):
+        print("The degree sequence is not graphical.")
+        return None
+
+    # Make a copy to avoid modifying the original
+    deg_seq = list(degree_sequence)
+    nodes = list(range(len(deg_seq)))
+    G = nx.Graph()
+    G.add_nodes_from(nodes)
+
+    while any(deg_seq):
+        # Sort nodes by remaining degree (descending)
+        node_deg_pairs = sorted(zip(nodes, deg_seq), key=lambda x: -x[1])
+        u, du = node_deg_pairs[0]
+        nodes = [x for x, _ in node_deg_pairs]
+        deg_seq = [d for _, d in node_deg_pairs]
+
+        # Take the top node and connect to next 'du' nodes
+        for i in range(1, du + 1):
+            v = nodes[i]
+            G.add_edge(u, v)
+            deg_seq[i] -= 1
+
+        deg_seq[0] = 0  # All of u's degree is used
+        # Remove nodes with 0 degree for next round
+        nodes = [n for n, d in zip(nodes, deg_seq) if d > 0]
+        deg_seq = [d for d in deg_seq if d > 0]
+
+    return G
+
 class GraphER(nn.Module):
     def __init__(self, in_channels, hidden_dim, num_layer):
         super().__init__()
@@ -86,8 +129,10 @@ class GraphER(nn.Module):
             if not valid:
                 print("Invalid degree")
                 continue
+            G = havel_hakimi_construction(seq)
+            if not G:
+                continue
             print(f"Generating graph {idx+1}")
-            G = configuration_model_from_multiset(seq)
             for t in reversed(range(num_steps +1)):
                 edges = list(G.edges())
                 u,v = random.choice(edges)
