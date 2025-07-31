@@ -167,21 +167,11 @@ def main(args):
         graphs = []
         if graph_type == "ego":
             graph_count = dataset["count"]
-            graphs = load_ego_graph(dataset["min_node"],dataset["max_node"],dataset["hop"],graph_count)
+            graphs = load_ego_graph(dataset["min_node"],dataset["max_node"],graph_count)
         if graph_type == "qm9":
             graphs = load_qm9_graph()
         if graph_type == "zinc":
             graphs = load_zinc_graph()
-        if graph_type == "planar":
-            graph_count = dataset["count"]
-            for _ in range(graph_count):
-                G = generate_planar_graph(node_count, edge_count)
-                graphs.append(G)
-        if graph_type == "sbm":
-            graph_count = dataset["count"]
-            for _ in range(graph_count):
-                G = generate_sbm_graph(dataset["block_sizes"], dataset["probabilities"])
-                graphs.append(G)
         if graph_type == "grid":
             graph_count = dataset["count"]
             for _ in range(graph_count):
