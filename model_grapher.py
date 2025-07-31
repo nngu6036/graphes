@@ -45,6 +45,7 @@ def configuration_model_from_multiset(degrees):
         if nx.number_of_selfloops(G) > 0 or has_duplicate_edges(G) :
             retry-= 1
             continue
+        return G
     return None
 
 class GraphER(nn.Module):

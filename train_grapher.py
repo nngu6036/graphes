@@ -93,7 +93,6 @@ def main(args):
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
     msvae_model  = load_msvae_from_file(max_node, msvae_config, model_dir /args.msvae_model)
     hidden_dim = config['training']['hidden_dim']
-    latent_dim = config['training']['latent_dim']
     num_layer = config['training']['num_layer']
     T = config['training']['T']
     model = GraphER(in_channels=1, hidden_dim=hidden_dim,num_layer=num_layer)
