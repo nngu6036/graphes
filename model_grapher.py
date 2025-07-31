@@ -108,7 +108,7 @@ class GraphER(nn.Module):
             elif not G.has_edge(u, y) and not G.has_edge(v, x):
                 G.remove_edges_from([(u,v), (x, y)])
                 G.add_edges_from([(u, y), (v, x)])
-        return G
+        return G if nx.connected(G) else None
 
     def generate_without_msvae(self, num_steps, degree_sequences):
         self.eval()
@@ -141,9 +141,9 @@ class GraphER(nn.Module):
                     continue
                 print(f"Initialize graph {len(generated_graphs)+1}")
                 gen_graph = self.reverse_rewiring(G,num_steps)
-            if gen_graph:
-                print(f"Generating graph {len(generated_graphs)+1}")
-                generated_graphs.append(G)
-            if len(generated_graphs) > num_samples:
-                break
+                if gen_graph:
+                    print(f"Generating graph {len(generated_graphs)+1}")
+                    generated_graphs.append(G)
+                if len(generated_graphs) > num_samples:
+                    break
         return generated_graphs
