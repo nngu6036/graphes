@@ -118,7 +118,7 @@ class GraphER(nn.Module):
     def generate_without_msvae(self, num_steps, degree_sequences):
         self.eval()
         generated_graphs = []
-        for seq in enumerate(degree_sequences):
+        for seq in degree_sequences:
             valid, _ = check_sequence_validity(seq)
             if not valid:
                 print("Invalid degree")
@@ -137,7 +137,7 @@ class GraphER(nn.Module):
         generated_graphs = []
         while len(generated_graphs) < num_samples:
             generated_seqs = msvae_model.generate(num_samples)
-            for seq in enumerate(generated_seqs):
+            for seq in generated_seqs:
                 valid, _ = check_sequence_validity(seq)
                 if not valid:
                     continue
