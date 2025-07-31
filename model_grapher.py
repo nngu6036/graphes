@@ -91,11 +91,34 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate_without_msvae(self, num_samples, num_steps, degree_sequences):
-        self.eval()
+    def reverse_rewiring(self,G,num_steps):
         device = next(self.parameters()).device
+        for t in reversed(range(num_steps +1)):
+            edges = list(G.edges())
+            u,v = random.choice(edges)
+            edge_candidates = [e for e in edges if e != (u,v) and len(set(e + (u,v))) == 4]
+            if not edge_candidates:
+                continue
+            candidate_tensor = torch.tensor(edge_candidates, dtype=torch.long, device=device)
+            data = graph_to_data(G).to(device)
+            edge_index = data.edge_index
+            scores = self(data.x, edge_index, (u,v), candidate_tensor, t)
+            top_idx = torch.argmax(scores).item()
+            x, y = candidate_tensor[top_idx].tolist()
+            if not G.has_edge(u, x) and not G.has_edge(v, y):
+                G.remove_edges_from([(u,v), (x, y)])
+                G.add_edges_from([(u, x), (v, y)])
+            elif not G.has_edge(u, y) and not G.has_edge(v, x):
+                G.remove_edges_from([(u,v), (x, y)])
+                G.add_edges_from([(u, y), (v, x)])
+        if nx.is_connected(G):
+            return G
+        return None
+
+    def generate_without_msvae(self, num_steps, degree_sequences):
+        self.eval()
         generated_graphs = []
-        for idx,seq in enumerate(degree_sequences):
+        for seq in enumerate(degree_sequences):
             valid, _ = check_sequence_validity(seq)
             if not valid:
                 print("Invalid degree")
@@ -103,61 +126,27 @@ class GraphER(nn.Module):
             G = configuration_model_from_multiset(seq)
             if not G:
                 continue
-            print(f"Generating graph {idx+1}")
-            for t in reversed(range(num_steps +1)):
-                edges = list(G.edges())
-                u,v = random.choice(edges)
-                edge_candidates = [e for e in edges if e != (u,v) and len(set(e + (u,v))) == 4]
-                if not edge_candidates:
-                    continue
-                candidate_tensor = torch.tensor(edge_candidates, dtype=torch.long, device=device)
-                data = graph_to_data(G).to(device)
-                edge_index = data.edge_index
-                scores = self(data.x, edge_index, (u,v), candidate_tensor, t)
-                top_idx = torch.argmax(scores).item()
-                x, y = candidate_tensor[top_idx].tolist()
-                if not G.has_edge(u, x) and not G.has_edge(v, y):
-                    G.remove_edges_from([(u,v), (x, y)])
-                    G.add_edges_from([(u, x), (v, y)])
-                elif not G.has_edge(u, y) and not G.has_edge(v, x):
-                    G.remove_edges_from([(u,v), (x, y)])
-                    G.add_edges_from([(u, y), (v, x)])
-            generated_graphs.append(G)
+            gen_graph = self.reverse_rewiring(G,num_steps)
+            if gen_graph:
+                print(f"Generating graph {len(generated_graphs)+1}")
+                generated_graphs.append(G)
         return generated_graphs
 
     def generate(self, num_samples, num_steps, msvae_model):
         self.eval()
-        device = next(self.parameters()).device
         generated_graphs = []
-        for _ in range(num_samples):
+        while len(generated_graphs) < num_samples:
             generated_seqs = msvae_model.generate(num_samples)
-            for idx,seq in enumerate(generated_seqs):
+            for seq in enumerate(generated_seqs):
                 valid, _ = check_sequence_validity(seq)
                 if not valid:
-                    print("Invalid degree")
                     continue
                 G = configuration_model_from_multiset(seq)
                 if not G:
                     continue
-                print(f"Generating graph {idx+1}")
-                for t in reversed(range(num_steps +1)):
-                    edges = list(G.edges())
-                    u,v = random.choice(edges)
-                    edge_candidates = [e for e in edges if e != (u,v) and len(set(e + (u,v))) == 4]
-                    if not edge_candidates:
-                        continue
-                    candidate_tensor = torch.tensor(edge_candidates, dtype=torch.long, device=device)
-                    data = graph_to_data(G).to(device)
-                    edge_index = data.edge_index
-                    scores = self(data.x, edge_index, (u,v), candidate_tensor, t)
-                    top_idx = torch.argmax(scores).item()
-                    x, y = candidate_tensor[top_idx].tolist()
-                    if not G.has_edge(u, x) and not G.has_edge(v, y):
-                        G.remove_edges_from([(u,v), (x, y)])
-                        G.add_edges_from([(u, x), (v, y)])
-                    elif not G.has_edge(u, y) and not G.has_edge(v, x):
-                        G.remove_edges_from([(u,v), (x, y)])
-                        G.add_edges_from([(u, y), (v, x)])
+                gen_graph = self.reverse_rewiring(G,num_steps)
+            if gen_graph:
+                print(f"Generating graph {len(generated_graphs)+1}")
                 generated_graphs.append(G)
             if len(generated_graphs) > num_samples:
                 break

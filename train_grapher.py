@@ -111,7 +111,7 @@ def main(args):
         if args.ablation:
             sample_graphs = random.sample(train_graphs,min(len(train_graphs),config['inference']['generate_samples']))
             degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
-            generated_graphs = model.generate_without_msvae(config['inference']['generate_samples'],max_mix_time,degree_sequences)
+            generated_graphs = model.generate_without_msvae(max_mix_time,degree_sequences)
         else:
             generated_graphs = model.generate(config['inference']['generate_samples'],max_mix_time, msvae_model)
         print(f"Evaluate generated graphs")
