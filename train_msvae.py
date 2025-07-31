@@ -61,8 +61,6 @@ def main(args):
     batch_size = config['training']['batch_size']
     input_data, max_node = load_degree_sequence_from_directory(dataset_dir)
     train_data, test_data = train_test_split(input_data, test_size=0.2, random_state=42)
-    for seq in train_data:
-        print(seq)
     train_dataset = TensorDataset(torch.stack([encode_degree_sequence(seq,max_node) for seq in train_data]))
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     hidden_dim = config['training']['hidden_dim']
@@ -83,8 +81,6 @@ def main(args):
     if args.evaluate:
         deg_eval = DegreeSequenceEvaluator()
         generated_data = model.generate(config['inference']['generate_samples'])
-        for seq in generated_data:
-            print(seq)
         print(f"Generated degree sequence validity: {deg_eval.evaluate_sequences(generated_data)}")
         print(f"Evaluate baseline: train <-> test")
         #print(f"Chamfer Distance: {deg_eval.evaluate_multisets_chamfer_distance(train_data,test_data)}")
