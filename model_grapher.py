@@ -84,7 +84,7 @@ class GraphER(nn.Module):
         device = next(self.parameters()).device
         generated_graphs = []
         generated_seqs = degree_sequences if degree_sequences else msvae_model.generate(num_samples)
-        validity_checks = [check_sequence_validity(seq) for seq in validity_checks]
+        validity_checks = [check_sequence_validity(seq) for seq in generated_seqs]
         degree_validities = [result for result, code in validity_checks if result]
         print(degree_validities)
         for idx,seq in enumerate(generated_seqs):
