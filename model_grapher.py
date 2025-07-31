@@ -23,8 +23,6 @@ def get_edge_representation(x, u, v, method="sum_absdiff"):
 
 def configuration_model_from_multiset(degrees):
     G = nx.configuration_model(degrees)
-    G = nx.Graph(G)
-    G.remove_edges_from(nx.selfloop_edges(G))
     return G
 
 class GraphER(nn.Module):
