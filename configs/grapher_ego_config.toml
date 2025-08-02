@@ -5,7 +5,7 @@ hidden_dim = 64          # Hidden dimension size
 batch_size = 1					 # Batch size
 num_layer = 5					   # GIN layer
 epsilon = 0.0001
-T = 1000
+T = 500
 
 [inference]
 generate_samples = 200    # Number of samples to generate
