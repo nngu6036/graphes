@@ -5,6 +5,7 @@ from torch_geometric.nn import GINConv, global_mean_pool
 import networkx as nx
 from collections import Counter
 import random
+import math
 
 from utils import graph_to_data, check_sequence_validity
 
