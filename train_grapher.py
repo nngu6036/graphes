@@ -24,28 +24,51 @@ from model_grapher import GraphER
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
 from utils import *
 
+def count_edge_triangles(G, u, v):
+    """Return number of triangles that edge (u,v) participates in."""
+    neighbors_u = set(G.neighbors(u))
+    neighbors_v = set(G.neighbors(v))
+    return len(neighbors_u & neighbors_v)
 
 def rewire_edges(G, num_rewirings):
     edges = list(G.edges())
     last_rewired_pair = None
     timestep = 0
     for _ in range(num_rewirings):
+        if len(edges) < 2:
+            continue
         e1, e2 = random.sample(edges, 2)
         u, v = e1
         x, y = e2
-        if len({u, v, x, y}) == 4:
-            if not G.has_edge(u, x) and not G.has_edge(v, y):
+        if len({u, v, x, y}) != 4:
+            continue
+        triangle_removed = count_edge_triangles(G, u, v) + count_edge_triangles(G, x, y)
+        # Option 1: (u,x), (v,y)
+        if not G.has_edge(u, x) and not G.has_edge(v, y):
+            tri_added = count_common_neighbors(G, u, x) + count_common_neighbors(G, v, y)
+            if tri_added >= triangle_removed:
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, x), (v, y)])
                 last_rewired_pair = (e1, e2)
-                timestep+= 1
-            elif not G.has_edge(u, y) and not G.has_edge(v, x):
+                timestep += 1
+                edges = list(G.edges())
+                continue
+        # Option 2: (u,y), (v,x)
+        if not G.has_edge(u, y) and not G.has_edge(v, x):
+            tri_added = count_common_neighbors(G, u, y) + count_common_neighbors(G, v, x)
+            if tri_added >= triangle_removed:
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, y), (v, x)])
                 last_rewired_pair = (e1, e2)
-                timestep+= 1
-        edges = list(G.edges())
+                timestep += 1
+                edges = list(G.edges())
+                continue
     return G, last_rewired_pair, timestep
+
+def count_common_neighbors(G, a, b):
+    """Return number of common neighbors of nodes a and b."""
+    return len(set(G.neighbors(a)) & set(G.neighbors(b)))
+
 
 def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
