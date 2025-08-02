@@ -33,19 +33,18 @@ def configuration_model_from_multiset(degrees):
     G.remove_edges_from(nx.selfloop_edges(G))
     return G
 
+def get_sinusoidal_embedding(t, dim, max_period=10000):
+    device = t.device
+    half_dim = dim // 2
+    freqs = torch.exp(
+        -torch.arange(0, half_dim, dtype=torch.float32, device=device) * (math.log(max_period) / half_dim)
+    )
+    t = t.float().unsqueeze(-1)  # shape [1, 1]
+    args = t * freqs  # shape [1, half_dim]
+    emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)  # shape [1, dim]
+    return emb.squeeze(0)  # shape [dim]
+
 def havel_hakimi_construction(degree_sequence):
-    """
-    Constructs a simple undirected graph from a given degree sequence
-    using the Havel-Hakimi algorithm.
-
-    Args:
-        degree_sequence (list): A list of non-negative integers sorted in non-increasing order.
-
-    Returns:
-        G (nx.Graph): A simple undirected graph with the given degree sequence,
-                      or None if the sequence is not graphical.
-    """
-    # Check if the degree sequence is graphical
     if not nx.is_valid_degree_sequence_havel_hakimi(degree_sequence):
         print("The degree sequence is not graphical.")
         return None
@@ -79,6 +78,7 @@ def havel_hakimi_construction(degree_sequence):
 class GraphER(nn.Module):
     def __init__(self, in_channels, hidden_dim, num_layer):
         super().__init__()
+        self.hidden_dim = hidden_dim
         self.gin_layers = nn.ModuleList([
             GINConv(nn.Sequential(nn.Linear(in_channels if i == 0 else hidden_dim, hidden_dim),
                                   nn.ReLU(),
@@ -90,19 +90,14 @@ class GraphER(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 1)
         )
-        self.time_embedding = nn.Sequential(
-            nn.Linear(1, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim)
-        )
 
-    def forward(self, x, edge_index ,first_edge ,candidate_edges, t):
+    def forward(self, x, edge_index, first_edge, candidate_edges, t):
         device = x.device
         for gin in self.gin_layers:
             x = gin(x, edge_index)
         first_edge_feat = get_edge_representation(x, first_edge[0], first_edge[1])
-        t_tensor = torch.tensor([[t]], dtype=torch.float32, device=device)
-        t_embed = self.time_embedding(t_tensor).squeeze(0) 
+        t_tensor = torch.tensor([t], dtype=torch.float32, device=device)
+        t_embed = get_sinusoidal_embedding(t_tensor, dim=self.hidden_dim)  # [hidden_dim]
         scores = []
         for edge in candidate_edges:
             edge_feat = get_edge_representation(x, edge[0], edge[1])
@@ -119,42 +114,77 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate(self, num_samples, num_steps, degree_sequences = None, msvae_model = None):
+    def generate(self, num_samples, num_steps, degree_sequences=None, msvae_model=None):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
         generated_seqs = degree_sequences if degree_sequences else msvae_model.generate(num_samples)
-        for idx,seq in enumerate(generated_seqs):
+
+        for idx, seq in enumerate(generated_seqs):
             valid, _ = check_sequence_validity(seq)
             if not valid:
-                print("Invalid degree")
+                print(f"Invalid degree sequence at sample {idx}")
                 continue
+
             G = havel_hakimi_construction(seq)
             if not G:
                 continue
-            print(f"Generating graph {idx+1}")
-            pre_seq = [deg for _, deg in G.degree()]
-            for t in reversed(range(num_steps +1)):
+
+            print(f"Generating graph {idx + 1}")
+            for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
-                u,v = random.choice(edges)
-                edge_candidates = [e for e in edges if e != (u,v) and len(set(e + (u,v))) == 4]
-                if not edge_candidates:
+                if len(edges) < 2:
                     continue
-                candidate_tensor = torch.tensor(edge_candidates, dtype=torch.long, device=device)
+
+                # Select a random anchor edge
+                u, v = random.choice(edges)
+
+                # Generate swappable candidates (disjoint with (u,v))
+                all_candidates = [
+                    e for e in edges if e != (u, v) and len(set(e + (u, v))) == 4
+                ]
+                if not all_candidates:
+                    continue
+
+                # Limit number of candidates
+                num_candidates = min(32, len(all_candidates))
+                candidate_edges = random.sample(all_candidates, num_candidates)
+
+                # Prepare input tensors
+                candidate_tensor = torch.tensor(candidate_edges, dtype=torch.long, device=device)
                 data = graph_to_data(G).to(device)
                 edge_index = data.edge_index
-                scores = self(data.x, edge_index, (u,v), candidate_tensor, t)
+                x = data.x
+
+                # GNN encoding
+                for gin in self.gin_layers:
+                    x = gin(x, edge_index)
+
+                # Encode first edge and time
+                first_edge_feat = get_edge_representation(x, u, v)
+                t_tensor = torch.tensor([t], dtype=torch.float32, device=device)
+                t_embed = get_sinusoidal_embedding(t_tensor, dim=self.hidden_dim)  # shape [H]
+
+                # Batch construct feature vectors
+                edge_feats = []
+                for s, t_ in candidate_edges:
+                    edge_feat = get_edge_representation(x, s, t_)
+                    feat = torch.cat([first_edge_feat, edge_feat, t_embed], dim=-1)
+                    edge_feats.append(feat)
+                edge_feats_tensor = torch.stack(edge_feats, dim=0)  # [B, F]
+
+                # Predict scores
+                scores = self.edge_predictor(edge_feats_tensor).squeeze(-1)  # [B]
                 top_idx = torch.argmax(scores).item()
-                x, y = candidate_tensor[top_idx].tolist()
-                if not G.has_edge(u, x) and not G.has_edge(v, y):
-                    G.remove_edges_from([(u,v), (x, y)])
-                    G.add_edges_from([(u, x), (v, y)])
-                elif not G.has_edge(u, y) and not G.has_edge(v, x):
-                    G.remove_edges_from([(u,v), (x, y)])
-                    G.add_edges_from([(u, y), (v, x)])
-            post_seq = [deg for _, deg in G.degree()]
-            if set(pre_seq) != set(post_seq):
-                import pdb
-                pdb.set_trace()
+                x_, y_ = candidate_edges[top_idx]
+
+                # Rewire only if no duplicates
+                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, x_), (v, y_)])
+                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, y_), (v, x_)])
             generated_graphs.append(G)
+
         return generated_graphs
