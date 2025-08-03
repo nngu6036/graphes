@@ -8,4 +8,4 @@ epsilon = 0.0001
 T = 900
 
 [inference]
-generate_samples = 500    # Number of samples to generate
+generate_samples = 200    # Number of samples to generate
