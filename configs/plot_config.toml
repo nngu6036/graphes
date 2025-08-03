@@ -1,5 +1,5 @@
 [mixing_time]
 max_steps=10000
-check_interval=100
+check_interval=50
 threshold=0.01
 sample_count=200

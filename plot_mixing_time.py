@@ -37,6 +37,8 @@ def estimate_mixing_time(G_init, config):
     G = G_init.copy()
     prev_features = graph_features(G)
     distances = []
+    threshold = config['mixing_time']['threshold']
+    step_indices = []
 
     for step in range(1, config['mixing_time']['max_steps'] + 1):
         edge_rewire(G)
@@ -46,12 +48,19 @@ def estimate_mixing_time(G_init, config):
             distance = features_distance(prev_features, current_features)
             distances.append(distance)
 
-            if distance < config['mixing_time']['threshold']:
-                return step, distances
+            if distance < threshold:
+                step_indices.append((step, distance))
 
             prev_features = current_features
 
-    return config['mixing_time']['max_steps'], distances
+    if step_indices:
+        avg_distance = np.mean([d for _, d in step_indices])
+        qualifying_steps = [step for step, dist in step_indices if dist < avg_distance]
+        min_step = min(qualifying_steps) if qualifying_steps else config['mixing_time']['max_steps']
+    else:
+        min_step = config['mixing_time']['max_steps']
+
+    return min_step, distances
 
 # Example Usage:
 def main(args):
