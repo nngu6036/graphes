@@ -45,8 +45,9 @@ def rewire_edges(G, num_rewirings):
         triangle_removed = count_edge_triangles(G, u, v) + count_edge_triangles(G, x, y)
         # Option 1: (u,x), (v,y)
         if not G.has_edge(u, x) and not G.has_edge(v, y):
-            tri_added = count_common_neighbors(G, u, x) + count_common_neighbors(G, v, y)
-            if tri_added >= triangle_removed:
+            #tri_added = count_common_neighbors(G, u, x) + count_common_neighbors(G, v, y)
+            #if tri_added >= triangle_removed:
+            if True:
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, x), (v, y)])
                 last_rewired_pair = (e1, e2)
@@ -55,8 +56,9 @@ def rewire_edges(G, num_rewirings):
                 continue
         # Option 2: (u,y), (v,x)
         if not G.has_edge(u, y) and not G.has_edge(v, x):
-            tri_added = count_common_neighbors(G, u, y) + count_common_neighbors(G, v, x)
-            if tri_added >= triangle_removed:
+            #tri_added = count_common_neighbors(G, u, y) + count_common_neighbors(G, v, x)
+            #if tri_added >= triangle_removed:
+            if True
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, y), (v, x)])
                 last_rewired_pair = (e1, e2)
@@ -140,11 +142,11 @@ def main(args):
             print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
             print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
         else:
-            generated_graphs = model.generate_with_configuration_model(config['inference']['generate_samples'],T,degree_sequences = None, msvae_model = msvae_model)
-            print(f"Evaluate generated graphs using Havei Hakimi")
-            print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-            print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-            print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
+            #generated_graphs = model.generate_with_configuration_model(config['inference']['generate_samples'],T,degree_sequences = None, msvae_model = msvae_model)
+            #print(f"Evaluate generated graphs using Havei Hakimi")
+            #print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
+            #print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
+            #print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
             generated_graphs = model.generate_with_havei_hakimi(config['inference']['generate_samples'],T,degree_sequences = None, msvae_model = msvae_model)
             print(f"Evaluate generated graphs using Configuraiton Model")
             print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
