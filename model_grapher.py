@@ -154,24 +154,21 @@ class GraphER(nn.Module):
                 scores = self(data.x,data.edge_index,(u,v), candidate_edges,t).squeeze(-1) 
                 top_idx = torch.argmax(scores).item()
                 tri_removed = count_edge_triangles(G, u, v)
-                best_candidate = None
-
-                for i in top_idx:
-                    x, y = candidate_edges[i]
-                    tri_added_1 = count_common_neighbors(G, u, x)
-                    tri_added_2 = count_common_neighbors(G, v, y)
-                    if not G.has_edge(u, x) and not G.has_edge(v, y) and (tri_added_1 + tri_added_2) >= tri_removed:
-                        best_candidate = [(u, x), (v, y)]
-                        break
-                    tri_added_1 = count_common_neighbors(G, u, y)
-                    tri_added_2 = count_common_neighbors(G, v, x)
-                    if not G.has_edge(u, y) and not G.has_edge(v, x) and (tri_added_1 + tri_added_2) >= tri_removed:
-                        best_candidate = [(u, y), (v, x)]
-                        break
-
-                if best_candidate:
+                x, y = candidate_edges[top_idx]
+                tri_added_1 = count_common_neighbors(G, u, x)
+                tri_added_2 = count_common_neighbors(G, v, y)
+                if not G.has_edge(u, x) and not G.has_edge(v, y) and (tri_added_1 + tri_added_2) >= tri_removed:
+                    best_candidate = [(u, x), (v, y)]
                     G.remove_edges_from([(u, v), candidate_edges[i]])
                     G.add_edges_from(best_candidate)
+                    continue
+                tri_added_1 = count_common_neighbors(G, u, y)
+                tri_added_2 = count_common_neighbors(G, v, x)
+                if not G.has_edge(u, y) and not G.has_edge(v, x) and (tri_added_1 + tri_added_2) >= tri_removed:
+                    best_candidate = [(u, y), (v, x)]
+                    G.remove_edges_from([(u, v), candidate_edges[i]])
+                    G.add_edges_from(best_candidate)
+                    continue
 
         return generated_graphs
 
@@ -209,24 +206,21 @@ class GraphER(nn.Module):
                 scores = self(data.x,data.edge_index,(u,v), candidate_edges,t).squeeze(-1) 
                 top_idx = torch.argmax(scores).item()
                 tri_removed = count_edge_triangles(G, u, v)
-                best_candidate = None
-
-                for i in top_idx:
-                    x, y = candidate_edges[i]
-                    tri_added_1 = count_common_neighbors(G, u, x)
-                    tri_added_2 = count_common_neighbors(G, v, y)
-                    if not G.has_edge(u, x) and not G.has_edge(v, y) and (tri_added_1 + tri_added_2) >= tri_removed:
-                        best_candidate = [(u, x), (v, y)]
-                        break
-                    tri_added_1 = count_common_neighbors(G, u, y)
-                    tri_added_2 = count_common_neighbors(G, v, x)
-                    if not G.has_edge(u, y) and not G.has_edge(v, x) and (tri_added_1 + tri_added_2) >= tri_removed:
-                        best_candidate = [(u, y), (v, x)]
-                        break
-
-                if best_candidate:
+                x, y = candidate_edges[top_idx]
+                tri_added_1 = count_common_neighbors(G, u, x)
+                tri_added_2 = count_common_neighbors(G, v, y)
+                if not G.has_edge(u, x) and not G.has_edge(v, y) and (tri_added_1 + tri_added_2) >= tri_removed:
+                    best_candidate = [(u, x), (v, y)]
                     G.remove_edges_from([(u, v), candidate_edges[i]])
                     G.add_edges_from(best_candidate)
+                    continue
+                tri_added_1 = count_common_neighbors(G, u, y)
+                tri_added_2 = count_common_neighbors(G, v, x)
+                if not G.has_edge(u, y) and not G.has_edge(v, x) and (tri_added_1 + tri_added_2) >= tri_removed:
+                    best_candidate = [(u, y), (v, x)]
+                    G.remove_edges_from([(u, v), candidate_edges[i]])
+                    G.add_edges_from(best_candidate)
+                    continue
             generated_graphs.append(G)
 
         return generated_graphs
