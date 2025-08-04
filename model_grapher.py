@@ -77,8 +77,8 @@ def havel_hakimi_construction(degree_sequence):
 def count_common_neighbors(G, a, b):
         return len(set(G.neighbors(a)) & set(G.neighbors(b)))
 
-    def count_edge_triangles(G, u, v):
-        return count_common_neighbors(G, u, v)
+def count_edge_triangles(G, u, v):
+    return count_common_neighbors(G, u, v)
 
         
 class GraphER(nn.Module):
