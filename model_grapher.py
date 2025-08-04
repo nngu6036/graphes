@@ -154,24 +154,14 @@ class GraphER(nn.Module):
                 data = graph_to_data(G).to(device)
                 scores = self(data.x,data.edge_index,(u,v), candidate_edges,t).squeeze(-1) 
                 top_idx = torch.argmax(scores).item()
-                tri_removed = count_edge_triangles(G, u, v)
-                x, y = candidate_edges[top_idx]
-                tri_added_1 = count_common_neighbors(G, u, x)
-                tri_added_2 = count_common_neighbors(G, v, y)
-                if not G.has_edge(u, x) and not G.has_edge(v, y) and (tri_added_1 + tri_added_2) >= tri_removed:
-                    best_candidate = [(u, x), (v, y)]
-                    G.remove_edges_from([(u, v), candidate_edges[top_idx]])
-                    G.add_edges_from(best_candidate)
-                    print("Update G")
-                    continue
-                tri_added_1 = count_common_neighbors(G, u, y)
-                tri_added_2 = count_common_neighbors(G, v, x)
-                if not G.has_edge(u, y) and not G.has_edge(v, x) and (tri_added_1 + tri_added_2) >= tri_removed:
-                    best_candidate = [(u, y), (v, x)]
-                    G.remove_edges_from([(u, v), candidate_edges[top_idx]])
-                    G.add_edges_from(best_candidate)
-                    print("Update G")
-                    continue
+                x_, y_ = candidate_edges[top_idx]
+                # Rewire only if no duplicates
+                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, x_), (v, y_)])
+                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, y_), (v, x_)])
             post_seq = [deg for _, deg in G.degree()]
             if set(post_seq) != set(pre_seq):
                 import pdb
@@ -212,22 +202,14 @@ class GraphER(nn.Module):
                 data = graph_to_data(G).to(device)
                 scores = self(data.x,data.edge_index,(u,v), candidate_edges,t).squeeze(-1) 
                 top_idx = torch.argmax(scores).item()
-                tri_removed = count_edge_triangles(G, u, v)
-                x, y = candidate_edges[top_idx]
-                tri_added_1 = count_common_neighbors(G, u, x)
-                tri_added_2 = count_common_neighbors(G, v, y)
-                if not G.has_edge(u, x) and not G.has_edge(v, y) and (tri_added_1 + tri_added_2) >= tri_removed:
-                    best_candidate = [(u, x), (v, y)]
-                    G.remove_edges_from([(u, v), candidate_edges[top_idx]])
-                    G.add_edges_from(best_candidate)
-                    continue
-                tri_added_1 = count_common_neighbors(G, u, y)
-                tri_added_2 = count_common_neighbors(G, v, x)
-                if not G.has_edge(u, y) and not G.has_edge(v, x) and (tri_added_1 + tri_added_2) >= tri_removed:
-                    best_candidate = [(u, y), (v, x)]
-                    G.remove_edges_from([(u, v), candidate_edges[top_idx]])
-                    G.add_edges_from(best_candidate)
-                    continue
+                x_, y_ = candidate_edges[top_idx]
+                # Rewire only if no duplicates
+                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, x_), (v, y_)])
+                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, y_), (v, x_)])
             generated_graphs.append(G)
 
         return generated_graphs
