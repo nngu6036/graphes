@@ -169,7 +169,7 @@ class GraphER(nn.Module):
                     G.remove_edges_from([(u, v), candidate_edges[top_idx]])
                     G.add_edges_from(best_candidate)
                     continue
-
+            generated_graphs.append(G)
         return generated_graphs
 
     def generate_with_configuration_model(self, num_samples, num_steps, degree_sequences=None, msvae_model=None):
