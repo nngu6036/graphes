@@ -66,7 +66,6 @@ def rewire_edges(G, num_rewirings):
                 timestep += 1
                 edges = list(G.edges())
                 continue
-        print(f"Triangles removed: {triangle_removed}, added: {tri_added}")
     return G, removed_pair, added_pair, timestep
 
 def count_common_neighbors(G, a, b):
