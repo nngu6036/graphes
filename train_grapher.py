@@ -32,7 +32,8 @@ def count_edge_triangles(G, u, v):
 
 def rewire_edges(G, num_rewirings):
     edges = list(G.edges())
-    last_rewired_pair = None
+    removed_pair = None
+    added_pair = None
     timestep = 0
     for _ in range(num_rewirings):
         if len(edges) < 2:
@@ -47,10 +48,10 @@ def rewire_edges(G, num_rewirings):
         if not G.has_edge(u, x) and not G.has_edge(v, y):
             tri_added = count_common_neighbors(G, u, x) + count_common_neighbors(G, v, y)
             if tri_added >= triangle_removed:
-            #if True:
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, x), (v, y)])
-                last_rewired_pair = (e1, e2)
+                removed_pair = (e1, e2)
+                added_pair = [(u, x), (v, y)]
                 timestep += 1
                 edges = list(G.edges())
                 continue
@@ -58,14 +59,15 @@ def rewire_edges(G, num_rewirings):
         if not G.has_edge(u, y) and not G.has_edge(v, x):
             tri_added = count_common_neighbors(G, u, y) + count_common_neighbors(G, v, x)
             if tri_added >= triangle_removed:
-            #if True:
                 G.remove_edges_from([e1, e2])
                 G.add_edges_from([(u, y), (v, x)])
-                last_rewired_pair = (e1, e2)
+                removed_pair = (e1, e2)
+                added_pair = [(u, y), (v, x)]
                 timestep += 1
                 edges = list(G.edges())
                 continue
-    return G, last_rewired_pair, timestep
+        print(f"Triangles removed: {triangle_removed}, added: {tri_added}")
+    return G, removed_pair, added_pair, timestep
 
 def count_common_neighbors(G, a, b):
     """Return number of common neighbors of nodes a and b."""
@@ -81,16 +83,16 @@ def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device)
         epoch_loss = 0.0
         for idx,G in enumerate(graphs):
             num_rewirings = random.randint(1, T)
-            G_corrupted, last_rewired_pair, timestep = rewire_edges(G.copy(), num_rewirings)
-            if not last_rewired_pair:
+            G_corrupted, removed_pair, added_pair, timestep = rewire_edges(G.copy(), num_rewirings)
+            if not removed_pair and not added_pair:
                 print("Revire pair null")
                 continue
-            (u,v), (x,y) = last_rewired_pair
+            first_edge_removed, second_edge_removed = removed_pair
+            first_edge_added, second_edge_added = added_pair
             data = graph_to_data(G_corrupted).to(device)
             candidate_edges = [e for e in G_corrupted.edges()]
-            positive_edges = {frozenset((u, x)), frozenset((u, y))}
-            labels = torch.tensor([1.0 if frozenset((s, t)) in positive_edges else 0.0 for (s, t) in candidate_edges])
-            scores = model(data.x, data.edge_index, (u,v), candidate_edges, t=timestep)
+            labels = torch.tensor([1.0 if frozenset(edge)  ==  frozenset(second_edge_added) else 0.0 for edge in candidate_edges])
+            scores = model(data.x, data.edge_index, first_edge_added, candidate_edges, t=timestep)
             loss = criterion(scores.squeeze(), labels)
             optimizer.zero_grad()
             loss.backward()

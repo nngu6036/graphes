@@ -49,7 +49,6 @@ def havel_hakimi_construction(degree_sequence):
     if not nx.is_valid_degree_sequence_havel_hakimi(degree_sequence):
         print("The degree sequence is not graphical.")
         return None
-
     # Make a copy to avoid modifying the original
     deg_seq = list(degree_sequence)
     nodes = list(range(len(deg_seq)))
@@ -68,14 +67,20 @@ def havel_hakimi_construction(degree_sequence):
             v = nodes[i]
             G.add_edge(u, v)
             deg_seq[i] -= 1
-
         deg_seq[0] = 0  # All of u's degree is used
         # Remove nodes with 0 degree for next round
         nodes = [n for n, d in zip(nodes, deg_seq) if d > 0]
         deg_seq = [d for d in deg_seq if d > 0]
-
     return G
 
+
+def count_common_neighbors(G, a, b):
+        return len(set(G.neighbors(a)) & set(G.neighbors(b)))
+
+    def count_edge_triangles(G, u, v):
+        return count_common_neighbors(G, u, v)
+
+        
 class GraphER(nn.Module):
     def __init__(self, in_channels, hidden_dim, num_layer):
         super().__init__()
@@ -145,39 +150,28 @@ class GraphER(nn.Module):
                 # Limit number of candidates
                 num_candidates = min(32, len(all_candidates))
                 candidate_edges = random.sample(all_candidates, num_candidates)
-                # Prepare input tensors
-                candidate_tensor = torch.tensor(candidate_edges, dtype=torch.long, device=device)
                 data = graph_to_data(G).to(device)
-                edge_index = data.edge_index
-                x = data.x
-                # GNN encoding
-                for gin in self.gin_layers:
-                    x = gin(x, edge_index)
-                # Encode first edge and time
-                first_edge_feat = get_edge_representation(x, u, v)
-                t_tensor = torch.tensor([t], dtype=torch.float32, device=device)
-                t_embed = get_sinusoidal_embedding(t_tensor, dim=self.hidden_dim)  # shape [H]
-                # Batch construct feature vectors
-                edge_feats = []
-                for s, t_ in candidate_edges:
-                    edge_feat = get_edge_representation(x, s, t_)
-                    feat = torch.cat([first_edge_feat, edge_feat, t_embed], dim=-1)
-                    edge_feats.append(feat)
-                edge_feats_tensor = torch.stack(edge_feats, dim=0)  # [B, F]
-
-                # Predict scores
-                scores = self.edge_predictor(edge_feats_tensor).squeeze(-1)  # [B]
+                scores = self(data.x,data.edge_index,(u,v), candidate_edges,t).squeeze(-1) 
                 top_idx = torch.argmax(scores).item()
-                x_, y_ = candidate_edges[top_idx]
+                tri_removed = count_edge_triangles(G, u, v)
+                best_candidate = None
 
-                # Rewire only if no duplicates
-                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, x_), (v, y_)])
-                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, y_), (v, x_)])
-            generated_graphs.append(G)
+                for i in top_idx:
+                    x, y = candidate_edges[i]
+                    tri_added_1 = count_common_neighbors(G, u, x)
+                    tri_added_2 = count_common_neighbors(G, v, y)
+                    if not G.has_edge(u, x) and not G.has_edge(v, y) and (tri_added_1 + tri_added_2) >= tri_removed:
+                        best_candidate = [(u, x), (v, y)]
+                        break
+                    tri_added_1 = count_common_neighbors(G, u, y)
+                    tri_added_2 = count_common_neighbors(G, v, x)
+                    if not G.has_edge(u, y) and not G.has_edge(v, x) and (tri_added_1 + tri_added_2) >= tri_removed:
+                        best_candidate = [(u, y), (v, x)]
+                        break
+
+                if best_candidate:
+                    G.remove_edges_from([(u, v), candidate_edges[i]])
+                    G.add_edges_from(best_candidate)
 
         return generated_graphs
 
@@ -211,38 +205,28 @@ class GraphER(nn.Module):
                 # Limit number of candidates
                 num_candidates = min(32, len(all_candidates))
                 candidate_edges = random.sample(all_candidates, num_candidates)
-                # Prepare input tensors
-                candidate_tensor = torch.tensor(candidate_edges, dtype=torch.long, device=device)
                 data = graph_to_data(G).to(device)
-                edge_index = data.edge_index
-                x = data.x
-                # GNN encoding
-                for gin in self.gin_layers:
-                    x = gin(x, edge_index)
-                # Encode first edge and time
-                first_edge_feat = get_edge_representation(x, u, v)
-                t_tensor = torch.tensor([t], dtype=torch.float32, device=device)
-                t_embed = get_sinusoidal_embedding(t_tensor, dim=self.hidden_dim)  # shape [H]
-                # Batch construct feature vectors
-                edge_feats = []
-                for s, t_ in candidate_edges:
-                    edge_feat = get_edge_representation(x, s, t_)
-                    feat = torch.cat([first_edge_feat, edge_feat, t_embed], dim=-1)
-                    edge_feats.append(feat)
-                edge_feats_tensor = torch.stack(edge_feats, dim=0)  # [B, F]
-
-                # Predict scores
-                scores = self.edge_predictor(edge_feats_tensor).squeeze(-1)  # [B]
+                scores = self(data.x,data.edge_index,(u,v), candidate_edges,t).squeeze(-1) 
                 top_idx = torch.argmax(scores).item()
-                x_, y_ = candidate_edges[top_idx]
+                tri_removed = count_edge_triangles(G, u, v)
+                best_candidate = None
 
-                # Rewire only if no duplicates
-                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, x_), (v, y_)])
-                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, y_), (v, x_)])
+                for i in top_idx:
+                    x, y = candidate_edges[i]
+                    tri_added_1 = count_common_neighbors(G, u, x)
+                    tri_added_2 = count_common_neighbors(G, v, y)
+                    if not G.has_edge(u, x) and not G.has_edge(v, y) and (tri_added_1 + tri_added_2) >= tri_removed:
+                        best_candidate = [(u, x), (v, y)]
+                        break
+                    tri_added_1 = count_common_neighbors(G, u, y)
+                    tri_added_2 = count_common_neighbors(G, v, x)
+                    if not G.has_edge(u, y) and not G.has_edge(v, x) and (tri_added_1 + tri_added_2) >= tri_removed:
+                        best_candidate = [(u, y), (v, x)]
+                        break
+
+                if best_candidate:
+                    G.remove_edges_from([(u, v), candidate_edges[i]])
+                    G.add_edges_from(best_candidate)
             generated_graphs.append(G)
 
         return generated_graphs

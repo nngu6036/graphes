@@ -1,0 +1,36 @@
+Community 
+Configuration Model
+MMD Degree: 0.005276648424458186
+MMD Clustering Coefficient: 0.2841718388703033
+MMD Orbit count: 0.1675529307317316
+
+Havei Hakimo Model
+MMD Degree: 0.055955714564690284
+MMD Clustering Coefficient: 0.4273394310681117
+MMD Orbit count: 0.254766518234931
+
+Ego
+Configuration Model
+MMD Degree: 0.07873028103039248
+MMD Clustering Coefficient: 0.11904209836692387
+MMD Orbit count: 0.11739689996814862
+
+Havei Hakimo Model
+MMD Degree: 0.2615591065276438
+MMD Clustering Coefficient: 0.37873774627488754
+MMD Orbit count: 0.525093437410637
+
+without triangle:
+
+Community:
+Evaluate generated graphs using Configuraiton Model
+MMD Degree: 0.007217142934888843
+MMD Clustering Coefficient: 0.34791108330456577
+MMD Orbit count: 0.18604657475735276
+
+Ego 
+Generating graph 200
+Evaluate generated graphs using Configuraiton Model
+MMD Degree: 0.06850826857625103
+MMD Clustering Coefficient: 0.15675898338244743
+MMD Orbit count: 0.14045522060963422
