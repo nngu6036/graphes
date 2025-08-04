@@ -209,15 +209,12 @@ class GraphER(nn.Module):
                 if not G.has_edge(u, x_) and not G.has_edge(v, y_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, x_), (v, y_)])
-                    print("Update G")
                 elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
-                    print("Update G")
             post_seq = [deg for _, deg in G.degree()]
-            if set(post_seq) != set(pre_seq):
-                import pdb
-                pdb.set_trace()
+            import pdb
+            pdb.set_trace()
             generated_graphs.append(G)
 
         return generated_graphs, generated_seqs
