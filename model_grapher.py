@@ -135,6 +135,7 @@ class GraphER(nn.Module):
             if not G:
                 continue
             print(f"Generating graph {idx + 1}")
+            pre_seq = [deg for _, deg in G.degree()]
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
@@ -161,6 +162,7 @@ class GraphER(nn.Module):
                     best_candidate = [(u, x), (v, y)]
                     G.remove_edges_from([(u, v), candidate_edges[top_idx]])
                     G.add_edges_from(best_candidate)
+                    print("Update G")
                     continue
                 tri_added_1 = count_common_neighbors(G, u, y)
                 tri_added_2 = count_common_neighbors(G, v, x)
@@ -168,7 +170,12 @@ class GraphER(nn.Module):
                     best_candidate = [(u, y), (v, x)]
                     G.remove_edges_from([(u, v), candidate_edges[top_idx]])
                     G.add_edges_from(best_candidate)
+                    print("Update G")
                     continue
+            post_seq = [deg for _, deg in G.degree()]
+            if set(post_seq) != set(pre_seq):
+                import pdb
+                pdb.set_trace()
             generated_graphs.append(G)
         return generated_graphs
 
