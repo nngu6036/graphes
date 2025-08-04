@@ -159,14 +159,14 @@ class GraphER(nn.Module):
                 tri_added_2 = count_common_neighbors(G, v, y)
                 if not G.has_edge(u, x) and not G.has_edge(v, y) and (tri_added_1 + tri_added_2) >= tri_removed:
                     best_candidate = [(u, x), (v, y)]
-                    G.remove_edges_from([(u, v), candidate_edges[i]])
+                    G.remove_edges_from([(u, v), candidate_edges[top_idx]])
                     G.add_edges_from(best_candidate)
                     continue
                 tri_added_1 = count_common_neighbors(G, u, y)
                 tri_added_2 = count_common_neighbors(G, v, x)
                 if not G.has_edge(u, y) and not G.has_edge(v, x) and (tri_added_1 + tri_added_2) >= tri_removed:
                     best_candidate = [(u, y), (v, x)]
-                    G.remove_edges_from([(u, v), candidate_edges[i]])
+                    G.remove_edges_from([(u, v), candidate_edges[top_idx]])
                     G.add_edges_from(best_candidate)
                     continue
 
@@ -211,14 +211,14 @@ class GraphER(nn.Module):
                 tri_added_2 = count_common_neighbors(G, v, y)
                 if not G.has_edge(u, x) and not G.has_edge(v, y) and (tri_added_1 + tri_added_2) >= tri_removed:
                     best_candidate = [(u, x), (v, y)]
-                    G.remove_edges_from([(u, v), candidate_edges[i]])
+                    G.remove_edges_from([(u, v), candidate_edges[top_idx]])
                     G.add_edges_from(best_candidate)
                     continue
                 tri_added_1 = count_common_neighbors(G, u, y)
                 tri_added_2 = count_common_neighbors(G, v, x)
                 if not G.has_edge(u, y) and not G.has_edge(v, x) and (tri_added_1 + tri_added_2) >= tri_removed:
                     best_candidate = [(u, y), (v, x)]
-                    G.remove_edges_from([(u, v), candidate_edges[i]])
+                    G.remove_edges_from([(u, v), candidate_edges[top_idx]])
                     G.add_edges_from(best_candidate)
                     continue
             generated_graphs.append(G)
