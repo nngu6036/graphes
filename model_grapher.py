@@ -184,6 +184,7 @@ class GraphER(nn.Module):
             if not G:
                 continue
             print(f"Generating graph {idx + 1}")
+            """
             pre_seq = [deg for _, deg in G.degree()]
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
@@ -215,6 +216,7 @@ class GraphER(nn.Module):
             if set(post_seq) != set(pre_seq):
                 import pdb
                 pdb.set_trace()
+            """
             generated_graphs.append(G)
 
         return generated_graphs, generated_seqs
