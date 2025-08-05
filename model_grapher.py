@@ -130,13 +130,14 @@ class GraphER(nn.Module):
         self.hidden_dim = hidden_dim
         self.gin_layers = nn.ModuleList([
             GINConv(nn.Sequential(nn.Linear(in_channels if i == 0 else hidden_dim, hidden_dim),
-                                  nn.ReLU(),
+                                  nn.LeakyReLU(0.1),
                                   nn.Linear(hidden_dim, hidden_dim)))
             for i in range(num_layer)
         ])
         self.edge_predictor = nn.Sequential(
             nn.Linear(hidden_dim * 4 + hidden_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.2),
             nn.Linear(hidden_dim, 1)
         )
 
