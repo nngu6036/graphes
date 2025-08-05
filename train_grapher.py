@@ -143,7 +143,7 @@ def main(args):
             print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
             print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
         else:
-            generated_graphs = model.generate_with_havei_hakimi(config['inference']['generate_samples'],T,degree_sequences = None, msvae_model = msvae_model)
+            generated_graphs,generated_seqs  = model.generate_with_havei_hakimi(config['inference']['generate_samples'],T,degree_sequences = None, msvae_model = msvae_model)
             print(f"Evaluate generated graphs using Havei Hakimi")
             print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
             print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
