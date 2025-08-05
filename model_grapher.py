@@ -194,8 +194,7 @@ class GraphER(nn.Module):
         initial_graphs = []
         for _ in range(num_samples):
             degree_sequences = msvae_model.generate(num_samples)
-            for _ in range(num_samples):
-                generated_seqs.append(degree_sequences[0])
+            generated_seqs.append(degree_sequences[0])
 
         """
         while len(initial_graphs) < num_samples:
