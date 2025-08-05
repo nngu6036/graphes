@@ -192,24 +192,17 @@ class GraphER(nn.Module):
         generated_graphs = []
         generated_seqs = []
         initial_graphs = []
-        for _ in range(num_samples):
-            degree_sequences = msvae_model.generate(num_samples)
-            generated_seqs.append(degree_sequences[0])
-
-        """
-        while len(initial_graphs) < num_samples:
-            degree_sequences = msvae_model.generate(num_samples)
-            for idx, seq in enumerate(degree_sequences):
-                valid, _ = check_sequence_validity(seq)
-                if not valid:
-                    continue
-                G = initialize_graphs(method, seq) 
-                if G:
-                    initial_graphs.append(G)
-                    generated_seqs.append(seq)
-                    if len(initial_graphs) >= num_samples:
-                        break
-        """
+        degree_sequences = msvae_model.generate(num_samples)
+        for idx, seq in enumerate(degree_sequences):
+            valid, _ = check_sequence_validity(seq)
+            if not valid:
+                continue
+            G = initialize_graphs(method, seq) 
+            if G:
+                initial_graphs.append(G)
+                generated_seqs.append(seq)
+                if len(initial_graphs) >= num_samples:
+                    break
         return generated_graphs, generated_seqs
         for idx, G in enumerate(initial_graphs): 
             print(f"Generating graph {idx + 1}")
