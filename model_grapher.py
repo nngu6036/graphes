@@ -193,8 +193,8 @@ class GraphER(nn.Module):
                 elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
-            generated_graphs.append(G)
             """
+            generated_graphs.append(G)
         return generated_graphs
 
     def generate_with_configuration_model(self, num_samples, num_steps, degree_sequences=None, msvae_model=None):
