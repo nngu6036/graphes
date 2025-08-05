@@ -111,6 +111,18 @@ def count_common_neighbors(G, a, b):
 def count_edge_triangles(G, u, v):
     return count_common_neighbors(G, u, v)
 
+def are_lists_equal_counting(list1, list2, lower_bound, upper_bound):
+    range_size = upper_bound - lower_bound + 1
+    count1 = [0] * range_size
+    count2 = [0] * range_size
+
+    for num in list1:
+        count1[num - lower_bound] += 1
+
+    for num in list2:
+        count2[num - lower_bound] += 1
+
+    return count1 == count2
         
 class GraphER(nn.Module):
     def __init__(self, in_channels, hidden_dim, num_layer):
@@ -151,7 +163,7 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate_with_havei_hakimi(self, num_samples, num_steps, degree_sequences=None, msvae_model=None):
+    def generate_with_havei_hakimi(self, num_samples, num_steps,max_node, degree_sequences=None, msvae_model=None):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
@@ -165,6 +177,7 @@ class GraphER(nn.Module):
             G = havel_hakimi_construction(seq)
             if not G:
                 continue
+            pre_seq = [deg for _, deg in G.degree()]
             """
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):
@@ -194,10 +207,14 @@ class GraphER(nn.Module):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
             """
+            post_seq = [deg for _, deg in G.degree()]
+            if not are_lists_equal_counting(pre_seq, post_seq, 0, max_node):
+                import pdb
+                pdb.set_trace()
             generated_graphs.append(G)
         return generated_graphs, generated_seqs
 
-    def generate_with_configuration_model(self, num_samples, num_steps, degree_sequences=None, msvae_model=None):
+    def generate_with_configuration_model(self, num_samples, num_steps, max_node,degree_sequences=None, msvae_model=None):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
@@ -212,6 +229,7 @@ class GraphER(nn.Module):
             if not G:
                 continue
             print(f"Generating graph {idx + 1}")
+            """
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
@@ -238,6 +256,7 @@ class GraphER(nn.Module):
                 elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
+            """
             generated_graphs.append(G)
 
         return generated_graphs, generated_seqs
