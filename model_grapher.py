@@ -28,12 +28,10 @@ def decode_degree_sequence(seq):
         degrees.extend([degree] * int(count))
     return degrees
 
-def constraint_configuration_model_from_multiset(degree_sequence, max_retries=None):
+def constraint_configuration_model_from_multiset(degree_sequence, max_retries=None, max_failures=1000):
     N = len(degree_sequence)
     if max_retries is None:
         max_retries = N
-    best_graph = None
-    best_stubs_used = -1
     for attempt in range(max_retries):
         stubs = []
         for node, deg in enumerate(degree_sequence):
@@ -41,25 +39,21 @@ def constraint_configuration_model_from_multiset(degree_sequence, max_retries=No
         random.shuffle(stubs)
         G = nx.Graph()
         G.add_nodes_from(range(N))
-        edges_added = set()
-        used_stubs = 0
-        while len(stubs) >= 2:
-            u, v = stubs.pop(), stubs.pop()
+        failures = 0
+        while len(stubs) >= 2 and failures < max_failures:
+            u = stubs.pop()
+            v = stubs.pop()
             if u == v or G.has_edge(u, v):
-                # Put stubs back and reshuffle to avoid deadlock
+                # Invalid pair: put them back and count as failure
                 stubs.extend([u, v])
                 random.shuffle(stubs)
+                failures += 1
                 continue
             G.add_edge(u, v)
-            used_stubs += 2
-            edges_added.add((min(u, v), max(u, v)))
-        if used_stubs > best_stubs_used:
-            best_stubs_used = used_stubs
-            best_graph = G.copy()
-        # If full degree sequence was realized, return immediately
-        if sorted(dict(G.degree()).values()) == sorted(degree_sequence):
+            failures = 0  # Reset on success
+        if sorted([d for _, d in G.degree()]) == sorted(degree_sequence):
             return G
-    return best_graph
+    return None  # Failed to generate a valid graph
 
 def configuration_model_from_multiset(degrees):
     G = nx.configuration_model(degrees)
@@ -206,6 +200,8 @@ class GraphER(nn.Module):
                 print(f"Invalid degree sequence at sample {idx}")
                 continue
             G = constraint_configuration_model_from_multiset(seq)
+            if not G:
+                continue
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
