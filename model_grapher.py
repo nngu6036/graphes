@@ -180,7 +180,7 @@ class GraphER(nn.Module):
             if not valid:
                 print(f"Invalid degree sequence at sample {idx}")
                 continue
-            G = configuration_model_from_multiset(seq)
+            G = generate_with_havei_hakimi(seq)
             if not G:
                 continue
             """
