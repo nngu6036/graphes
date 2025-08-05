@@ -164,7 +164,7 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate_with_havei_hakimi(self, num_samples, num_steps,max_node, degree_sequences=None, msvae_model=None):
+    def generate_with_havei_hakimi(self, num_samples, num_steps, degree_sequences=None, msvae_model=None):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
@@ -178,7 +178,6 @@ class GraphER(nn.Module):
             G = havel_hakimi_construction(seq)
             if not G:
                 continue
-            pre_seq = [deg for _, deg in G.degree()]
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
@@ -206,10 +205,6 @@ class GraphER(nn.Module):
                 elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
-            post_seq = [deg for _, deg in G.degree()]
-            if not are_lists_equal_counting(pre_seq, post_seq, 0, max_node):
-                import pdb
-                pdb.set_trace()
             generated_graphs.append(G)
         return generated_graphs, generated_seqs
 
