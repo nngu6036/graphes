@@ -165,8 +165,8 @@ class GraphER(nn.Module):
             G = havel_hakimi_construction(seq)
             if not G:
                 continue
+            """
             print(f"Generating graph {idx + 1}")
-            pre_seq = [deg for _, deg in G.degree()]
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
@@ -193,11 +193,8 @@ class GraphER(nn.Module):
                 elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
-            post_seq = [deg for _, deg in G.degree()]
-            if set(post_seq) != set(pre_seq):
-                import pdb
-                pdb.set_trace()
             generated_graphs.append(G)
+            """
         return generated_graphs
 
     def generate_with_configuration_model(self, num_samples, num_steps, degree_sequences=None, msvae_model=None):
@@ -211,7 +208,7 @@ class GraphER(nn.Module):
             if not valid:
                 print(f"Invalid degree sequence at sample {idx}")
                 continue
-            G = generate_with_havei_hakimi(seq)
+            G = configuration_model_from_multiset(seq)
             if not G:
                 continue
             """
