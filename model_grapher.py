@@ -178,7 +178,6 @@ class GraphER(nn.Module):
             if not G:
                 continue
             pre_seq = [deg for _, deg in G.degree()]
-            """
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
@@ -206,7 +205,6 @@ class GraphER(nn.Module):
                 elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
-            """
             post_seq = [deg for _, deg in G.degree()]
             if not are_lists_equal_counting(pre_seq, post_seq, 0, max_node):
                 import pdb
