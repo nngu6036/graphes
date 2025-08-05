@@ -167,10 +167,10 @@ def main(args):
             print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
         else:
             generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model = msvae_model)
-            print(f"Evaluate generated graphs using Configuraiton Model")
-            print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-            print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-            print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
+            #print(f"Evaluate generated graphs using Configuraiton Model")
+            #print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
+            #print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
+            #print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
             deg_eval = DegreeSequenceEvaluator()
             test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
             print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
