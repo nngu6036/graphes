@@ -211,7 +211,6 @@ class GraphER(nn.Module):
             G = configuration_model_from_multiset(seq)
             if not G:
                 continue
-            """
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
@@ -239,7 +238,6 @@ class GraphER(nn.Module):
                 elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
-            """
             generated_graphs.append(G)
 
         return generated_graphs, generated_seqs
