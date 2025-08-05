@@ -203,6 +203,7 @@ class GraphER(nn.Module):
                 generated_seqs.append(seq)
                 if len(initial_graphs) >= num_samples:
                     break
+        print(len(generated_seqs))
         return generated_graphs, generated_seqs
         for idx, G in enumerate(initial_graphs): 
             print(f"Generating graph {idx + 1}")
