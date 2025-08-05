@@ -98,6 +98,15 @@ def havel_hakimi_construction(degree_sequence):
         deg_seq = [d for d in deg_seq if d > 0]
     return G
 
+def initialize_graphs(method, seq):
+    if method == 'havei_hakimi':
+        G = havel_hakimi_construction(seq)
+    if method == 'configuration_model':
+        G = configuration_model_from_multiset(seq)
+    if method == 'constraint_configuration_model':
+        G = constraint_configuration_model_from_multiset(seq)
+    return G
+    
 def count_common_neighbors(G, a, b):
         return len(set(G.neighbors(a)) & set(G.neighbors(b)))
 
@@ -144,22 +153,11 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-
-    def initialize_graphs(self, method, seq):
-        if method == 'havei_hakimi':
-            G = havel_hakimi_construction(seq)
-        if method == 'configuration_model':
-            G = configuration_model_from_multiset(seq)
-        if method == 'constraint_configuration_model':
-            G = constraint_configuration_model_from_multiset(seq)
-        return G
-
-
     def generate_without_msvae(self, num_steps, degree_sequences, method = 'constraint_configuration_model'):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
-        initial_graphs = [self.initialize_graphs(method, seq) for seq in degree_sequences]
+        initial_graphs = [initialize_graphs(method, seq) for seq in degree_sequences]
         for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):
@@ -194,18 +192,25 @@ class GraphER(nn.Module):
         generated_graphs = []
         generated_seqs = []
         initial_graphs = []
+        for _ in range(num_samples):
+            degree_sequences = msvae_model.generate(num_samples)
+            for _ in range(num_samples):
+                generated_seqs.append(degree_sequences[0])
+
+        """
         while len(initial_graphs) < num_samples:
             degree_sequences = msvae_model.generate(num_samples)
             for idx, seq in enumerate(degree_sequences):
                 valid, _ = check_sequence_validity(seq)
                 if not valid:
                     continue
-                G = self.initialize_graphs(method, seq) 
+                G = initialize_graphs(method, seq) 
                 if G:
                     initial_graphs.append(G)
                     generated_seqs.append(seq)
                     if len(initial_graphs) >= num_samples:
                         break
+        """
         return generated_graphs, generated_seqs
         for idx, G in enumerate(initial_graphs): 
             print(f"Generating graph {idx + 1}")
