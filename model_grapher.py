@@ -28,41 +28,51 @@ def decode_degree_sequence(seq):
         degrees.extend([degree] * int(count))
     return degrees
 
+def constraint_configuration_model_from_multiset(degree_sequence, max_retries=None):
+    """
+    Generate a simple undirected graph from a valid degree sequence
+    using stub matching with retry mechanism.
+
+    Args:
+        degree_sequence (list of int): List of degrees for N nodes.
+        max_retries (int): Number of retries before giving up. Default is len(degree_sequence).
+
+    Returns:
+        G (networkx.Graph or None): A simple graph satisfying the degree sequence, or None if failed.
+    """
+    N = len(degree_sequence)
+    if max_retries is None:
+        max_retries = N
+    for attempt in range(max_retries):
+        stubs = []
+        for node, deg in enumerate(degree_sequence):
+            stubs.extend([node] * deg)
+        random.shuffle(stubs)
+        G = nx.Graph()
+        G.add_nodes_from(range(N))
+        edges_added = set()
+
+        while stubs:
+            if len(stubs) < 2:
+                break  # Odd number of stubs, can't pair
+            u = stubs.pop()
+            v = stubs.pop()
+            if u == v or G.has_edge(u, v):
+                # Invalid edge, put them back and try again later
+                stubs.extend([u, v])
+                random.shuffle(stubs)  # Reshuffle to try different pairs
+                continue
+            G.add_edge(u, v)
+            edges_added.add((min(u, v), max(u, v)))
+        # Check if the graph matches the degree sequence exactly
+        if sorted([d for _, d in G.degree()]) == sorted(degree_sequence):
+            return G
+    return None  # Failed after max_retries
+
 def configuration_model_from_multiset(degrees):
     G = nx.configuration_model(degrees)
     G = nx.Graph(G)
     G.remove_edges_from(nx.selfloop_edges(G))
-    return G
-
-def havel_hakimi_construction(degree_sequence):
-    if not nx.is_valid_degree_sequence_havel_hakimi(degree_sequence):
-        print("The degree sequence is not graphical.")
-        return None
-
-    # Make a copy to avoid modifying the original
-    deg_seq = list(degree_sequence)
-    nodes = list(range(len(deg_seq)))
-    G = nx.Graph()
-    G.add_nodes_from(nodes)
-
-    while any(deg_seq):
-        # Sort nodes by remaining degree (descending)
-        node_deg_pairs = sorted(zip(nodes, deg_seq), key=lambda x: -x[1])
-        u, du = node_deg_pairs[0]
-        nodes = [x for x, _ in node_deg_pairs]
-        deg_seq = [d for _, d in node_deg_pairs]
-
-        # Take the top node and connect to next 'du' nodes
-        for i in range(1, du + 1):
-            v = nodes[i]
-            G.add_edge(u, v)
-            deg_seq[i] -= 1
-
-        deg_seq[0] = 0  # All of u's degree is used
-        # Remove nodes with 0 degree for next round
-        nodes = [n for n, d in zip(nodes, deg_seq) if d > 0]
-        deg_seq = [d for d in deg_seq if d > 0]
-
     return G
 
 def get_sinusoidal_embedding(t, dim, max_period=10000):
@@ -85,14 +95,12 @@ def havel_hakimi_construction(degree_sequence):
     nodes = list(range(len(deg_seq)))
     G = nx.Graph()
     G.add_nodes_from(nodes)
-
     while any(deg_seq):
         # Sort nodes by remaining degree (descending)
         node_deg_pairs = sorted(zip(nodes, deg_seq), key=lambda x: -x[1])
         u, du = node_deg_pairs[0]
         nodes = [x for x, _ in node_deg_pairs]
         deg_seq = [d for _, d in node_deg_pairs]
-
         # Take the top node and connect to next 'du' nodes
         for i in range(1, du + 1):
             v = nodes[i]
@@ -104,25 +112,11 @@ def havel_hakimi_construction(degree_sequence):
         deg_seq = [d for d in deg_seq if d > 0]
     return G
 
-
 def count_common_neighbors(G, a, b):
         return len(set(G.neighbors(a)) & set(G.neighbors(b)))
 
 def count_edge_triangles(G, u, v):
     return count_common_neighbors(G, u, v)
-
-def are_lists_equal_counting(list1, list2, lower_bound, upper_bound):
-    range_size = upper_bound - lower_bound + 1
-    count1 = [0] * range_size
-    count2 = [0] * range_size
-
-    for num in list1:
-        count1[num - lower_bound] += 1
-
-    for num in list2:
-        count2[num - lower_bound] += 1
-
-    return count1 == count2
         
 class GraphER(nn.Module):
     def __init__(self, in_channels, hidden_dim, num_layer):
@@ -219,7 +213,7 @@ class GraphER(nn.Module):
             if not valid:
                 print(f"Invalid degree sequence at sample {idx}")
                 continue
-            G = configuration_model_from_multiset(seq)
+            G = constraint_configuration_model_from_multiset(seq)
             if not G:
                 continue
             print(f"Generating graph {idx + 1}")
