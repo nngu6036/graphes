@@ -183,8 +183,8 @@ class GraphER(nn.Module):
             G = configuration_model_from_multiset(seq)
             if not G:
                 continue
+            """
             print(f"Generating graph {idx + 1}")
-            pre_seq = [deg for _, deg in G.degree()]
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
@@ -204,7 +204,6 @@ class GraphER(nn.Module):
                 scores = self(data.x,data.edge_index,(u,v), candidate_edges,t).squeeze(-1) 
                 top_idx = torch.argmax(scores).item()
                 x_, y_ = candidate_edges[top_idx]
-                print(top_idx, x_, y_)
                 # Rewire only if no duplicates
                 if not G.has_edge(u, x_) and not G.has_edge(v, y_):
                     G.remove_edges_from([(u, v), (x_, y_)])
@@ -212,9 +211,7 @@ class GraphER(nn.Module):
                 elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
-            post_seq = [deg for _, deg in G.degree()]
-            import pdb
-            pdb.set_trace()
+            """
             generated_graphs.append(G)
 
         return generated_graphs, generated_seqs
