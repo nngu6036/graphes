@@ -144,64 +144,23 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate_with_havei_hakimi(self, num_samples, num_steps, degree_sequences=None, msvae_model=None):
-        self.eval()
-        device = next(self.parameters()).device
-        generated_graphs = []
-        generated_seqs = degree_sequences if degree_sequences else msvae_model.generate(num_samples)
 
-        for idx, seq in enumerate(generated_seqs):
-            valid, _ = check_sequence_validity(seq)
-            if not valid:
-                print(f"Invalid degree sequence at sample {idx}")
-                continue
+    def initialize_graphs(self, method, seq):
+        if method == 'havei_hakimi':
             G = havel_hakimi_construction(seq)
-            if not G:
-                continue
-            print(f"Generating graph {idx + 1}")
-            for t in reversed(range(num_steps + 1)):
-                edges = list(G.edges())
-                if len(edges) < 2:
-                    continue
-                # Select a random anchor edge
-                u, v = random.choice(edges)
-                # Generate swappable candidates (disjoint with (u,v))
-                all_candidates = [
-                    e for e in edges if e != (u, v) and len(set(e + (u, v))) == 4
-                ]
-                if not all_candidates:
-                    continue
-                # Limit number of candidates
-                num_candidates = min(32, len(all_candidates))
-                candidate_edges = random.sample(all_candidates, num_candidates)
-                data = graph_to_data(G).to(device)
-                scores = self(data.x,data.edge_index,(u,v), candidate_edges,t).squeeze(-1) 
-                top_idx = torch.argmax(scores).item()
-                x_, y_ = candidate_edges[top_idx]
-                # Rewire only if no duplicates
-                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, x_), (v, y_)])
-                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, y_), (v, x_)])
-            generated_graphs.append(G)
-        return generated_graphs, generated_seqs
+        if method == 'configuration_model':
+            G = configuration_model_from_multiset(seq)
+        if method == 'constraint_configuration_model':
+            G = constraint_configuration_model_from_multiset(seq)
+        return G
 
-    def generate_with_configuration_model(self, num_samples, num_steps,degree_sequences=None, msvae_model=None):
+
+    def generate_without_msvae(self, num_steps, degree_sequences, method = 'constraint_configuration_model'):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
-        generated_seqs = degree_sequences if degree_sequences else msvae_model.generate(num_samples)
-
-        for idx, seq in enumerate(generated_seqs):
-            valid, _ = check_sequence_validity(seq)
-            if not valid:
-                print(f"Invalid degree sequence at sample {idx}")
-                continue
-            G = constraint_configuration_model_from_multiset(seq)
-            if not G:
-                continue
+        initial_graphs = [self.initialize_graphs(method, seq) for seq in degree_sequences]
+        for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
@@ -215,13 +174,10 @@ class GraphER(nn.Module):
                 ]
                 if not all_candidates:
                     continue
-                # Limit number of candidates
-                num_candidates = min(32, len(all_candidates))
-                candidate_edges = random.sample(all_candidates, num_candidates)
                 data = graph_to_data(G).to(device)
-                scores = self(data.x,data.edge_index,(u,v), candidate_edges,t).squeeze(-1) 
+                scores = self(data.x,data.edge_index,(u,v), all_candidates,t).squeeze(-1) 
                 top_idx = torch.argmax(scores).item()
-                x_, y_ = candidate_edges[top_idx]
+                x_, y_ = all_candidates[top_idx]
                 # Rewire only if no duplicates
                 if not G.has_edge(u, x_) and not G.has_edge(v, y_):
                     G.remove_edges_from([(u, v), (x_, y_)])
@@ -230,5 +186,53 @@ class GraphER(nn.Module):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
             generated_graphs.append(G)
+        return generated_graphs, degree_sequences
 
+    def generate(self, num_samples, num_steps, msvae_model,method = 'constraint_configuration_model'):
+        self.eval()
+        device = next(self.parameters()).device
+        generated_graphs = []
+        generated_seqs = []
+        initial_graphs = []
+        while len(initial_graphs) < num_samples:
+            degree_sequences = msvae_model.generate(num_samples)
+            for idx, seq in enumerate(degree_sequences):
+                valid, _ = check_sequence_validity(seq)
+                if not valid:
+                    continue
+                G = self.initialize_graphs(method, seq) 
+                if G:
+                    initial_graphs.append(G)
+                    generated_seqs.append(seq)
+                    if len(initial_graphs) >= num_samples:
+                        break
+        for idx, G in enumerate(initial_graphs): 
+            print(f"Generating graph {idx + 1}")
+            for t in reversed(range(num_steps + 1)):
+                edges = list(G.edges())
+                if len(edges) < 2:
+                    continue
+                # Select a random anchor edge
+                u, v = random.choice(edges)
+                # Generate swappable candidates (disjoint with (u,v))
+                all_candidates = [
+                    e for e in edges if e != (u, v) and len(set(e + (u, v))) == 4
+                ]
+                all_candidates = [
+                    e for e in edges if e != (u, v) and len(set(e + (u, v))) == 4
+                ]
+                if not all_candidates:
+                    continue
+                data = graph_to_data(G).to(device)
+                scores = self(data.x,data.edge_index,(u,v), all_candidates,t).squeeze(-1) 
+                top_idx = torch.argmax(scores).item()
+                x_, y_ = all_candidates[top_idx]
+                # Rewire only if no duplicates
+                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, x_), (v, y_)])
+                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, y_), (v, x_)])
+            generated_graphs.append(G)
         return generated_graphs, generated_seqs
