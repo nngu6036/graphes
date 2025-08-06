@@ -64,58 +64,59 @@ def count_common_neighbors(G, a, b):
     """Return number of common neighbors of nodes a and b."""
     return len(set(G.neighbors(a)) & set(G.neighbors(b)))
 
-def train_grapher(model, graphs, learning_rate, threshold, T, device):
+def train_grapher(model, graphs, num_epochs, learning_rate, threshold, T, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.BCEWithLogitsLoss()
     model.to(device)
     model.train()
-    graph_loss = 0.0
-    for idx,G in enumerate(graphs):
-        # --- Corrupt graph with t edge rewirings ---
-        distance = 1
-        G_corrupted = G
-        trajectory = []
-        step = 0
-        prev_features = graph_features(G_corrupted)
-        while step < T:
-            G_corrupted, removed_pair, added_pair = rewire_edges(G_corrupted.copy())
-            if removed_pair and added_pair:
-                step += 1
-                trajectory.append((G_corrupted, removed_pair, added_pair, step))
-                current_features = graph_features(G_corrupted)
-                distance = features_distance(prev_features, current_features)
-                if distance < threshold:
-                    break
-        for G_corrupted, removed_pair, added_pair, timestep in trajectory:
-            # --- Define anchor and target edge ---
-            first_edge_added, second_edge_added = added_pair  # predict second_edge_added given first_edge_added
-            # --- Graph to PyG format ---
-            data = graph_to_data(G_corrupted).to(device)
-            # --- Edge candidates from corrupted graph ---
-            u, v = first_edge_added
-            candidate_edges = [
-                e for e in G_corrupted.edges()
-                if len(set(e + (u, v))) == 4  # disjoint
-            ]
-            if not candidate_edges:
-                print("No candidate found")
-                continue
-            # --- Construct binary labels ---
-            labels = torch.tensor(
-                [1.0 if frozenset(edge) == frozenset(second_edge_added) else 0.0 for edge in candidate_edges],
-                dtype=torch.float32,
-                device=device
-            )
-            # --- Forward pass ---
-            scores = model(data.x, data.edge_index, first_edge_added, candidate_edges, t=timestep)
-            loss = criterion(scores.squeeze(), labels)
-            # --- Backpropagation ---
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            graph_loss += loss.item()
-            print(f"Graph {idx + 1}/{len(graphs)}, Loss: {graph_loss:.4f}")
-
+    for epoch in range(num_epochs):
+        epoch_loss = 0.0
+        for G in graphs:
+            # --- Corrupt graph with t edge rewirings ---
+            graph_loss = 0.0
+            distance = 1
+            G_corrupted = G
+            trajectory = []
+            step = 0
+            prev_features = graph_features(G_corrupted)
+            while step < T:
+                G_corrupted, removed_pair, added_pair = rewire_edges(G_corrupted.copy())
+                if removed_pair and added_pair:
+                    step += 1
+                    trajectory.append((G_corrupted, removed_pair, added_pair, step))
+                    current_features = graph_features(G_corrupted)
+                    distance = features_distance(prev_features, current_features)
+                    if distance < threshold:
+                        break
+            for G_corrupted, removed_pair, added_pair, timestep in trajectory:
+                # --- Define anchor and target edge ---
+                first_edge_added, second_edge_added = added_pair  # predict second_edge_added given first_edge_added
+                # --- Graph to PyG format ---
+                data = graph_to_data(G_corrupted).to(device)
+                # --- Edge candidates from corrupted graph ---
+                u, v = first_edge_added
+                candidate_edges = [
+                    e for e in G_corrupted.edges()
+                    if len(set(e + (u, v))) == 4  # disjoint
+                ]
+                if not candidate_edges:
+                    print("No candidate found")
+                    continue
+                # --- Construct binary labels ---
+                labels = torch.tensor(
+                    [1.0 if frozenset(edge) == frozenset(second_edge_added) else 0.0 for edge in candidate_edges],
+                    dtype=torch.float32,
+                    device=device
+                )
+                # --- Forward pass ---
+                scores = model(data.x, data.edge_index, first_edge_added, candidate_edges, t=timestep)
+                loss = criterion(scores.squeeze(), labels)
+                # --- Backpropagation ---
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item()
+        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
 
 
 def load_msvae_from_file(max_node,config, model_path):
@@ -147,7 +148,7 @@ def main(args):
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_grapher(model, train_graphs, learning_rate, threshold,T, 'cpu')
+        train_grapher(model, train_graphs,num_epochs, learning_rate, threshold,T, 'cpu')
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
