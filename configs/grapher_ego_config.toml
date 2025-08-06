@@ -1,5 +1,5 @@
 [training]
-num_epochs = 1000     # Number of training epochs
+num_epochs = 10000     # Number of training epochs
 learning_rate = 0.001    # Learning rate for the optimizer
 hidden_dim = 128          # Hidden dimension size
 batch_size = 1					 # Batch size
