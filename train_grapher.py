@@ -30,66 +30,63 @@ def count_edge_triangles(G, u, v):
     neighbors_v = set(G.neighbors(v))
     return len(neighbors_u & neighbors_v)
 
-def rewire_edges(G, num_rewirings):
+def rewire_edges(G):
     edges = list(G.edges())
     removed_pair = None
     added_pair = None
-    timestep = 0
-    for _ in range(num_rewirings):
-        if len(edges) < 2:
-            continue
-        e1, e2 = random.sample(edges, 2)
-        u, v = e1
-        x, y = e2
-        if len({u, v, x, y}) != 4:
-            continue
-        triangle_removed = count_edge_triangles(G, u, v) + count_edge_triangles(G, x, y)
-        # Option 1: (u,x), (v,y)
-        if not G.has_edge(u, x) and not G.has_edge(v, y):
-            tri_added = count_common_neighbors(G, u, x) + count_common_neighbors(G, v, y)
-            if tri_added >= triangle_removed:
-                removed_pair = ((u,v), (x,y))
-                added_pair = ((u, x), (v, y))
-                G.remove_edges_from(removed_pair)
-                G.add_edges_from(added_pair)
-                timestep += 1
-                edges = list(G.edges())
-                continue
-        # Option 2: (u,y), (v,x)
-        if not G.has_edge(u, y) and not G.has_edge(v, x):
-            tri_added = count_common_neighbors(G, u, y) + count_common_neighbors(G, v, x)
-            if tri_added >= triangle_removed:
-                removed_pair = ((u,v), (x,y))
-                added_pair = [(u, y), (v, x)]
-                G.remove_edges_from(removed_pair)
-                G.add_edges_from(added_pair)
-                timestep += 1
-                edges = list(G.edges())
-                continue
-    if not timestep:
-        removed_pair = None
-        added_pair = None
-    return G, removed_pair, added_pair, timestep
+    e1, e2 = random.sample(edges, 2)
+    u, v = e1
+    x, y = e2
+    if len({u, v, x, y}) != 4:
+        return G, None, None
+    triangle_removed = count_edge_triangles(G, u, v) + count_edge_triangles(G, x, y)
+    # Option 1: (u,x), (v,y)
+    if not G.has_edge(u, x) and not G.has_edge(v, y):
+        tri_added = count_common_neighbors(G, u, x) + count_common_neighbors(G, v, y)
+        if tri_added >= triangle_removed:
+            removed_pair = ((u,v), (x,y))
+            added_pair = ((u, x), (v, y))
+            G.remove_edges_from(removed_pair)
+            G.add_edges_from(added_pair)
+            return G, removed_pair, added_pair
+    # Option 2: (u,y), (v,x)
+    if not G.has_edge(u, y) and not G.has_edge(v, x):
+        tri_added = count_common_neighbors(G, u, y) + count_common_neighbors(G, v, x)
+        if tri_added >= triangle_removed:
+            removed_pair = ((u,v), (x,y))
+            added_pair = [(u, y), (v, x)]
+            G.remove_edges_from(removed_pair)
+            G.add_edges_from(added_pair)
+            return G, removed_pair, added_pair
+    return G, None, None
 
 def count_common_neighbors(G, a, b):
     """Return number of common neighbors of nodes a and b."""
     return len(set(G.neighbors(a)) & set(G.neighbors(b)))
 
-def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device):
+def train_grapher(model, graphs, learning_rate, threshold, T, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.BCEWithLogitsLoss()
     model.to(device)
     model.train()
-
-    for epoch in range(num_epochs):
-        epoch_loss = 0.0
-        for G in graphs:
-            # --- Corrupt graph with t edge rewirings ---
-            num_rewirings = random.randint(1, T)
-            G_corrupted, removed_pair, added_pair, timestep = rewire_edges(G.copy(), num_rewirings)
-            # --- Skip graphs that couldn't be rewired ---
-            if not removed_pair or not added_pair:
-                continue
+    graph_loss = 0.0
+    for idx,G in enumerate(graphs):
+        # --- Corrupt graph with t edge rewirings ---
+        distance = 1
+        G_corrupted = G
+        trajectory = []
+        step = 0
+        prev_features = graph_features(G_corrupted)
+        while step < T:
+            G_corrupted, removed_pair, added_pair = rewire_edges(G_corrupted.copy())
+            if removed_pair and added_pair:
+                step += 1
+                trajectory.append((G_corrupted, removed_pair, added_pair, step))
+                current_features = graph_features(G_corrupted)
+                distance = features_distance(prev_features, current_features)
+                if distance < threshold:
+                    break
+        for G_corrupted, removed_pair, added_pair, timestep in trajectory:
             # --- Define anchor and target edge ---
             first_edge_added, second_edge_added = added_pair  # predict second_edge_added given first_edge_added
             # --- Graph to PyG format ---
@@ -116,8 +113,8 @@ def train_grapher(model, graphs, num_epochs, learning_rate, max_node, T, device)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            epoch_loss += loss.item()
-        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
+            graph_loss += loss.item()
+            print(f"Graph {idx + 1}/{len(graphs)}, Loss: {graph_loss:.4f}")
 
 
 
@@ -142,6 +139,7 @@ def main(args):
     hidden_dim = config['training']['hidden_dim']
     num_layer = config['training']['num_layer']
     T = config['training']['T']
+    threshold = config['training']['threshold']
     model = GraphER(1, hidden_dim,num_layer,T)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
@@ -149,7 +147,7 @@ def main(args):
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_grapher(model, train_graphs, num_epochs, learning_rate, max_node,T, 'cpu')
+        train_grapher(model, train_graphs, learning_rate, threshold,T, 'cpu')
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
