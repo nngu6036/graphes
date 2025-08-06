@@ -229,7 +229,7 @@ class GraphER(nn.Module):
             generated_graphs.append(G)
         return generated_graphs, degree_sequences
 
-    def generate(self, num_samples, num_steps, msvae_model,method = 'constraint_configuration_model'):
+    def generate(self, num_samples, num_steps, msvae_model,method = 'constraint_configuration_model',threshold = 0.01):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
