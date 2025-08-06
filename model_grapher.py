@@ -131,7 +131,7 @@ def compute_triangle_delta(G, u, v, x, y):
     return max(delta_1, delta_2), delta_1, delta_2
         
 class GraphER(nn.Module):
-    def __init__(self, in_channels, hidden_dim, num_layer):
+    def __init__(self, in_channels, hidden_dim, num_layer,T):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.gin_layers = nn.ModuleList([
@@ -146,14 +146,18 @@ class GraphER(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 1)
         )
+        self.t_embed = nn.Embedding(T + 1, hidden_dim)
+        nn.init.xavier_uniform_(self.t_embed.weight)
 
     def forward(self, x, edge_index, first_edge, candidate_edges, t):
         device = x.device
         for gin in self.gin_layers:
             x = gin(x, edge_index)
         first_edge_feat = get_edge_representation(x, first_edge[0], first_edge[1])
-        t_tensor = torch.tensor([t], dtype=torch.float32, device=device)
-        t_embed = get_sinusoidal_embedding(t_tensor, dim=self.hidden_dim)  # [hidden_dim]
+        #t_tensor = torch.tensor([t], dtype=torch.float32, device=device)
+        #t_embed = get_sinusoidal_embedding(t_tensor, dim=self.hidden_dim)  # [hidden_dim]
+        t_tensor = torch.tensor([t], dtype=torch.long, device=device)  # or pass t directly if it's already a tensor
+        t_embed = self.t_embed(t_tensor).squeeze(0)  # shape: [hidden_dim]
         scores = []
         for edge in candidate_edges:
             edge_feat = get_edge_representation(x, edge[0], edge[1])

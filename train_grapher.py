@@ -144,7 +144,7 @@ def main(args):
     hidden_dim = config['training']['hidden_dim']
     num_layer = config['training']['num_layer']
     T = config['training']['T']
-    model = GraphER(in_channels=1, hidden_dim=hidden_dim,num_layer=num_layer)
+    model = GraphER(1, hidden_dim,num_layer,T)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
         print(f"Model Graph-ER loaded from {args.input_model}")
