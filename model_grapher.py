@@ -32,7 +32,7 @@ def constraint_configuration_model_from_multiset(degree_sequence, max_retries=No
     N = len(degree_sequence)
     if max_retries is None:
         max_retries = N
-    for attempt in range(max_retries):
+    for _ in range(max_retries):
         stubs = []
         for node, deg in enumerate(degree_sequence):
             stubs.extend([node] * deg)
@@ -112,6 +112,23 @@ def count_common_neighbors(G, a, b):
 
 def count_edge_triangles(G, u, v):
     return count_common_neighbors(G, u, v)
+
+def compute_triangle_delta(G, u, v, x, y):
+    # Edges to be removed: (u,v), (x,y)
+    # Possible rewirings: (u,x)-(v,y) or (u,y)-(v,x)
+    before = count_edge_triangles(G, u, v) + count_edge_triangles(G, x, y)
+
+    delta_1 = -1e9
+    if not G.has_edge(u, x) and not G.has_edge(v, y):
+        after_1 = count_edge_triangles(G, u, x) + count_edge_triangles(G, v, y)
+        delta_1 = after_1 - before
+
+    delta_2 = -1e9
+    if not G.has_edge(u, y) and not G.has_edge(v, x):
+        after_2 = count_edge_triangles(G, u, y) + count_edge_triangles(G, v, x)
+        delta_2 = after_2 - before
+
+    return max(delta_1, delta_2), delta_1, delta_2
         
 class GraphER(nn.Module):
     def __init__(self, in_channels, hidden_dim, num_layer):
@@ -172,15 +189,29 @@ class GraphER(nn.Module):
                 ]
                 if not all_candidates:
                     continue
+                tri_filtered = []
+                tri_deltas = []
+                for e in all_candidates:
+                    x_, y_ = e
+                    net_delta, delta1, delta2 = compute_triangle_delta(G, u, v, x_, y_)
+                    if net_delta >= 0:
+                        tri_filtered.append((e, delta1, delta2))
+                        tri_deltas.append(net_delta)
+                if not tri_filtered:
+                    continue
+                # Get prediction scores for remaining candidates
+                candidate_edges = [e for e, _, _ in tri_filtered]
                 data = graph_to_data(G).to(device)
-                scores = self(data.x,data.edge_index,(u,v), all_candidates,t).squeeze(-1) 
+                scores = self(data.x, data.edge_index, (u, v), candidate_edges, t).squeeze(-1)
                 top_idx = torch.argmax(scores).item()
-                x_, y_ = all_candidates[top_idx]
-                # Rewire only if no duplicates
-                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
+                x_, y_ = candidate_edges[top_idx]
+                _, delta1, delta2 = tri_filtered[top_idx]
+
+                # Rewire using valid option that matches triangle analysis
+                if delta1 >= delta2 and not G.has_edge(u, x_) and not G.has_edge(v, y_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, x_), (v, y_)])
-                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
+                elif delta2 > delta1 and not G.has_edge(u, y_) and not G.has_edge(v, x_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
             generated_graphs.append(G)
@@ -203,8 +234,6 @@ class GraphER(nn.Module):
                 generated_seqs.append(seq)
                 if len(initial_graphs) >= num_samples:
                     break
-        print(len(generated_seqs))
-        return generated_graphs, generated_seqs
         for idx, G in enumerate(initial_graphs): 
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):
