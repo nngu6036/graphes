@@ -173,7 +173,7 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate_without_msvae(self, num_steps, degree_sequences, method = 'constraint_configuration_model', threshold = 0.01):
+    def generate_without_msvae(self, num_steps, degree_sequences, method = 'constraint_configuration_model'):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
