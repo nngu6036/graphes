@@ -73,13 +73,12 @@ def train_grapher(model, graphs, num_epochs, learning_rate, threshold, T, device
         epoch_loss = 0.0
         for G in graphs:
             # --- Corrupt graph with t edge rewirings ---
-            graph_loss = 0.0
             distance = 1
             G_corrupted = G
             trajectory = []
             step = 0
             prev_features = graph_features(G_corrupted)
-            while step < T:
+            for _ in range(T):
                 G_corrupted, removed_pair, added_pair = rewire_edges(G_corrupted.copy())
                 if removed_pair and added_pair:
                     step += 1
