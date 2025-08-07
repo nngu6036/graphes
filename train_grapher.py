@@ -74,11 +74,13 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, device):
         for G in graphs:
             # --- Corrupt graph with t edge rewirings ---
             G_prev = G
-            steps = random.randint(1, T)
-            for _ in range(steps):
+            max_rewiring = random.randint(1, T)
+            timestep = 0
+            for _ in range(max_rewiring):
                 G_next, removed_pair, added_pair = rewire_edges(G_prev.copy())
                 if not removed_pair or not added_pair:
                     continue
+                timestep +=1
                 # --- Define anchor and target edge ---
                 first_edge_added, second_edge_added = added_pair  # predict second_edge_added given first_edge_added
                 # --- Graph to PyG format ---
