@@ -77,6 +77,8 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, device):
             steps = random.randint(1, T)
             for _ in range(steps):
                 G_next, removed_pair, added_pair = rewire_edges(G_prev.copy())
+                if not removed_pair or not added_pair:
+                    continue
                 # --- Define anchor and target edge ---
                 first_edge_added, second_edge_added = added_pair  # predict second_edge_added given first_edge_added
                 # --- Graph to PyG format ---
