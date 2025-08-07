@@ -204,7 +204,7 @@ class GraphER(nn.Module):
             """
             generated_seqs.append([deg for _, deg in G.degree()])
             generated_graphs.append(G)
-        return generated_graphs, degree_sequences
+        return generated_graphs, generated_seqs
 
     def generate(self, num_samples, num_steps, msvae_model,k_eigen,method = 'constraint_configuration_model',threshold = 0.01):
         self.eval()

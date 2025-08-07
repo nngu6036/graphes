@@ -22,34 +22,51 @@ def gaussian_emd_kernel(X, Y, sigma=1.0):
             K[i, j] = np.exp(-emd**2 / (2 * sigma**2))
     return K
 
-def compute_degree_histograms(seqs, max_degree):
-    histograms = []
-    for seq in seqs:
-        hist = torch.zeros(max_degree + 1)
-        for deg in seq:
-            if 0 <= deg <= max_degree:
-                hist[deg] += 1
-        hist /= hist.sum() + 1e-8  # normalize + stability
-        histograms.append(hist)
-    return torch.stack(histograms)
+def compute_degree_histograms(
+    seqs,
+    max_degree,
+    normalize=True,
+    dtype=torch.float32,
+    device=None,
+):
+    hists = []
+    for s in seqs:
+        s = torch.as_tensor(s, device=device).to(torch.long)
+        # keep only 0 <= deg <= max_degree (matches your original if-condition)
+        mask = (s >= 0) & (s <= max_degree)
+        s = s[mask]
+        hist = torch.bincount(s, minlength=max_degree + 1).to(dtype)
+        if normalize:
+            total = hist.sum()
+            # avoid adding bias (no +1e-8); keep exactly zero if empty
+            hist = torch.where(total > 0, hist / total, hist)
+        hists.append(hist)
+    return torch.stack(hists, dim=0)  # [B, max_degree+1]
 
 
 class GraphsEvaluator():
 
 	def compute_mmd_degree_emd(self, graphs_1, graphs_2, max_degree, sigma=1.0):
-		def degree_histogram(graphs, max_degree):
-			histograms = []
-			for G in graphs:
-				degree_sequence = [deg for _, deg in G.degree()]
-				hist = np.zeros(max_degree + 1)
-				for deg in degree_sequence:
-					if deg <= max_degree:
-						hist[deg] += 1
-				if hist.sum() == 0:
-					hist[0] = 1.0
-				hist /= hist.sum()
-				histograms.append(hist)
-			return np.array(histograms)
+		def degree_histogram(graphs, max_degree, normalize=True, empty="zeros", dtype=np.float64):
+			out = np.zeros((len(graphs), max_degree + 1), dtype=dtype)
+			for i, G in enumerate(graphs):
+				# degrees as a 1D int array
+				degs = np.fromiter((d for _, d in G.degree()), dtype=np.int64, count=G.number_of_nodes())
+				# keep only 0 <= d <= max_degree (drops out-of-range as in your code)
+				if degs.size:
+					mask = (degs >= 0) & (degs <= max_degree)
+					degs = degs[mask]
+				# histogram via bincount
+				hist = np.bincount(degs, minlength=max_degree + 1).astype(dtype)
+				if degs.size == 0:
+					if empty == "unit_at_zero":
+						hist[0] = 1.0  # matches your original fallback
+				if normalize:
+					total = hist.sum()
+					if total > 0:
+						hist /= total
+				out[i] = hist
+			return out
 		H1 = degree_histogram(graphs_1, max_degree)
 		H2 = degree_histogram(graphs_2, max_degree)
 		K_xx = gaussian_emd_kernel(H1, H1, sigma)
