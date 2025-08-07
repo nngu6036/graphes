@@ -101,9 +101,7 @@ def havel_hakimi_construction(degree_sequence):
 
 def initialize_graphs(method, seq):
     if method == 'havei_hakimi':
-        print("Pre",sorted(seq))
         G = havel_hakimi_construction(seq)
-        print("Post",sorted([deg for _, deg in G.degree()]))
     if method == 'configuration_model':
         G = configuration_model_from_multiset(seq)
     if method == 'constraint_configuration_model':
@@ -206,7 +204,7 @@ class GraphER(nn.Module):
             """
             generated_seqs.append([deg for _, deg in G.degree()])
             generated_graphs.append(G)
-        return generated_graphs, generated_seqs
+        return generated_graphs, degree_sequences
 
     def generate(self, num_samples, num_steps, msvae_model,k_eigen,method = 'constraint_configuration_model',threshold = 0.01):
         self.eval()
