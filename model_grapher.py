@@ -173,7 +173,7 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate_without_msvae(self, num_steps, degree_sequences, method = 'constraint_configuration_model'):
+    def generate_without_msvae(self, num_steps, degree_sequences,k_eigen, method = 'constraint_configuration_model'):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
@@ -197,7 +197,7 @@ class GraphER(nn.Module):
                 ]
                 if not all_candidates:
                     continue
-                data = graph_to_data(G).to(device)
+                data = graph_to_data(G,k_eigen).to(device)
                 scores = self(data.x,data.edge_index,(u,v), all_candidates,t).squeeze(-1) 
                 top_idx = torch.argmax(scores).item()
                 x_, y_ = all_candidates[top_idx]
@@ -215,7 +215,7 @@ class GraphER(nn.Module):
             generated_graphs.append(G)
         return generated_graphs, generated_seqs
 
-    def generate(self, num_samples, num_steps, msvae_model,method = 'constraint_configuration_model',threshold = 0.01):
+    def generate(self, num_samples, num_steps, msvae_model,k_eigen,method = 'constraint_configuration_model',threshold = 0.01):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
@@ -246,7 +246,7 @@ class GraphER(nn.Module):
                 ]
                 if not all_candidates:
                     continue
-                data = graph_to_data(G).to(device)
+                data = graph_to_data(G,k_eigen).to(device)
                 scores = self(data.x,data.edge_index,(u,v), all_candidates,t).squeeze(-1) 
                 top_idx = torch.argmax(scores).item()
                 x_, y_ = all_candidates[top_idx]

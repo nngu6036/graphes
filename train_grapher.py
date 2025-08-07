@@ -147,7 +147,7 @@ def main(args):
         if args.ablation:
             sample_graphs = random.choices(train_graphs,k=config['inference']['generate_samples'])
             degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
-            generated_graphs, generated_seqs = model.generate_without_msvae(T,degree_sequences)
+            generated_graphs, generated_seqs = model.generate_without_msvae(T,degree_sequences,k_eigen)
             print(f"Evaluate generated graphs sampled from training")
             print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
             print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
@@ -157,7 +157,7 @@ def main(args):
             print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
             print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
         else:
-            generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model = msvae_model)
+            generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model,k_eigen)
             print(f"Evaluate generated graphs using Configuraiton Model")
             print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
             print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
