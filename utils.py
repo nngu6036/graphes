@@ -3,7 +3,8 @@ import os
 import networkx as nx
 from torch_geometric.utils.convert import from_networkx
 import numpy as np
-
+from scipy.sparse import csgraph
+from scipy.sparse.linalg import eigsh
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
@@ -43,9 +44,25 @@ def load_graph_from_directory(directory_path):
             graphs.append(graph)
     return graphs, max_node
 
-def graph_to_data(G):
-    for node in G.nodes:
-        G.nodes[node]['x'] = [1.0]
+def compute_laplacian_eigenvectors(G, k=10):
+    """
+    Compute the first k eigenvectors of the normalized Laplacian matrix of G.
+    """
+    A = nx.to_scipy_sparse_array(G, format="csr")
+    L = csgraph.laplacian(A, normed=True)
+    n = G.number_of_nodes()
+    k = min(k, n - 2)  # ensure it's less than rank
+    try:
+        eigvals, eigvecs = eigsh(L, k=k, which='SM')
+        return eigvecs  # shape: (n, k)
+    except Exception as e:
+        print(f"Eigen decomposition failed: {e}")
+        return np.ones((n, 1))  # fallback: constant features
+
+def graph_to_data(G, k_eigen=10):
+    eigvecs = compute_laplacian_eigenvectors(G, k=k_eigen)
+    for i, node in enumerate(G.nodes()):
+        G.nodes[node]['x'] = eigvecs[i].tolist()
     return from_networkx(G)
 
 
