@@ -8,6 +8,9 @@ epsilon = 0.0001
 T = 500
 threshold = 0.01
 
+[data]
+k_eigen = 10
+
 [inference]
 generate_samples = 200    # Number of samples to generate
 threshold = 0.01
