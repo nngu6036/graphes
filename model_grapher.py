@@ -6,6 +6,7 @@ import networkx as nx
 from collections import Counter
 import random
 import math
+from numpy import np
 
 from utils import graph_to_data, check_sequence_validity
 
@@ -105,31 +106,25 @@ def initialize_graphs(method, seq):
         G = configuration_model_from_multiset(seq)
     if method == 'constraint_configuration_model':
         G = constraint_configuration_model_from_multiset(seq)
+    if G:
+        edges = list(G.edges())
+        np.random.shuffle(edges)
+        for _ in range(10*len(edges)):
+            e1, e2 = random.sample(edges, 2)
+            u, v = e1
+            x, y = e2
+            if len({u, v, x, y}) != 4:
+                continue
+            # Option 1: (u,x), (v,y)
+            if not G.has_edge(u, x) and not G.has_edge(v, y):
+                G.remove_edges_from( ((u,v), (x,y)))
+                G.add_edges_from(((u, x), (v, y)))
+            # Option 2: (u,y), (v,x)
+            if not G.has_edge(u, y) and not G.has_edge(v, x):
+                G.remove_edges_from(((u,v), (x,y)))
+                G.add_edges_from(((u, y), (v, x)))
     return G
     
-def count_common_neighbors(G, a, b):
-        return len(set(G.neighbors(a)) & set(G.neighbors(b)))
-
-def count_edge_triangles(G, u, v):
-    return count_common_neighbors(G, u, v)
-
-def compute_triangle_delta(G, u, v, x, y):
-    # Edges to be removed: (u,v), (x,y)
-    # Possible rewirings: (u,x)-(v,y) or (u,y)-(v,x)
-    before = count_edge_triangles(G, u, v) + count_edge_triangles(G, x, y)
-
-    delta_1 = -1e9
-    if not G.has_edge(u, x) and not G.has_edge(v, y):
-        after_1 = count_edge_triangles(G, u, x) + count_edge_triangles(G, v, y)
-        delta_1 = after_1 - before
-
-    delta_2 = -1e9
-    if not G.has_edge(u, y) and not G.has_edge(v, x):
-        after_2 = count_edge_triangles(G, u, y) + count_edge_triangles(G, v, x)
-        delta_2 = after_2 - before
-
-    return max(delta_1, delta_2), delta_1, delta_2
-        
 class GraphER(nn.Module):
     def __init__(self, in_channels, hidden_dim, num_layer,T):
         super().__init__()
@@ -179,9 +174,7 @@ class GraphER(nn.Module):
         generated_graphs = []
         generated_seqs = []
         initial_graphs = [initialize_graphs(method, seq) for seq in degree_sequences]
-        print(len(initial_graphs))
         initial_graphs = [G for G in initial_graphs if G]
-        print(len(initial_graphs))
         for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
             swap = 0
