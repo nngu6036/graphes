@@ -177,6 +177,7 @@ class GraphER(nn.Module):
         initial_graphs = [G for G in initial_graphs if G]
         for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
+            """
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
@@ -200,6 +201,7 @@ class GraphER(nn.Module):
                 elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
+            """
             generated_seqs.append([deg for _, deg in G.degree()])
             generated_graphs.append(G)
         return generated_graphs, generated_seqs
