@@ -46,27 +46,59 @@ def load_graph_from_directory(directory_path):
     return graphs, max_node
 
 
-def compute_laplacian_eigenvectors(G, k):
+def _safe_eigvecs(G: nx.Graph, k: int) -> np.ndarray:
     """
-    Compute the first k eigenvectors of the normalized Laplacian matrix of G.
+    Return up to `k` Laplacian eigenvectors for G, coping with tiny graphs.
+
+    For |V| ≤ 2  (or any failure in ARPACK), we return a constant vector so that
+    every node gets identical features.  This keeps dimensions consistent while
+    still giving the GNN *something* to work with.
     """
-    A = csr_matrix(nx.to_scipy_sparse_array(G, dtype=float))  # ✅ fix
-    L = csgraph.laplacian(A, normed=True)
     n = G.number_of_nodes()
-    k = min(k, n - 2) if n > 2 else 1  # avoid crash on tiny graphs
+    if n == 0:
+        return np.empty((0, k))
+
+    # For very small graphs we skip ARPACK entirely.
+    if n <= 2:
+        return np.ones((n, 1))
+
+    A = csr_matrix(nx.to_scipy_sparse_array(G, dtype=float))
+    L = csgraph.laplacian(A, normed=True)
+
+    # eigsh requires k < n.  Use n-2 so that the zero eigenpair is avoided.
+    k_eff = min(k, n - 2)
+    if k_eff < 1:
+        k_eff = 1
+
     try:
-        eigvals, eigvecs = eigsh(L, k=k, which='SM')
-        return eigvecs  # shape: (n, k)
+        _, eigvecs = eigsh(L, k=k_eff, which="SM")
+        return eigvecs  # shape: (n , k_eff)
     except Exception as e:
-        print(f"Eigen decomposition failed: {e}")
-        return np.ones((n, 1))  # fallback
+        print(f"[utils] Laplacian eigendecomposition failed on |V|={n}: {e}")
+        return np.ones((n, 1))
 
 
+def graph_to_data(G: nx.Graph, k_eigen: int):
+    """
+    Convert a NetworkX graph to a PyG Data object with Laplacian‐eigen features.
 
-def graph_to_data(G, k_eigen):
-    eigvecs = compute_laplacian_eigenvectors(G, k_eigen)
+    The returned Data.x has fixed width `k_eigen` for *all* graphs, so the
+    downstream GIN layers in GraphER always receive the expected dimension.
+    """
+    eigvecs = _safe_eigvecs(G, k_eigen)           # (n , ≤k_eigen)
+    n, cur_k = eigvecs.shape
+
+    # Pad or truncate to exactly k_eigen columns.
+    if cur_k < k_eigen:
+        pad = np.zeros((n, k_eigen - cur_k), dtype=eigvecs.dtype)
+        eigvecs = np.concatenate([eigvecs, pad], axis=1)
+    elif cur_k > k_eigen:
+        eigvecs = eigvecs[:, :k_eigen]
+
+    # Attach features to nodes.
     for i, node in enumerate(G.nodes()):
-        G.nodes[node]['x'] = eigvecs[i].tolist()
+        G.nodes[node]["x"] = eigvecs[i].astype(np.float32)
+
     return from_networkx(G)
 
 
