@@ -48,16 +48,17 @@ def compute_laplacian_eigenvectors(G, k=10):
     """
     Compute the first k eigenvectors of the normalized Laplacian matrix of G.
     """
-    A = nx.to_scipy_sparse_array(G, format="csr")
+    A = nx.to_scipy_sparse_matrix(G, format="csr")  # <- fixed
     L = csgraph.laplacian(A, normed=True)
     n = G.number_of_nodes()
-    k = min(k, n - 2)  # ensure it's less than rank
+    k = min(k, n - 2)  # ensure it's valid
     try:
         eigvals, eigvecs = eigsh(L, k=k, which='SM')
         return eigvecs  # shape: (n, k)
     except Exception as e:
         print(f"Eigen decomposition failed: {e}")
-        return np.ones((n, 1))  # fallback: constant features
+        return np.ones((n, 1))  # fallback
+
 
 def graph_to_data(G, k_eigen=10):
     eigvecs = compute_laplacian_eigenvectors(G, k=k_eigen)
