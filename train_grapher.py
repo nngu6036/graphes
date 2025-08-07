@@ -132,7 +132,7 @@ def main(args):
     msvae_model  = load_msvae_from_file(max_node, msvae_config, model_dir /args.msvae_model)
     hidden_dim = config['training']['hidden_dim']
     num_layer = config['training']['num_layer']
-    k_eigen = config['data']['k_eigen ']
+    k_eigen = config['data']['k_eigen']
     T = config['training']['T']
     model = GraphER(k_eigen, hidden_dim,num_layer,T)
     if args.input_model:
