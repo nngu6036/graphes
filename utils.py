@@ -45,30 +45,10 @@ def load_graph_from_directory(directory_path):
             graphs.append(graph)
     return graphs, max_node
 
-def compute_laplacian_eigenvectors(G, k=10):
-    A = csr_matrix(nx.to_scipy_sparse_array(G, dtype=float))
-    L = csgraph.laplacian(A, normed=True)
-    n = G.number_of_nodes()
-    actual_k = min(k, n - 2) if n > 2 else 1
-    try:
-        eigvals, eigvecs = eigsh(L, k=actual_k, which='SM')
-        # Pad with zeros if actual_k < k
-        if actual_k < k:
-            padded = np.zeros((n, k))
-            padded[:, :actual_k] = eigvecs
-            return padded
-        return eigvecs
-    except Exception as e:
-        print(f"Eigen decomposition failed: {e}")
-        return np.ones((n, k))  # fallback padded
-
-
-def graph_to_data(G, k_eigen=10):
-    eigvecs = compute_laplacian_eigenvectors(G, k=k_eigen)
-    for i, node in enumerate(G.nodes()):
-        G.nodes[node]['x'] = eigvecs[i].tolist()
+def graph_to_data(G):
+    for node in G.nodes():
+        G.nodes[node]['x'] = [G.degree[node]]  # single scalar feature
     return from_networkx(G)
-
 
 def check_sequence_validity(seq):
     """Checks if a degree sequence is valid after removing all zeros."""

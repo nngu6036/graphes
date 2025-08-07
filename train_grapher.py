@@ -64,7 +64,7 @@ def count_common_neighbors(G, a, b):
     """Return number of common neighbors of nodes a and b."""
     return len(set(G.neighbors(a)) & set(G.neighbors(b)))
 
-def train_grapher(model, graphs, num_epochs, learning_rate, T,k_eigen, device):
+def train_grapher(model, graphs, num_epochs, learning_rate, T, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.BCEWithLogitsLoss()
     model.to(device)
@@ -84,7 +84,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T,k_eigen, device):
                 # --- Define anchor and target edge ---
                 first_edge_added, second_edge_added = added_pair  # predict second_edge_added given first_edge_added
                 # --- Graph to PyG format ---
-                data = graph_to_data(G_next,k_eigen).to(device)
+                data = graph_to_data(G_next).to(device)
                 # --- Edge candidates from corrupted graph ---
                 u, v = first_edge_added
                 candidate_edges = [
@@ -132,16 +132,15 @@ def main(args):
     msvae_model  = load_msvae_from_file(max_node, msvae_config, model_dir /args.msvae_model)
     hidden_dim = config['training']['hidden_dim']
     num_layer = config['training']['num_layer']
-    k_eigen = config['data']['k_eigen']
     T = config['training']['T']
-    model = GraphER(k_eigen, hidden_dim,num_layer,T)
+    model = GraphER(1, hidden_dim,num_layer,T)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
         print(f"Model Graph-ER loaded from {args.input_model}")
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_grapher(model, train_graphs,num_epochs, learning_rate,T,k_eigen, 'cpu')
+        train_grapher(model, train_graphs,num_epochs, learning_rate,T, 'cpu')
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
