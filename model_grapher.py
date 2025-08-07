@@ -7,7 +7,7 @@ from collections import Counter
 import random
 import math
 
-from utils import graph_to_data, check_sequence_validity, features_distance, graph_features, edge_rewire
+from utils import graph_to_data, check_sequence_validity
 
 def get_edge_representation(x, u, v, method="sum_absdiff"):
     x_u, x_v = x[u], x[v]
@@ -179,14 +179,6 @@ class GraphER(nn.Module):
         device = next(self.parameters()).device
         generated_graphs = []
         initial_graphs = [initialize_graphs(method, seq) for seq in degree_sequences]
-        # perform mixing on graphs
-        for G in initial_graphs:
-            prev_features = graph_features(G)
-            distance = 1
-            while distance > threshold:
-                edge_rewire(G)
-                current_features = graph_features(G)
-                distance = features_distance(prev_features, current_features)
         for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):
@@ -246,14 +238,6 @@ class GraphER(nn.Module):
                 generated_seqs.append(seq)
                 if len(initial_graphs) >= num_samples:
                     break
-        # perform mixing on graphs
-        for G in initial_graphs:
-            prev_features = graph_features(G)
-            distance = 1
-            while distance > threshold:
-                edge_rewire(G)
-                current_features = graph_features(G)
-                distance = features_distance(prev_features, current_features)
         for idx, G in enumerate(initial_graphs): 
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):

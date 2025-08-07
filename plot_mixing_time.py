@@ -6,9 +6,31 @@ import argparse
 import toml
 from pathlib import Path
 import matplotlib.pyplot as plt
-from utils import load_graph_from_directory, graph_features, features_distance, edge_rewire
+from utils import load_graph_from_directory
 
+# Compute statistical features of the graph
+def graph_features(G):
+    clustering = np.mean(list(nx.clustering(G).values()))
+    degree_seq = np.array(sorted([d for _, d in G.degree()]))
+    return clustering, degree_seq
 
+# Measure distance between feature distributions
+def features_distance(f1, f2):
+    clustering_diff = np.abs(f1[0] - f2[0])
+    degree_diff = np.linalg.norm(f1[1] - f2[1])
+    return clustering_diff + degree_diff
+
+# Function for a single edge rewiring step
+def edge_rewire(G):
+    edges = list(G.edges())
+    np.random.shuffle(edges)
+    for (u, v) in edges:
+        for (x, y) in edges:
+            # Check conditions to avoid self-loop and multiple edges
+            if len({u, v, x, y}) == 4 and not G.has_edge(u, x) and not G.has_edge(v, y):
+                G.remove_edges_from([(u, v), (x, y)])
+                G.add_edges_from([(u, x), (v, y)])
+                return
 
 # Empirical estimation of mixing time
 def estimate_mixing_time(G_init, config):

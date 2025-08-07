@@ -64,7 +64,7 @@ def count_common_neighbors(G, a, b):
     """Return number of common neighbors of nodes a and b."""
     return len(set(G.neighbors(a)) & set(G.neighbors(b)))
 
-def train_grapher(model, graphs, num_epochs, learning_rate, threshold, T, device):
+def train_grapher(model, graphs, num_epochs, learning_rate, T, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.BCEWithLogitsLoss()
     model.to(device)
@@ -73,29 +73,18 @@ def train_grapher(model, graphs, num_epochs, learning_rate, threshold, T, device
         epoch_loss = 0.0
         for G in graphs:
             # --- Corrupt graph with t edge rewirings ---
-            distance = 1
-            G_corrupted = G
-            trajectory = []
-            step = 0
-            prev_features = graph_features(G_corrupted)
-            for _ in range(T):
-                G_corrupted, removed_pair, added_pair = rewire_edges(G_corrupted.copy())
-                if removed_pair and added_pair:
-                    step += 1
-                    trajectory.append((G_corrupted, removed_pair, added_pair, step))
-                    current_features = graph_features(G_corrupted)
-                    distance = features_distance(prev_features, current_features)
-                    if distance < threshold:
-                        break
-            for G_corrupted, removed_pair, added_pair, timestep in trajectory:
+            G_prev = G
+            steps = random.randint(1, T)
+            for _ in range(steps):
+                G_next, removed_pair, added_pair = rewire_edges(G_prev.copy())
                 # --- Define anchor and target edge ---
                 first_edge_added, second_edge_added = added_pair  # predict second_edge_added given first_edge_added
                 # --- Graph to PyG format ---
-                data = graph_to_data(G_corrupted).to(device)
+                data = graph_to_data(G_next).to(device)
                 # --- Edge candidates from corrupted graph ---
                 u, v = first_edge_added
                 candidate_edges = [
-                    e for e in G_corrupted.edges()
+                    e for e in G_next.edges()
                     if len(set(e + (u, v))) == 4  # disjoint
                 ]
                 if not candidate_edges:
@@ -115,6 +104,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, threshold, T, device
                 loss.backward()
                 optimizer.step()
                 epoch_loss += loss.item()
+                G_prev = G_next
         print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
 
 
@@ -139,7 +129,6 @@ def main(args):
     hidden_dim = config['training']['hidden_dim']
     num_layer = config['training']['num_layer']
     T = config['training']['T']
-    threshold = config['training']['threshold']
     model = GraphER(1, hidden_dim,num_layer,T)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
@@ -147,7 +136,7 @@ def main(args):
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_grapher(model, train_graphs,num_epochs, learning_rate, threshold,T, 'cpu')
+        train_grapher(model, train_graphs,num_epochs, learning_rate,T, 'cpu')
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
