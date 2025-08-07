@@ -46,7 +46,7 @@ def load_graph_from_directory(directory_path):
     return graphs, max_node
 
 
-def compute_laplacian_eigenvectors(G, k=10):
+def compute_laplacian_eigenvectors(G, k):
     """
     Compute the first k eigenvectors of the normalized Laplacian matrix of G.
     """
@@ -63,8 +63,8 @@ def compute_laplacian_eigenvectors(G, k=10):
 
 
 
-def graph_to_data(G, k_eigen=10):
-    eigvecs = compute_laplacian_eigenvectors(G, k=k_eigen)
+def graph_to_data(G, k_eigen):
+    eigvecs = compute_laplacian_eigenvectors(G, k_eigen)
     for i, node in enumerate(G.nodes()):
         G.nodes[node]['x'] = eigvecs[i].tolist()
     return from_networkx(G)
