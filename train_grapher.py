@@ -69,18 +69,24 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
     criterion = nn.BCEWithLogitsLoss()
     model.to(device)
     model.train()
-    for idx,G in enumerate(graphs):
-        # --- Corrupt graph with t edge rewirings ---
-        G_prev = G
-        timestep = 0
-        graph_loss = 0.0
-        for _ in range(T):
-            G_next, removed_pair, added_pair = rewire_edges(G_prev.copy())
-            if not removed_pair or not added_pair:
-                continue
-            timestep +=1
+    for epoch in range(num_epochs):
+        epoch_loss = 0.0
+        for G in enumerate(graphs):
+            # --- Corrupt graph with t edge rewirings ---
+            num_rewirings = random.randint(1,T)
+            G_prev = G
+            timestep = 0
+            last_removed_pair = None
+            last_added_pair = None
+            for _ in range(num_rewirings):
+                G_next, removed_pair, added_pair = rewire_edges(G_prev.copy())
+                if removed_pair and added_pair:
+                    timestep +=1
+                    last_removed_pair = removed_pair
+                    last_added_pair = added_pair
+                G_prev = G_next
             # --- Define anchor and target edge ---
-            first_edge_added, second_edge_added = added_pair  # predict second_edge_added given first_edge_added
+            first_edge_added, second_edge_added = last_added_pair  # predict second_edge_added given first_edge_added
             # --- Graph to PyG format ---
             data = graph_to_data(G_next,k_eigen).to(device)
             # --- Edge candidates from corrupted graph ---
@@ -102,9 +108,8 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            graph_loss += loss.item()
-            G_prev = G_next
-        print(f"Graph {idx + 1}/{len(graphs)}, Loss: {graph_loss:.4f}")
+            epoch_loss += loss.item()
+        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
 
 
 def load_msvae_from_file(max_node,config, model_path):
@@ -146,6 +151,8 @@ def main(args):
             sample_graphs = random.choices(train_graphs,k=config['inference']['generate_samples'])
             test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
             degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
+
+            """
             generated_graphs, generated_seqs = model.generate_without_msvae(T,degree_sequences,k_eigen,method = 'constraint_configuration_model')
             print(f"Evaluate generated graphs sampled from training using constraint configuration model")
             print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
@@ -163,7 +170,7 @@ def main(args):
             deg_eval = DegreeSequenceEvaluator()
             print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
             print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-
+            """
             generated_graphs, generated_seqs = model.generate_without_msvae(T,degree_sequences,k_eigen,method = 'havei_hakimi')
             print(f"Evaluate generated graphs sampled from training using havei-hakimi model")
             print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
@@ -173,6 +180,7 @@ def main(args):
             print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
             print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
         else:
+            """
             generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model,k_eigen,method = 'constraint_configuration_model')
             print(f"Evaluate generated graphs using constraint Configuraiton Model")
             print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
@@ -192,7 +200,7 @@ def main(args):
             test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
             print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
             print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-
+            """
             generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model,k_eigen,method = 'havei_hakimi')
             print(f"Evaluate generated graphs using Havei Hamimi Model")
             print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
