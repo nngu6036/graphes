@@ -6,7 +6,7 @@ import networkx as nx
 from collections import Counter
 import random
 import math
-from numpy import np
+import numpy as np
 
 from utils import graph_to_data, check_sequence_validity
 
