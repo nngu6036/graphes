@@ -177,8 +177,11 @@ class GraphER(nn.Module):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
+        generated_seqs = []
         initial_graphs = [initialize_graphs(method, seq) for seq in degree_sequences]
+        print(len(initial_graphs))
         initial_graphs = [G for G in initial_graphs if G]
+        print(len(initial_graphs))
         for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):
@@ -193,33 +196,20 @@ class GraphER(nn.Module):
                 ]
                 if not all_candidates:
                     continue
-                tri_filtered = []
-                tri_deltas = []
-                for e in all_candidates:
-                    x_, y_ = e
-                    net_delta, delta1, delta2 = compute_triangle_delta(G, u, v, x_, y_)
-                    if net_delta >= 0:
-                        tri_filtered.append((e, delta1, delta2))
-                        tri_deltas.append(net_delta)
-                if not tri_filtered:
-                    continue
-                # Get prediction scores for remaining candidates
-                candidate_edges = [e for e, _, _ in tri_filtered]
                 data = graph_to_data(G).to(device)
-                scores = self(data.x, data.edge_index, (u, v), candidate_edges, t).squeeze(-1)
+                scores = self(data.x,data.edge_index,(u,v), all_candidates,t).squeeze(-1) 
                 top_idx = torch.argmax(scores).item()
-                x_, y_ = candidate_edges[top_idx]
-                _, delta1, delta2 = tri_filtered[top_idx]
-
+                x_, y_ = all_candidates[top_idx]
                 # Rewire using valid option that matches triangle analysis
-                if delta1 >= delta2 and not G.has_edge(u, x_) and not G.has_edge(v, y_):
+                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, x_), (v, y_)])
-                elif delta2 > delta1 and not G.has_edge(u, y_) and not G.has_edge(v, x_):
+                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
+            generated_seqs.appen([deg for _, deg in G.degree()])
             generated_graphs.append(G)
-        return generated_graphs, degree_sequences
+        return generated_graphs, generated_seqs
 
     def generate(self, num_samples, num_steps, msvae_model,method = 'constraint_configuration_model',threshold = 0.01):
         self.eval()
@@ -247,9 +237,6 @@ class GraphER(nn.Module):
                 # Select a random anchor edge
                 u, v = random.choice(edges)
                 # Generate swappable candidates (disjoint with (u,v))
-                all_candidates = [
-                    e for e in edges if e != (u, v) and len(set(e + (u, v))) == 4
-                ]
                 all_candidates = [
                     e for e in edges if e != (u, v) and len(set(e + (u, v))) == 4
                 ]
