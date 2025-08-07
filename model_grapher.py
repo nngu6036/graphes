@@ -136,8 +136,7 @@ class GraphER(nn.Module):
         self.hidden_dim = hidden_dim
         self.gin_layers = nn.ModuleList([
             GINConv(nn.Sequential(nn.Linear(in_channels if i == 0 else hidden_dim, hidden_dim),
-                                  nn.LeakyReLU(0.1),
-                                  nn.Dropout(0.2),
+                                  nn.ReLU(),
                                   nn.Linear(hidden_dim, hidden_dim)))
             for i in range(num_layer)
         ])
@@ -152,6 +151,8 @@ class GraphER(nn.Module):
     def forward(self, x, edge_index, first_edge, candidate_edges, t):
         device = x.device
         for gin in self.gin_layers:
+            import pdb
+            pdb.set_trace()
             x = gin(x, edge_index)
         first_edge_feat = get_edge_representation(x, first_edge[0], first_edge[1])
         #t_tensor = torch.tensor([t], dtype=torch.float32, device=device)
