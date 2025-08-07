@@ -5,6 +5,7 @@ from torch_geometric.utils.convert import from_networkx
 import numpy as np
 from scipy.sparse import csgraph
 from scipy.sparse.linalg import eigsh
+from scipy.sparse import csr_matrix
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
@@ -48,17 +49,16 @@ def compute_laplacian_eigenvectors(G, k=10):
     """
     Compute the first k eigenvectors of the normalized Laplacian matrix of G.
     """
-    A = nx.to_scipy_sparse_matrix(G, format="csr")  # <- fixed
+    A = csr_matrix(nx.to_scipy_sparse_array(G, dtype=float))  # ✅ fix
     L = csgraph.laplacian(A, normed=True)
     n = G.number_of_nodes()
-    k = min(k, n - 2)  # ensure it's valid
+    k = min(k, n - 2) if n > 2 else 1  # avoid crash on tiny graphs
     try:
         eigvals, eigvecs = eigsh(L, k=k, which='SM')
         return eigvecs  # shape: (n, k)
     except Exception as e:
         print(f"Eigen decomposition failed: {e}")
         return np.ones((n, 1))  # fallback
-
 
 def graph_to_data(G, k_eigen=10):
     eigvecs = compute_laplacian_eigenvectors(G, k=k_eigen)
