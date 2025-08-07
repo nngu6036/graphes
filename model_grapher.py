@@ -178,6 +178,7 @@ class GraphER(nn.Module):
         device = next(self.parameters()).device
         generated_graphs = []
         initial_graphs = [initialize_graphs(method, seq) for seq in degree_sequences]
+        initial_graphs = [G for G in initial_graphs if G]
         for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):

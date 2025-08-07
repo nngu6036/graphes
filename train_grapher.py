@@ -91,9 +91,6 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, device):
                     e for e in G_next.edges()
                     if len(set(e + (u, v))) == 4  # disjoint
                 ]
-                if not candidate_edges:
-                    print("No candidate found")
-                    continue
                 # --- Construct binary labels ---
                 labels = torch.tensor(
                     [1.0 if frozenset(edge) == frozenset(second_edge_added) else 0.0 for edge in candidate_edges],
