@@ -14,16 +14,16 @@ def load_degree_sequence_from_directory(directory_path):
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
-            graph = nx.read_edgelist(file_path, nodetype=int)
-            max_node = max(max_node, graph.number_of_nodes())
-            max_edge = max(max_node, graph.number_of_edges())
+            G = nx.read_edgelist(file_path, nodetype=int)
+            max_node = max(max_node, G.number_of_nodes())
+            max_edge = max(max_node, G.number_of_edges())
     print("Max node: ", max_node, " Max edge:", max_edge)
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
-            graph = nx.read_edgelist(file_path, nodetype=int)
-            graph = nx.convert_node_labels_to_integers(graph)
-            seq = [deg for _, deg in graph.degree()]
+            G = nx.read_edgelist(file_path, nodetype=int)
+            G = nx.convert_node_labels_to_integers(G)
+            seq = [deg for _, deg in G.degree()]
             if seq is not None:
                 seqs.append(seq)
     return seqs, max_node
