@@ -10,10 +10,10 @@ from scipy.spatial import Delaunay
 from torch_geometric.datasets import QM9, ZINC
 import numpy as np
 
-def generate_grid_graph(min_node, max_node):
+def generate_grid_graph(min_len, max_len):
     """Generate a grid graph."""
-    r = random.randint(min_node, max_node)
-    c = random.randint(min_node, max_node)
+    r = random.randint(min_len, max_len)
+    c = random.randint(min_len, max_len)
     G = nx.grid_2d_graph(r, c, periodic=False)
     return G
 
@@ -175,7 +175,7 @@ def main(args):
         if graph_type == "grid":
             graph_count = dataset["count"]
             for _ in range(graph_count):
-                G = generate_grid_graph(dataset["min_node"],dataset["max_node"])
+                G = generate_grid_graph(dataset["min_len"],dataset["max_len"])
                 graphs.append(G)
         if graph_type == "community":
             graph_count = dataset["count"]
