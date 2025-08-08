@@ -149,7 +149,6 @@ def main(args):
         graph_eval = GraphsEvaluator()
         deg_eval = DegreeSequenceEvaluator()
         sample_graphs = random.choices(train_graphs,k=config['inference']['generate_samples'])
-        train_seqs = [[deg for _, deg in graph.degree()] for graph in train_graphs ]
         test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
         degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
         print(f"MMD Distance Sample <->Test: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,degree_sequences,max_node)}")
@@ -180,7 +179,9 @@ def main(args):
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
         print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
         
+        induced_seqs = [[deg for _, deg in graph.degree()] for graph in generated_graphs ]
         print(f"MMD Distance Test <-> Generated: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
+        print(f"MMD Distance Test <-> Induced Generated: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,induced_seqs,max_node)}")
         """
         generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model,k_eigen,method = 'constraint_configuration_model')
         print(f"Evaluate generated graphs using constraint Configuraiton Model")

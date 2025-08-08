@@ -173,8 +173,12 @@ class GraphER(nn.Module):
         device = next(self.parameters()).device
         generated_graphs = []
         generated_seqs = []
-        initial_graphs = [initialize_graphs(method, seq) for seq in degree_sequences]
-        initial_graphs = [G for G in initial_graphs if G]
+        initial_graphs = []
+        for seq in degree_sequences:
+            G = initialize_graphs(method, seq)
+            if G:
+                initial_graphs.append(G)
+                generated_seqs.append(seq)
         for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
             """
@@ -202,7 +206,6 @@ class GraphER(nn.Module):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
             """
-            generated_seqs.append([deg for _, deg in G.degree()])
             generated_graphs.append(G)
         return generated_graphs, generated_seqs
 
