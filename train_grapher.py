@@ -24,43 +24,133 @@ from model_grapher import GraphER
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
 from utils import *
 
-def count_edge_triangles(G, u, v):
-    """Return number of triangles that edge (u,v) participates in."""
-    neighbors_u = set(G.neighbors(u))
-    neighbors_v = set(G.neighbors(v))
-    return len(neighbors_u & neighbors_v)
+# --- Add these helpers near the top of train_grapher.py (or move to utils.py if you prefer) ---
 
-def rewire_edges(G,num_rewirings):
+def _count_simple_paths_exact_k(G: nx.Graph, s: int, t: int, k: int, forbidden_edge=None, cap=100000):
+    """
+    Count simple paths of *exact* length k (in edges) from s to t, without revisiting nodes.
+    If forbidden_edge is given as a frozenset({u,v}), that edge is not allowed in the path.
+    'cap' is a safety limit to avoid pathological blow-ups; counting stops after reaching cap.
+    """
+    if k < 0:
+        return 0
+    if k == 0:
+        return int(s == t)
+    # Quick pruning: can't reach in k steps if distance lower bound is too big.
+    # (Optional: comment out if you don't have precomputed distances)
+    count = 0
+    target = t
+    forb = forbidden_edge
+    def dfs(u, depth, visited):
+        nonlocal count
+        if count >= cap:
+            return
+        if depth == k:
+            if u == target:
+                count += 1
+            return
+        for w in G.neighbors(u):
+            if w in visited:
+                continue
+            if forb and frozenset((u, w)) == forb:
+                continue
+            # prevent early arrival: we need exact length k
+            if w == target and depth + 1 < k:
+                continue
+            visited.add(w)
+            dfs(w, depth + 1, visited)
+            visited.remove(w)
+    dfs(s, 0, {s})
+    return count
+
+def count_edge_cycles_n(G: nx.Graph, u: int, v: int, n: int) -> int:
+    """
+    Number of simple cycles of length n that contain edge (u,v).
+    For n=3, use fast common-neighbors count. For n>3, count simple paths
+    of length n-1 between u and v in G with edge (u,v) forbidden.
+    """
+    if n < 3:
+        return 0
+    if n == 3:
+        # triangles through (u,v)
+        return len(set(G.neighbors(u)) & set(G.neighbors(v)))
+    forb = frozenset((u, v))
+    return _count_simple_paths_exact_k(G, u, v, n - 1, forbidden_edge=forb)
+
+def count_cycles_if_add_edge_n(G: nx.Graph, a: int, b: int, n: int) -> int:
+    """
+    Number of simple cycles of length n that would be created by adding (a,b).
+    Equals the number of simple paths of length n-1 between a and b in the current G.
+    """
+    if n < 3:
+        return 0
+    if n == 3:
+        # New triangles formed by adding (a,b) are common neighbors of a and b
+        return len(set(G.neighbors(a)) & set(G.neighbors(b)))
+    return _count_simple_paths_exact_k(G, a, b, n - 1, forbidden_edge=None)
+
+# --- Replace your rewire_edges with this generic cycle-preserving version ---
+
+def rewire_edges(G: nx.Graph, num_rewirings: int, cycle_len: int = 3, cap_per_count: int = 100000):
+    """
+    Perform up to num_rewirings double-edge swaps that preserve (or increase) the count of
+    cycles of length 'cycle_len'. Uses '>=' criterion like your triangle-preserving version.
+
+    cap_per_count: safety cap passed to the path counter to guard against blow-ups on dense graphs.
+    """
     step = 0
     removed_pair = None
     added_pair = None
     for _ in range(num_rewirings):
-        edges = list(G.edges())    
+        edges = list(G.edges())
+        if len(edges) < 2:
+            break
         e1, e2 = random.sample(edges, 2)
         u, v = e1
         x, y = e2
         if len({u, v, x, y}) != 4:
             continue
-        triangle_removed = count_edge_triangles(G, u, v) + count_edge_triangles(G, x, y)
-        # Option 1: (u,x), (v,y)
-        if not G.has_edge(u, x) and not G.has_edge(v, y):
-            tri_added = count_common_neighbors(G, u, x) + count_common_neighbors(G, v, y)
-            if tri_added >= triangle_removed:
-                removed_pair = ((u,v), (x,y))
+        # cycles removed by deleting both edges
+        # Use capped counters to avoid pathological runtimes
+        c_removed = (
+            count_edge_cycles_n(G, u, v, cycle_len) +
+            count_edge_cycles_n(G, x, y, cycle_len)
+        )
+        # Option 1: (u,x) & (v,y)
+        can1 = (not G.has_edge(u, x)) and (not G.has_edge(v, y))
+        if can1:
+            c_add1 = (
+                count_cycles_if_add_edge_n(G, u, x, cycle_len) +
+                count_cycles_if_add_edge_n(G, v, y, cycle_len)
+            )
+        else:
+            c_add1 = -1  # invalid
+        # Option 2: (u,y) & (v,x)
+        can2 = (not G.has_edge(u, y)) and (not G.has_edge(v, x))
+        if can2:
+            c_add2 = (
+                count_cycles_if_add_edge_n(G, u, y, cycle_len) +
+                count_cycles_if_add_edge_n(G, v, x, cycle_len)
+            )
+        else:
+            c_add2 = -1  # invalid
+        # Choose the best valid option that preserves or increases cycle count
+        best_add = max(c_add1, c_add2)
+        if best_add >= c_removed and best_add >= 0:
+            if c_add1 >= c_add2 and can1:
+                G.remove_edges_from([(u, v), (x, y)])
+                G.add_edges_from([(u, x), (v, y)])
+                removed_pair = ((u, v), (x, y))
                 added_pair = ((u, x), (v, y))
-                G.remove_edges_from(removed_pair)
-                G.add_edges_from(added_pair)
                 step += 1
-        # Option 2: (u,y), (v,x)
-        elif not G.has_edge(u, y) and not G.has_edge(v, x):
-            tri_added = count_common_neighbors(G, u, y) + count_common_neighbors(G, v, x)
-            if tri_added >= triangle_removed:
-                removed_pair = ((u,v), (x,y))
+            elif can2:
+                G.remove_edges_from([(u, v), (x, y)])
+                G.add_edges_from([(u, y), (v, x)])
+                removed_pair = ((u, v), (x, y))
                 added_pair = ((u, y), (v, x))
-                G.remove_edges_from(removed_pair)
-                G.add_edges_from(added_pair)
                 step += 1
     return G, removed_pair, added_pair, step
+
 
 def count_common_neighbors(G, a, b):
     """Return number of common neighbors of nodes a and b."""
