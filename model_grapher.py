@@ -107,9 +107,9 @@ def initialize_graphs(method, seq):
     if method == 'constraint_configuration_model':
         G = constraint_configuration_model_from_multiset(seq)
     if G:
-        edges = list(G.edges())
-        np.random.shuffle(edges)
-        for _ in range(10*len(edges)):
+        for _ in range(10*G.number_of_edges()):
+            edges = list(G.edges())
+            np.random.shuffle(edges)
             e1, e2 = random.sample(edges, 2)
             u, v = e1
             x, y = e2
@@ -121,17 +121,10 @@ def initialize_graphs(method, seq):
             if not G.has_edge(u, x) and not G.has_edge(v, y):
                 G.remove_edges_from([(u,v), (x,y)])
                 G.add_edges_from([(u, x), (v, y)])
-                print("Option 1")
             # Option 2: (u,y), (v,x)
             elif not G.has_edge(u, y) and not G.has_edge(v, x):
                 G.remove_edges_from([(u,v), (x,y)])
                 G.add_edges_from([(u, y), (v, x)])
-                print("Option 2")
-            if sorted(seq) != sorted([deg for _, deg in G.degree()]):
-                for i in (u,v,x,y):
-                    print(i,list(G.neighbors(i)))
-                import pdb
-                pdb.set_trace()
     return G
     
 class GraphER(nn.Module):
