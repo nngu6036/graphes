@@ -115,8 +115,6 @@ def initialize_graphs(method, seq):
             x, y = e2
             if len({u, v, x, y}) != 4:
                 continue
-            for i in (u,v,x,y):
-                print(i,list(G.neighbors(i)))
             # Option 1: (u,x), (v,y)
             if not G.has_edge(u, x) and not G.has_edge(v, y):
                 G.remove_edges_from([(u,v), (x,y)])
@@ -183,7 +181,6 @@ class GraphER(nn.Module):
                 generated_seqs.append(seq)
         for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
-            """
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
@@ -207,7 +204,6 @@ class GraphER(nn.Module):
                 elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
                     G.remove_edges_from([(u, v), (x_, y_)])
                     G.add_edges_from([(u, y_), (v, x_)])
-            """
             generated_graphs.append(G)
         return generated_graphs, generated_seqs
 
