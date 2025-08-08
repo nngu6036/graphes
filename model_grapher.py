@@ -117,12 +117,12 @@ def initialize_graphs(method, seq):
                 continue
             # Option 1: (u,x), (v,y)
             if not G.has_edge(u, x) and not G.has_edge(v, y):
-                G.remove_edges_from( ((u,v), (x,y)))
-                G.add_edges_from(((u, x), (v, y)))
+                G.remove_edges_from( [(u,v), (x,y)])
+                G.add_edges_from([(u, x), (v, y)])
             # Option 2: (u,y), (v,x)
             elif not G.has_edge(u, y) and not G.has_edge(v, x):
-                G.remove_edges_from(((u,v), (x,y)))
-                G.add_edges_from(((u, y), (v, x)))
+                G.remove_edges_from([(u,v), (x,y)])
+                G.add_edges_from([(u, y), (v, x)])
             if sorted([d for _, d in G.degree()]) != sorted(seq):
                 import pdb
                 pdb.set_trace()
