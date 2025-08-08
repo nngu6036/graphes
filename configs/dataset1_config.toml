@@ -30,7 +30,7 @@ type = "zinc"
 
 [[datasets]]
 type = "community"
-count = 100
+count = 200
 min_node = 12
 max_node = 20
 p_intra = 0.3
