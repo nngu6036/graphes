@@ -76,7 +76,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
         for G in graphs:
             # --- Corrupt graph with t edge rewirings ---
             num_rewirings = random.randint(1,T)
-            G_corrupt, removed_pair, added_pair,step = rewire_edges(G.copy())
+            G_corrupt, removed_pair, added_pair,step = rewire_edges(G.copy(),num_rewirings)
             if not removed_pair or not added_pair:
                 continue
             # --- Define anchor and target edge ---
