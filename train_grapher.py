@@ -156,7 +156,7 @@ def count_common_neighbors(G, a, b):
     """Return number of common neighbors of nodes a and b."""
     return len(set(G.neighbors(a)) & set(G.neighbors(b)))
 
-def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
+def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,cycle,device):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.BCEWithLogitsLoss()
     model.to(device)
@@ -218,6 +218,7 @@ def main(args):
     num_layer = config['training']['num_layer']
     T = config['training']['T']
     k_eigen = config['data']['k_eigen']
+    cycle = config['training']['cycle']
     model = GraphER(k_eigen, hidden_dim,num_layer,T)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
@@ -225,7 +226,7 @@ def main(args):
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_grapher(model, train_graphs,num_epochs, learning_rate,T, k_eigen,'cpu')
+        train_grapher(model, train_graphs,num_epochs, learning_rate,T, k_eigen,cycle,'cpu')
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
