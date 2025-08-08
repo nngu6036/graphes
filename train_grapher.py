@@ -151,9 +151,6 @@ def main(args):
         sample_graphs = random.choices(train_graphs,k=config['inference']['generate_samples'])
         test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
         degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
-        print(f"MMD Distance Sample <->Test: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,degree_sequences,max_node)}")
-        print(f"MMD Distance Traing <->Test: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,train_seqs,max_node)}")
-        print(f"MMD Distance Train + Train <->Test: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,train_seqs+train_seqs,max_node)}")
         """
         generated_graphs, generated_seqs = model.generate_without_msvae(T,degree_sequences,k_eigen,method = 'constraint_configuration_model')
         print(f"Evaluate generated graphs sampled from training using constraint configuration model")
