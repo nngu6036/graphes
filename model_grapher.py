@@ -116,6 +116,8 @@ def initialize_graphs(method, seq):
             if len({u, v, x, y}) != 4:
                 continue
             # Option 1: (u,x), (v,y)
+            import pdb
+            pdb.set_trace()
             if not G.has_edge(u, x) and not G.has_edge(v, y):
                 G.remove_edges_from( [(u,v), (x,y)])
                 G.add_edges_from([(u, x), (v, y)])
@@ -123,9 +125,6 @@ def initialize_graphs(method, seq):
             elif not G.has_edge(u, y) and not G.has_edge(v, x):
                 G.remove_edges_from([(u,v), (x,y)])
                 G.add_edges_from([(u, y), (v, x)])
-            if sorted([d for _, d in G.degree()]) != sorted(seq):
-                import pdb
-                pdb.set_trace()
     return G
     
 class GraphER(nn.Module):
