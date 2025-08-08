@@ -30,35 +30,37 @@ def count_edge_triangles(G, u, v):
     neighbors_v = set(G.neighbors(v))
     return len(neighbors_u & neighbors_v)
 
-def rewire_edges(G):
-    edges = list(G.edges())
+def rewire_edges(G,num_rewirings):
+    step = 0
     removed_pair = None
     added_pair = None
-    e1, e2 = random.sample(edges, 2)
-    u, v = e1
-    x, y = e2
-    if len({u, v, x, y}) != 4:
-        return G, None, None
-    triangle_removed = count_edge_triangles(G, u, v) + count_edge_triangles(G, x, y)
-    # Option 1: (u,x), (v,y)
-    if not G.has_edge(u, x) and not G.has_edge(v, y):
-        tri_added = count_common_neighbors(G, u, x) + count_common_neighbors(G, v, y)
-        if tri_added >= triangle_removed:
-            removed_pair = ((u,v), (x,y))
-            added_pair = ((u, x), (v, y))
-            G.remove_edges_from(removed_pair)
-            G.add_edges_from(added_pair)
-            return G, removed_pair, added_pair
-    # Option 2: (u,y), (v,x)
-    elif not G.has_edge(u, y) and not G.has_edge(v, x):
-        tri_added = count_common_neighbors(G, u, y) + count_common_neighbors(G, v, x)
-        if tri_added >= triangle_removed:
-            removed_pair = ((u,v), (x,y))
-            added_pair = ((u, y), (v, x))
-            G.remove_edges_from(removed_pair)
-            G.add_edges_from(added_pair)
-            return G, removed_pair, added_pair
-    return G, None, None
+    for _ in range(num_rewirings):
+        edges = list(G.edges())    
+        e1, e2 = random.sample(edges, 2)
+        u, v = e1
+        x, y = e2
+        if len({u, v, x, y}) != 4:
+            continue
+        triangle_removed = count_edge_triangles(G, u, v) + count_edge_triangles(G, x, y)
+        # Option 1: (u,x), (v,y)
+        if not G.has_edge(u, x) and not G.has_edge(v, y):
+            tri_added = count_common_neighbors(G, u, x) + count_common_neighbors(G, v, y)
+            if tri_added >= triangle_removed:
+                removed_pair = ((u,v), (x,y))
+                added_pair = ((u, x), (v, y))
+                G.remove_edges_from(removed_pair)
+                G.add_edges_from(added_pair)
+                step += 1
+        # Option 2: (u,y), (v,x)
+        elif not G.has_edge(u, y) and not G.has_edge(v, x):
+            tri_added = count_common_neighbors(G, u, y) + count_common_neighbors(G, v, x)
+            if tri_added >= triangle_removed:
+                removed_pair = ((u,v), (x,y))
+                added_pair = ((u, y), (v, x))
+                G.remove_edges_from(removed_pair)
+                G.add_edges_from(added_pair)
+                step += 1
+    return G, removed_pair, added_pair, step
 
 def count_common_neighbors(G, a, b):
     """Return number of common neighbors of nodes a and b."""
@@ -74,25 +76,17 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
         for G in graphs:
             # --- Corrupt graph with t edge rewirings ---
             num_rewirings = random.randint(1,T)
-            G_prev = G
-            timestep = 0
-            last_removed_pair = None
-            last_added_pair = None
-            for _ in range(num_rewirings):
-                G_next, removed_pair, added_pair = rewire_edges(G_prev.copy())
-                if removed_pair and added_pair:
-                    timestep +=1
-                    last_removed_pair = removed_pair
-                    last_added_pair = added_pair
-                G_prev = G_next
+            G_corrupt, removed_pair, added_pair,step = rewire_edges(G.copy())
+            if not removed_pair or not added_pair:
+                continue
             # --- Define anchor and target edge ---
-            first_edge_added, second_edge_added = last_added_pair  # predict second_edge_added given first_edge_added
+            first_edge_added, second_edge_added = added_pair  # predict second_edge_added given first_edge_added
             # --- Graph to PyG format ---
-            data = graph_to_data(G_next,k_eigen).to(device)
+            data = graph_to_data(G_corrupt,k_eigen).to(device)
             # --- Edge candidates from corrupted graph ---
             u, v = first_edge_added
             candidate_edges = [
-                e for e in G_next.edges()
+                e for e in G_corrupt.edges()
                 if len(set(e + (u, v))) == 4  # disjoint
             ]
             # --- Construct binary labels ---
@@ -102,7 +96,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
                 device=device
             )
             # --- Forward pass ---
-            scores = model(data.x, data.edge_index, first_edge_added, candidate_edges, t=timestep)
+            scores = model(data.x, data.edge_index, first_edge_added, candidate_edges, t=step)
             loss = criterion(scores.squeeze(), labels)
             # --- Backpropagation ---
             optimizer.zero_grad()
