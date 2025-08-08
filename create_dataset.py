@@ -15,6 +15,7 @@ def generate_grid_graph(min_len, max_len):
     r = random.randint(min_len, max_len)
     c = random.randint(min_len, max_len)
     G = nx.grid_2d_graph(r, c, periodic=False)
+    print(f"Create graph with {r} rows, {c} columns, {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
     return G
 
 def generate_community_graph(min_node, max_node, p_intra=0.3, p_inter = 0.05):
