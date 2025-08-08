@@ -54,7 +54,7 @@ def rewire_edges(G):
         tri_added = count_common_neighbors(G, u, y) + count_common_neighbors(G, v, x)
         if tri_added >= triangle_removed:
             removed_pair = ((u,v), (x,y))
-            added_pair = [(u, y), (v, x)]
+            added_pair = ((u, y), (v, x))
             G.remove_edges_from(removed_pair)
             G.add_edges_from(added_pair)
             return G, removed_pair, added_pair
