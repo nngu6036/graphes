@@ -71,7 +71,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
     model.train()
     for epoch in range(num_epochs):
         epoch_loss = 0.0
-        for G in enumerate(graphs):
+        for G in graphs:
             # --- Corrupt graph with t edge rewirings ---
             num_rewirings = random.randint(1,T)
             G_prev = G
