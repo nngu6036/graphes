@@ -116,10 +116,10 @@ def initialize_graphs(method, seq):
             if len({u, v, x, y}) != 4:
                 continue
             for i in (u,v,x,y):
-                print(i,G.degree[i])
+                print(i,list(G.neighbors(i)))
             # Option 1: (u,x), (v,y)
             if not G.has_edge(u, x) and not G.has_edge(v, y):
-                G.remove_edges_from( [(u,v), (x,y)])
+                G.remove_edges_from([(u,v), (x,y)])
                 G.add_edges_from([(u, x), (v, y)])
                 print("Option 1")
             # Option 2: (u,y), (v,x)
@@ -127,9 +127,9 @@ def initialize_graphs(method, seq):
                 G.remove_edges_from([(u,v), (x,y)])
                 G.add_edges_from([(u, y), (v, x)])
                 print("Option 2")
-            for i in (u,v,x,y):
-                print(i,G.degree[i])
             if sorted(seq) != sorted([deg for _, deg in G.degree()]):
+                for i in (u,v,x,y):
+                    print(i,list(G.neighbors(i)))
                 import pdb
                 pdb.set_trace()
     return G
