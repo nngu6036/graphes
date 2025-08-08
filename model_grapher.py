@@ -123,6 +123,9 @@ def initialize_graphs(method, seq):
             elif not G.has_edge(u, y) and not G.has_edge(v, x):
                 G.remove_edges_from(((u,v), (x,y)))
                 G.add_edges_from(((u, y), (v, x)))
+            if sorted([d for _, d in G.degree()]) != sorted(seq):
+                import pdb
+                pdb.set_trace()
     return G
     
 class GraphER(nn.Module):
@@ -179,8 +182,6 @@ class GraphER(nn.Module):
             if G:
                 initial_graphs.append(G)
                 generated_seqs.append(seq)
-                print(sorted(seq))
-                print(sorted([d for _, d in G.degree()]))
         for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
             """
