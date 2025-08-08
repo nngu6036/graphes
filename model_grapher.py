@@ -106,6 +106,7 @@ def initialize_graphs(method, seq):
         G = configuration_model_from_multiset(seq)
     if method == 'constraint_configuration_model':
         G = constraint_configuration_model_from_multiset(seq)
+    """
     if G:
         edges = list(G.edges())
         np.random.shuffle(edges)
@@ -123,6 +124,7 @@ def initialize_graphs(method, seq):
             if not G.has_edge(u, y) and not G.has_edge(v, x):
                 G.remove_edges_from(((u,v), (x,y)))
                 G.add_edges_from(((u, y), (v, x)))
+    """
     return G
     
 class GraphER(nn.Module):

@@ -172,14 +172,11 @@ def main(args):
         """
         generated_graphs, generated_seqs = model.generate_without_msvae(T,degree_sequences,k_eigen,method = 'havei_hakimi')
         print(f"Evaluate generated graphs sampled from training using havei-hakimi model")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,train_graphs,max_node)}")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
         print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
         
-        induced_seqs = [[deg for _, deg in graph.degree()] for graph in generated_graphs ]
         print(f"MMD Distance Test <-> Generated: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-        print(f"MMD Distance Test <-> Induced Generated: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,induced_seqs,max_node)}")
         """
         generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model,k_eigen,method = 'constraint_configuration_model')
         print(f"Evaluate generated graphs using constraint Configuraiton Model")
