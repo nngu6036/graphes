@@ -179,6 +179,8 @@ class GraphER(nn.Module):
             if G:
                 initial_graphs.append(G)
                 generated_seqs.append(seq)
+                print(sorted(seq))
+                print(sorted([d for _, d in G.degree()]))
         for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
             """

@@ -172,6 +172,7 @@ def main(args):
         """
         generated_graphs, generated_seqs = model.generate_without_msvae(T,degree_sequences,k_eigen,method = 'havei_hakimi')
         print(f"Evaluate generated graphs sampled from training using havei-hakimi model")
+        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,train_graphs,max_node)}")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
         print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
