@@ -1,5 +1,5 @@
 [training]
-num_epochs = 800     # Number of training epochs
+num_epochs = 10000     # Number of training epochs
 learning_rate = 0.001    # Learning rate for the optimizer
 hidden_dim = 64          # Hidden dimension size
 latent_dim = 32          # Latent dimension size
