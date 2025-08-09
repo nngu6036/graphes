@@ -8,6 +8,8 @@ epsilon = 0.0001
 T = 250
 cycle = 6
 
+[data]
+k_eigen = 10
 
 [inference]
 generate_samples = 200    # Number of samples to generate
