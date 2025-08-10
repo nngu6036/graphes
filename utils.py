@@ -26,7 +26,7 @@ def load_degree_sequence_from_directory(directory_path):
             seq = [deg for _, deg in G.degree()]
             if seq is not None:
                 seqs.append(seq)
-    return seqs, max_node
+    return seqs, max_node, min_node
 
 def load_graph_from_directory(directory_path):
     max_node = 0 
