@@ -35,16 +35,16 @@ def load_graph_from_directory(directory_path):
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
-            graph = nx.read_edgelist(file_path, nodetype=int)
-            max_node = max(max_node, graph.number_of_nodes())
+            G = nx.read_edgelist(file_path, nodetype=int)
+            max_node = max(max_node, G.number_of_nodes())
             min_node = min(min_node, G.number_of_edges()) if min_node > 0 else G.number_of_edges()
     print("Max node: ", max_node)
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
-            graph = nx.read_edgelist(file_path, nodetype=int)
-            graph = nx.convert_node_labels_to_integers(graph)
-            graphs.append(graph)
+            G = nx.read_edgelist(file_path, nodetype=int)
+            graph = nx.convert_node_labels_to_integers(G)
+            graphs.append(G)
     return graphs, max_node, min_node
 
 

@@ -116,6 +116,9 @@ python train_grapher.py --config grapher_grid_config.toml  --dataset-dir dataset
 python train_grapher.py --config grapher_ego_config.toml  --dataset-dir dataset1_ego_edgelists --msvae-model msvae_ego --msvae-config msvae_config1.toml --input-model grapher_ego --evaluate 
 ```
 ```bash
+python train_grapher.py --config grapher_ego_config.toml  --dataset-dir dataset1_ego_edgelists --setvae-model setvae_ego --setvae-config setvae_config1.toml --input-model grapher_ego --evaluate 
+```
+```bash
 python train_grapher.py --config grapher_community_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config msvae_config1.toml --input-model grapher_community --evaluate 
 ```
 ```bash
