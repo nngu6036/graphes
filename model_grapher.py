@@ -168,7 +168,7 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate_without_msvae(self, num_steps, degree_sequences,k_eigen, method = 'constraint_configuration_model'):
+    def generate_from_sequences(self, num_steps, degree_sequences,k_eigen, method = 'constraint_configuration_model'):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
@@ -207,7 +207,7 @@ class GraphER(nn.Module):
             generated_graphs.append(G)
         return generated_graphs, generated_seqs
 
-    def generate(self, num_samples, num_steps, msvae_model,k_eigen,method = 'constraint_configuration_model',threshold = 0.01):
+    def generate_with_msvae(self, num_samples, num_steps, msvae_model,k_eigen,method = 'constraint_configuration_model'):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
@@ -223,6 +223,51 @@ class GraphER(nn.Module):
                 initial_graphs.append(G)
                 generated_seqs.append(seq)
                 if len(initial_graphs) >= num_samples:
+                    break
+        for idx, G in enumerate(initial_graphs): 
+            print(f"Generating graph {idx + 1}")
+            for t in reversed(range(num_steps + 1)):
+                edges = list(G.edges())
+                if len(edges) < 2:
+                    continue
+                # Select a random anchor edge
+                u, v = random.choice(edges)
+                # Generate swappable candidates (disjoint with (u,v))
+                all_candidates = [
+                    e for e in edges if e != (u, v) and len(set(e + (u, v))) == 4
+                ]
+                if not all_candidates:
+                    continue
+                data = graph_to_data(G,k_eigen).to(device)
+                scores = self(data.x,data.edge_index,(u,v), all_candidates,t).squeeze(-1) 
+                top_idx = torch.argmax(scores).item()
+                x_, y_ = all_candidates[top_idx]
+                # Rewire only if no duplicates
+                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, x_), (v, y_)])
+                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, y_), (v, x_)])
+            generated_graphs.append(G)
+        return generated_graphs, generated_seqs
+    
+    def generate_with_setvae(self, N_nodes, num_steps, setvae_model,k_eigen,method = 'constraint_configuration_model'):
+        self.eval()
+        device = next(self.parameters()).device
+        generated_graphs = []
+        generated_seqs = []
+        initial_graphs = []
+        degree_sequences = setvae_model.generate(N_nodes)
+        for idx, seq in enumerate(degree_sequences):
+            valid, _ = check_sequence_validity(seq)
+            if not valid:
+                continue
+            G = initialize_graphs(method, seq) 
+            if G:
+                initial_graphs.append(G)
+                generated_seqs.append(seq)
+                if len(initial_graphs) >= len(N_nodes):
                     break
         for idx, G in enumerate(initial_graphs): 
             print(f"Generating graph {idx + 1}")

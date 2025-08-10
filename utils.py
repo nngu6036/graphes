@@ -30,12 +30,14 @@ def load_degree_sequence_from_directory(directory_path):
 
 def load_graph_from_directory(directory_path):
     max_node = 0 
+    min_node = -1
     graphs = []
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
             max_node = max(max_node, graph.number_of_nodes())
+            min_node = min(min_node, G.number_of_edges()) if min_node > 0 else G.number_of_edges()
     print("Max node: ", max_node)
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
@@ -43,7 +45,7 @@ def load_graph_from_directory(directory_path):
             graph = nx.read_edgelist(file_path, nodetype=int)
             graph = nx.convert_node_labels_to_integers(graph)
             graphs.append(graph)
-    return graphs, max_node
+    return graphs, max_node, min_node
 
 
 def _safe_eigvecs(G: nx.Graph, k: int) -> np.ndarray:
