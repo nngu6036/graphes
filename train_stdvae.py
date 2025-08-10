@@ -57,7 +57,7 @@ def main(args):
     model_dir = Path("models")
     config = toml.load(config_dir / args.config)
     batch_size = config['training']['batch_size']
-    input_data, max_node = load_degree_sequence_from_directory(dataset_dir)
+    input_data, max_node, _ = load_degree_sequence_from_directory(dataset_dir)
     train_data, test_data = train_test_split(input_data, test_size=0.2, random_state=42)
     train_dataset = TensorDataset(torch.stack([encode_degree_sequence(seq,max_node) for seq in train_data]))
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
