@@ -28,8 +28,7 @@ def train_setvae(model, dataloader, num_epochs, learning_rate,max_degree):
     for epoch in range(num_epochs):
         print("Traininig Set-VAE iteration ", epoch)
         total_loss = 0
-        for (x,) in dataloader:
-            m = encode_degree_sequence(x,max_degree) 
+        for (m,) in dataloader:
             N = m.sum(dim=1).long()
             out = model(m, N)
             loss = out["loss"]
@@ -49,7 +48,7 @@ def main(args):
     batch_size = config['training']['batch_size']
     input_data, max_node = load_degree_sequence_from_directory(dataset_dir)
     train_data, test_data = train_test_split(input_data, test_size=0.2, random_state=42)
-    train_dataset = TensorDataset(torch.stack([encode_degree_sequence(seq,max_node) for seq in train_data]))
+    train_dataset = TensorDataset(torch.stack([encode_degree_sequence(seq,max_node, normalize=False) for seq in train_data]))
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']

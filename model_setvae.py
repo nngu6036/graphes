@@ -4,12 +4,29 @@ import torch.nn.functional as F
 
 # one-hot enconding 
 
-def encode_degree_sequence(degree_sequence, max_degree):
-    h = torch.bincount(
-        degree_sequence.clamp_min(0).clamp_max(max_degree),
-        minlength=max_degree + 1
-    ).float()
-    return h  # raw counts (not normalized)
+def encode_degree_sequence(degree_sequence, max_degree, normalize=True):
+    """
+    Encode a degree sequence into a histogram vector of multiplicities.
+
+    Args:
+        degree_sequence (list[int]): List of node degrees.
+        max_degree (int): Maximum possible degree value.
+        normalize (bool): If True, divide counts by total number of nodes.
+
+    Returns:
+        torch.Tensor: Multiplicity vector h of shape (max_degree+1,).
+                      Normalized if normalize=True.
+    """
+    # Clamp degrees into [0, max_degree]
+    clamped = [max(0, min(d, max_degree)) for d in degree_sequence]
+    # Compute multiplicity counts
+    h = torch.zeros(max_degree + 1, dtype=torch.float)
+    for deg in clamped:
+        h[deg] += 1
+    # Normalize so sum(h) == 1 (or keep raw counts)
+    if normalize and h.sum() > 0:
+        h /= h.sum()
+    return h
 
 def decode_degree_sequence(one_hot_tensor):
     # one_hot_tensor is actually a multiplicity/count vector m[0..Dmax]
