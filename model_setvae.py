@@ -106,8 +106,7 @@ class SetVAE(torch.nn.Module):
         return {
             "logits": logits,
             "mu": mu, "logvar": logvar,
-            "loss": total,
-            "loss_terms": {"recon": recon.detach(), "kld": kld.detach()()}
+            "loss": total
         }
 
     @torch.no_grad()

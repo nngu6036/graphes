@@ -6,6 +6,7 @@ import os
 import argparse
 import toml
 import math
+import random
 from pathlib import Path
 import networkx as nx
 from scipy.optimize import linear_sum_assignment
@@ -46,7 +47,7 @@ def main(args):
     model_dir = Path("models")
     config = toml.load(config_dir / args.config)
     batch_size = config['training']['batch_size']
-    input_data, max_node = load_degree_sequence_from_directory(dataset_dir)
+    input_data, max_node, min_node = load_degree_sequence_from_directory(dataset_dir)
     train_data, test_data = train_test_split(input_data, test_size=0.2, random_state=42)
     train_dataset = TensorDataset(torch.stack([encode_degree_sequence(seq,max_node, normalize=False) for seq in train_data]))
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -65,7 +66,8 @@ def main(args):
         print(f"Model saved to {args.output_model}")
     if args.evaluate:
         deg_eval = DegreeSequenceEvaluator()
-        generated_data = model.generate(config['inference']['generate_samples'])
+        nodes = [ random.randint(min_node, max_node) for _ in range(config['inference']['generate_samples'])]
+        generated_data = model.generate(config['inference']['generate_samples'],nodes)
         print(f"Generated degree sequence validity: {deg_eval.evaluate_sequences(generated_data)}")
         print(f"Evaluate baseline: train <-> test")
         #print(f"Chamfer Distance: {deg_eval.evaluate_multisets_chamfer_distance(train_data,test_data)}")

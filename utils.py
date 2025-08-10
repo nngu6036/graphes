@@ -9,15 +9,15 @@ from scipy.sparse import csr_matrix
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
-    max_edge = 0
+    min_node = -1
     seqs = []
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
             G = nx.read_edgelist(file_path, nodetype=int)
             max_node = max(max_node, G.number_of_nodes())
-            max_edge = max(max_node, G.number_of_edges())
-    print("Max node: ", max_node, " Max edge:", max_edge)
+            min_node = min(min_node, G.number_of_edges()) if min_node > 0 else G.number_of_edges()
+    print("Max node: ", max_node, " Min node:", min_node)
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
