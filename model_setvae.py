@@ -110,15 +110,17 @@ class SetVAE(torch.nn.Module):
         }
 
     @torch.no_grad()
-    def generate(self, batch_size, N_nodes):
+    def generate(self, N_nodes):
         self.eval()
         device = next(self.parameters()).device
+        batch_size = len(N_nodes)
+        N_tensor = torch.tensor(N_nodes)
         z = torch.randn(batch_size, self.latent_dim, device=device)
         logits = self.decode(z)
         probs = F.softmax(logits, dim=-1)
         m_list = []
         for b in range(batch_size):
-            m_b = torch.multinomial(probs[b], num_samples=int(N_nodes[b].item()), replacement=True)
+            m_b = torch.multinomial(probs[b], num_samples=int(N_tensor[b].item()), replacement=True)
             m_counts = torch.bincount(m_b, minlength=self.max_degree+1)
             m_list.append(m_counts)
         samples = torch.stack(m_list, dim=0).to(device)

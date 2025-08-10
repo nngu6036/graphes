@@ -67,7 +67,7 @@ def main(args):
     if args.evaluate:
         deg_eval = DegreeSequenceEvaluator()
         nodes = [ random.randint(min_node, max_node) for _ in range(config['inference']['generate_samples'])]
-        generated_data = model.generate(config['inference']['generate_samples'],nodes)
+        generated_data = model.generate(nodes)
         print(f"Generated degree sequence validity: {deg_eval.evaluate_sequences(generated_data)}")
         print(f"Evaluate baseline: train <-> test")
         #print(f"Chamfer Distance: {deg_eval.evaluate_multisets_chamfer_distance(train_data,test_data)}")
