@@ -26,7 +26,7 @@ def train_setvae(model, dataloader, num_epochs, learning_rate,max_degree):
     optimizer = Adam(model.parameters(), lr=learning_rate,weight_decay=1e-4)
     model.train()
     for epoch in range(num_epochs):
-        print("Traininig Multiset-VAE iteration ", epoch)
+        print("Traininig Set-VAE iteration ", epoch)
         total_loss = 0
         for (x,) in dataloader:
             m = encode_degree_sequence(x,max_degree) 
@@ -38,7 +38,7 @@ def train_setvae(model, dataloader, num_epochs, learning_rate,max_degree):
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             total_loss += loss.item()
-        print(f"Epoch Multiset-VAE [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
+        print(f"Epoch Set-VAE [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
 
 
 def main(args):

@@ -4,25 +4,12 @@ import torch.nn.functional as F
 
 # one-hot enconding 
 
-def encode_degree_sequence(degree_sequence, max_degree, normalize=True):
-    if not isinstance(degree_sequence, list):
-        raise TypeError("degree_sequence must be a list of integers")
-    if not all(isinstance(d, int) for d in degree_sequence):
-        raise ValueError("degree_sequence must contain only integers")
-
-    # Clamp degrees into [0, max_degree]
-    clamped = [max(0, min(d, max_degree)) for d in degree_sequence]
-
-    # Compute multiplicity counts
-    h = torch.zeros(max_degree + 1, dtype=torch.float)
-    for deg in clamped:
-        h[deg] += 1
-
-    # Normalize so sum(h) == 1 (or keep raw counts)
-    if normalize and h.sum() > 0:
-        h /= h.sum()
-
-    return h
+def encode_degree_sequence(degree_sequence, max_degree):
+    h = torch.bincount(
+        degree_sequence.clamp_min(0).clamp_max(max_degree),
+        minlength=max_degree + 1
+    ).float()
+    return h  # raw counts (not normalized)
 
 def decode_degree_sequence(one_hot_tensor):
     # one_hot_tensor is actually a multiplicity/count vector m[0..Dmax]
@@ -92,16 +79,12 @@ class SetVAE(torch.nn.Module):
         mu, logvar = self.encode(m_counts)
         z = self.reparameterize(mu, logvar)
         logits = self.decode(z)  # [B, Dp1]
-
         # Reconstruction: KL(target || softmax(logits)) == CE(target, logits) - H(target)
         target_prob = (m_counts + 1e-8) / (N_nodes.unsqueeze(1) + 1e-8)
         recon = F.kl_div(F.log_softmax(logits, dim=-1), target_prob, reduction='batchmean')
-
         # Latent KL
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
-
         # EG soft validity
-
         total = recon + kld 
         return {
             "logits": logits,
