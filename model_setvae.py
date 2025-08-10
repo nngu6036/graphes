@@ -4,10 +4,25 @@ import torch.nn.functional as F
 
 # one-hot enconding 
 
-def encode_degree_sequence(degree_sequence , max_degree):
-    h = torch.bincount(degree_sequence.clamp_min(0).clamp_max(max_degree),
-                       minlength=max_degree+1).float()
-    return h  # counts (m_0,...,m_max)
+def encode_degree_sequence(degree_sequence, max_degree, normalize=True):
+    if not isinstance(degree_sequence, list):
+        raise TypeError("degree_sequence must be a list of integers")
+    if not all(isinstance(d, int) for d in degree_sequence):
+        raise ValueError("degree_sequence must contain only integers")
+
+    # Clamp degrees into [0, max_degree]
+    clamped = [max(0, min(d, max_degree)) for d in degree_sequence]
+
+    # Compute multiplicity counts
+    h = torch.zeros(max_degree + 1, dtype=torch.float)
+    for deg in clamped:
+        h[deg] += 1
+
+    # Normalize so sum(h) == 1 (or keep raw counts)
+    if normalize and h.sum() > 0:
+        h /= h.sum()
+
+    return h
 
 def decode_degree_sequence(one_hot_tensor):
     # one_hot_tensor is actually a multiplicity/count vector m[0..Dmax]
