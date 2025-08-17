@@ -26,6 +26,7 @@ from eval import DegreeSequenceEvaluator, GraphsEvaluator
 from utils import (
     graph_to_data,
     check_sequence_validity,
+    load_graph_from_directory,
     laplacian_eigs,
     normalized_laplacian_dense,
     _B_inner,
