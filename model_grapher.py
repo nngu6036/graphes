@@ -233,8 +233,10 @@ class GraphER(nn.Module):
                 # Select a random anchor edge
                 u, v = random.choice(edges)
                 # Generate swappable candidates (disjoint with (u,v))
+                uv = frozenset((u, v))
                 all_candidates = [
-                    e for e in edges if e != (u, v) and len(set(e + (u, v))) == 4
+                    e for e in edges
+                    if frozenset(e) != uv and len(set(e + (u, v))) == 4
                 ]
                 if not all_candidates:
                     continue
@@ -278,8 +280,10 @@ class GraphER(nn.Module):
                 # Select a random anchor edge
                 u, v = random.choice(edges)
                 # Generate swappable candidates (disjoint with (u,v))
+                uv = frozenset((u, v))
                 all_candidates = [
-                    e for e in edges if e != (u, v) and len(set(e + (u, v))) == 4
+                    e for e in edges
+                    if frozenset(e) != uv and len(set(e + (u, v))) == 4
                 ]
                 if not all_candidates:
                     continue

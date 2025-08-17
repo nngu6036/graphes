@@ -71,19 +71,23 @@ class MSVAE(torch.nn.Module):
         return logits, mean, logvar
 
     def fix_degree_sum_even(self, freq: torch.Tensor) -> torch.Tensor:
-        """
-        Ensures the sum of degrees in `freq` is even.
-        Subtracts 1 from the highest non-zero entry if sum is odd.
-        """
-        indices = torch.arange(1, self.max_input_dim+1).float().to(freq.device)
-        total = torch.sum(freq * indices).item()
-        if total % 2 != 0:
-            even_indices = torch.arange(0, freq.size(0), 2)  # get even indices: 0, 2, 4, ...
-            even_values = freq[even_indices]                # values at even indices
-            relative_max_idx = torch.argmax(even_values)    # index within the even subset
-            max_idx = even_indices[relative_max_idx]        # map back to original index
-            if freq[max_idx] > 0:
-                freq[max_idx] += 1
+        degs = torch.arange(1, self.max_input_dim+1, device=freq.device)
+        total = torch.sum(freq * degs).item()
+        if int(total) % 2 == 0:
+            return freq
+        # try to increment an odd-degree bin if possible (adds an odd number)
+        odd_idx = torch.arange(0, freq.size(0), 1, device=freq.device)[(degs % 2)==1]
+        if (freq[odd_idx] >= 0).any():
+            # choose the highest odd degree present or just the highest odd index
+            i = odd_idx[-1]
+            freq[i] = freq[i] + 1
+            return freq
+        # fallback: move one node from degree 0 -> 1
+        if freq.size(0) >= 2 and freq[0] > 0:
+            freq[0] -= 1
+            freq[1] += 1
+        else:
+            freq[1] = freq[1].clamp_min(0) + 1
         return freq
 
     def generate(self, num_samples ):

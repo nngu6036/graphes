@@ -6,6 +6,7 @@ import numpy as np
 from scipy.sparse import csgraph
 from scipy.sparse.linalg import eigsh
 from scipy.sparse import csr_matrix
+from scipy.sparse import csgraph, csr_matrix
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
@@ -121,3 +122,60 @@ def check_sequence_validity(seq):
             return False,3
     return True, 0
 
+
+def laplacian_eigs(G: nx.Graph, k: int, normed: bool = True):
+    """
+    Return (vals, vecs) for the K smallest *non-zero* eigenpairs of the (normalized) Laplacian.
+    Falls back gracefully on tiny graphs.
+    """
+    n = G.number_of_nodes()
+    if n == 0:
+        return np.empty((0,), dtype=np.float32), np.empty((0, 0), dtype=np.float32)
+    if n <= 2:
+        # trivial spectrum: normalized Laplacian of K2 has {0, 2}
+        vals = np.array([1.0] * min(k, max(0, n - 1)), dtype=np.float32)
+        vecs = np.ones((n, min(k, max(0, n - 1))), dtype=np.float32) / np.sqrt(n or 1)
+        return vals, vecs
+
+    A = csr_matrix(nx.to_scipy_sparse_array(G, dtype=float))
+    L = csgraph.laplacian(A, normed=normed)
+
+    # ask for k+1 to include the zero eigenvalue, then drop it
+    want = min(max(1, k + 1), n - 1)
+    try:
+        vals, vecs = eigsh(L, k=want, which="SM")
+    except Exception:
+        # robust fallback
+        return np.ones((k,), dtype=np.float32), np.ones((n, k), dtype=np.float32) / np.sqrt(n)
+
+    idx = np.argsort(vals)
+    vals, vecs = vals[idx], vecs[:, idx]
+    # drop the (near-)zero eigenvalue
+    if vals[0] < 1e-8:
+        vals, vecs = vals[1:], vecs[:, 1:]
+    # cap/pad to exactly k
+    vals = vals[:k].astype(np.float32)
+    vecs = vecs[:, :k].astype(np.float32)
+    if vals.shape[0] < k:
+        pad = k - vals.shape[0]
+        vals = np.pad(vals, (0, pad))
+        vecs = np.pad(vecs, ((0, 0), (0, pad)))
+    return vals, vecs
+
+
+def normalized_laplacian_dense(G: nx.Graph) -> np.ndarray:
+    """Dense normalized Laplacian as float64 ndarray (for small graphs this is fine)."""
+    return csgraph.laplacian(
+        csr_matrix(nx.to_scipy_sparse_array(G, dtype=float)), normed=True
+    ).toarray()
+
+
+# ---- inner-products needed for fast Frobenius scoring of a double-edge swap ----
+def _B_inner(M: np.ndarray, a: int, b: int) -> float:
+    # <M, (e_a - e_b)(e_a - e_b)^T> = M_aa + M_bb - 2 M_ab
+    return float(M[a, a] + M[b, b] - 2.0 * M[a, b])
+
+def _pair_inner(a: int, b: int, c: int, d: int) -> float:
+    # <B_ab, B_cd> = ( (e_a - e_b)^T (e_c - e_d) )^2
+    z = (a == c) - (a == d) - (b == c) + (b == d)
+    return float(z * z)

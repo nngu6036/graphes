@@ -20,10 +20,17 @@ from collections import Counter
 import numpy as np
 
 from model_msvae import MSVAE
-from model_setvae import SetVAE
-from model_grapher import GraphER
+from model_spectrer import SpectralER
+
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
-from utils import *
+from utils import (
+    graph_to_data,
+    check_sequence_validity,
+    laplacian_eigs,
+    normalized_laplacian_dense,
+    _B_inner,
+    _pair_inner,
+)
 
 # --- Add these helpers near the top of train_grapher.py (or move to utils.py if you prefer) ---
 
@@ -157,44 +164,55 @@ def count_common_neighbors(G, a, b):
     """Return number of common neighbors of nodes a and b."""
     return len(set(G.neighbors(a)) & set(G.neighbors(b)))
 
-def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,cycle,device):
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = nn.BCEWithLogitsLoss()
-    model.to(device)
-    model.train()
+
+def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, cycle, device):
+    opt = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    model.to(device).train()
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for G in graphs:
-            # --- Corrupt graph with t edge rewirings ---
-            num_rewirings = random.randint(1,T)
-            G_corrupt, removed_pair, added_pair,step = rewire_edges(G.copy(),num_rewirings,cycle)
+            num_rewirings = random.randint(1, T)
+            G_t, removed_pair, added_pair, step = rewire_edges(G.copy(), num_rewirings, cycle_len=cycle)
             if not removed_pair or not added_pair:
                 continue
-            # --- Define anchor and target edge ---
-            first_edge_added, second_edge_added = added_pair  # predict second_edge_added given first_edge_added
-            # --- Graph to PyG format ---
-            data = graph_to_data(G_corrupt,k_eigen).to(device)
-            # --- Edge candidates from corrupted graph ---
-            u, v = first_edge_added
-            candidate_edges = [
-                e for e in G_corrupt.edges()
-                if len(set(e + (u, v))) == 4  # disjoint
-            ]
-            # --- Construct binary labels ---
-            labels = torch.tensor(
-                [1.0 if frozenset(edge) == frozenset(second_edge_added) else 0.0 for edge in candidate_edges],
-                dtype=torch.float32,
-                device=device
-            )
-            # --- Forward pass ---
-            scores = model(data.x, data.edge_index, first_edge_added, candidate_edges, t=step)
-            loss = criterion(scores.squeeze(), labels)
-            # --- Backpropagation ---
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            epoch_loss += loss.item()
-        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
+
+            # Undo the last swap to get G_{t-1}
+            G_prev = G_t.copy()
+            (u, v), (x, y) = removed_pair
+            (a, b), (c, d) = added_pair
+            if G_prev.has_edge(a, b): G_prev.remove_edge(a, b)
+            if G_prev.has_edge(c, d): G_prev.remove_edge(c, d)
+            G_prev.add_edge(u, v); G_prev.add_edge(x, y)
+
+            lam_t, _    = laplacian_eigs(G_t,   k_eigen, normed=True)
+            lam_prev, _ = laplacian_eigs(G_prev, k_eigen, normed=True)
+            lam_t   = torch.from_numpy(lam_t).to(device)
+            lam_t_1 = torch.from_numpy(lam_prev).to(device)
+
+            # size features
+            n = G_t.number_of_nodes()
+            m_edges = G_t.number_of_edges()
+            avg_deg = (2.0 * m_edges) / max(1, n)
+            density = (2.0 * m_edges) / max(1, n * (n - 1))
+            extra_feat = torch.tensor([math.log(max(n, 2)), avg_deg, density],
+                                      device=device, dtype=lam_t.dtype)
+
+            mu, logvar = model(lam_t, step, extra_feat)
+
+            # Masked diagonal-Gaussian NLL over valid eigenvalues
+            m_valid = min(k_eigen, max(0, n - 1))
+            mask = torch.zeros_like(lam_t_1)
+            if m_valid > 0:
+                mask[:m_valid] = 1.0
+            diff = lam_t_1 - mu
+            nll_vec = 0.5 * (diff.pow(2) * torch.exp(-logvar) + logvar)
+            nll = (nll_vec * mask).sum() / mask.sum().clamp_min(1.0)
+
+            opt.zero_grad()
+            nll.backward()
+            opt.step()
+            epoch_loss += float(nll.item())
+        print(f"[spectral] Epoch {epoch+1}/{num_epochs}  NLL: {epoch_loss:.4f}")
 
 
 def load_msvae_from_file(max_node,config, model_path):
@@ -219,104 +237,57 @@ def main(args):
     dataset_dir = Path("datasets") / args.dataset_dir
     model_dir = Path("models")
     config = toml.load(config_dir / args.config)
+
     graphs, max_node, min_node = load_graph_from_directory(dataset_dir)
     print(f"Loading graphs dataset {len(graphs)}")
+
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
+
     if args.msvae_model:
         msvae_config = toml.load(config_dir / args.msvae_config)
-        msvae_model  = load_msvae_from_file(max_node, msvae_config, model_dir /args.msvae_model)
+        msvae_model  = load_msvae_from_file(max_node, msvae_config, model_dir / args.msvae_model)
+
     if args.setvae_model:
         setvae_config = toml.load(config_dir / args.setvae_config)
-        setvae_model  = load_setvae_from_file(max_node, setvae_config, model_dir /args.setvae_model)
+        setvae_model  = load_setvae_from_file(max_node, setvae_config, model_dir / args.setvae_model)
+
     hidden_dim = config['training']['hidden_dim']
-    num_layer = config['training']['num_layer']
-    T = config['training']['T']
-    k_eigen = config['data']['k_eigen']
-    cycle = config['training']['cycle']
-    model = GraphER(k_eigen, hidden_dim,num_layer,T)
+    T         = config['training']['T']
+    k_eigen   = config['data']['k_eigen']
+    cycle     = config['training']['cycle']
+
+    # FIX: correct ctor args (k, hidden, T)
+    model = SpectralER(k_eigen, hidden_dim, T)
+
     if args.input_model:
         model.load_model(model_dir / args.input_model)
-        print(f"Model Graph-ER loaded from {args.input_model}")
+        print(f"SpectralER model loaded from {args.input_model}")
     else:
-        num_epochs = config['training']['num_epochs']
+        num_epochs    = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_grapher(model, train_graphs,num_epochs, learning_rate,T, k_eigen,cycle,'cpu')
+        train_spectral(model, train_graphs, num_epochs, learning_rate, T, k_eigen, cycle, 'cpu')
+
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
+
     if args.evaluate:
         graph_eval = GraphsEvaluator()
         deg_eval = DegreeSequenceEvaluator()
-        sample_graphs = random.choices(train_graphs,k=config['inference']['generate_samples'])
-        test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
-        degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
-        """
-        generated_graphs, generated_seqs = model.generate_with_sequences(T,degree_sequences,k_eigen,method = 'constraint_configuration_model')
-        print(f"Evaluate generated graphs sampled from training using constraint configuration model")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-        deg_eval = DegreeSequenceEvaluator()
-        print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-        print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
+        test_seqs = [[deg for _, deg in g.degree()] for g in test_graphs]
 
-        generated_graphs, generated_seqs = model.generate_with_sequences(T,degree_sequences,k_eigen,method ='configuration_model')
-        print(f"Evaluate generated graphs sampled from training using configuraiton model")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-        deg_eval = DegreeSequenceEvaluator()
-        print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-        print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-        """
-        #generated_graphs, generated_seqs = model.generate_with_sequences(T,degree_sequences,k_eigen,method = 'havei_hakimi')
-        #print(f"Evaluate generated graphs sampled from training using havei-hakimi model")
-        #print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        #print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        #print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-        
-        #print(f"MMD Distance Test <-> Generated: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-        """
-        generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model,k_eigen,method = 'constraint_configuration_model')
-        print(f"Evaluate generated graphs using constraint Configuraiton Model")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-        deg_eval = DegreeSequenceEvaluator()
-        test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
-        print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-        print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-
-        generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model,k_eigen,method = 'configuration_model')
-        print(f"Evaluate generated graphs using  Configuraiton Model")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-        deg_eval = DegreeSequenceEvaluator()
-        test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
-        print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-        print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-        """
         if msvae_model:
-            generated_graphs, generated_seqs = model.generate_with_msvae(config['inference']['generate_samples'],T, msvae_model,k_eigen,method = 'havei_hakimi')
-            print(f"Evaluate generated graphs using Havei Hamimi Model and MS-VAE")
-            print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-            print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-            print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-
-            print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-            print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-
-        if setvae_model:
-            nodes = [ random.randint(min_node, max_node) for _ in range(config['inference']['generate_samples'])]
-            generated_graphs, generated_seqs = model.generate_with_setvae(nodes,T, setvae_model,k_eigen,method = 'havei_hakimi')
-            print(f"Evaluate generated graphs using Havei Hamimi Model and Set-VAE")
-            print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-            print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-            print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-
-            print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-            print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
+            # how many samples to generate
+            num_gen = config['inference']['generate_samples']
+            generated_graphs, generated_seqs = model.generate_with_msvae(
+                num_gen, T, msvae_model, k_eigen, method='havel_hakimi'
+            )
+            print(f"Evaluate generated graphs (MS-VAE + Havel–Hakimi init)")
+            print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs, generated_graphs, max_node)}")
+            print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs, generated_graphs)}")
+            print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs, generated_graphs)}")
+            print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs, generated_seqs, max_node)}")
+            print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs, generated_seqs, max_node)}")
 
 
 if __name__ == "__main__":
