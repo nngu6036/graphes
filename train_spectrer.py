@@ -277,6 +277,9 @@ def main(args):
         deg_eval = DegreeSequenceEvaluator()
         test_seqs = [[deg for _, deg in g.degree()] for g in test_graphs]
 
+        sample_graphs = random.choices(train_graphs,k=config['inference']['generate_samples'])
+        degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
+
         """
         if msvae_model:
             # how many samples to generate
