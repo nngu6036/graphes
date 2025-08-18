@@ -291,7 +291,7 @@ def main(args):
             print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs, generated_seqs, max_node)}")
             print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs, generated_seqs, max_node)}")
         """
-        generated_graphs, generated_seqs = model.generate_with_sequences(T,degree_sequences,k_eigen,method = 'constraint_configuration_model')
+        generated_graphs, generated_seqs = model.generate_from_sequences(T,degree_sequences,k_eigen,method = 'constraint_configuration_model')
         print(f"Evaluate generated graphs sampled from training using constraint configuration model")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
