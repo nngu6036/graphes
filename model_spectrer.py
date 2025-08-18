@@ -192,6 +192,64 @@ class SpectralER(nn.Module):
         self.load_state_dict(torch.load(file_path, map_location="cpu"))
         self.eval()
 
+    def generate_from_sequences(self, num_steps, degree_sequences,k_eigen, method = 'constraint_configuration_model'):
+        self.eval()
+        device = next(self.parameters()).device
+        generated_graphs = []
+        generated_seqs = []
+        initial_graphs = []
+        for seq in degree_sequences:
+            G = initialize_graphs(method, seq)
+            if G:
+                initial_graphs.append(G)
+                generated_seqs.append(seq)
+        for idx, G in enumerate(initial_graphs):
+            print(f"[spectral] Generating graph {idx + 1}")
+            for t in reversed(range(num_steps + 1)):
+                edges = list(G.edges())
+                if len(edges) < 2:
+                    continue
+                u, v = random.choice(edges)
+
+                # (1) current spectrum
+                lam_t_np, U_t = laplacian_eigs(G, k_eigen, normed=True)
+                lam_t = torch.from_numpy(lam_t_np).to(device)
+
+                # (extras) size features
+                n = G.number_of_nodes()
+                m_edges = G.number_of_edges()
+                avg_deg = (2.0 * m_edges) / max(1, n)
+                density = (2.0 * m_edges) / max(1, n * (n - 1))
+                extra_feat = torch.tensor(
+                    [math.log(max(n, 2)), avg_deg, density],
+                    device=device, dtype=lam_t.dtype
+                )
+
+                # (2) predict / sample lambda_{t-1}
+                lam_pred, mu, logvar = self.sample(lam_t, t, extra_feat)
+                lam_pred_np = lam_pred.clamp_min(0.0).clamp_max(2.0).cpu().numpy()
+
+                # (3) residual-preserving target L_{t-1}^hat
+                L_t = normalized_laplacian_dense(G)
+                # replace low-frequency block only:
+                # L_hat = L_t - U diag(lam_t) U^T + U diag(lam_pred) U^T
+                L_hat = (L_t
+                         - (U_t @ np.diag(lam_t_np) @ U_t.T)
+                         + (U_t @ np.diag(lam_pred_np) @ U_t.T)).astype(np.float64)
+
+                # (4) pick best second edge
+                choice, orient = pick_second_edge_by_spectral(G, u, v, L_hat)
+                if choice is None:
+                    continue
+                x, y = choice
+                p, q, r, s = orient
+                if (not G.has_edge(p, q)) and (not G.has_edge(r, s)):
+                    G.remove_edges_from([(u, v), (x, y)])
+                    G.add_edges_from([(p, q), (r, s)])
+
+            generated_graphs.append(G)
+        return generated_graphs, generated_seqs
+
     @torch.no_grad()
     def generate_with_msvae(self, num_samples, num_steps, msvae_model, k_eigen, method='constraint_configuration_model'):
         """

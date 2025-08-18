@@ -66,12 +66,12 @@ def draw_swap_before_after(G, G_swapped, removed, added, pos=None, fname=None, w
         node_size=2400,
         node_color="skyblue",
         edgecolors="black",
-        linewidths=4,
+        linewidths=10,
     )
-    base_edge_kw = dict(width=3, alpha=0.45, edge_color="gray")
+    base_edge_kw = dict(width=10, alpha=0.7, edge_color="black")
 
-    hi_removed_kw = dict(width=7, alpha=1.0, edge_color="red", connectionstyle="arc3,rad=0.15")
-    hi_added_kw   = dict(width=7, alpha=1.0, edge_color="green", connectionstyle="arc3,rad=0.15")
+    hi_removed_kw = dict(width=10, alpha=1.0, edge_color="red", connectionstyle="arc3,rad=0.15")
+    hi_added_kw   = dict(width=10, alpha=1.0, edge_color="green", connectionstyle="arc3,rad=0.15")
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
     ax1, ax2 = axes
@@ -106,10 +106,7 @@ def main(args):
     config_dir = Path("configs")
     dataset_dir = Path("datasets") / args.dataset_dir
     graphs, _,min_node = load_graph_from_directory(dataset_dir)
-    G_init = None
-    for G in graphs:
-        if G.number_of_nodes() == min_node + 2:
-            G_init = G
+    G = random.choice(graphs)
     G2, removed_edges, added_edges = random_edge_swap_with_record(G, rng=random)
 
     draw_swap_before_after(
