@@ -152,7 +152,18 @@ def save_graph_evolution(snapshots, idx, out_dir="evolutions"):
     plt.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close()
 
-
+def _pad_or_trim_tensor_1d(x: torch.Tensor, target_len: int):
+    """
+    Make x length==target_len by zero-padding or truncation (returns contiguous tensor).
+    """
+    cur = x.numel()
+    if cur == target_len:
+        return x.contiguous()
+    if cur > target_len:
+        return x[:target_len].contiguous()
+    # pad with zeros
+    pad = torch.zeros(target_len - cur, dtype=x.dtype, device=x.device)
+    return torch.cat([x, pad], dim=0).contiguous()
 
 class SpectralER(nn.Module):
     def __init__(self, k, hidden, T, extra_dim=3):
@@ -224,16 +235,19 @@ class SpectralER(nn.Module):
                 lam_t_np, U_t = laplacian_eigs(G, k_eff, normed=True)
                 lam_t = torch.from_numpy(lam_t_np).to(device)
 
+                lam_t_in = _pad_or_trim_tensor_1d(lam_t, self.k)
+
+
                 # extras
                 m_edges = G.number_of_edges()
                 avg_deg = (2.0 * m_edges) / max(1, n)
                 density = (2.0 * m_edges) / max(1, n * (n - 1))
                 extra_feat = torch.tensor([math.log(max(n, 2)), avg_deg, density],
-                                          device=device, dtype=lam_t.dtype)
+                                          device=device, dtype=lam_t_in.dtype)
 
                 # predict lambda_{t-1}
-                lam_pred, _, _ = self.sample(lam_t, t, extra_feat)
-                lam_pred_np = lam_pred.clamp_min(0.0).clamp_max(2.0).cpu().numpy()
+                lam_pred, _, _ = self.sample(lam_t_in, t, extra_feat)
+                lam_pred_np = lam_pred[:k_eff].clamp_min(0.0).clamp_max(2.0).cpu().numpy()
 
                 # build L_hat
                 L_t = normalized_laplacian_dense(G)
@@ -315,16 +329,19 @@ class SpectralER(nn.Module):
                 lam_t_np, U_t = laplacian_eigs(G, k_eff, normed=True)
                 lam_t = torch.from_numpy(lam_t_np).to(device)
 
+                lam_t_in = _pad_or_trim_tensor_1d(lam_t, self.k)
+
+
                 # extras
                 m_edges = G.number_of_edges()
                 avg_deg = (2.0 * m_edges) / max(1, n)
                 density = (2.0 * m_edges) / max(1, n * (n - 1))
                 extra_feat = torch.tensor([math.log(max(n, 2)), avg_deg, density],
-                                          device=device, dtype=lam_t.dtype)
+                                          device=device, dtype=lam_t_in.dtype)
 
                 # predict lambda_{t-1}
-                lam_pred, _, _ = self.sample(lam_t, t, extra_feat)
-                lam_pred_np = lam_pred.clamp_min(0.0).clamp_max(2.0).cpu().numpy()
+                lam_pred, _, _ = self.sample(lam_t_in, t, extra_feat)
+                lam_pred_np = lam_pred[:k_eff].clamp_min(0.0).clamp_max(2.0).cpu().numpy()
 
                 # build L_hat
                 L_t = normalized_laplacian_dense(G)
