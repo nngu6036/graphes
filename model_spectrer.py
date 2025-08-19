@@ -152,7 +152,7 @@ def save_graph_evolution(snapshots, idx, out_dir="evolutions"):
     plt.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close()
 
-    
+
 
 class SpectralER(nn.Module):
     def __init__(self, k, hidden, T, extra_dim=3):
@@ -173,11 +173,19 @@ class SpectralER(nn.Module):
         mu, logvar = out[:self.k], out[self.k:]
         logvar = torch.clamp(logvar, min=-10.0, max=5.0)
         return mu, logvar
+
     @torch.no_grad()
     def sample(self, lam_t, t, extra_feat):
         mu, logvar = self(lam_t,t,extra_feat)
         std = (0.5*logvar).exp(); eps = torch.randn_like(std)
         return mu+eps*std, mu, logvar
+
+    def save_model(self, file_path):
+        torch.save(self.state_dict(), file_path)
+
+    def load_model(self, file_path):
+        self.load_state_dict(torch.load(file_path))
+        self.eval()
 
     def generate_from_sequences(self, num_steps, degree_sequences, k_eigen, method='constraint_configuration_model'):
         self.eval()
