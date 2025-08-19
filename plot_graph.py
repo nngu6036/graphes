@@ -96,9 +96,9 @@ def draw_swap_before_after(G, G_swapped, removed, added, pos=None, fname=None, w
         nx.draw_networkx_labels(G_swapped, pos, ax=ax2, font_size=12)
     ax2.set_axis_off()
 
-    plt.tight_layout()
+    plt.savefig("myplot.png", dpi=300)
 
-    plt.show()
+    plt.close()
 # ---------------- Example ----------------
 
 # Example Usage:

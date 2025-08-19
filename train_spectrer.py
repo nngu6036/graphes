@@ -280,7 +280,6 @@ def main(args):
         sample_graphs = random.choices(train_graphs,k=config['inference']['generate_samples'])
         degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
 
-        """
         if msvae_model:
             # how many samples to generate
             num_gen = config['inference']['generate_samples']
@@ -301,10 +300,12 @@ def main(args):
         print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
 
         generated_graphs, generated_seqs = model.generate_from_sequences(T,degree_sequences,k_eigen,method = 'havei_hakimi')
-        print(f"Evaluate generated graphs sampled from training using constraint configuration model")
+        print(f"Evaluate generated graphs sampled from training using havei_hakimi model")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
         print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
+        """
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GRAPH-ER Model')
     parser.add_argument('--dataset-dir', type=str, required=True,help='Path to the directory containing graph files')
