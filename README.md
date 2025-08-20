@@ -137,3 +137,16 @@ python train_spectrer.py --config grapher_ego_config.toml  --dataset-dir dataset
 ```bash
 python train_spectrer.py --config grapher_community_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config msvae_config.toml --output-model spectrer_community --evaluate 
 ```
+```bash
+python train_spectrer.py --config grapher_grid_config.toml  --dataset-dir dataset1_grid_edgelists --msvae-model msvae_grid --msvae-config msvae_config.toml --output-model spectrer_grid --evaluate 
+```
+## Training and evaluate GraphER model
+```bash
+python train_spectrer.py --config grapher_ego_config.toml  --dataset-dir dataset1_ego_edgelists --msvae-model msvae_ego --msvae-config msvae_config.toml --output-model spectrer_ego --evaluate 
+```
+```bash
+python train_spectrer.py --config grapher_community_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config msvae_config.toml --output-model spectrer_community --evaluate 
+```
+```bash
+python train_spectrer.py --config grapher_grid_config.toml  --dataset-dir dataset1_grid_edgelists --msvae-model msvae_grid --msvae-config msvae_config.toml --output-model spectrer_grid --evaluate 
+```
