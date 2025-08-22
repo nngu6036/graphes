@@ -25,139 +25,89 @@ from model_grapher import GraphER
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
 from utils import *
 
-# --- Add these helpers near the top of train_grapher.py (or move to utils.py if you prefer) ---
 
-def _count_simple_paths_exact_k(G: nx.Graph, s: int, t: int, k: int, forbidden_edge=None, cap=100000):
+def rewire_edges(
+    G: nx.Graph,
+    num_rewirings: int,
+    max_trials_per_step: int = 64,
+    preserve_components: bool = True,
+):
     """
-    Count simple paths of *exact* length k (in edges) from s to t, without revisiting nodes.
-    If forbidden_edge is given as a frozenset({u,v}), that edge is not allowed in the path.
-    'cap' is a safety limit to avoid pathological blow-ups; counting stops after reaching cap.
-    """
-    if k < 0:
-        return 0
-    if k == 0:
-        return int(s == t)
-    # Quick pruning: can't reach in k steps if distance lower bound is too big.
-    # (Optional: comment out if you don't have precomputed distances)
-    count = 0
-    target = t
-    forb = forbidden_edge
-    def dfs(u, depth, visited):
-        nonlocal count
-        if count >= cap:
-            return
-        if depth == k:
-            if u == target:
-                count += 1
-            return
-        for w in G.neighbors(u):
-            if w in visited:
-                continue
-            if forb and frozenset((u, w)) == forb:
-                continue
-            # prevent early arrival: we need exact length k
-            if w == target and depth + 1 < k:
-                continue
-            visited.add(w)
-            dfs(w, depth + 1, visited)
-            visited.remove(w)
-    dfs(s, 0, {s})
-    return count
+    Degree-preserving rewiring that *also* preserves the number of connected components.
 
-def count_edge_cycles_n(G: nx.Graph, u: int, v: int, n: int) -> int:
-    """
-    Number of simple cycles of length n that contain edge (u,v).
-    For n=3, use fast common-neighbors count. For n>3, count simple paths
-    of length n-1 between u and v in G with edge (u,v) forbidden.
-    """
-    if n < 3:
-        return 0
-    if n == 3:
-        # triangles through (u,v)
-        return len(set(G.neighbors(u)) & set(G.neighbors(v)))
-    forb = frozenset((u, v))
-    return _count_simple_paths_exact_k(G, u, v, n - 1, forbidden_edge=forb)
-
-def count_cycles_if_add_edge_n(G: nx.Graph, a: int, b: int, n: int) -> int:
-    """
-    Number of simple cycles of length n that would be created by adding (a,b).
-    Equals the number of simple paths of length n-1 between a and b in the current G.
-    """
-    if n < 3:
-        return 0
-    if n == 3:
-        # New triangles formed by adding (a,b) are common neighbors of a and b
-        return len(set(G.neighbors(a)) & set(G.neighbors(b)))
-    return _count_simple_paths_exact_k(G, a, b, n - 1, forbidden_edge=None)
-
-# --- Replace your rewire_edges with this generic cycle-preserving version ---
-
-def rewire_edges(G: nx.Graph, num_rewirings: int, cycle_len: int = 3, cap_per_count: int = 100000):
-    """
-    Perform up to num_rewirings double-edge swaps that preserve (or increase) the count of
-    cycles of length 'cycle_len'. Uses '>=' criterion like your triangle-preserving version.
-
-    cap_per_count: safety cap passed to the path counter to guard against blow-ups on dense graphs.
+    - If the input graph is connected, the result after each accepted swap remains connected.
+    - When preserve_components is True, we require that the number of CCs stays the same.
+    - We skip edges that are bridges (for connected graphs) to avoid obvious disconnects.
     """
     step = 0
     removed_pair = None
     added_pair = None
+
+    base_cc = nx.number_connected_components(G) if preserve_components else None
+
     for _ in range(num_rewirings):
-        edges = list(G.edges())
-        if len(edges) < 2:
+        success = False
+
+        # Optional: avoid picking bridges when the graph is connected.
+        bridges = set()
+        if preserve_components and base_cc == 1:
+            # nx.bridges returns an iterator of edges that are bridges.
+            bridges = {frozenset(e) for e in nx.bridges(G)}
+
+        # Candidate edge list (optionally excluding bridges).
+        all_edges = [e for e in G.edges() if frozenset(e) not in bridges] if bridges else list(G.edges())
+        if len(all_edges) < 2:
             break
-        e1, e2 = random.sample(edges, 2)
-        u, v = e1
-        x, y = e2
-        if len({u, v, x, y}) != 4:
+
+        for _ in range(max_trials_per_step):
+            e1, e2 = random.sample(all_edges, 2)
+            u, v = e1
+            x, y = e2
+            # Disjoint endpoints for a valid 2-edge swap
+            if len({u, v, x, y}) != 4:
+                continue
+
+            # Two possible rewiring options
+            for new_e1, new_e2 in (((u, x), (v, y)), ((u, y), (v, x))):
+                # Keep it a simple graph (no loops, no duplicate edges)
+                if new_e1[0] == new_e1[1] or new_e2[0] == new_e2[1]:
+                    continue
+                if G.has_edge(*new_e1) or G.has_edge(*new_e2):
+                    continue
+
+                G_try = G.copy()
+                G_try.remove_edges_from([e1, e2])
+                G_try.add_edges_from([new_e1, new_e2])
+
+                # Preserve connected components (connectedness if base_cc==1)
+                if preserve_components:
+                    if nx.number_connected_components(G_try) != base_cc:
+                        continue
+
+                # Accept
+                G = G_try
+                removed_pair = (e1, e2)
+                added_pair = (new_e1, new_e2)
+                step += 1
+                success = True
+                break  # stop checking options
+
+            if success:
+                break  # proceed to next rewiring step
+
+        # If we couldn't find any valid swap this step, just move on.
+        if not success:
             continue
-        # cycles removed by deleting both edges
-        # Use capped counters to avoid pathological runtimes
-        c_removed = (
-            count_edge_cycles_n(G, u, v, cycle_len) +
-            count_edge_cycles_n(G, x, y, cycle_len)
-        )
-        # Option 1: (u,x) & (v,y)
-        can1 = (not G.has_edge(u, x)) and (not G.has_edge(v, y))
-        if can1:
-            c_add1 = (
-                count_cycles_if_add_edge_n(G, u, x, cycle_len) +
-                count_cycles_if_add_edge_n(G, v, y, cycle_len)
-            )
-        else:
-            c_add1 = -1  # invalid
-        # Option 2: (u,y) & (v,x)
-        can2 = (not G.has_edge(u, y)) and (not G.has_edge(v, x))
-        if can2:
-            c_add2 = (
-                count_cycles_if_add_edge_n(G, u, y, cycle_len) +
-                count_cycles_if_add_edge_n(G, v, x, cycle_len)
-            )
-        else:
-            c_add2 = -1  # invalid
-        # Choose the best valid option that preserves or increases cycle count
-        best_add = max(c_add1, c_add2)
-        if best_add >= c_removed and best_add >= 0:
-            if c_add1 >= c_add2 and can1:
-                G.remove_edges_from([(u, v), (x, y)])
-                G.add_edges_from([(u, x), (v, y)])
-                removed_pair = ((u, v), (x, y))
-                added_pair = ((u, x), (v, y))
-                step += 1
-            elif can2:
-                G.remove_edges_from([(u, v), (x, y)])
-                G.add_edges_from([(u, y), (v, x)])
-                removed_pair = ((u, v), (x, y))
-                added_pair = ((u, y), (v, x))
-                step += 1
+
     return G, removed_pair, added_pair, step
+
 
 
 def count_common_neighbors(G, a, b):
     """Return number of common neighbors of nodes a and b."""
     return len(set(G.neighbors(a)) & set(G.neighbors(b)))
 
-def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,cycle,device):
+def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.BCEWithLogitsLoss()
     model.to(device)
@@ -167,7 +117,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,cycle,dev
         for G in graphs:
             # --- Corrupt graph with t edge rewirings ---
             num_rewirings = random.randint(1,T)
-            G_corrupt, removed_pair, added_pair,step = rewire_edges(G.copy(),num_rewirings,cycle)
+            G_corrupt, removed_pair, added_pair,step = rewire_edges(G.copy(),num_rewirings)
             if not removed_pair or not added_pair:
                 continue
             # --- Define anchor and target edge ---
@@ -176,10 +126,8 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,cycle,dev
             data = graph_to_data(G_corrupt,k_eigen).to(device)
             # --- Edge candidates from corrupted graph ---
             u, v = first_edge_added
-            candidate_edges = [
-                e for e in G_corrupt.edges()
-                if len(set(e + (u, v))) == 4  # disjoint
-            ]
+            uv = frozenset(first_edge_added)
+            candidate_edges = [e for e in G_corrupt.edges() if frozenset(e) != uv and len(set(e + first_edge_added)) == 4]
             # --- Construct binary labels ---
             labels = torch.tensor(
                 [1.0 if frozenset(edge) == frozenset(second_edge_added) else 0.0 for edge in candidate_edges],
@@ -205,16 +153,9 @@ def load_msvae_from_file(max_node,config, model_path):
     model.load_model(model_path)
     return model
 
-def load_setvae_from_file(max_node,config, model_path):
-    hidden_dim = config['training']['hidden_dim']
-    latent_dim = config['training']['latent_dim']
-    model = SetVAE(hidden_dim=hidden_dim, latent_dim=latent_dim, max_degree = max_node)
-    print(f"Set-VAE Model loaded from {model_path}")
-    model.load_model(model_path)
-    return model
 
 def main(args):
-    msvae_model, setvae_model = None, None
+    msvae_model = None
     config_dir = Path("configs")
     dataset_dir = Path("datasets") / args.dataset_dir
     model_dir = Path("models")
@@ -225,14 +166,10 @@ def main(args):
     if args.msvae_model:
         msvae_config = toml.load(config_dir / args.msvae_config)
         msvae_model  = load_msvae_from_file(max_node, msvae_config, model_dir /args.msvae_model)
-    if args.setvae_model:
-        setvae_config = toml.load(config_dir / args.setvae_config)
-        setvae_model  = load_setvae_from_file(max_node, setvae_config, model_dir /args.setvae_model)
     hidden_dim = config['training']['hidden_dim']
     num_layer = config['training']['num_layer']
     T = config['training']['T']
     k_eigen = config['data']['k_eigen']
-    cycle = config['training']['cycle']
     model = GraphER(k_eigen, hidden_dim,num_layer,T)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
@@ -240,7 +177,7 @@ def main(args):
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_grapher(model, train_graphs,num_epochs, learning_rate,T, k_eigen,cycle,'cpu')
+        train_grapher(model, train_graphs,num_epochs, learning_rate,T, k_eigen,'cpu')
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
@@ -250,32 +187,12 @@ def main(args):
         sample_graphs = random.choices(train_graphs,k=config['inference']['generate_samples'])
         test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
         degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
-        """
-        generated_graphs, generated_seqs = model.generate_with_sequences(T,degree_sequences,k_eigen,method = 'constraint_configuration_model')
-        print(f"Evaluate generated graphs sampled from training using constraint configuration model")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-        deg_eval = DegreeSequenceEvaluator()
-        print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-        print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-
-        generated_graphs, generated_seqs = model.generate_with_sequences(T,degree_sequences,k_eigen,method ='configuration_model')
-        print(f"Evaluate generated graphs sampled from training using configuraiton model")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-        deg_eval = DegreeSequenceEvaluator()
-        print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-        print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-        """
-        #generated_graphs, generated_seqs = model.generate_with_sequences(T,degree_sequences,k_eigen,method = 'havei_hakimi')
-        #print(f"Evaluate generated graphs sampled from training using havei-hakimi model")
-        #print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        #print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        #print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
         
-        #print(f"MMD Distance Test <-> Generated: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
+        generated_graphs, generated_seqs = model.generate_from_sequences(T,degree_sequences,k_eigen,method = 'havei_hakimi')
+        print(f"Evaluate generated graphs sampled from training using havei-hakimi model")
+        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
+        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
+        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
         """
         generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model,k_eigen,method = 'constraint_configuration_model')
         print(f"Evaluate generated graphs using constraint Configuraiton Model")
@@ -304,20 +221,6 @@ def main(args):
             print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
             print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
 
-            print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-            print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-
-        if setvae_model:
-            nodes = [ random.randint(min_node, max_node) for _ in range(config['inference']['generate_samples'])]
-            generated_graphs, generated_seqs = model.generate_with_setvae(nodes,T, setvae_model,k_eigen,method = 'havei_hakimi')
-            print(f"Evaluate generated graphs using Havei Hamimi Model and Set-VAE")
-            print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-            print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-            print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-
-            print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-            print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GRAPH-ER Model')
@@ -325,8 +228,6 @@ if __name__ == "__main__":
     parser.add_argument('--config', type=str, required=True, help='Path to the configuration file in TOML format of Graph-ER')
     parser.add_argument('--msvae-config', type=str, help='Path to the configuration file in TOML format of MS-VAE')
     parser.add_argument('--msvae-model', type=str,help='Path to load a pre-trained MS-VAE model')
-    parser.add_argument('--setvae-config', type=str,help='Path to the configuration file in TOML format of Set-VAE')
-    parser.add_argument('--setvae-model', type=str,help='Path to load a pre-trained Set-VAE model')
     parser.add_argument('--output-model', type=str, help='Path to save the trained model')
     parser.add_argument('--input-model', type=str, help='Path to load a pre-trained model')
     parser.add_argument('--evaluate', action='store_true', help='Whether we evaluate the model')

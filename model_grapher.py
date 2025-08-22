@@ -62,17 +62,6 @@ def configuration_model_from_multiset(degrees):
     G.remove_edges_from(nx.selfloop_edges(G))
     return G
 
-def get_sinusoidal_embedding(t, dim, max_period=10000):
-    device = t.device
-    half_dim = dim // 2
-    freqs = torch.exp(
-        -torch.arange(0, half_dim, dtype=torch.float32, device=device) * (math.log(max_period) / half_dim)
-    )
-    t = t.float().unsqueeze(-1)  # shape [1, 1]
-    args = t * freqs  # shape [1, half_dim]
-    emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)  # shape [1, dim]
-    return emb.squeeze(0)  # shape [dim]
-
 def havel_hakimi_construction(degree_sequence):
     if not nx.is_valid_degree_sequence_havel_hakimi(degree_sequence):
         print("The degree sequence is not graphical.")
@@ -99,7 +88,42 @@ def havel_hakimi_construction(degree_sequence):
         deg_seq = [d for d in deg_seq if d > 0]
     return G
 
+def connectivity_safe_rewire_options(G, e1, e2, base_cc=None):
+    """
+    Return the list of valid 2-edge-swap options for edges e1, e2 that:
+      - keep the graph simple (no loops, no duplicates)
+      - preserve the number of connected components (== base_cc)
+
+    Each option is a pair of edges: (new_e1, new_e2).
+    """
+    if base_cc is None:
+        base_cc = nx.number_connected_components(G)
+
+    (u, v), (x, y) = e1, e2
+    # Must be disjoint endpoints
+    if len({u, v, x, y}) != 4:
+        return []
+
+    candidates = [((u, x), (v, y)), ((u, y), (v, x))]
+    safe = []
+    for ne1, ne2 in candidates:
+        # Simple-graph constraints
+        if ne1[0] == ne1[1] or ne2[0] == ne2[1]:
+            continue
+        if G.has_edge(*ne1) or G.has_edge(*ne2):
+            continue
+
+        # Try the swap and test connectivity preservation
+        G_try = G.copy()
+        G_try.remove_edges_from([e1, e2])
+        G_try.add_edges_from([ne1, ne2])
+
+        if nx.number_connected_components(G_try) == base_cc:
+            safe.append((ne1, ne2))
+    return safe
+    
 def initialize_graphs(method, seq):
+    G = None
     if method == 'havei_hakimi':
         G = havel_hakimi_construction(seq)
     if method == 'configuration_model':
@@ -148,18 +172,12 @@ class GraphER(nn.Module):
         for gin in self.gin_layers:
             x = gin(x, edge_index)
         first_edge_feat = get_edge_representation(x, first_edge[0], first_edge[1])
-        #t_tensor = torch.tensor([t], dtype=torch.float32, device=device)
-        #t_embed = get_sinusoidal_embedding(t_tensor, dim=self.hidden_dim)  # [hidden_dim]
-        t_tensor = torch.tensor([t], dtype=torch.long, device=device)  # or pass t directly if it's already a tensor
-        t_embed = self.t_embed(t_tensor).squeeze(0)  # shape: [hidden_dim]
-        scores = []
-        for edge in candidate_edges:
-            edge_feat = get_edge_representation(x, edge[0], edge[1])
-            feat = torch.cat([first_edge_feat, edge_feat, t_embed], dim=-1)
-            score = self.edge_predictor(feat)
-            scores.append(score)
-        logits = torch.cat(scores)
-        return logits
+        t = int(t)
+        T_max = self.t_embed.num_embeddings - 1
+        t = max(0, min(t, T_max))
+        t_embed = self.t_embed(torch.tensor([t], dtype=torch.long, device=device)).squeeze(0)
+        scores = [self.edge_predictor(torch.cat([first_edge_feat,get_edge_representation(x, e[0], e[1]), t_embed], dim=-1)).squeeze(-1)                   for e in candidate_edges]
+        return torch.stack(scores, dim=0)  # [num_candidates]
 
     def save_model(self, file_path):
         torch.save(self.state_dict(), file_path)
@@ -188,14 +206,13 @@ class GraphER(nn.Module):
                 # Select a random anchor edge
                 u, v = random.choice(edges)
                 # Generate swappable candidates (disjoint with (u,v))
-                all_candidates = [
-                    e for e in edges if e != (u, v) and len(set(e + (u, v))) == 4
-                ]
+                uv = frozenset((u, v))
+                all_candidates = [e for e in edges if frozenset(e) != uv and len(set(e + (u, v))) == 4]
                 if not all_candidates:
                     continue
                 data = graph_to_data(G,k_eigen).to(device)
-                scores = self(data.x,data.edge_index,(u,v), all_candidates,t).squeeze(-1) 
-                top_idx = torch.argmax(scores).item()
+                scores = self(data.x, data.edge_index, (u, v), all_candidates, t)
+                top_idx = int(torch.argmax(scores).item())
                 x_, y_ = all_candidates[top_idx]
                 # Rewire using valid option that matches triangle analysis
                 if not G.has_edge(u, x_) and not G.has_edge(v, y_):
@@ -234,10 +251,7 @@ class GraphER(nn.Module):
                 u, v = random.choice(edges)
                 # Generate swappable candidates (disjoint with (u,v))
                 uv = frozenset((u, v))
-                all_candidates = [
-                    e for e in edges
-                    if frozenset(e) != uv and len(set(e + (u, v))) == 4
-                ]
+                all_candidates = [e for e in edges if frozenset(e) != uv and len(set(e + (u, v))) == 4]
                 if not all_candidates:
                     continue
                 data = graph_to_data(G,k_eigen).to(device)

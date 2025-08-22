@@ -45,7 +45,7 @@ def load_graph_from_directory(directory_path):
         if os.path.isfile(file_path):
             G = nx.read_edgelist(file_path, nodetype=int)
             graph = nx.convert_node_labels_to_integers(G)
-            graphs.append(G)
+            graphs.append(graph)
     return graphs, max_node, min_node
 
 

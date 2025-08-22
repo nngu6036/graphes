@@ -130,7 +130,7 @@ python train_grapher.py --config grapher_community_config.toml  --dataset-dir da
 ```bash
 python train_grapher.py --config grapher_grid_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_grid --msvae-config msvae_config.toml --input-model grapher_grid --evaluate  --ablation
 ```
-## Training and evaluate GraphER model
+## Training and evaluate SpectralER model
 ```bash
 python train_spectrer.py --config grapher_ego_config.toml  --dataset-dir dataset1_ego_edgelists --msvae-model msvae_ego --msvae-config msvae_config.toml --output-model spectrer_ego --evaluate 
 ```
@@ -140,13 +140,13 @@ python train_spectrer.py --config grapher_community_config.toml  --dataset-dir d
 ```bash
 python train_spectrer.py --config grapher_grid_config.toml  --dataset-dir dataset1_grid_edgelists --msvae-model msvae_grid --msvae-config msvae_config.toml --output-model spectrer_grid --evaluate 
 ```
-## Training and evaluate GraphER model
+## Evaluate SpectralER model
 ```bash
-python train_spectrer.py --config grapher_ego_config.toml  --dataset-dir dataset1_ego_edgelists --msvae-model msvae_ego --msvae-config msvae_config.toml --output-model spectrer_ego --evaluate 
+python train_spectrer.py --config grapher_ego_config.toml  --dataset-dir dataset1_ego_edgelists --msvae-model msvae_ego --msvae-config msvae_config.toml --input-model spectrer_ego --evaluate 
 ```
 ```bash
-python train_spectrer.py --config grapher_community_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config msvae_config.toml --output-model spectrer_community --evaluate 
+python train_spectrer.py --config grapher_community_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config msvae_config.toml --input-model spectrer_community --evaluate 
 ```
 ```bash
-python train_spectrer.py --config grapher_grid_config.toml  --dataset-dir dataset1_grid_edgelists --msvae-model msvae_grid --msvae-config msvae_config.toml --output-model spectrer_grid --evaluate 
+python train_spectrer.py --config grapher_grid_config.toml  --dataset-dir dataset1_grid_edgelists --msvae-model msvae_grid --msvae-config msvae_config.toml --input-model spectrer_grid --evaluate 
 ```
