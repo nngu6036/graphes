@@ -25,9 +25,46 @@ from model_grapher import GraphER
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
 from utils import *
 
+def edge_set(G: nx.Graph):
+    """Return edges as a set, robust for undirected vs directed vs multigraph."""
+    if G.is_multigraph():
+        # Count parallel edges separately by using (u,v,key)
+        if G.is_directed():
+            return {(u, v, k) for u, v, k in G.edges(keys=True)}
+        else:
+            # Use frozenset for undirected endpoints + key to distinguish parallels
+            return {(frozenset((u, v)), k) for u, v, k in G.edges(keys=True)}
+    else:
+        if G.is_directed():
+            return {(u, v) for u, v in G.edges()}
+        else:
+            # undirected simple graph
+            return {frozenset((u, v)) for u, v in G.edges()}
+
+def symmetric_difference_edit_distance(G: nx.Graph, H: nx.Graph,
+                                       normalize: bool = False,
+                                       swap_units: bool = False) -> float:
+    """
+    dΔ(G,H) = |E(G) Δ E(H)|.
+    - normalize=True -> divide by max(|E(G)|, |E(H)|) to get [0,1].
+    - swap_units=True -> return dΔ/2 (useful when progress counted in 2-edge swaps).
+    """
+    # (Optional) sanity: same node labels
+    if set(G.nodes()) != set(H.nodes()):
+        raise ValueError("Graphs must have the same node set (align/permute first).")
+
+    EG, EH = edge_set(G), edge_set(H)
+    d_delta = len((EG - EH) | (EH - EG))  # symmetric difference size
+
+    val = d_delta / 2.0 if swap_units else float(d_delta)
+    if normalize:
+        denom = max(len(EG), len(EH), 1)
+        val /= denom
+    return val
 
 def rewire_edges(
     G: nx.Graph,
+    G_target,
     num_rewirings: int,
     max_trials_per_step: int = 64,
     preserve_components: bool = True,
@@ -58,7 +95,7 @@ def rewire_edges(
         all_edges = [e for e in G.edges() if frozenset(e) not in bridges] if bridges else list(G.edges())
         if len(all_edges) < 2:
             break
-
+        base_dist =  symmetric_difference_edit_distance(G,G_hh)
         for _ in range(max_trials_per_step):
             e1, e2 = random.sample(all_edges, 2)
             u, v = e1
@@ -83,7 +120,9 @@ def rewire_edges(
                 if preserve_components:
                     if nx.number_connected_components(G_try) != base_cc:
                         continue
-
+                new_dist =  symmetric_difference_edit_distance(G_try,G_hh)
+                if new_dist > base_dist:
+                    continue
                 # Accept
                 G = G_try
                 removed_pair = (e1, e2)
@@ -115,9 +154,11 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for G in graphs:
+            # Construc the Havel Hakimi graph
+            G_hh = havel_hakimi_construction()
             # --- Corrupt graph with t edge rewirings ---
             num_rewirings = random.randint(1,T)
-            G_corrupt, removed_pair, added_pair,step = rewire_edges(G.copy(),num_rewirings)
+            G_corrupt, removed_pair, added_pair,step = rewire_edges(G.copy(),G_hh,num_rewirings)
             if not removed_pair or not added_pair:
                 continue
             # --- Define anchor and target edge ---
