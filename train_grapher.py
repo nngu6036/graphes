@@ -95,7 +95,7 @@ def rewire_edges(
         all_edges = [e for e in G.edges() if frozenset(e) not in bridges] if bridges else list(G.edges())
         if len(all_edges) < 2:
             break
-        base_dist =  symmetric_difference_edit_distance(G,G_hh)
+        base_dist =  symmetric_difference_edit_distance(G,G_target)
         for _ in range(max_trials_per_step):
             e1, e2 = random.sample(all_edges, 2)
             u, v = e1
@@ -120,7 +120,7 @@ def rewire_edges(
                 if preserve_components:
                     if nx.number_connected_components(G_try) != base_cc:
                         continue
-                new_dist =  symmetric_difference_edit_distance(G_try,G_hh)
+                new_dist =  symmetric_difference_edit_distance(G_try,G_target)
                 if new_dist > base_dist:
                     continue
                 # Accept
