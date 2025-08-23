@@ -155,7 +155,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
         epoch_loss = 0.0
         for G in graphs:
             # Construc the Havel Hakimi graph
-            G_hh = havel_hakimi_construction()
+            G_hh = havel_hakimi_construction([deg for _, deg in G.degree()])
             # --- Corrupt graph with t edge rewirings ---
             num_rewirings = random.randint(1,T)
             G_corrupt, removed_pair, added_pair,step = rewire_edges(G.copy(),G_hh,num_rewirings)
