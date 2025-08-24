@@ -144,6 +144,9 @@ class GraphER(nn.Module):
                 generated_seqs.append(seq)
         for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
+            snapshots = []
+            step_size = max(1, num_steps // 8)   # ~8 panels
+            plot_index = num_steps
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
@@ -161,12 +164,23 @@ class GraphER(nn.Module):
                 x_, y_ = all_candidates[top_idx]
                 # Rewire using valid option that matches triangle analysis
                 if not G.has_edge(u, x_) and not G.has_edge(v, y_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, x_), (v, y_)])
-                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, y_), (v, x_)])
-            generated_graphs.append(G)
+                    if connectivity_safe_rewire_options(G, (u, x_),(v, y_)):
+                        G.remove_edges_from([(u, v), (x_, y_)])
+                        G.add_edges_from([(u, x_), (v, y_)])
+                        generated_graphs.append(G)
+                        continue
+                if not G.has_edge(u, y_) and not G.has_edge(v, x_):
+                    if connectivity_safe_rewire_options(G, (u, y_),(v, x_)):
+                        G.remove_edges_from([(u, v), (x_, y_)])
+                        G.add_edges_from([(u, y_), (v, x_)])
+                        generated_graphs.append(G)
+                        continue
+            # Ensure we include the final state if not already captured
+            if not snapshots or snapshots[-1][1] != 0:
+                snapshots.append((G.copy(), 0))
+
+            # Save the evolution strip for this graph
+            save_graph_evolution(snapshots, idx, out_dir="evolutions_seq")
         return generated_graphs, generated_seqs
 
     def generate_with_msvae(self, num_samples, num_steps, msvae_model,k_eigen,method = 'constraint_configuration_model'):
@@ -187,63 +201,22 @@ class GraphER(nn.Module):
                 if len(initial_graphs) >= num_samples:
                     break
         for idx, G in enumerate(initial_graphs): 
+            snapshots = []
+            step_size = max(1, num_steps // 8)   # ~8 panels
+            plot_index = num_steps
             print(f"Generating graph {idx + 1}")
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
                     continue
+                if t == plot_index:
+                    snapshots.append((G.copy(), t))  # store a copy of the graph and the step
+                    plot_index -= step_size
                 # Select a random anchor edge
                 u, v = random.choice(edges)
                 # Generate swappable candidates (disjoint with (u,v))
                 uv = frozenset((u, v))
                 all_candidates = [e for e in edges if frozenset(e) != uv and len(set(e + (u, v))) == 4]
-                if not all_candidates:
-                    continue
-                data = graph_to_data(G,k_eigen).to(device)
-                scores = self(data.x,data.edge_index,(u,v), all_candidates,t).squeeze(-1) 
-                top_idx = torch.argmax(scores).item()
-                x_, y_ = all_candidates[top_idx]
-                # Rewire only if no duplicates
-                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, x_), (v, y_)])
-                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, y_), (v, x_)])
-            generated_graphs.append(G)
-        return generated_graphs, generated_seqs
-    
-    def generate_with_setvae(self, N_nodes, num_steps, setvae_model,k_eigen,method = 'constraint_configuration_model'):
-        self.eval()
-        device = next(self.parameters()).device
-        generated_graphs = []
-        generated_seqs = []
-        initial_graphs = []
-        degree_sequences = setvae_model.generate(N_nodes)
-        for idx, seq in enumerate(degree_sequences):
-            valid, _ = check_sequence_validity(seq)
-            if not valid:
-                continue
-            G = initialize_graphs(method, seq) 
-            if G:
-                initial_graphs.append(G)
-                generated_seqs.append(seq)
-                if len(initial_graphs) >= len(N_nodes):
-                    break
-        for idx, G in enumerate(initial_graphs): 
-            print(f"Generating graph {idx + 1}")
-            for t in reversed(range(num_steps + 1)):
-                edges = list(G.edges())
-                if len(edges) < 2:
-                    continue
-                # Select a random anchor edge
-                u, v = random.choice(edges)
-                # Generate swappable candidates (disjoint with (u,v))
-                uv = frozenset((u, v))
-                all_candidates = [
-                    e for e in edges
-                    if frozenset(e) != uv and len(set(e + (u, v))) == 4
-                ]
                 if not all_candidates:
                     continue
                 data = graph_to_data(G,k_eigen).to(device)
@@ -263,5 +236,11 @@ class GraphER(nn.Module):
                         G.add_edges_from([(u, y_), (v, x_)])
                         generated_graphs.append(G)
                         continue
+            # Ensure we include the final state if not already captured
+            if not snapshots or snapshots[-1][1] != 0:
+                snapshots.append((G.copy(), 0))
 
+            # Save the evolution strip for this graph
+            save_graph_evolution(snapshots, idx, out_dir="evolutions_msvae")
+            generated_graphs.append(G)
         return generated_graphs, generated_seqs

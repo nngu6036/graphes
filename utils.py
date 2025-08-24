@@ -239,3 +239,40 @@ def havel_hakimi_construction(degree_sequence):
         nodes = [n for n, d in zip(nodes, deg_seq) if d > 0]
         deg_seq = [d for d in deg_seq if d > 0]
     return G
+
+def save_graph_evolution(snapshots, idx, out_dir="evolutions"):
+    """
+    Save a sequence of graph snapshots in one horizontal figure.
+
+    Args:
+        snapshots (list[tuple[nx.Graph, int]]): list of (graph, step) pairs, for ONE graph.
+        idx (int): 0-based index of this graph (used in filename).
+        out_dir (str): output folder.
+    """
+    import matplotlib.pyplot as plt
+    import os
+
+    if not snapshots:
+        return
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Use a FIXED layout across all panels for comparability.
+    # Compute on the first snapshot and reuse positions.
+    G0, _ = snapshots[0]
+    # Seeded layout for reproducibility; tweak seed if you like.
+    pos = nx.spring_layout(G0, seed=42)
+
+    fig, axes = plt.subplots(1, len(snapshots), figsize=(4 * len(snapshots), 4))
+    if len(snapshots) == 1:
+        axes = [axes]
+
+    for ax, (G, t) in zip(axes, snapshots):
+        # Draw with fixed positions; nodes that don't exist will be ignored (same N here).
+        nx.draw(G, pos=pos, node_size=40, with_labels=False, ax=ax)
+        ax.set_title(f"Step {t}")
+        ax.axis("off")
+
+    filename = os.path.join(out_dir, f"graph_{idx+1}_evolution.png")
+    plt.savefig(filename, dpi=150, bbox_inches="tight")
+    plt.close()
