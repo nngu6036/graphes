@@ -257,6 +257,8 @@ def main(args):
         """
         if msvae_model:
             generated_graphs, generated_seqs = model.generate_with_msvae(config['inference']['generate_samples'],T, msvae_model,k_eigen,method = 'havei_hakimi')
+            import pdb
+            pdb.set_trace()
             print(f"Evaluate generated graphs using Havei Hamimi Model and MS-VAE")
             print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
             print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
