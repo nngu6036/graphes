@@ -13,4 +13,4 @@ k_eigen = 10
 
 [inference]
 threshold = 0.01
-generate_samples = 5    # Number of samples to generate
+generate_samples = 10    # Number of samples to generate
