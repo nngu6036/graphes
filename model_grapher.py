@@ -175,6 +175,11 @@ class GraphER(nn.Module):
                         G.add_edges_from([(u, y_), (v, x_)])
                         generated_graphs.append(G)
                         continue
+            if not snapshots or snapshots[-1][1] != 0:
+                snapshots.append((G.copy(), 0))
+
+            # Save the evolution strip for this graph
+            save_graph_evolution(snapshots, idx, out_dir="evolutions_seq")
         return generated_graphs, generated_seqs
 
     def generate_with_msvae(self, num_samples, num_steps, msvae_model,k_eigen,method = 'constraint_configuration_model'):
@@ -230,4 +235,9 @@ class GraphER(nn.Module):
                         G.add_edges_from([(u, y_), (v, x_)])
                         generated_graphs.append(G)
                         continue
+            if not snapshots or snapshots[-1][1] != 0:
+                snapshots.append((G.copy(), 0))
+
+            # Save the evolution strip for this graph
+            save_graph_evolution(snapshots, idx, out_dir="evolutions")
         return generated_graphs, generated_seqs
