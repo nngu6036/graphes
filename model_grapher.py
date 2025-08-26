@@ -239,5 +239,5 @@ class GraphER(nn.Module):
                 snapshots.append((G.copy(), 0))
 
             # Save the evolution strip for this graph
-            save_graph_evolution(snapshots, idx, out_dir="evolutions")
+            save_graph_evolution(snapshots, idx, out_dir=f"evolutions_{method}")
         return generated_graphs, generated_seqs
