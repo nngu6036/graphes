@@ -6,118 +6,85 @@ import argparse
 import toml
 from pathlib import Path
 import matplotlib.pyplot as plt
-from utils import load_graph_from_directory
+from utils import load_graph_from_directory, havel_hakimi_construction
 import matplotlib.patheffects as pe
 
-def random_edge_swap_with_record(G, rng=None, max_tries=200):
+from create_dataset import generate_community_graph
+
+def plot_graph_evolution(snapshots):
     """
-    Force one valid edge swap on an undirected simple graph G.
-    Returns: G_new, removed_edges, added_edges
+    Plot a sequence of graph snapshots in one horizontal figure.
+
+    Args:
+        snapshots (list[tuple[nx.Graph, int]]): list of (graph, step) pairs, for ONE graph.
+        idx (int): 0-based index of this graph (used in filename).
+        out_dir (str): output folder.
     """
-    assert not G.is_directed(), "This helper assumes an undirected simple graph."
-    rng = rng or random
-    edges = list(G.edges())
-    if len(edges) < 2:
-        raise ValueError("Need at least 2 edges to swap.")
 
-    for _ in range(max_tries):
-        (u, v), (x, y) = rng.sample(edges, 2)
+    if not snapshots:
+        return
 
-        # Two possible rewirings
-        if rng.random() < 0.5:
-            a, b = u, y
-            c, d = x, v
-        else:
-            a, b = u, x
-            c, d = v, y
+    # Use a FIXED layout across all panels for comparability.
+    # Compute on the first snapshot and reuse positions.
+    G0, _ = snapshots[0]
+    # Seeded layout for reproducibility; tweak seed if you like.
+    pos = nx.spring_layout(G0, seed=42)
 
-        # prevent self-loops, duplicates
-        if len({a, b}) < 2 or len({c, d}) < 2:
+    fig, axes = plt.subplots(1, len(snapshots), figsize=(4 * len(snapshots), 4))
+    if len(snapshots) == 1:
+        axes = [axes]
+
+    for ax, (G, label) in zip(axes, snapshots):
+        # Draw with fixed positions; nodes that don't exist will be ignored (same N here).
+        nx.draw(G, pos=pos, node_size=40, with_labels=False, ax=ax)
+        ax.set_title(label)
+        ax.axis("off")
+
+    plt.show()
+
+
+def rewire_edges(
+    G: nx.Graph,
+    max_retry_step: int = 64,
+):
+    for _ in range(max_retry_step):
+        all_edges = list(G.edges())
+        e1, e2 = random.sample(all_edges, 2)
+        u, v = e1
+        x, y = e2
+        # Disjoint endpoints for a valid 2-edge swap
+        if len({u, v, x, y}) != 4:
             continue
-        if len({tuple(sorted((a, b))), tuple(sorted((c, d)))}) < 2:
-            continue
-        if G.has_edge(a, b) or G.has_edge(c, d):
-            continue
+        if not G.has_edge(u, x) and not G.has_edge(v, y):
+            G.remove_edges_from([(u, v), (x, y)])
+            G.add_edges_from([(u, x), (v, y)])
+            return G
+        if not G.has_edge(u, y) and not G.has_edge(v, x):
+            G.remove_edges_from([(u, v), (x, y)])
+            G.add_edges_from([(u, y), (v, x)])
+            return G
+    return G
 
-        # valid: do the swap on a copy
-        G_new = G.copy()
-        # normalize old endpoints for undirected graphs
-        u, v = (u, v) if u <= v else (v, u)
-        x, y = (x, y) if x <= y else (y, x)
-        G_new.remove_edge(u, v)
-        G_new.remove_edge(x, y)
-        G_new.add_edge(a, b)
-        G_new.add_edge(c, d)
-        removed = [(u, v), (x, y)]
-        added = [(a, b), (c, d)]
-        return G_new, removed, added
-
-    raise RuntimeError("Could not find a valid swap; try a different seed/graph.")
-
-def draw_swap_before_after(G, G_swapped, removed, added, pos=None, fname=None, with_labels=False):
-    """
-    Before: removed edges in RED.
-    After : added edges in GREEN.
-    """
-    if pos is None:
-        pos = nx.spring_layout(G, seed=42)
-
-    node_kw = dict(
-        node_size=2400,
-        node_color="skyblue",
-        edgecolors="black",
-        linewidths=10,
-    )
-    base_edge_kw = dict(width=10, alpha=0.7, edge_color="black")
-
-    hi_removed_kw = dict(width=10, alpha=1.0, edge_color="red", connectionstyle="arc3,rad=0.15")
-    hi_added_kw   = dict(width=10, alpha=1.0, edge_color="green", connectionstyle="arc3,rad=0.15")
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-    ax1, ax2 = axes
-
-    # BEFORE
-    ax1.set_title("Before")
-    nx.draw_networkx_nodes(G, pos, ax=ax1, **node_kw)
-    nx.draw_networkx_edges(G, pos, ax=ax1, **base_edge_kw)
-    if removed:
-        nx.draw_networkx_edges(G, pos, edgelist=removed, ax=ax1, **hi_removed_kw)
-    if with_labels:
-        nx.draw_networkx_labels(G, pos, ax=ax1, font_size=12)
-    ax1.set_axis_off()
-
-    # AFTER
-    ax2.set_title("After")
-    nx.draw_networkx_nodes(G_swapped, pos, ax=ax2, **node_kw)
-    nx.draw_networkx_edges(G_swapped, pos, ax=ax2, **base_edge_kw)
-    if added:
-        nx.draw_networkx_edges(G_swapped, pos, edgelist=added, ax=ax2, **hi_added_kw)
-    if with_labels:
-        nx.draw_networkx_labels(G_swapped, pos, ax=ax2, font_size=12)
-    ax2.set_axis_off()
-
-    plt.savefig("myplot.png", dpi=300)
-
-    plt.close()
-# ---------------- Example ----------------
 
 # Example Usage:
-def main(args):
-    config_dir = Path("configs")
-    dataset_dir = Path("datasets") / args.dataset_dir
-    graphs, _,min_node = load_graph_from_directory(dataset_dir)
-    G = random.choice(graphs)
-    G2, removed_edges, added_edges = random_edge_swap_with_record(G, rng=random)
-
-    draw_swap_before_after(
-        G, G2,
-        removed=removed_edges,
-        added=added_edges,
-        fname="edge_swap_highlight.png")
+def main():
+    G = generate_community_graph(25,30)
+    seq = [deg for _, deg in G.degree()]
+    G_hh = havel_hakimi_construction(seq)
+    num_steps = 2000
+    snapshots = []
+    step_size = max(1, num_steps // 8)   # ~8 panels
+    plot_index = num_steps
+    snapshots.append((G.copy(), "G"))
+    for t in reversed(range(num_steps + 1)):
+        G = rewire_edges(G.copy())
+        if t == plot_index:
+            snapshots.append((G.copy(), f"Step {t}"))  # store a copy of the graph and the step
+            plot_index -= step_size
+    
+    snapshots.append((G_hh, f"G-HH"))
+    plot_graph_evolution(snapshots)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Compute Mixing Time for Graph Generation')
-    parser.add_argument('--dataset-dir', type=str, help='Path to the directory containing graph files')
-    args = parser.parse_args()
-    main(args)
+    main()
