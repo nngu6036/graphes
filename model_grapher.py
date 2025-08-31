@@ -172,17 +172,19 @@ class GraphER(nn.Module):
                 x_, y_ = all_candidates[top_idx]
                 # Rewire only if no duplicates
                 if not G.has_edge(u, x_) and not G.has_edge(v, y_):
-                    if connectivity_safe_rewire_options(G, (u, x_),(v, y_)):
-                        G.remove_edges_from([(u, v), (x_, y_)])
-                        G.add_edges_from([(u, x_), (v, y_)])
-                        generated_graphs.append(G)
-                        continue
+                    G_try = G.copy()
+                    G_try.remove_edges_from([(u, v), (x_, y_)])
+                    G_try.add_edges_from([(u, x_), (v, y_)])
+                    if nx.is_connected(G_try):
+                        G = G_try
+                    continue
                 if not G.has_edge(u, y_) and not G.has_edge(v, x_):
-                    if connectivity_safe_rewire_options(G, (u, y_),(v, x_)):
-                        G.remove_edges_from([(u, v), (x_, y_)])
-                        G.add_edges_from([(u, y_), (v, x_)])
-                        generated_graphs.append(G)
-                        continue
+                    G_try = G.copy()
+                    G_try.remove_edges_from([(u, v), (x_, y_)])
+                    G_try.add_edges_from([(u, y_), (v, x_)])
+                    if nx.is_connected(G_try):
+                        G = G_try
+            generated_graphs.append(G)
             if not snapshots or snapshots[-1][1] != 0:
                 snapshots.append((G.copy(), 0))
 
