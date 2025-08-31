@@ -215,9 +215,9 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for G in graphs:
-\            # --- Corrupt graph with t edge rewirings ---
+            # --- Corrupt graph with t edge rewirings ---
             num_rewirings = random.randint(1,T)
-            G_corrupt, added_pair, removed_pair,step = rewire_edges(G.copy(),num_rewirings)
+            G_corrupt, added_pair, removed_pair,step = rewire_edges_k_local_assortative(G.copy(),num_rewirings)
             if not removed_pair or not added_pair:
                 continue
             # --- Define anchor and target edge ---
