@@ -182,7 +182,7 @@ class GraphER(nn.Module):
             save_graph_evolution(snapshots, idx, out_dir="evolutions_seq")
         return generated_graphs, generated_seqs
 
-    def generate_with_msvae(self, num_samples, num_steps, msvae_model,k_eigen,method = 'constraint_configuration_model'):
+    def generate_with_msvae(self, num_samples, num_steps, msvae_model,k_eigen,method = 'havei_hakimi'):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []

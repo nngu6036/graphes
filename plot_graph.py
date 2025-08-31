@@ -6,10 +6,10 @@ import argparse
 import toml
 from pathlib import Path
 import matplotlib.pyplot as plt
-from utils import load_graph_from_directory, havel_hakimi_construction
+from utils import load_graph_from_directory, constraint_configuration_model_from_multiset, havel_hakimi_construction
 import matplotlib.patheffects as pe
 
-from create_dataset import generate_community_graph
+from create_dataset import generate_community_graph, generate_grid_graph
 
 def plot_graph_evolution(snapshots):
     """
@@ -43,32 +43,17 @@ def plot_graph_evolution(snapshots):
     plt.show()
 
 
-def rewire_edges(
-    G: nx.Graph,
-    max_retry_step: int = 64,
-):
-    for _ in range(max_retry_step):
-        all_edges = list(G.edges())
-        e1, e2 = random.sample(all_edges, 2)
-        u, v = e1
-        x, y = e2
-        # Disjoint endpoints for a valid 2-edge swap
-        if len({u, v, x, y}) != 4:
-            continue
-        if not G.has_edge(u, x) and not G.has_edge(v, y):
-            G.remove_edges_from([(u, v), (x, y)])
-            G.add_edges_from([(u, x), (v, y)])
-            return G
-        if not G.has_edge(u, y) and not G.has_edge(v, x):
-            G.remove_edges_from([(u, v), (x, y)])
-            G.add_edges_from([(u, y), (v, x)])
-            return G
-    return G
+import math
+import random
+from collections import deque
+import networkx as nx
+
+# ---------- helpers ----------
 
 
 # Example Usage:
 def main():
-    G = generate_community_graph(25,30)
+    G = generate_community_graph(20,30)
     seq = [deg for _, deg in G.degree()]
     G_hh = havel_hakimi_construction(seq)
     num_steps = 2000
@@ -77,14 +62,12 @@ def main():
     plot_index = num_steps
     snapshots.append((G.copy(), "G"))
     for t in reversed(range(num_steps + 1)):
-        G = rewire_edges(G.copy())
+        G = rewire_edges_k_local_assortative(G.copy())
         if t == plot_index:
             snapshots.append((G.copy(), f"Step {t}"))  # store a copy of the graph and the step
             plot_index -= step_size
     
     snapshots.append((G_hh, f"G-HH"))
     plot_graph_evolution(snapshots)
-
-
 if __name__ == "__main__":
     main()
