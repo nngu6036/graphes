@@ -30,41 +30,6 @@ def decode_degree_sequence(seq):
     return degrees
 
 
-
-def connectivity_safe_rewire_options(G, e1, e2, base_cc=None):
-    """
-    Return the list of valid 2-edge-swap options for edges e1, e2 that:
-      - keep the graph simple (no loops, no duplicates)
-      - preserve the number of connected components (== base_cc)
-
-    Each option is a pair of edges: (new_e1, new_e2).
-    """
-    if base_cc is None:
-        base_cc = nx.number_connected_components(G)
-
-    (u, v), (x, y) = e1, e2
-    # Must be disjoint endpoints
-    if len({u, v, x, y}) != 4:
-        return []
-
-    candidates = [((u, x), (v, y)), ((u, y), (v, x))]
-    safe = []
-    for ne1, ne2 in candidates:
-        # Simple-graph constraints
-        if ne1[0] == ne1[1] or ne2[0] == ne2[1]:
-            continue
-        if G.has_edge(*ne1) or G.has_edge(*ne2):
-            continue
-
-        # Try the swap and test connectivity preservation
-        G_try = G.copy()
-        G_try.remove_edges_from([e1, e2])
-        G_try.add_edges_from([ne1, ne2])
-
-        if nx.number_connected_components(G_try) == base_cc:
-            safe.append((ne1, ne2))
-    return safe
-
 def initialize_graphs(method, seq):
     G = None
     if method == 'havei_hakimi':
@@ -73,25 +38,6 @@ def initialize_graphs(method, seq):
         G = configuration_model_from_multiset(seq)
     if method == 'constraint_configuration_model':
         G = constraint_configuration_model_from_multiset(seq)
-    """
-    if G:
-        for _ in range(10*G.number_of_edges()):
-            edges = list(G.edges())
-            np.random.shuffle(edges)
-            e1, e2 = random.sample(edges, 2)
-            u, v = e1
-            x, y = e2
-            if len({u, v, x, y}) != 4:
-                continue
-            # Option 1: (u,x), (v,y)
-            if not G.has_edge(u, x) and not G.has_edge(v, y):
-                G.remove_edges_from([(u,v), (x,y)])
-                G.add_edges_from([(u, x), (v, y)])
-            # Option 2: (u,y), (v,x)
-            elif not G.has_edge(u, y) and not G.has_edge(v, x):
-                G.remove_edges_from([(u,v), (x,y)])
-                G.add_edges_from([(u, y), (v, x)])
-    """
     return G
     
 class GraphER(nn.Module):
@@ -164,17 +110,19 @@ class GraphER(nn.Module):
                 x_, y_ = all_candidates[top_idx]
                 # Rewire using valid option that matches triangle analysis
                 if not G.has_edge(u, x_) and not G.has_edge(v, y_):
-                    if connectivity_safe_rewire_options(G, (u, x_),(v, y_)):
-                        G.remove_edges_from([(u, v), (x_, y_)])
-                        G.add_edges_from([(u, x_), (v, y_)])
-                        generated_graphs.append(G)
-                        continue
+                    G_try = G.copy()
+                    G_try.remove_edges_from([(u, v), (x_, y_)])
+                    G_try.add_edges_from([(u, x_), (v, y_)])
+                    if nx.is_connected(G_try):
+                        G = G_try
+                    continue
                 if not G.has_edge(u, y_) and not G.has_edge(v, x_):
-                    if connectivity_safe_rewire_options(G, (u, y_),(v, x_)):
-                        G.remove_edges_from([(u, v), (x_, y_)])
-                        G.add_edges_from([(u, y_), (v, x_)])
-                        generated_graphs.append(G)
-                        continue
+                    G_try = G.copy()
+                    G_try.remove_edges_from([(u, v), (x_, y_)])
+                    G_try.add_edges_from([(u, y_), (v, x_)])
+                    if nx.is_connected(G_try):
+                        G = G_try
+            generated_graphs.append(G)
             if not snapshots or snapshots[-1][1] != 0:
                 snapshots.append((G.copy(), 0))
 
