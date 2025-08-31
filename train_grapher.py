@@ -98,8 +98,8 @@ def _weighted_two_edges(edges, weights):
 # ---------- main ----------
 def rewire_edges_k_local_assortative(
     G: nx.Graph,
+    num_rewirings,
     k: int = 2,
-    max_retry_step: int = 64,
     keep_connected: bool = True,
     forbid_bridges: bool = True,
     assortative_bias: float = 7.0,
@@ -124,6 +124,7 @@ def rewire_edges_k_local_assortative(
       G (modified in-place; unchanged if no acceptable swap is found).
     """
     add,remove = None, None
+    step = 0
     if G.number_of_edges() < 2:
         return G, add, remove
 
@@ -145,7 +146,7 @@ def rewire_edges_k_local_assortative(
     else:
         weights = [1.0] * len(edges)
 
-    for _ in range(max_retry_step):
+    for _ in range(num_rewirings):
         # Pick two source edges (possibly weighted toward high-degree endpoints)
         e1, e2 = _weighted_two_edges(edges, weights)
         u, v = e1
@@ -191,20 +192,21 @@ def rewire_edges_k_local_assortative(
         # Execute 
         add = (a, b), (c, d)
         remove = (u, v), (x, y)
+        step += 1
         G.remove_edges_from([(u, v), (x, y)])
         G.add_edges_from([(a, b), (c, d)])
 
         # Enforce connectivity
         if keep_connected and not nx.is_connected(G):
             # revert and try again
+            add, remove = None
+            step -= 1
             G.remove_edges_from([(a, b), (c, d)])
             G.add_edges_from([(u, v), (x, y)])
             continue
 
-        return G, add, remove
-
     # No acceptable swap found
-    return G, add, remove
+    return G, add, remove, step
 
 
 def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
