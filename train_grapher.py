@@ -199,7 +199,7 @@ def rewire_edges_k_local_assortative(
         # Enforce connectivity
         if keep_connected and not nx.is_connected(G):
             # revert and try again
-            add, remove = None
+            add, remove = None, None
             step -= 1
             G.remove_edges_from([(a, b), (c, d)])
             G.add_edges_from([(u, v), (x, y)])
