@@ -8,6 +8,9 @@ from scipy.sparse import csgraph
 from scipy.sparse.linalg import eigsh
 from scipy.sparse import csr_matrix
 from scipy.sparse import csgraph, csr_matrix
+from collections import Counter
+import numpy as np
+from collections import deque
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 

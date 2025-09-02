@@ -16,9 +16,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
-from collections import Counter
-import numpy as np
-from collections import deque
+
 
 from model_msvae import MSVAE
 from model_setvae import SetVAE
