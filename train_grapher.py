@@ -38,7 +38,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
             added_pair, removed_pair = None, None
             step = 0
             for _ in range(num_rewirings):
-                G_corrupt, add, remov = rewire_edges_k_local_assortative(G.copy(),num_rewirings)
+                G_corrupt, add, remove = rewire_edges_k_local_assortative(G.copy(),num_rewirings)
                 if add and remove:
                     added_pair, removed_pair = add, remove
                     step += 1
