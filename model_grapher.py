@@ -141,6 +141,7 @@ class GraphER(nn.Module):
         generated_seqs = []
         initial_graphs = []
         while len(generated_graphs) < num_samples:
+            print(len(generated_graphs))
             degree_sequences = msvae_model.generate(num_samples)
             for idx, seq in enumerate(degree_sequences):
                 valid, _ = check_sequence_validity(seq)
