@@ -37,14 +37,19 @@ def load_degree_sequence_from_directory(directory_path):
 def load_graph_from_directory(directory_path):
     max_node = 0 
     min_node = -1
+    max_edge = 0 
+    min_edge = -1
     graphs = []
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
             G = nx.read_edgelist(file_path, nodetype=int)
             max_node = max(max_node, G.number_of_nodes())
-            min_node = min(min_node, G.number_of_edges()) if min_node > 0 else G.number_of_edges()
+            min_node = min(min_node, G.number_of_nodes()) if min_node > 0 else G.number_of_nodes()
+            max_edge = max(max_edge, G.number_of_edges())
+            min_edge = min(min_edge, G.number_of_edges()) if min_edge > 0 else G.number_of_edges()
     print("Max node: ", max_node, " Min node:", min_node)
+    print("Max edge: ", max_edge, " Min edge:", min_edge)
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
