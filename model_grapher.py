@@ -38,7 +38,10 @@ def initialize_graphs(method, seq):
         G = configuration_model_from_multiset(seq)
     if method == 'constraint_configuration_model':
         G = constraint_configuration_model_from_multiset(seq)
+    if not nx.is_connected(G):
+        G = None
     return G
+
     
 class GraphER(nn.Module):
     def __init__(self, in_channels, hidden_dim, num_layer,T):

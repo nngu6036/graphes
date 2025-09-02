@@ -124,62 +124,170 @@ def check_sequence_validity(seq):
     return True, 0
 
 
-def laplacian_eigs(G: nx.Graph, k: int, normed: bool = True):
+def _within_k_hops(G: nx.Graph, s, t, k: int) -> bool:
+    """Return True iff dist_G(s,t) <= k (BFS early-stop)."""
+    if s == t:
+        return True
+    if k <= 0:
+        return False
+    seen = {s}
+    q = deque([(s, 0)])
+    while q:
+        v, d = q.popleft()
+        if d == k:
+            continue
+        for w in G.neighbors(v):
+            if w == t:
+                return True
+            if w not in seen:
+                seen.add(w)
+                q.append((w, d + 1))
+    return False
+
+def _edges_within_k_hops(G: nx.Graph, e1, e2, k: int) -> bool:
+    """Require the two SOURCE edges to be 'k-local' to each other."""
+    (u, v), (x, y) = e1, e2
+    return (
+        _within_k_hops(G, u, x, k) or
+        _within_k_hops(G, u, y, k) or
+        _within_k_hops(G, v, x, k) or
+        _within_k_hops(G, v, y, k)
+    )
+
+def _assort_score(a, b, deg, mode="product"):
     """
-    Return (vals, vecs) for the K smallest *non-zero* eigenpairs of the (normalized) Laplacian.
-    Falls back gracefully on tiny graphs.
+    Larger is better for high-high pairs.
+      mode='product'      -> deg[a]*deg[b]   (strongly favors high-high)
+      mode='similarity'   -> - (deg[a]-deg[b])**2   (favors similar degrees)
     """
-    n = G.number_of_nodes()
-    if n == 0:
-        return np.empty((0,), dtype=np.float32), np.empty((0, 0), dtype=np.float32)
-    if n <= 2:
-        # trivial spectrum: normalized Laplacian of K2 has {0, 2}
-        vals = np.array([1.0] * min(k, max(0, n - 1)), dtype=np.float32)
-        vecs = np.ones((n, min(k, max(0, n - 1))), dtype=np.float32) / np.sqrt(n or 1)
-        return vals, vecs
+    if mode == "similarity":
+        da, db = deg[a], deg[b]
+        return - (da - db) ** 2
+    # default: product
+    return deg[a] * deg[b]
 
-    A = csr_matrix(nx.to_scipy_sparse_array(G, dtype=float))
-    L = csgraph.laplacian(A, normed=normed)
+def _weighted_two_edges(edges, weights):
+    """Pick two distinct edges with probability proportional to weights."""
+    # First edge
+    idx1 = random.choices(range(len(edges)), weights=weights, k=1)[0]
+    # Second edge (resample until different)
+    while True:
+        idx2 = random.choices(range(len(edges)), weights=weights, k=1)[0]
+        if idx2 != idx1:
+            break
+    return edges[idx1], edges[idx2]
 
-    # ask for k+1 to include the zero eigenvalue, then drop it
-    want = min(max(1, k + 1), n - 1)
-    try:
-        vals, vecs = eigsh(L, k=want, which="SM")
-    except Exception:
-        # robust fallback
-        return np.ones((k,), dtype=np.float32), np.ones((n, k), dtype=np.float32) / np.sqrt(n)
+# ---------- main ----------
+def rewire_edges_k_local_assortative(
+    G: nx.Graph,
+    k: int = 2,
+    max_retries = 10,
+    keep_connected: bool = True,
+    forbid_bridges: bool = True,
+    assortative_bias: float = 7.0,
+    assortative_mode: str = "product",   # 'product' or 'similarity'
+    weight_edge_sampling: bool = True,   # bias which source edges we pick
+):
+    """
+    One degree-preserving 2-edge swap that:
+      • keeps the graph connected (reverts if not),
+      • only considers source edges within k hops (locality),
+      • BIASES the new edges to connect high-degree nodes together.
 
-    idx = np.argsort(vals)
-    vals, vecs = vals[idx], vecs[:, idx]
-    # drop the (near-)zero eigenvalue
-    if vals[0] < 1e-8:
-        vals, vecs = vals[1:], vecs[:, 1:]
-    # cap/pad to exactly k
-    vals = vals[:k].astype(np.float32)
-    vecs = vecs[:, :k].astype(np.float32)
-    if vals.shape[0] < k:
-        pad = k - vals.shape[0]
-        vals = np.pad(vals, (0, pad))
-        vecs = np.pad(vecs, ((0, 0), (0, pad)))
-    return vals, vecs
+    Bias controls:
+      - weight_edge_sampling=True biases which *source* edges are chosen;
+        edges with large deg[u]*deg[v] are sampled more often.
+      - assortative_bias>0 applies a softmax over the two candidate pairings,
+        preferring the one with larger sum of scores for (a,b) and (c,d).
+      - assortative_mode='product' (default) strongly prefers high-high pairs;
+        use 'similarity' to favor degree-similar pairs (assortative but gentler).
 
+    Returns:
+      G (modified in-place; unchanged if no acceptable swap is found).
+    """
+    add_pair,remove_pair = None, None
+    step = 0
+    if G.number_of_edges() < 2:
+        return G, None, None
 
-def normalized_laplacian_dense(G: nx.Graph) -> np.ndarray:
-    """Dense normalized Laplacian as float64 ndarray (for small graphs this is fine)."""
-    return csgraph.laplacian(
-        csr_matrix(nx.to_scipy_sparse_array(G, dtype=float)), normed=True
-    ).toarray()
+    deg = dict(G.degree())
 
+    # Precompute optional bridge set (helps avoid disconnections)
+    bridge_set = set()
+    if forbid_bridges:
+        bridge_set = {tuple(sorted(e)) for e in nx.bridges(G)}
 
-# ---- inner-products needed for fast Frobenius scoring of a double-edge swap ----
-def _B_inner(M: np.ndarray, a: int, b: int) -> float:
-    # <M, (e_a - e_b)(e_a - e_b)^T> = M_aa + M_bb - 2 M_ab
-    return float(M[a, a] + M[b, b] - 2.0 * M[a, b])
+    edges = list(G.edges())
 
-def _pair_inner(a: int, b: int, c: int, d: int) -> float:
-    # <B_ab, B_cd> = ( (e_a - e_b)^T (e_c - e_d) )^2
-    z = (a == c) - (a == d) - (b == c) + (b == d)
-    return float(z * z)
+    # Optional: bias *which* edges we propose to rewire
+    if weight_edge_sampling:
+        base_w = [deg[u] * deg[v] for (u, v) in edges]  # product works well
+        # Avoid zero weights
+        min_pos = 1 if all(w == 0 for w in base_w) else 0
+        weights = [w + min_pos for w in base_w]
+    else:
+        weights = [1.0] * len(edges)
+
+    for _ in range(max_retries):
+        # Pick two source edges (possibly weighted toward high-degree endpoints)
+        e1, e2 = _weighted_two_edges(edges, weights)
+        u, v = e1
+        x, y = e2
+
+        # Distinct endpoints for a valid 2-switch
+        if len({u, v, x, y}) != 4:
+            continue
+
+        # k-hop locality between the *source* edges
+        if not _edges_within_k_hops(G, e1, e2, k):
+            continue
+
+        # (Optional) avoid deleting bridges
+        if forbid_bridges and (tuple(sorted(e1)) in bridge_set or tuple(sorted(e2)) in bridge_set):
+            continue
+
+        # Two candidate pairings
+        candidates = [ (u, x, v, y), (u, y, v, x) ]
+        random.shuffle(candidates)  # avoid deterministic tie behavior
+
+        # Score each valid pairing by how assortative the *new* edges are
+        scored = []
+        for a, b, c, d in candidates:
+            if a == b or c == d:
+                continue
+            if G.has_edge(a, b) or G.has_edge(c, d):
+                continue
+            s = _assort_score(a, b, deg, assortative_mode) + _assort_score(c, d, deg, assortative_mode)
+            scored.append(((a, b, c, d), s))
+
+        if not scored:
+            continue
+
+        # Softmax over scores -> prefer higher assortativity, but keep some randomness
+        max_s = max(s for _, s in scored)
+        probs = [math.exp(assortative_bias * (s - max_s)) for _, s in scored]
+        total = sum(probs)
+        probs = [p / total for p in probs]
+        choice_idx = random.choices(range(len(scored)), weights=probs, k=1)[0]
+        a, b, c, d = scored[choice_idx][0]
+
+        # Execute 
+        add = (a, b), (c, d)
+        remove = (u, v), (x, y)
+        G.remove_edges_from([(u, v), (x, y)])
+        G.add_edges_from([(a, b), (c, d)])
+
+        # Enforce connectivity
+        if keep_connected and not nx.is_connected(G):
+            # revert and try again
+            add, remove = None, None
+            G.remove_edges_from([(a, b), (c, d)])
+            G.add_edges_from([(u, v), (x, y)])
+            continue
+        else:
+            return G, add, remove
+
+    return G, None, None
 
 
 def constraint_configuration_model_from_multiset(degree_sequence, max_retries=None, max_failures=1000):
