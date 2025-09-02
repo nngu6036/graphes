@@ -22,7 +22,7 @@ from model_msvae import MSVAE
 from model_setvae import SetVAE
 from model_grapher import GraphER
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
-from utils import rewire_edges_k_local_assortative, load_graph_from_directory
+from utils import rewire_edges_k_local_assortative, load_graph_from_directory, graph_to_data
 
 
 def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
