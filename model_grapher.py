@@ -133,23 +133,25 @@ class GraphER(nn.Module):
             save_graph_evolution(snapshots, idx, out_dir="evolutions_seq")
         return generated_graphs, generated_seqs
 
+
     def generate_with_msvae(self, num_samples, num_steps, msvae_model,k_eigen,method = 'havei_hakimi'):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
         generated_seqs = []
         initial_graphs = []
-        degree_sequences = msvae_model.generate(num_samples)
-        for idx, seq in enumerate(degree_sequences):
-            valid, _ = check_sequence_validity(seq)
-            if not valid:
-                continue
-            G = initialize_graphs(method, seq) 
-            if G:
-                initial_graphs.append(G)
-                generated_seqs.append(seq)
-                if len(initial_graphs) >= num_samples:
-                    break
+        while len(generated_graphs) < num_samples:
+            degree_sequences = msvae_model.generate(num_samples)
+            for idx, seq in enumerate(degree_sequences):
+                valid, _ = check_sequence_validity(seq)
+                if not valid:
+                    continue
+                G = initialize_graphs(method, seq) 
+                if G:
+                    initial_graphs.append(G)
+                    generated_seqs.append(seq)
+                    if len(initial_graphs) >= num_samples:
+                        break
         for idx, G in enumerate(initial_graphs): 
             snapshots = []
             step_size = max(1, num_steps // 8)   # ~8 panels
