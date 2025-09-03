@@ -225,7 +225,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
         for G in graphs:
             # --- Corrupt graph with t edge rewirings ---
             traj = transform_to_hh_via_stochastic_rewiring(G, G.number_of_edges())
-            step = 1
+            step = 0
             for G_corrupt, added_pair, removed_pair in traj:
                 step += 1
                 # --- Define anchor and target edge ---
