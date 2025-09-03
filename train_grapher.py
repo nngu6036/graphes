@@ -197,7 +197,7 @@ def transform_to_hh_via_stochastic_rewiring(
             Gc.add_edges_from([e1, e2])
             continue
         else:
-            traj.append(Gc.copy(),(f1, f2),(e1, e2))
+            traj.append((Gc.copy(),(f1, f2),(e1, e2)))
 
         # Commit
         cur_matches += dmatches
