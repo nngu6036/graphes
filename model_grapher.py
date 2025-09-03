@@ -38,8 +38,6 @@ def initialize_graphs(method, seq):
         G = configuration_model_from_multiset(seq)
     if method == 'constraint_configuration_model':
         G = constraint_configuration_model_from_multiset(seq)
-    if not nx.is_connected(G):
-        G = None
     return G
 
     
@@ -113,18 +111,13 @@ class GraphER(nn.Module):
                 x_, y_ = all_candidates[top_idx]
                 # Rewire using valid option that matches triangle analysis
                 if not G.has_edge(u, x_) and not G.has_edge(v, y_):
-                    G_try = G.copy()
-                    G_try.remove_edges_from([(u, v), (x_, y_)])
-                    G_try.add_edges_from([(u, x_), (v, y_)])
-                    if nx.is_connected(G_try):
-                        G = G_try
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, x_), (v, y_)])
                     continue
                 if not G.has_edge(u, y_) and not G.has_edge(v, x_):
-                    G_try = G.copy()
-                    G_try.remove_edges_from([(u, v), (x_, y_)])
-                    G_try.add_edges_from([(u, y_), (v, x_)])
-                    if nx.is_connected(G_try):
-                        G = G_try
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, y_), (v, x_)])
+                    continue
             generated_graphs.append(G)
             if not snapshots or snapshots[-1][1] != 0:
                 snapshots.append((G.copy(), 0))
@@ -177,18 +170,13 @@ class GraphER(nn.Module):
                 x_, y_ = all_candidates[top_idx]
                 # Rewire only if no duplicates
                 if not G.has_edge(u, x_) and not G.has_edge(v, y_):
-                    G_try = G.copy()
-                    G_try.remove_edges_from([(u, v), (x_, y_)])
-                    G_try.add_edges_from([(u, x_), (v, y_)])
-                    if nx.is_connected(G_try):
-                        G = G_try
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, x_), (v, y_)])
                     continue
                 if not G.has_edge(u, y_) and not G.has_edge(v, x_):
-                    G_try = G.copy()
-                    G_try.remove_edges_from([(u, v), (x_, y_)])
-                    G_try.add_edges_from([(u, y_), (v, x_)])
-                    if nx.is_connected(G_try):
-                        G = G_try
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, y_), (v, x_)])
+                    continue
             generated_graphs.append(G)
             if not snapshots or snapshots[-1][1] != 0:
                 snapshots.append((G.copy(), 0))
