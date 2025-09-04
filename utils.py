@@ -441,3 +441,15 @@ def hh_graph_from_G(G):
     mapping = {i: deg_pairs[i][1] for i in range(len(seq))}
     H = nx.relabel_nodes(H_int, mapping, copy=True)
     return H
+
+
+def hh_graph_from_seq(seq):
+    """
+    Build a canonical Havel–Hakimi realization that uses the degree sequence seq
+    Ties are broken by (higher degree first, then smaller node id).
+    """
+    # Build HH graph on 0..n-1 then relabel back to original nodes in this order
+    H_int = nx.havel_hakimi_graph(seq)
+    mapping = {i: deg_pairs[i][1] for i in range(len(seq))}
+    H = nx.relabel_nodes(H_int, mapping, copy=True)
+    return H

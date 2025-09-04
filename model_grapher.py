@@ -33,7 +33,7 @@ def decode_degree_sequence(seq):
 def initialize_graphs(method, seq):
     G = None
     if method == 'havel_hakimi':
-        G = hh_graph_from_G(seq)
+        G = hh_graph_from_seq(seq)
     if method == 'configuration_model':
         G = configuration_model_from_multiset(seq)
     if method == 'constraint_configuration_model':
