@@ -12,52 +12,10 @@ import random
 from collections import deque
 import networkx as nx
 
-from utils import load_graph_from_directory, constraint_configuration_model_from_multiset, havel_hakimi_construction
+from utils import hh_graph_from_G,load_graph_from_directory, plot_graph_evolution, constraint_configuration_model_from_multiset, havel_hakimi_construction
 from create_dataset import generate_community_graph, generate_grid_graph
 
-def plot_graph_evolution(snapshots):
-    """
-    Plot a sequence of graph snapshots in one horizontal figure.
 
-    Args:
-        snapshots (list[tuple[nx.Graph, int]]): list of (graph, step) pairs, for ONE graph.
-        idx (int): 0-based index of this graph (used in filename).
-        out_dir (str): output folder.
-    """
-
-    if not snapshots:
-        return
-
-    # Use a FIXED layout across all panels for comparability.
-    # Compute on the first snapshot and reuse positions.
-    G0, _ = snapshots[0]
-    # Seeded layout for reproducibility; tweak seed if you like.
-    pos = nx.spring_layout(G0, seed=42)
-
-    fig, axes = plt.subplots(1, len(snapshots), figsize=(4 * len(snapshots), 4))
-    if len(snapshots) == 1:
-        axes = [axes]
-
-    for ax, (G, label) in zip(axes, snapshots):
-        # Draw with fixed positions; nodes that don't exist will be ignored (same N here).
-        nx.draw(G, pos=pos, node_size=40, with_labels=False, ax=ax)
-        ax.set_title(label)
-        ax.axis("off")
-
-    plt.show()
-
-def hh_graph_from_G(G):
-    """
-    Build a canonical Havel–Hakimi realization that uses the same node labels as G.
-    Ties are broken by (higher degree first, then smaller node id).
-    """
-    deg_pairs = sorted(((d, u) for u, d in G.degree()), key=lambda x: (-x[0], x[1]))
-    seq = [d for d, _ in deg_pairs]
-    # Build HH graph on 0..n-1 then relabel back to original nodes in this order
-    H_int = nx.havel_hakimi_graph(seq)
-    mapping = {i: deg_pairs[i][1] for i in range(len(seq))}
-    H = nx.relabel_nodes(H_int, mapping, copy=True)
-    return H
 
 def _ek(u, v):
     return (u, v) if u <= v else (v, u)
@@ -242,10 +200,10 @@ def transform_to_hh_via_stochastic_rewiring(
 
 # Example Usage:
 def main():
-    G = generate_community_graph(20,30)
-    print("Edge count ",10*G.number_of_edges())
+    dataset_dir = Path("datasets") / 'dataset1_community_edgelists'
+    graphs,_,_ = load_graph_from_directory(dataset_dir)
     try:
-        while True:
+        for G in graphs:
             print("Looping... Press Ctrl+C to exit.")
             G_to_HH, H, _ = transform_to_hh_via_stochastic_rewiring(
                 G,

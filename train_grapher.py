@@ -22,21 +22,8 @@ from model_msvae import MSVAE
 from model_setvae import SetVAE
 from model_grapher import GraphER
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
-from utils import rewire_edges_k_local_assortative, load_graph_from_directory, graph_to_data
+from utils import hh_graph_from_G,rewire_edges_k_local_assortative,plot_graph_evolution, load_graph_from_directory, graph_to_data
 
-
-def hh_graph_from_G(G):
-    """
-    Build a canonical Havel–Hakimi realization that uses the same node labels as G.
-    Ties are broken by (higher degree first, then smaller node id).
-    """
-    deg_pairs = sorted(((d, u) for u, d in G.degree()), key=lambda x: (-x[0], x[1]))
-    seq = [d for d, _ in deg_pairs]
-    # Build HH graph on 0..n-1 then relabel back to original nodes in this order
-    H_int = nx.havel_hakimi_graph(seq)
-    mapping = {i: deg_pairs[i][1] for i in range(len(seq))}
-    H = nx.relabel_nodes(H_int, mapping, copy=True)
-    return H
 
 def _ek(u, v):
     return (u, v) if u <= v else (v, u)
@@ -136,6 +123,7 @@ def _propose_swap_with_locality(
 
 def transform_to_hh_via_stochastic_rewiring(
     G,
+    H,
     max_steps=10000,
     beta=3.0,           # bias toward HH edges
     T0=1.0,             # initial temperature
@@ -154,7 +142,7 @@ def transform_to_hh_via_stochastic_rewiring(
     Gc = G.copy()
 
     # Target HH graph and scoring
-    H = hh_graph_from_G(Gc)
+    
     H_set = {_ek(u, v) for u, v in H.edges()}
     def matches_in_H(edges): return sum(1 for e in edges if _ek(*e) in H_set)
     cur_matches = matches_in_H(Gc.edges())
@@ -212,6 +200,7 @@ def transform_to_hh_via_stochastic_rewiring(
             for u in {e1[0], e1[1], e2[0], e2[1], f1[0], f1[1], f2[0], f2[1]}:
                 dists = nx.single_source_shortest_path_length(Gc, u, cutoff=k_hop)
                 neighborhoods[u] = {x for x, dist in dists.items() if 0 < dist <= k_hop}
+    #plot_graph_evolution([(G,"G"),(Gc,"G_to_HH"),(H,"H")])
     return traj
 
 
@@ -223,8 +212,9 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for G in graphs:
+            G_hh = hh_graph_from_G(G)
             # --- Corrupt graph with t edge rewirings ---
-            traj = transform_to_hh_via_stochastic_rewiring(G, G.number_of_edges())
+            traj = transform_to_hh_via_stochastic_rewiring(G, G_hh, G.number_of_edges())
             step = 0
             for G_corrupt, added_pair, removed_pair in traj:
                 step += 1
@@ -244,7 +234,8 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
                 )
                 # --- Forward pass ---
                 scores = model(data.x, data.edge_index, first_edge_added, candidate_edges, t=step)
-                loss = criterion(scores.squeeze(), labels)
+                pos_w = torch.tensor(max(1.0, len(candidate_edges) - 1.0), device=device)
+                loss = F.binary_cross_entropy_with_logits(scores.squeeze(), labels, pos_weight=pos_w)
                 # --- Backpropagation ---
                 optimizer.zero_grad()
                 loss.backward()
@@ -256,11 +247,19 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
 def load_msvae_from_file(max_node,config, model_path):
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
-    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node)
+    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node-1)
     print(f"MS-VAE Model loaded from {model_path}")
     model.load_model(model_path)
     return model
 
+
+def load_setvae_from_file(max_node,config, model_path):
+    hidden_dim = config['training']['hidden_dim']
+    latent_dim = config['training']['latent_dim']
+    model = SetVAE(hidden_dim=hidden_dim, latent_dim=latent_dim, max_degree = max_node-1)
+    print(f"Set-VAE Model loaded from {model_path}")
+    model.load_model(model_path)
+    return model
 
 def main(args):
     msvae_model = None
@@ -274,6 +273,9 @@ def main(args):
     if args.msvae_model:
         msvae_config = toml.load(config_dir / args.msvae_config)
         msvae_model  = load_msvae_from_file(max_node, msvae_config, model_dir /args.msvae_model)
+    if args.setvae_model:
+        setvae_config = toml.load(config_dir / args.setvae_config)
+        setvae_model  = load_setvae_from_file(max_node, setvae_config, model_dir /args.setvae_model)
     hidden_dim = config['training']['hidden_dim']
     num_layer = config['training']['num_layer']
     T = config['training']['T']
@@ -329,6 +331,14 @@ def main(args):
             print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
             print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
 
+        if setvae_model:
+            N_nodes = [G.number_of_nodes() for G in random.choices(train_graphs, k=config['inference']['generate_samples'])]
+            generated_graphs, generated_seqs = model.generate_with_setvae(N_nodes, T, setvae_model, k_eigen, method='havel_hakimi')
+            print(f"Evaluate generated graphs using Havei Hamimi Model and Set-VAE")
+            print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
+            print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
+            print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GRAPH-ER Model')
@@ -336,6 +346,8 @@ if __name__ == "__main__":
     parser.add_argument('--config', type=str, required=True, help='Path to the configuration file in TOML format of Graph-ER')
     parser.add_argument('--msvae-config', type=str, help='Path to the configuration file in TOML format of MS-VAE')
     parser.add_argument('--msvae-model', type=str,help='Path to load a pre-trained MS-VAE model')
+    parser.add_argument('--setvae-config', type=str, help='Path to the configuration file in TOML format of Set-VAE')
+    parser.add_argument('--setvae-model', type=str,help='Path to load a pre-trained Set-VAE model')
     parser.add_argument('--output-model', type=str, help='Path to save the trained model')
     parser.add_argument('--input-model', type=str, help='Path to load a pre-trained model')
     parser.add_argument('--evaluate', action='store_true', help='Whether we evaluate the model')

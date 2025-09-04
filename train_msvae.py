@@ -44,13 +44,8 @@ def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch
     targets_flat = target_freq.long().view(-1)                    # shape (B×D,)
     recon_loss = F.cross_entropy(logits_flat, targets_flat, reduction='sum')
     kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-    lambda_entropy = weights.get("entropy", 0.0)
-    probs = F.softmax(logits, dim=-1)  # shape: (B, D, N)
-    entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)  # shape: (B, D)
-    entropy = entropy.mean()  # scalar
     total_loss = (weights['reconstruction'] * recon_loss +
-                  weights['kl_divergence'] * kl_loss +
-                  lambda_entropy * entropy)
+                  weights['kl_divergence'] * kl_loss )
     return total_loss
 
 def main(args):

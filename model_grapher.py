@@ -33,7 +33,7 @@ def decode_degree_sequence(seq):
 def initialize_graphs(method, seq):
     G = None
     if method == 'havei_hakimi':
-        G = havel_hakimi_construction(seq)
+        G = hh_graph_from_G(seq)
     if method == 'configuration_model':
         G = configuration_model_from_multiset(seq)
     if method == 'constraint_configuration_model':
@@ -184,3 +184,56 @@ class GraphER(nn.Module):
             # Save the evolution strip for this graph
             save_graph_evolution(snapshots, idx, out_dir=f"evolutions_{method}")
         return generated_graphs, generated_seqs
+
+    def generate_with_setvae(self, N_nodes, num_steps, setvae_model, k_eigen, method='havel_hakimi'):
+        self.eval()
+        device = next(self.parameters()).device
+        generated_graphs = []
+        generated_seqs = []
+        initial_graphs = []
+        degree_sequences = setvae_model.generate(N_nodes)
+        for seq in degree_sequences:
+            G = initialize_graphs(method, seq)
+            if G:
+                initial_graphs.append(G)
+                generated_seqs.append(seq)
+        for idx, G in enumerate(initial_graphs): 
+            snapshots = []
+            step_size = max(1, num_steps // 8)   # ~8 panels
+            plot_index = num_steps
+            print(f"Generating graph {idx + 1}")
+            for t in reversed(range(num_steps + 1)):
+                edges = list(G.edges())
+                if len(edges) < 2:
+                    continue
+                if t == plot_index:
+                    snapshots.append((G.copy(), t))  # store a copy of the graph and the step
+                    plot_index -= step_size
+                # Select a random anchor edge
+                u, v = random.choice(edges)
+                # Generate swappable candidates (disjoint with (u,v))
+                uv = frozenset((u, v))
+                all_candidates = [e for e in edges if frozenset(e) != uv and len(set(e + (u, v))) == 4]
+                if not all_candidates:
+                    continue
+                data = graph_to_data(G,k_eigen).to(device)
+                scores = self(data.x, data.edge_index, (u, v), all_candidates, t).squeeze(-1)
+                top_idx = torch.argmax(scores).item()
+                x_, y_ = all_candidates[top_idx]
+                # Rewire only if no duplicates
+                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, x_), (v, y_)])
+                    continue
+                if not G.has_edge(u, y_) and not G.has_edge(v, x_):
+                    G.remove_edges_from([(u, v), (x_, y_)])
+                    G.add_edges_from([(u, y_), (v, x_)])
+                    continue
+            generated_graphs.append(G)
+            if not snapshots or snapshots[-1][1] != 0:
+                snapshots.append((G.copy(), 0))
+
+            # Save the evolution strip for this graph
+            save_graph_evolution(snapshots, idx, out_dir=f"evolutions_{method}")
+        return generated_graphs, generated_seqs
+

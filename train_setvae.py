@@ -48,19 +48,20 @@ def main(args):
     config = toml.load(config_dir / args.config)
     batch_size = config['training']['batch_size']
     input_data, max_node, min_node = load_degree_sequence_from_directory(dataset_dir)
+    max_degree = max_node - 1
     train_data, test_data = train_test_split(input_data, test_size=0.2, random_state=42)
-    train_dataset = TensorDataset(torch.stack([encode_degree_sequence(seq,max_node, normalize=False) for seq in train_data]))
+    train_dataset = TensorDataset(torch.stack([encode_degree_sequence(seq,max_degree, normalize=False) for seq in train_data]))
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
-    model = SetVAE(hidden_dim=hidden_dim, latent_dim=latent_dim, max_degree = max_node)
+    model = SetVAE(hidden_dim=hidden_dim, latent_dim=latent_dim, max_degree = max_degree)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
         print(f"Model loaded from {model_dir / args.input_model}")
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_setvae(model, train_dataloader, num_epochs, learning_rate, max_node)
+        train_setvae(model, train_dataloader, num_epochs, learning_rate, max_degree)
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")

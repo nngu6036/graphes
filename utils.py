@@ -12,6 +12,7 @@ from collections import Counter
 import numpy as np
 from collections import deque
 import math
+import matplotlib.pyplot as plt
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
@@ -22,7 +23,7 @@ def load_degree_sequence_from_directory(directory_path):
         if os.path.isfile(file_path):
             G = nx.read_edgelist(file_path, nodetype=int)
             max_node = max(max_node, G.number_of_nodes())
-            min_node = min(min_node, G.number_of_edges()) if min_node > 0 else G.number_of_edges()
+            min_node = min(min_node, G.number_of_nodes()) if min_node > 0 else G.number_of_nodes()
     print("Max node: ", max_node, " Min node:", min_node)
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
@@ -394,3 +395,49 @@ def save_graph_evolution(snapshots, idx, out_dir="evolutions"):
     filename = os.path.join(out_dir, f"graph_{idx+1}_evolution.png")
     plt.savefig(filename, dpi=150, bbox_inches="tight")
     plt.close()
+
+
+def plot_graph_evolution(snapshots):
+    """
+    Plot a sequence of graph snapshots in one horizontal figure.
+
+    Args:
+        snapshots (list[tuple[nx.Graph, int]]): list of (graph, step) pairs, for ONE graph.
+        idx (int): 0-based index of this graph (used in filename).
+        out_dir (str): output folder.
+    """
+
+    if not snapshots:
+        return
+
+    # Use a FIXED layout across all panels for comparability.
+    # Compute on the first snapshot and reuse positions.
+    G0, _ = snapshots[0]
+    # Seeded layout for reproducibility; tweak seed if you like.
+    pos = nx.spring_layout(G0, seed=42)
+
+    fig, axes = plt.subplots(1, len(snapshots), figsize=(4 * len(snapshots), 4))
+    if len(snapshots) == 1:
+        axes = [axes]
+
+    for ax, (G, label) in zip(axes, snapshots):
+        # Draw with fixed positions; nodes that don't exist will be ignored (same N here).
+        nx.draw(G, pos=pos, node_size=40, with_labels=False, ax=ax)
+        ax.set_title(label)
+        ax.axis("off")
+
+    plt.show()
+
+
+def hh_graph_from_G(G):
+    """
+    Build a canonical Havel–Hakimi realization that uses the same node labels as G.
+    Ties are broken by (higher degree first, then smaller node id).
+    """
+    deg_pairs = sorted(((d, u) for u, d in G.degree()), key=lambda x: (-x[0], x[1]))
+    seq = [d for d, _ in deg_pairs]
+    # Build HH graph on 0..n-1 then relabel back to original nodes in this order
+    H_int = nx.havel_hakimi_graph(seq)
+    mapping = {i: deg_pairs[i][1] for i in range(len(seq))}
+    H = nx.relabel_nodes(H_int, mapping, copy=True)
+    return H
