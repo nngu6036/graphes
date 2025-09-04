@@ -234,8 +234,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
                 )
                 # --- Forward pass ---
                 scores = model(data.x, data.edge_index, first_edge_added, candidate_edges, t=step)
-                pos_w = torch.tensor(max(1.0, len(candidate_edges) - 1.0), device=device)
-                loss = F.binary_cross_entropy_with_logits(scores.squeeze(), labels, pos_weight=pos_w)
+                loss = criterion(scores.squeeze(), labels)
                 # --- Backpropagation ---
                 optimizer.zero_grad()
                 loss.backward()
