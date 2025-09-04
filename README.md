@@ -55,17 +55,17 @@ python train_msvae.py  --dataset-dir dataset1_qm9_edgelists --config  msvae_conf
 python train_msvae.py  --dataset-dir dataset1_zinc_edgelists --config  msvae_config.toml --input-model msvae_zinc --evaluate
 ```
 
-## Train and evaluate Std-VAE model
+## Train and evaluate Set-VAE model
 ```bash
-python train_stdvae.py  --dataset-dir dataset1_grid_edgelists --config  msvae_config.toml --output-model stdvae_grid  --evaluate
+python train_setvae.py  --dataset-dir dataset1_grid_edgelists --config  setvae_config.toml --output-model setvae_grid  --evaluate
 ```
 ```bash
-python train_stdvae.py  --dataset-dir dataset1_ego_edgelists --config  msvae_config.toml  --output-model stdvae_ego --evaluate
+python train_setvae.py  --dataset-dir dataset1_ego_edgelists --config  setvae_config.toml  --output-model setvae_ego --evaluate
 ```
 ```bash
-python train_stdvae.py  --dataset-dir dataset1_community_edgelists --config  msvae_config.toml --output-model stdvae_community --evaluate
+python train_setvae.py  --dataset-dir dataset1_community_edgelists --config  setvae_config.toml --output-model setvae_community --evaluate
 ```
-## Evaluate Std-VAE model
+## Evaluate Set-VAE model
 ```bash
 python train_stdvae.py  --dataset-dir dataset1_grid_edgelists --config  msvae_config.toml  --input-model stdvae_grid  --evaluate
 ```
