@@ -262,6 +262,7 @@ def load_setvae_from_file(max_node,config, model_path):
 
 def main(args):
     msvae_model = None
+    setvae_model = None
     config_dir = Path("configs")
     dataset_dir = Path("datasets") / args.dataset_dir
     model_dir = Path("models")
