@@ -338,6 +338,11 @@ def main(args):
             print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
             print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
 
+        generated_graphs, generated_seqs = model.generate_from_sequences(test_seqs, k_eigen, method='havel_hakimi')
+        print(f"Evaluate generated graphs using Havei Hamimi Model and Set-VAE")
+        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
+        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
+        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GRAPH-ER Model')

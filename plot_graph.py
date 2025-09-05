@@ -200,7 +200,7 @@ def transform_to_hh_via_stochastic_rewiring(
 
 # Example Usage:
 def main():
-    dataset_dir = Path("datasets") / 'dataset1_community_edgelists'
+    dataset_dir = Path("datasets") / 'dataset1_ego_edgelists'
     graphs,_,_ = load_graph_from_directory(dataset_dir)
     try:
         for G in graphs:
@@ -217,7 +217,7 @@ def main():
                 locality_reference="initial",
                 seed=42,
             )
-            plot_graph_evolution([(G,"G"),(G_to_HH,"G_to_HH"),(H,"H")])
+            plot_graph_evolution([(G,"G"),(G_to_HH,"Rewiring"),(H,"Havel-Hakimi")])
     except KeyboardInterrupt:
         print("\nKeyboardInterrupt detected. Exiting loop.")
     finally:

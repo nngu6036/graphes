@@ -78,7 +78,7 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate_from_sequences(self, num_steps, degree_sequences,k_eigen, method = 'constraint_configuration_model'):
+    def generate_from_sequences(self, degree_sequences,k_eigen, method = 'havel_hakimi'):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []
@@ -94,7 +94,7 @@ class GraphER(nn.Module):
             snapshots = []
             step_size = max(1, num_steps // 8)   # ~8 panels
             plot_index = num_steps
-            for t in reversed(range(num_steps + 1)):
+            for t in reversed(range(G.number_of_edges() + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
                     continue
@@ -127,7 +127,7 @@ class GraphER(nn.Module):
         return generated_graphs, generated_seqs
 
 
-    def generate_with_msvae(self, num_samples, num_steps, msvae_model,k_eigen,method = 'havei_hakimi'):
+    def generate_with_msvae(self, num_samples, num_steps, msvae_model,k_eigen,method = 'havel_hakimi'):
         self.eval()
         device = next(self.parameters()).device
         generated_graphs = []

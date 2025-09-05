@@ -40,5 +40,5 @@ p_inter = 0.05
 [[datasets]]
 type = "grid"
 count = 100
-min_len = 40
-max_len = 100
+min_len = 4
+max_len = 20
