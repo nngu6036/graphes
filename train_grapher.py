@@ -129,7 +129,7 @@ def transform_to_hh_via_stochastic_rewiring(
     T0=1.0,             # initial temperature
     cooling=0.995,      # simulated annealing cooling per accepted step
     ensure_connected=True,
-    k_hop=None,         # e.g., 2 or 3 to preserve locality; None disables
+    k_hop=2,         # e.g., 2 or 3 to preserve locality; None disables
     locality_reference="initial",  # "initial" (default) or "current"
     seed=None,
 ):

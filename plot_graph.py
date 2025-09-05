@@ -200,10 +200,11 @@ def transform_to_hh_via_stochastic_rewiring(
 
 # Example Usage:
 def main():
-    dataset_dir = Path("datasets") / 'dataset1_ego_edgelists'
+    dataset_dir = Path("datasets") / 'dataset1_community_edgelists'
     graphs,_,_ = load_graph_from_directory(dataset_dir)
     try:
-        for G in graphs:
+        while True:
+            G = graphs[0]
             print("Looping... Press Ctrl+C to exit.")
             G_to_HH, H, _ = transform_to_hh_via_stochastic_rewiring(
                 G,
@@ -212,7 +213,7 @@ def main():
                 T0=1.0,
                 cooling=0.997,
                 ensure_connected=True,
-                k_hop=None,
+                k_hop=2,
                 return_trajectory = True,
                 locality_reference="initial",
                 seed=42,
