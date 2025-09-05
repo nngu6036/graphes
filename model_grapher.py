@@ -91,6 +91,7 @@ class GraphER(nn.Module):
                 generated_seqs.append(seq)
         for idx, G in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
+            num_steps = G.number_of_edges() 
             snapshots = []
             step_size = max(1, num_steps // 8)   # ~8 panels
             plot_index = num_steps
