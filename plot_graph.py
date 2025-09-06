@@ -12,7 +12,7 @@ import random
 from collections import deque
 import networkx as nx
 
-from utils import hh_graph_from_G,load_graph_from_directory, plot_graph_evolution, constraint_configuration_model_from_multiset, havel_hakimi_construction
+from utils import *
 from create_dataset import generate_community_graph, generate_grid_graph
 
 
@@ -147,7 +147,7 @@ def transform_to_hh_via_stochastic_rewiring(
         neighborhoods = _khop_neighborhoods(ref_graph, k_hop)
 
     T = T0
-    traj = [Gc.copy()] if return_trajectory else None
+    traj = []
     m = Gc.number_of_edges()
 
     for _ in range(max_steps):
@@ -169,6 +169,7 @@ def transform_to_hh_via_stochastic_rewiring(
             continue
 
         # Tentatively apply and enforce connectivity
+        Gpred = Gc.copy()
         Gc.remove_edges_from([e1, e2])
         Gc.add_edges_from([f1, f2])
 
@@ -182,7 +183,7 @@ def transform_to_hh_via_stochastic_rewiring(
         cur_matches += dmatches
         T *= cooling
         if return_trajectory:
-            traj.append(Gc.copy())
+            traj.append([Gpred.copy(),Gc.copy()])
 
         if cur_matches == m:  # reached HH exactly
             break
@@ -202,23 +203,40 @@ def transform_to_hh_via_stochastic_rewiring(
 def main():
     dataset_dir = Path("datasets") / 'dataset1_community_edgelists'
     graphs,_,_ = load_graph_from_directory(dataset_dir)
+    jaccard_edge_dists = []
+    normalized_symdiff_dists = []
+    swap_dists = []
+    spectral_l2_dists = []
     try:
-        while True:
-            G = graphs[0]
-            print("Looping... Press Ctrl+C to exit.")
-            G_to_HH, H, _ = transform_to_hh_via_stochastic_rewiring(
-                G,
-                max_steps=20000,
-                beta=3.0,
-                T0=1.0,
-                cooling=0.997,
-                ensure_connected=True,
-                k_hop=2,
-                return_trajectory = True,
-                locality_reference="initial",
-                seed=42,
-            )
-            plot_graph_evolution([(G,"G"),(G_to_HH,"Rewiring"),(H,"Havel-Hakimi")])
+        G = graphs[0]
+        G_to_HH, H, trajectory = transform_to_hh_via_stochastic_rewiring(
+            G,
+            max_steps=20000,
+            beta=3.0,
+            T0=1.0,
+            cooling=0.997,
+            ensure_connected=True,
+            k_hop=2,
+            return_trajectory = True,
+            locality_reference="initial",
+            seed=42,
+        )
+        for G_pred, G_next in trajectory:
+            print(spectral_l2_distance(G_pred, G_next))
+        #jaccard_edge_dist = jaccard_edge_similarity(G_to_HH, H)
+        #normalized_symdiff_dist = normalized_symdiff_distance(G_to_HH, H)
+        #swap_dist = swap_distance(G_to_HH, H)
+        #spectral_l2_dist = spectral_l2_distance(G_to_HH, H)
+        #jaccard_edge_dists.append(jaccard_edge_dist)
+        #normalized_symdiff_dists.append(normalized_symdiff_dist)
+        #swap_dists.append(swap_dist)
+        #spectral_l2_dists.append(spectral_l2_dist)
+            
+        #plot_graph_evolution([(G,"G"),(G_to_HH,"Rewiring"),(H,"Havel-Hakimi")])
+        #print(sum(jaccard_edge_dists)/len(jaccard_edge_dists))
+        #print(sum(normalized_symdiff_dists)/len(normalized_symdiff_dists))
+        #print(sum(swap_dists)/len(swap_dists))
+        #print(sum(spectral_l2_dists)/len(spectral_l2_dists))
     except KeyboardInterrupt:
         print("\nKeyboardInterrupt detected. Exiting loop.")
     finally:

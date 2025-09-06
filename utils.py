@@ -134,170 +134,184 @@ def check_sequence_validity(seq):
     return True, 0
 
 
-def _within_k_hops(G: nx.Graph, s, t, k: int) -> bool:
-    """Return True iff dist_G(s,t) <= k (BFS early-stop)."""
-    if s == t:
-        return True
-    if k <= 0:
-        return False
-    seen = {s}
-    q = deque([(s, 0)])
-    while q:
-        v, d = q.popleft()
-        if d == k:
+def _ek(u, v):
+    return (u, v) if u <= v else (v, u)
+
+def _pick_valid_swap(G, max_tries=128, rng=random):
+    """
+    Propose a valid 2-edge swap (e1, e2) -> (f1, f2).
+    Returns (e1, e2, f1, f2) or None if not found.
+    """
+    E = list(G.edges())
+    nE = len(E)
+    if nE < 2:
+        return None
+    for _ in range(max_tries):
+        (a, b) = E[rng.randrange(nE)]
+        (c, d) = E[rng.randrange(nE)]
+        if len({a, b, c, d}) != 4:  # endpoints must be all different
             continue
-        for w in G.neighbors(v):
-            if w == t:
-                return True
-            if w not in seen:
-                seen.add(w)
-                q.append((w, d + 1))
-    return False
+        # two possible rewires; pick one at random
+        if rng.random() < 0.5:
+            f1, f2 = (a, c), (b, d)
+        else:
+            f1, f2 = (a, d), (b, c)
+        # no self-loops and no multi-edges
+        if f1[0] == f1[1] or f2[0] == f2[1]:
+            continue
+        if G.has_edge(*f1) or G.has_edge(*f2):
+            continue
+        # Also avoid creating parallel edges across the pair
+        if _ek(*f1) == _ek(*f2):
+            continue
+        return ( (a,b), (c,d), f1, f2 )
+    return None
 
-def _edges_within_k_hops(G: nx.Graph, e1, e2, k: int) -> bool:
-    """Require the two SOURCE edges to be 'k-local' to each other."""
-    (u, v), (x, y) = e1, e2
-    return (
-        _within_k_hops(G, u, x, k) or
-        _within_k_hops(G, u, y, k) or
-        _within_k_hops(G, v, x, k) or
-        _within_k_hops(G, v, y, k)
-    )
-
-def _assort_score(a, b, deg, mode="product"):
+def _khop_neighborhoods(G, k):
     """
-    Larger is better for high-high pairs.
-      mode='product'      -> deg[a]*deg[b]   (strongly favors high-high)
-      mode='similarity'   -> - (deg[a]-deg[b])**2   (favors similar degrees)
+    Precompute closed k-hop neighborhoods (excluding the center itself).
     """
-    if mode == "similarity":
-        da, db = deg[a], deg[b]
-        return - (da - db) ** 2
-    # default: product
-    return deg[a] * deg[b]
+    N = {}
+    for u in G.nodes():
+        dists = nx.single_source_shortest_path_length(G, u, cutoff=k)
+        N[u] = {v for v, dist in dists.items() if 0 < dist <= k}
+    return N
 
-def _weighted_two_edges(edges, weights):
-    """Pick two distinct edges with probability proportional to weights."""
-    # First edge
-    idx1 = random.choices(range(len(edges)), weights=weights, k=1)[0]
-    # Second edge (resample until different)
-    while True:
-        idx2 = random.choices(range(len(edges)), weights=weights, k=1)[0]
-        if idx2 != idx1:
-            break
-    return edges[idx1], edges[idx2]
+def _within_k(u, v, k, neighborhoods, G_current, locality_reference, cache_dynamic):
+    """
+    Check if dist(u, v) <= k according to chosen reference.
+    """
+    if k is None:
+        return True
+    if locality_reference == "initial":
+        return v in neighborhoods[u]
+    # dynamic: compute on-demand BFS (cached per (anchor, k))
+    key = (u, k)
+    if key not in cache_dynamic:
+        dists = nx.single_source_shortest_path_length(G_current, u, cutoff=k)
+        cache_dynamic[key] = {x for x, dist in dists.items() if 0 < dist <= k}
+    return v in cache_dynamic[key]
 
-# ---------- main ----------
-def rewire_edges_k_local_assortative(
-    G: nx.Graph,
-    k: int = 2,
-    max_retries = 10,
-    keep_connected: bool = True,
-    forbid_bridges: bool = True,
-    assortative_bias: float = 7.0,
-    assortative_mode: str = "product",   # 'product' or 'similarity'
-    weight_edge_sampling: bool = True,   # bias which source edges we pick
+def _propose_swap_with_locality(
+    G, rng, k, neighborhoods, locality_reference, max_tries=256
 ):
     """
-    One degree-preserving 2-edge swap that:
-      • keeps the graph connected (reverts if not),
-      • only considers source edges within k hops (locality),
-      • BIASES the new edges to connect high-degree nodes together.
-
-    Bias controls:
-      - weight_edge_sampling=True biases which *source* edges are chosen;
-        edges with large deg[u]*deg[v] are sampled more often.
-      - assortative_bias>0 applies a softmax over the two candidate pairings,
-        preferring the one with larger sum of scores for (a,b) and (c,d).
-      - assortative_mode='product' (default) strongly prefers high-high pairs;
-        use 'similarity' to favor degree-similar pairs (assortative but gentler).
-
-    Returns:
-      G (modified in-place; unchanged if no acceptable swap is found).
+    Propose a valid 2-edge swap (e1,e2)->(f1,f2) that respects k-hop locality.
+    Returns (e1, e2, f1, f2) or None.
     """
-    add_pair,remove_pair = None, None
-    step = 0
-    if G.number_of_edges() < 2:
-        return G, None, None
+    E = list(G.edges())
+    m = len(E)
+    if m < 2: return None
+    dyn_cache = {}  # for dynamic k-hop lookups
 
-    deg = dict(G.degree())
-
-    # Precompute optional bridge set (helps avoid disconnections)
-    bridge_set = set()
-    if forbid_bridges:
-        bridge_set = {tuple(sorted(e)) for e in nx.bridges(G)}
-
-    edges = list(G.edges())
-
-    # Optional: bias *which* edges we propose to rewire
-    if weight_edge_sampling:
-        base_w = [deg[u] * deg[v] for (u, v) in edges]  # product works well
-        # Avoid zero weights
-        min_pos = 1 if all(w == 0 for w in base_w) else 0
-        weights = [w + min_pos for w in base_w]
-    else:
-        weights = [1.0] * len(edges)
-
-    for _ in range(max_retries):
-        # Pick two source edges (possibly weighted toward high-degree endpoints)
-        e1, e2 = _weighted_two_edges(edges, weights)
-        u, v = e1
-        x, y = e2
-
-        # Distinct endpoints for a valid 2-switch
-        if len({u, v, x, y}) != 4:
+    for _ in range(max_tries):
+        (a, b) = E[rng.randrange(m)]
+        (c, d) = E[rng.randrange(m)]
+        if len({a, b, c, d}) != 4:
             continue
 
-        # k-hop locality between the *source* edges
-        if not _edges_within_k_hops(G, e1, e2, k):
-            continue
-
-        # (Optional) avoid deleting bridges
-        if forbid_bridges and (tuple(sorted(e1)) in bridge_set or tuple(sorted(e2)) in bridge_set):
-            continue
-
-        # Two candidate pairings
-        candidates = [ (u, x, v, y), (u, y, v, x) ]
-        random.shuffle(candidates)  # avoid deterministic tie behavior
-
-        # Score each valid pairing by how assortative the *new* edges are
-        scored = []
-        for a, b, c, d in candidates:
-            if a == b or c == d:
+        # Two orientations; try the one sampled first, fall back to the other
+        for (f1, f2) in ( ((a, c), (b, d)), ((a, d), (b, c)) if rng.random() < 0.5 else ((a, d), (b, c),), ):
+            # simple-edge constraints
+            if f1[0] == f1[1] or f2[0] == f2[1]:
                 continue
-            if G.has_edge(a, b) or G.has_edge(c, d):
+            if G.has_edge(*f1) or G.has_edge(*f2):
                 continue
-            s = _assort_score(a, b, deg, assortative_mode) + _assort_score(c, d, deg, assortative_mode)
-            scored.append(((a, b, c, d), s))
+            if _ek(*f1) == _ek(*f2):
+                continue
+            # k-hop locality constraints
+            if not _within_k(f1[0], f1[1], k, neighborhoods, G, locality_reference, dyn_cache):
+                continue
+            if not _within_k(f2[0], f2[1], k, neighborhoods, G, locality_reference, dyn_cache):
+                continue
+            return ( (a,b), (c,d), f1, f2 )
 
-        if not scored:
+    return None
+
+# ---------- main routine ----------
+
+def transform_to_hh_via_stochastic_rewiring(
+    G,
+    H,
+    max_steps=10000,
+    beta=3.0,           # bias toward HH edges
+    T0=1.0,             # initial temperature
+    cooling=0.995,      # simulated annealing cooling per accepted step
+    ensure_connected=True,
+    k_hop=2,         # e.g., 2 or 3 to preserve locality; None disables
+    locality_reference="initial",  # "initial" (default) or "current"
+    seed=None,
+):
+    """
+    Stochastically transform G to its Havel–Hakimi realization using biased 2-edge swaps
+    while (a) preserving degree sequence, (b) enforcing k-hop locality for *new* edges,
+    and (c) rejecting swaps that break connectivity (if ensure_connected=True).
+    """
+    rng = random.Random(seed)
+    Gc = G.copy()
+
+    # Target HH graph and scoring
+    
+    H_set = {_ek(u, v) for u, v in H.edges()}
+    def matches_in_H(edges): return sum(1 for e in edges if _ek(*e) in H_set)
+    cur_matches = matches_in_H(Gc.edges())
+
+    # Precompute k-hop neighborhoods on the chosen reference graph
+    neighborhoods = None
+    if k_hop is not None:
+        ref_graph = G if locality_reference == "initial" else Gc
+        neighborhoods = _khop_neighborhoods(ref_graph, k_hop)
+
+    T = T0
+    traj = []
+    m = Gc.number_of_edges()
+
+    for _ in range(max_steps):
+        prop = _propose_swap_with_locality(
+            Gc, rng, k_hop, neighborhoods, locality_reference, max_tries=256
+        )
+        if prop is None:
+            # no valid locality-respecting swap found under the budget
+            break
+
+        (e1, e2, f1, f2) = prop
+        before = int(_ek(*e1) in H_set) + int(_ek(*e2) in H_set)
+        after  = int(_ek(*f1) in H_set) + int(_ek(*f2) in H_set)
+        dmatches = after - before
+
+        # Metropolis acceptance (symmetric proposals)
+        accept = (dmatches >= 0) or (rng.random() < math.exp(beta * dmatches / max(T, 1e-8)))
+        if not accept:
             continue
 
-        # Softmax over scores -> prefer higher assortativity, but keep some randomness
-        max_s = max(s for _, s in scored)
-        probs = [math.exp(assortative_bias * (s - max_s)) for _, s in scored]
-        total = sum(probs)
-        probs = [p / total for p in probs]
-        choice_idx = random.choices(range(len(scored)), weights=probs, k=1)[0]
-        a, b, c, d = scored[choice_idx][0]
+        # Tentatively apply and enforce connectivity
+        Gc.remove_edges_from([e1, e2])
+        Gc.add_edges_from([f1, f2])
 
-        # Execute 
-        add = (a, b), (c, d)
-        remove = (u, v), (x, y)
-        G.remove_edges_from([(u, v), (x, y)])
-        G.add_edges_from([(a, b), (c, d)])
-
-        # Enforce connectivity
-        if keep_connected and not nx.is_connected(G):
-            # revert and try again
-            add, remove = None, None
-            G.remove_edges_from([(a, b), (c, d)])
-            G.add_edges_from([(u, v), (x, y)])
+        if ensure_connected and not nx.is_connected(Gc):
+            # revert if it breaks connectivity
+            Gc.remove_edges_from([f1, f2])
+            Gc.add_edges_from([e1, e2])
             continue
         else:
-            return G, add, remove
+            traj.append((Gc.copy(),(f1, f2),(e1, e2)))
 
-    return G, None, None
+        # Commit
+        cur_matches += dmatches
+        T *= cooling
+
+        if cur_matches == m:  # reached HH exactly
+            break
+
+        # If using dynamic locality, refresh neighborhoods occasionally (cheap heuristic)
+        if k_hop is not None and locality_reference == "current":
+            # Only recompute for touched nodes to keep it light
+            for u in {e1[0], e1[1], e2[0], e2[1], f1[0], f1[1], f2[0], f2[1]}:
+                dists = nx.single_source_shortest_path_length(Gc, u, cutoff=k_hop)
+                neighborhoods[u] = {x for x, dist in dists.items() if 0 < dist <= k_hop}
+    #plot_graph_evolution([(G,"G"),(Gc,"G_to_HH"),(H,"H")])
+    return traj
+
 
 
 def constraint_configuration_model_from_multiset(degree_sequence, max_retries=None, max_failures=1000):
@@ -453,3 +467,162 @@ def hh_graph_from_seq(seq):
     mapping = {i: deg_pairs[i][1] for i in range(len(seq))}
     H = nx.relabel_nodes(H_int, mapping, copy=True)
     return H
+
+
+def edge_sets(G):
+    return {tuple(sorted(e)) for e in G.edges()}
+
+def jaccard_edge_similarity(G,H):
+    A, B = edge_sets(G), edge_sets(H)
+    inter, union = len(A & B), len(A | B)
+    return inter / union if union else 1.0
+
+def normalized_symdiff_distance(G,H):
+    A, B = edge_sets(G), edge_sets(H)
+    m = G.number_of_edges()
+    return len(A ^ B) / (2*m) if m else 0.0
+
+def swap_distance(G,H):
+    """Exact # of 2-switches via alternating-cycle decomposition."""
+    A, B = edge_sets(G), edge_sets(H)
+    red = A - B
+    blue = B - A
+    # Build adjacency by color
+    adjR, adjB = {}, {}
+    for u,v in red:
+        adjR.setdefault(u,set()).add(v)
+        adjR.setdefault(v,set()).add(u)
+    for u,v in blue:
+        adjB.setdefault(u,set()).add(v)
+        adjB.setdefault(v,set()).add(u)
+
+    usedR = set()
+    cycles = 0
+    total_red = len(red)
+
+    # Traverse alternating cycles: start from unused red edges
+    # store red edges as frozensets for quick membership
+    red_edges = {frozenset(e) for e in red}
+
+    for u,v in red:
+        e0 = frozenset((u,v))
+        if e0 in usedR:
+            continue
+        # start an alternating walk from (u,v), current node v, expecting blue next
+        curr = v
+        prev = u
+        expecting_blue = True
+        cycle_len = 1  # counts red edges; we'll count blue implicitly
+        usedR.add(e0)
+
+        while True:
+            if expecting_blue:
+                # take any unused blue edge from curr that doesn't go back to prev unless needed
+                nbrs = adjB.get(curr, set())
+                # choose a neighbor that continues the cycle; fall back if needed
+                next_nodes = [w for w in nbrs if w != prev]
+                if not next_nodes and prev in nbrs:
+                    next_nodes = [prev]
+                if not next_nodes:
+                    break  # should not happen if degrees match; defensive
+                nxt = next_nodes.pop()
+                prev, curr = curr, nxt
+            else:
+                # take a red edge; mark it used
+                nbrs = adjR.get(curr, set())
+                next_nodes = [w for w in nbrs if frozenset((curr,w)) not in usedR]
+                if not next_nodes:
+                    # closed the cycle if we’re back at start
+                    if curr == u:
+                        break
+                    else:
+                        # fallback to any red (should close)
+                        next_nodes = [w for w in nbrs if w == u]
+                        if not next_nodes:
+                            break
+                nxt = next_nodes.pop()
+                usedR.add(frozenset((curr,nxt)))
+                cycle_len += 1
+                prev, curr = curr, nxt
+            expecting_blue = not expecting_blue
+
+        cycles += 1
+
+    # Each alternating cycle with 2ℓ edges contributes (ℓ-1) swaps.
+    # Sum over cycles: total_red = sum ℓ, and #cycles = cycles ⇒ swaps = total_red - cycles
+    return total_red - cycles
+
+def topk_normlap_eigvals(G, k=32):
+    L = nx.normalized_laplacian_matrix(G).astype(float)
+    # For small/medium graphs you can use dense eigendecomposition:
+    w = np.linalg.eigvalsh(L.A if hasattr(L, "A") else L.todense())
+    w.sort()
+    k = min(k, len(w))
+    return w[:k]
+
+def spectral_l2_distance(G,H,k=32):
+    a = topk_normlap_eigvals(G,k)
+    b = topk_normlap_eigvals(H,k)
+    # pad if needed
+    if len(a) != len(b):
+        m = max(len(a), len(b))
+        a = np.pad(a, (0,m-len(a)))
+        b = np.pad(b, (0,m-len(b)))
+    return np.linalg.norm(a-b)
+
+def laplacian_eigs(G: nx.Graph, k: int, normed: bool = True):
+    """
+    Return (vals, vecs) for the K smallest *non-zero* eigenpairs of the (normalized) Laplacian.
+    Falls back gracefully on tiny graphs.
+    """
+    n = G.number_of_nodes()
+    if n == 0:
+        return np.empty((0,), dtype=np.float32), np.empty((0, 0), dtype=np.float32)
+    if n <= 2:
+        # trivial spectrum: normalized Laplacian of K2 has {0, 2}
+        vals = np.array([1.0] * min(k, max(0, n - 1)), dtype=np.float32)
+        vecs = np.ones((n, min(k, max(0, n - 1))), dtype=np.float32) / np.sqrt(n or 1)
+        return vals, vecs
+
+    A = csr_matrix(nx.to_scipy_sparse_array(G, dtype=float))
+    L = csgraph.laplacian(A, normed=normed)
+
+    # ask for k+1 to include the zero eigenvalue, then drop it
+    want = min(max(1, k + 1), n - 1)
+    try:
+        vals, vecs = eigsh(L, k=want, which="SM")
+    except Exception:
+        # robust fallback
+        return np.ones((k,), dtype=np.float32), np.ones((n, k), dtype=np.float32) / np.sqrt(n)
+
+    idx = np.argsort(vals)
+    vals, vecs = vals[idx], vecs[:, idx]
+    # drop the (near-)zero eigenvalue
+    if vals[0] < 1e-8:
+        vals, vecs = vals[1:], vecs[:, 1:]
+    # cap/pad to exactly k
+    vals = vals[:k].astype(np.float32)
+    vecs = vecs[:, :k].astype(np.float32)
+    if vals.shape[0] < k:
+        pad = k - vals.shape[0]
+        vals = np.pad(vals, (0, pad))
+        vecs = np.pad(vecs, ((0, 0), (0, pad)))
+    return vals, vecs
+
+
+def normalized_laplacian_dense(G: nx.Graph) -> np.ndarray:
+    """Dense normalized Laplacian as float64 ndarray (for small graphs this is fine)."""
+    return csgraph.laplacian(
+        csr_matrix(nx.to_scipy_sparse_array(G, dtype=float)), normed=True
+    ).toarray()
+
+
+# ---- inner-products needed for fast Frobenius scoring of a double-edge swap ----
+def _B_inner(M: np.ndarray, a: int, b: int) -> float:
+    # <M, (e_a - e_b)(e_a - e_b)^T> = M_aa + M_bb - 2 M_ab
+    return float(M[a, a] + M[b, b] - 2.0 * M[a, b])
+
+def _pair_inner(a: int, b: int, c: int, d: int) -> float:
+    # <B_ab, B_cd> = ( (e_a - e_b)^T (e_c - e_d) )^2
+    z = (a == c) - (a == d) - (b == c) + (b == d)
+    return float(z * z)

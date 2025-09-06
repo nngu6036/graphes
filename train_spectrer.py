@@ -23,197 +23,60 @@ from model_msvae import MSVAE
 from model_spectrer import SpectralER
 
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
-from utils import (
-    graph_to_data,
-    check_sequence_validity,
-    load_graph_from_directory,
-    laplacian_eigs,
-    normalized_laplacian_dense,
-    _B_inner,
-    _pair_inner,
-)
-
-# --- Add these helpers near the top of train_grapher.py (or move to utils.py if you prefer) ---
-
-def _count_simple_paths_exact_k(G: nx.Graph, s: int, t: int, k: int, forbidden_edge=None, cap=100000):
-    """
-    Count simple paths of *exact* length k (in edges) from s to t, without revisiting nodes.
-    If forbidden_edge is given as a frozenset({u,v}), that edge is not allowed in the path.
-    'cap' is a safety limit to avoid pathological blow-ups; counting stops after reaching cap.
-    """
-    if k < 0:
-        return 0
-    if k == 0:
-        return int(s == t)
-    # Quick pruning: can't reach in k steps if distance lower bound is too big.
-    # (Optional: comment out if you don't have precomputed distances)
-    count = 0
-    target = t
-    forb = forbidden_edge
-    def dfs(u, depth, visited):
-        nonlocal count
-        if count >= cap:
-            return
-        if depth == k:
-            if u == target:
-                count += 1
-            return
-        for w in G.neighbors(u):
-            if w in visited:
-                continue
-            if forb and frozenset((u, w)) == forb:
-                continue
-            # prevent early arrival: we need exact length k
-            if w == target and depth + 1 < k:
-                continue
-            visited.add(w)
-            dfs(w, depth + 1, visited)
-            visited.remove(w)
-    dfs(s, 0, {s})
-    return count
-
-def count_edge_cycles_n(G: nx.Graph, u: int, v: int, n: int) -> int:
-    """
-    Number of simple cycles of length n that contain edge (u,v).
-    For n=3, use fast common-neighbors count. For n>3, count simple paths
-    of length n-1 between u and v in G with edge (u,v) forbidden.
-    """
-    if n < 3:
-        return 0
-    if n == 3:
-        # triangles through (u,v)
-        return len(set(G.neighbors(u)) & set(G.neighbors(v)))
-    forb = frozenset((u, v))
-    return _count_simple_paths_exact_k(G, u, v, n - 1, forbidden_edge=forb)
-
-def count_cycles_if_add_edge_n(G: nx.Graph, a: int, b: int, n: int) -> int:
-    """
-    Number of simple cycles of length n that would be created by adding (a,b).
-    Equals the number of simple paths of length n-1 between a and b in the current G.
-    """
-    if n < 3:
-        return 0
-    if n == 3:
-        # New triangles formed by adding (a,b) are common neighbors of a and b
-        return len(set(G.neighbors(a)) & set(G.neighbors(b)))
-    return _count_simple_paths_exact_k(G, a, b, n - 1, forbidden_edge=None)
-
-# --- Replace your rewire_edges with this generic cycle-preserving version ---
-
-def rewire_edges(G: nx.Graph, num_rewirings: int, cycle_len: int = 3, cap_per_count: int = 100000):
-    """
-    Perform up to num_rewirings double-edge swaps that preserve (or increase) the count of
-    cycles of length 'cycle_len'. Uses '>=' criterion like your triangle-preserving version.
-
-    cap_per_count: safety cap passed to the path counter to guard against blow-ups on dense graphs.
-    """
-    step = 0
-    removed_pair = None
-    added_pair = None
-    for _ in range(num_rewirings):
-        edges = list(G.edges())
-        if len(edges) < 2:
-            break
-        e1, e2 = random.sample(edges, 2)
-        u, v = e1
-        x, y = e2
-        if len({u, v, x, y}) != 4:
-            continue
-        # cycles removed by deleting both edges
-        # Use capped counters to avoid pathological runtimes
-        c_removed = (
-            count_edge_cycles_n(G, u, v, cycle_len) +
-            count_edge_cycles_n(G, x, y, cycle_len)
-        )
-        # Option 1: (u,x) & (v,y)
-        can1 = (not G.has_edge(u, x)) and (not G.has_edge(v, y))
-        if can1:
-            c_add1 = (
-                count_cycles_if_add_edge_n(G, u, x, cycle_len) +
-                count_cycles_if_add_edge_n(G, v, y, cycle_len)
-            )
-        else:
-            c_add1 = -1  # invalid
-        # Option 2: (u,y) & (v,x)
-        can2 = (not G.has_edge(u, y)) and (not G.has_edge(v, x))
-        if can2:
-            c_add2 = (
-                count_cycles_if_add_edge_n(G, u, y, cycle_len) +
-                count_cycles_if_add_edge_n(G, v, x, cycle_len)
-            )
-        else:
-            c_add2 = -1  # invalid
-        # Choose the best valid option that preserves or increases cycle count
-        best_add = max(c_add1, c_add2)
-        if best_add >= c_removed and best_add >= 0:
-            if c_add1 >= c_add2 and can1:
-                G.remove_edges_from([(u, v), (x, y)])
-                G.add_edges_from([(u, x), (v, y)])
-                removed_pair = ((u, v), (x, y))
-                added_pair = ((u, x), (v, y))
-                step += 1
-            elif can2:
-                G.remove_edges_from([(u, v), (x, y)])
-                G.add_edges_from([(u, y), (v, x)])
-                removed_pair = ((u, v), (x, y))
-                added_pair = ((u, y), (v, x))
-                step += 1
-    return G, removed_pair, added_pair, step
+from utils import *
 
 
-def count_common_neighbors(G, a, b):
-    """Return number of common neighbors of nodes a and b."""
-    return len(set(G.neighbors(a)) & set(G.neighbors(b)))
-
-
-def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, cycle, device):
+def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
     opt = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    model.to(device).train()
+    criterion = nn.BCEWithLogitsLoss()
+    model.to(device)
+    model.train()
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for G in graphs:
-            num_rewirings = random.randint(1, T)
-            G_t, removed_pair, added_pair, step = rewire_edges(G.copy(), num_rewirings, cycle_len=cycle)
-            if not removed_pair or not added_pair:
-                continue
+            G_hh = hh_graph_from_G(G)
+            # --- Corrupt graph with t edge rewirings ---
+            traj = transform_to_hh_via_stochastic_rewiring(G, G_hh, G.number_of_edges())
+            step = 0
+            for G_t, added_pair, removed_pair in traj:
+                step += 1
+                # Undo the last swap to get G_{t-1}
+                G_prev = G_t.copy()
+                (u, v), (x, y) = removed_pair
+                (a, b), (c, d) = added_pair
+                if G_prev.has_edge(a, b): G_prev.remove_edge(a, b)
+                if G_prev.has_edge(c, d): G_prev.remove_edge(c, d)
+                G_prev.add_edge(u, v); G_prev.add_edge(x, y)
 
-            # Undo the last swap to get G_{t-1}
-            G_prev = G_t.copy()
-            (u, v), (x, y) = removed_pair
-            (a, b), (c, d) = added_pair
-            if G_prev.has_edge(a, b): G_prev.remove_edge(a, b)
-            if G_prev.has_edge(c, d): G_prev.remove_edge(c, d)
-            G_prev.add_edge(u, v); G_prev.add_edge(x, y)
+                lam_t, _    = laplacian_eigs(G_t,   k_eigen, normed=True)
+                lam_prev, _ = laplacian_eigs(G_prev, k_eigen, normed=True)
+                lam_t   = torch.from_numpy(lam_t).to(device)
+                lam_t_1 = torch.from_numpy(lam_prev).to(device)
 
-            lam_t, _    = laplacian_eigs(G_t,   k_eigen, normed=True)
-            lam_prev, _ = laplacian_eigs(G_prev, k_eigen, normed=True)
-            lam_t   = torch.from_numpy(lam_t).to(device)
-            lam_t_1 = torch.from_numpy(lam_prev).to(device)
+                # size features
+                n = G_t.number_of_nodes()
+                m_edges = G_t.number_of_edges()
+                avg_deg = (2.0 * m_edges) / max(1, n)
+                density = (2.0 * m_edges) / max(1, n * (n - 1))
+                extra_feat = torch.tensor([math.log(max(n, 2)), avg_deg, density],
+                                          device=device, dtype=lam_t.dtype)
 
-            # size features
-            n = G_t.number_of_nodes()
-            m_edges = G_t.number_of_edges()
-            avg_deg = (2.0 * m_edges) / max(1, n)
-            density = (2.0 * m_edges) / max(1, n * (n - 1))
-            extra_feat = torch.tensor([math.log(max(n, 2)), avg_deg, density],
-                                      device=device, dtype=lam_t.dtype)
+                mu, logvar = model(lam_t, step, extra_feat)
 
-            mu, logvar = model(lam_t, step, extra_feat)
+                # Masked diagonal-Gaussian NLL over valid eigenvalues
+                m_valid = min(k_eigen, max(0, n - 1))
+                mask = torch.zeros_like(lam_t_1)
+                if m_valid > 0:
+                    mask[:m_valid] = 1.0
+                diff = lam_t_1 - mu
+                nll_vec = 0.5 * (diff.pow(2) * torch.exp(-logvar) + logvar)
+                nll = (nll_vec * mask).sum() / mask.sum().clamp_min(1.0)
 
-            # Masked diagonal-Gaussian NLL over valid eigenvalues
-            m_valid = min(k_eigen, max(0, n - 1))
-            mask = torch.zeros_like(lam_t_1)
-            if m_valid > 0:
-                mask[:m_valid] = 1.0
-            diff = lam_t_1 - mu
-            nll_vec = 0.5 * (diff.pow(2) * torch.exp(-logvar) + logvar)
-            nll = (nll_vec * mask).sum() / mask.sum().clamp_min(1.0)
-
-            opt.zero_grad()
-            nll.backward()
-            opt.step()
-            epoch_loss += float(nll.item())
-        print(f"[spectral] Epoch {epoch+1}/{num_epochs}  NLL: {epoch_loss:.4f}")
+                opt.zero_grad()
+                nll.backward()
+                opt.step()
+                epoch_loss += float(nll.item())
+        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
 
 
 def load_msvae_from_file(max_node,config, model_path):
@@ -255,7 +118,6 @@ def main(args):
     hidden_dim = config['training']['hidden_dim']
     T         = config['training']['T']
     k_eigen   = config['data']['k_eigen']
-    cycle     = config['training']['cycle']
 
     # FIX: correct ctor args (k, hidden, T)
     model = SpectralER(k_eigen, hidden_dim, T)
@@ -266,7 +128,7 @@ def main(args):
     else:
         num_epochs    = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_spectral(model, train_graphs, num_epochs, learning_rate, T, k_eigen, cycle, 'cpu')
+        train_spectral(model, train_graphs,num_epochs, learning_rate,T, k_eigen,'cpu')
 
     if args.output_model:
         model.save_model(model_dir / args.output_model)
@@ -292,19 +154,14 @@ def main(args):
             print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs, generated_graphs)}")
             print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs, generated_seqs, max_node)}")
             print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs, generated_seqs, max_node)}")
-        """
-        generated_graphs, generated_seqs = model.generate_from_sequences(T,degree_sequences,k_eigen,method = 'constraint_configuration_model')
-        print(f"Evaluate generated graphs sampled from training using constraint configuration model")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
 
-        generated_graphs, generated_seqs = model.generate_from_sequences(T,degree_sequences,k_eigen,method = 'havei_hakimi')
-        print(f"Evaluate generated graphs sampled from training using havei_hakimi model")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-        """
+        if setvae_model:
+            N_nodes = [G.number_of_nodes() for G in random.choices(train_graphs, k=config['inference']['generate_samples'])]
+            generated_graphs, generated_seqs = model.generate_with_setvae(N_nodes, T, setvae_model, k_eigen, method='havel_hakimi')
+            print(f"Evaluate generated graphs using Havei Hamimi Model and Set-VAE")
+            print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
+            print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
+            print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GRAPH-ER Model')
