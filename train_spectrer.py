@@ -20,7 +20,8 @@ from collections import Counter
 import numpy as np
 
 from model_msvae import MSVAE
-from model_spectrer import SpectralER
+from model_setvae import SetVAE
+from model_grapher import GraphER
 
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
 from utils import *
