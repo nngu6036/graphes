@@ -21,7 +21,7 @@ import numpy as np
 
 from model_msvae import MSVAE
 from model_setvae import SetVAE
-from model_grapher import GraphER
+from model_spectraler import SpectralER
 
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
 from utils import *
