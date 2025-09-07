@@ -404,7 +404,7 @@ class SpectralER(nn.Module):
                 snapshots.append((G.copy(), 0))
 
             # Save the evolution strip for this graph
-            save_graph_evolution(snapshots, idx, out_dir="evolutions")
+            save_graph_evolution(snapshots, idx, out_dir=f"evolutions_spectral_{method}")
 
             generated_graphs.append(G)
 
