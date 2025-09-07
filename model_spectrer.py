@@ -331,3 +331,81 @@ class SpectralER(nn.Module):
             generated_graphs.append(G)
 
         return generated_graphs, generated_seqs
+
+
+    @torch.no_grad()
+    def generate_with_setvae(self, N_nodes, num_steps, setvae_model, k_eigen, method='constraint_configuration_model'):
+        self.eval()
+        device = next(self.parameters()).device
+        generated_graphs = []
+        generated_seqs = []
+        initial_graphs = []
+        degree_sequences = setvae_model.generate(N_nodes)
+        for seq in degree_sequences:
+            G = initialize_graphs(method, seq)
+            if G:
+                initial_graphs.append(G)
+                generated_seqs.append(seq)
+
+        for idx, G in enumerate(initial_graphs):
+            print(f"[spectral] Generating graph {idx + 1}")
+
+            # Reset snapshot collectors PER GRAPH
+            snapshots = []
+            step_size = max(1, num_steps // 8)   # ~8 panels
+            plot_index = num_steps
+
+            for t in reversed(range(num_steps + 1)):
+                if t == plot_index:
+                    snapshots.append((G.copy(), t))
+                    plot_index -= step_size
+
+                edges = list(G.edges())
+                if len(edges) < 2:
+                    continue
+                u, v = random.choice(edges)
+
+                # spectrum (clamp k to graph size)
+                n = G.number_of_nodes()
+                k_eff = min(k_eigen, max(1, n - 1))
+                lam_t_np, U_t = laplacian_eigs(G, k_eff, normed=True)
+                lam_t = torch.from_numpy(lam_t_np).to(device)
+
+                lam_t_in = _pad_or_trim_tensor_1d(lam_t, self.k)
+
+
+                # extras
+                m_edges = G.number_of_edges()
+                avg_deg = (2.0 * m_edges) / max(1, n)
+                density = (2.0 * m_edges) / max(1, n * (n - 1))
+                extra_feat = torch.tensor([math.log(max(n, 2)), avg_deg, density],
+                                          device=device, dtype=lam_t_in.dtype)
+
+                # predict lambda_{t-1}
+                lam_pred, _, _ = self.sample(lam_t_in, t, extra_feat)
+                lam_pred_np = lam_pred[:k_eff].clamp_min(0.0).clamp_max(2.0).cpu().numpy()
+
+                # build L_hat
+                L_t = normalized_laplacian_dense(G)
+                L_hat = (L_t
+                         - (U_t @ np.diag(lam_t_np) @ U_t.T)
+                         + (U_t @ np.diag(lam_pred_np) @ U_t.T)).astype(np.float64)
+
+                # best second edge and apply swap (connectivity-safe)
+                choice, orient = pick_second_edge_by_spectral(G, u, v, L_hat)
+                if choice is None:
+                    continue
+                x, y = choice
+                p, q, r, s = orient
+                _apply_swap_if_valid(G, u, v, x, y, p, q, r, s, preserve_connectivity=True)
+
+            # Ensure we include the final state if not already captured
+            if not snapshots or snapshots[-1][1] != 0:
+                snapshots.append((G.copy(), 0))
+
+            # Save the evolution strip for this graph
+            save_graph_evolution(snapshots, idx, out_dir="evolutions")
+
+            generated_graphs.append(G)
+
+        return generated_graphs, generated_seqs
