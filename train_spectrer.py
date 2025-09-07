@@ -83,15 +83,16 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
 def load_msvae_from_file(max_node,config, model_path):
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
-    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node)
+    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node-1)
     print(f"MS-VAE Model loaded from {model_path}")
     model.load_model(model_path)
     return model
 
+
 def load_setvae_from_file(max_node,config, model_path):
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
-    model = SetVAE(hidden_dim=hidden_dim, latent_dim=latent_dim, max_degree = max_node)
+    model = SetVAE(hidden_dim=hidden_dim, latent_dim=latent_dim, max_degree = max_node-1)
     print(f"Set-VAE Model loaded from {model_path}")
     model.load_model(model_path)
     return model
