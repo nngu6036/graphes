@@ -6,7 +6,7 @@ import networkx as nx
 import random, math, numpy as np
 import matplotlib.pyplot as plt
 
-from utils import graph_to_data, check_sequence_validity, laplacian_eigs, normalized_laplacian_dense, _B_inner, _pair_inner
+from utils import save_graph_evolution,graph_to_data, check_sequence_validity, laplacian_eigs, normalized_laplacian_dense, _B_inner, _pair_inner
 
 
 def constraint_configuration_model_from_multiset(degree_sequence, max_retries=None, max_failures=1000):
