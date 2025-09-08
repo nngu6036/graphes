@@ -81,7 +81,7 @@ def initialize_graphs(method, seq):
     if method == 'constraint_configuration_model':
         G = constraint_configuration_model_from_multiset(seq)
     return G
-    
+
 class SpectralER(nn.Module):
     def __init__(self, k, hidden, T, extra_dim=3):
         super().__init__()
@@ -178,7 +178,7 @@ class SpectralER(nn.Module):
                     continue
                 x, y = choice
                 p, q, r, s = orient
-                _apply_swap_if_valid(G, u, v, x, y, p, q, r, s, preserve_connectivity=True)
+                _apply_swap_if_valid(G, u, v, x, y, p, q, r, s)
 
             # Ensure we include the final state if not already captured
             if not snapshots or snapshots[-1][1] != 0:
@@ -272,7 +272,7 @@ class SpectralER(nn.Module):
                     continue
                 x, y = choice
                 p, q, r, s = orient
-                _apply_swap_if_valid(G, u, v, x, y, p, q, r, s, preserve_connectivity=True)
+                _apply_swap_if_valid(G, u, v, x, y, p, q, r, s)
 
             # Ensure we include the final state if not already captured
             if not snapshots or snapshots[-1][1] != 0:
@@ -350,7 +350,7 @@ class SpectralER(nn.Module):
                     continue
                 x, y = choice
                 p, q, r, s = orient
-                _apply_swap_if_valid(G, u, v, x, y, p, q, r, s, preserve_connectivity=True)
+                _apply_swap_if_valid(G, u, v, x, y, p, q, r, s)
 
             # Ensure we include the final state if not already captured
             if not snapshots or snapshots[-1][1] != 0:
