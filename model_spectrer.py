@@ -8,6 +8,15 @@ import matplotlib.pyplot as plt
 
 from utils import *
 
+# ---- inner-products needed for fast Frobenius scoring of a double-edge swap ----
+def _B_inner(M: np.ndarray, a: int, b: int) -> float:
+    # <M, (e_a - e_b)(e_a - e_b)^T> = M_aa + M_bb - 2 M_ab
+    return float(M[a, a] + M[b, b] - 2.0 * M[a, b])
+
+def _pair_inner(a: int, b: int, c: int, d: int) -> float:
+    # <B_ab, B_cd> = ( (e_a - e_b)^T (e_c - e_d) )^2
+    z = (a == c) - (a == d) - (b == c) + (b == d)
+    return float(z * z)
 
 
 def _apply_swap_if_valid(G, u, v, x, y, p, q, r, s):
