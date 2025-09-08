@@ -6,81 +6,15 @@ import networkx as nx
 import random, math, numpy as np
 import matplotlib.pyplot as plt
 
-from utils import save_graph_evolution,graph_to_data, check_sequence_validity, laplacian_eigs, normalized_laplacian_dense, _B_inner, _pair_inner
+from utils import *
 
 
-def constraint_configuration_model_from_multiset(degree_sequence, max_retries=None, max_failures=1000):
-    N = len(degree_sequence)
-    if max_retries is None:
-        max_retries = N
-    for _ in range(max_retries):
-        stubs = []
-        for node, deg in enumerate(degree_sequence):
-            stubs.extend([node] * deg)
-        random.shuffle(stubs)
-        G = nx.Graph(); G.add_nodes_from(range(N))
-        failures = 0
-        while len(stubs) >= 2 and failures < max_failures:
-            u, v = stubs.pop(), stubs.pop()
-            if u == v or G.has_edge(u, v):
-                stubs.extend([u, v])
-                random.shuffle(stubs)
-                failures += 1
-                continue
-            G.add_edge(u, v)
-            failures = 0
-        if sorted([d for _, d in G.degree()]) == sorted(degree_sequence):
-            return G
-    return None
 
-def configuration_model_from_multiset(degrees):
-    G = nx.configuration_model(degrees)
-    G = nx.Graph(G)
-    G.remove_edges_from(nx.selfloop_edges(G))
-    return G
-
-def havel_hakimi_construction(degree_sequence):
-    try:
-        seq_sorted = sorted([int(d) for d in degree_sequence], reverse=True)
-        if not nx.is_valid_degree_sequence_havel_hakimi(seq_sorted):
-            return None
-        return nx.generators.degree_seq.havel_hakimi_graph(seq_sorted, create_using=nx.Graph())
-    except Exception:
-        return None
-
-def initialize_graphs(method, seq):
-    if method in ('havei_hakimi', 'havel_hakimi'):
-        G = havel_hakimi_construction(seq)
-    elif method == 'configuration_model':
-        G = configuration_model_from_multiset(seq)
-    elif method == 'constraint_configuration_model':
-        G = constraint_configuration_model_from_multiset(seq)
-    else:
-        raise ValueError(f"Unknown init method: {method}")
-    if G is not None:
-        for _ in range(10 * G.number_of_edges()):
-            edges = list(G.edges())
-            if len(edges) < 2: break
-            e1, e2 = random.sample(edges, 2)
-            u, v = e1; x, y = e2
-            if len({u, v, x, y}) != 4: continue
-            if (not G.has_edge(u, x)) and (not G.has_edge(v, y)):
-                G.remove_edges_from([(u, v), (x, y)]); G.add_edges_from([(u, x), (v, y)])
-            elif (not G.has_edge(u, y)) and (not G.has_edge(v, x)):
-                G.remove_edges_from([(u, v), (x, y)]); G.add_edges_from([(u, y), (v, x)])
-    return G
-
-def _apply_swap_if_valid(G, u, v, x, y, p, q, r, s, preserve_connectivity=False):
+def _apply_swap_if_valid(G, u, v, x, y, p, q, r, s):
     if G.has_edge(p, q) or G.has_edge(r, s):
         return False
-    if preserve_connectivity:
-        was_connected = nx.is_connected(G)
     G.remove_edges_from([(u, v), (x, y)])
     G.add_edges_from([(p, q), (r, s)])
-    if preserve_connectivity and not nx.is_connected(G):
-        G.remove_edges_from([(p, q), (r, s)])
-        G.add_edges_from([(u, v), (x, y)])
-        return False
     return True
 
 def _score_swap_error(M: np.ndarray, terms):
