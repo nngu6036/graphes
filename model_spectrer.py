@@ -63,6 +63,16 @@ def _pad_or_trim_tensor_1d(x: torch.Tensor, target_len: int):
     pad = torch.zeros(target_len - cur, dtype=x.dtype, device=x.device)
     return torch.cat([x, pad], dim=0).contiguous()
 
+def initialize_graphs(method, seq):
+    G = None
+    if method == 'havel_hakimi':
+        G = nx.havel_hakimi_graph(seq)
+    if method == 'configuration_model':
+        G = configuration_model_from_multiset(seq)
+    if method == 'constraint_configuration_model':
+        G = constraint_configuration_model_from_multiset(seq)
+    return G
+    
 class SpectralER(nn.Module):
     def __init__(self, k, hidden, T, extra_dim=3):
         super().__init__()
