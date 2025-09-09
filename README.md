@@ -128,6 +128,15 @@ python train_spectrer.py --config grapher_community_config.toml  --dataset-dir d
 ```bash
 python train_spectrer.py --config grapher_grid_config.toml  --dataset-dir dataset1_grid_edgelists --msvae-model msvae_grid --msvae-config msvae_config.toml --output-model spectrer_grid --evaluate 
 ```
+```bash
+python train_spectrer.py --config grapher_ego_config.toml  --dataset-dir dataset1_ego_edgelists --setvae-model setvae_ego --setvae-config setvae_config.toml --output-model spectrer_ego --evaluate 
+```
+```bash
+python train_spectrer.py --config grapher_community_config.toml  --dataset-dir dataset1_community_edgelists --setvae-model setvae_community --setvae-config setvae_config.toml --output-model spectrer_community --evaluate 
+```
+```bash
+python train_spectrer.py --config grapher_grid_config.toml  --dataset-dir dataset1_grid_edgelists --setvae-model setvae_grid --setvae-config setvae_config.toml --output-model spectrer_grid --evaluate 
+```
 ## Evaluate SpectralER model
 ```bash
 python train_spectrer.py --config grapher_ego_config.toml  --dataset-dir dataset1_ego_edgelists --msvae-model msvae_ego --msvae-config msvae_config.toml --input-model spectrer_ego --evaluate 

@@ -130,17 +130,7 @@ class SpectralER(nn.Module):
         for idx, G in enumerate(initial_graphs):
             print(f"[spectral] Generating graph {idx + 1}")
 
-            # Reset snapshot collectors PER GRAPH
-            snapshots = []
-            step_size = max(1, num_steps // 8)   # ~8 panels
-            plot_index = num_steps
-
             for t in reversed(range(num_steps + 1)):
-                # snapshot before doing the step evaluation (so we capture t)
-                if t == plot_index:
-                    snapshots.append((G.copy(), t))  # store a copy of the graph and the step
-                    plot_index -= step_size
-
                 edges = list(G.edges())
                 if len(edges) < 2:
                     continue
@@ -178,17 +168,9 @@ class SpectralER(nn.Module):
                     continue
                 x, y = choice
                 p, q, r, s = orient
-                _apply_swap_if_valid(G, u, v, x, y, p, q, r, s)
-
-            # Ensure we include the final state if not already captured
-            if not snapshots or snapshots[-1][1] != 0:
-                snapshots.append((G.copy(), 0))
-
-            # Save the evolution strip for this graph
-            save_graph_evolution(snapshots, idx, out_dir="evolutions")
-
+                _apply_swap_if_valid(G, u, v, x, y, p, q, r, s)            
             generated_graphs.append(G)
-
+        save_graphs(generated_graphs)
         return generated_graphs, generated_seqs
 
     @torch.no_grad()
@@ -225,16 +207,7 @@ class SpectralER(nn.Module):
         for idx, G in enumerate(initial_graphs):
             print(f"[spectral] Generating graph {idx + 1}")
 
-            # Reset snapshot collectors PER GRAPH
-            snapshots = []
-            step_size = max(1, num_steps // 8)   # ~8 panels
-            plot_index = num_steps
-
             for t in reversed(range(num_steps + 1)):
-                if t == plot_index:
-                    snapshots.append((G.copy(), t))
-                    plot_index -= step_size
-
                 edges = list(G.edges())
                 if len(edges) < 2:
                     continue
@@ -247,7 +220,6 @@ class SpectralER(nn.Module):
                 lam_t = torch.from_numpy(lam_t_np).to(device)
 
                 lam_t_in = _pad_or_trim_tensor_1d(lam_t, self.k)
-
 
                 # extras
                 m_edges = G.number_of_edges()
@@ -273,16 +245,8 @@ class SpectralER(nn.Module):
                 x, y = choice
                 p, q, r, s = orient
                 _apply_swap_if_valid(G, u, v, x, y, p, q, r, s)
-
-            # Ensure we include the final state if not already captured
-            if not snapshots or snapshots[-1][1] != 0:
-                snapshots.append((G.copy(), 0))
-
-            # Save the evolution strip for this graph
-            save_graph_evolution(snapshots, idx, out_dir="evolutions")
-
             generated_graphs.append(G)
-
+        save_graphs(generated_graphs)
         return generated_graphs, generated_seqs
 
 
@@ -302,17 +266,7 @@ class SpectralER(nn.Module):
 
         for idx, G in enumerate(initial_graphs):
             print(f"[spectral] Generating graph {idx + 1}")
-
-            # Reset snapshot collectors PER GRAPH
-            snapshots = []
-            step_size = max(1, num_steps // 8)   # ~8 panels
-            plot_index = num_steps
-
             for t in reversed(range(num_steps + 1)):
-                if t == plot_index:
-                    snapshots.append((G.copy(), t))
-                    plot_index -= step_size
-
                 edges = list(G.edges())
                 if len(edges) < 2:
                     continue
@@ -351,14 +305,6 @@ class SpectralER(nn.Module):
                 x, y = choice
                 p, q, r, s = orient
                 _apply_swap_if_valid(G, u, v, x, y, p, q, r, s)
-
-            # Ensure we include the final state if not already captured
-            if not snapshots or snapshots[-1][1] != 0:
-                snapshots.append((G.copy(), 0))
-
-            # Save the evolution strip for this graph
-            save_graph_evolution(snapshots, idx, out_dir=f"evolutions_spectral_{method}")
-
             generated_graphs.append(G)
-
+        save_graphs(generated_graphs)
         return generated_graphs, generated_seqs
