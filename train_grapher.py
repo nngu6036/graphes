@@ -1,111 +1,78 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch_geometric.data import Data
-import os
-import argparse
-import toml
-import math
-import random
 from pathlib import Path
-from torch_geometric.utils import from_networkx
+import toml, random
 import networkx as nx
-from scipy.optimize import linear_sum_assignment
-from torch.optim import Adam
-from torch.utils.data import DataLoader, TensorDataset
-from tqdm import tqdm
-import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
-
 
 from model_msvae import MSVAE
 from model_setvae import SetVAE
 from model_grapher import GraphER
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
-from utils import *
+from utils import graph_to_data, hh_graph_from_G, transform_to_hh_via_stochastic_rewiring, load_graph_from_directory, check_sequence_validity
 
-# --- helper to infer orientation label (0 or 1) for reverse step ---
 def _orientation_label(anchor, partner, removed_pair):
-    """
-    anchor:   (a,b)  in G_t
-    partner:  (c,d)  in G_t
-    removed_pair: ((u,v), (x,y))  that were present in G_{t-1}
-    Return:
-      0 if { (a,c), (b,d) } equals removed edges (unordered)
-      1 if { (a,d), (b,c) } equals removed edges
-    Raises if neither matches (shouldn't happen if trajectory is consistent).
-    """
     (a,b), (c,d) = anchor, partner
     rem = {frozenset(removed_pair[0]), frozenset(removed_pair[1])}
-    opt0 = {frozenset((a, c)), frozenset((b, d))}
-    if opt0 == rem: return 0
-    opt1 = {frozenset((a, d)), frozenset((b, c))}
-    if opt1 == rem: return 1
-    # Fallback: pick the closer one (rare). Or raise.
-    raise ValueError("Orientation does not match removed edges; check trajectory construction.")
+    if {frozenset((a,c)), frozenset((b,d))} == rem: return 0
+    if {frozenset((a,d)), frozenset((b,c))} == rem: return 1
+    raise ValueError("Orientation does not match removed edges.")
 
-def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
+def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen, device):
     model = model.to(device)
     opt = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0.0
+
         for G in graphs:
             G_hh = hh_graph_from_G(G)
-            # --- Corrupt graph with t edge rewirings ---
             traj = transform_to_hh_via_stochastic_rewiring(G, G_hh, G.number_of_edges())
             for step_idx, (G_t, added_pair, removed_pair) in enumerate(traj, start=1):
-                # Teacher-forced anchor = one of added edges
                 (a,b), (c,d) = added_pair
-                anchor = (a, b)
+                anchor      = (a, b)
                 pos_partner = (c, d)
 
-                # Build candidate set = all edges disjoint with anchor (a,b)
+                # candidates = all edges disjoint with anchor
                 all_edges = list(G_t.edges())
-                cand_edges = []
-                for (x,y) in all_edges:
-                    if frozenset((x,y)) == frozenset(anchor):
-                        continue
-                    if len({a,b,x,y}) == 4:   # disjoint
-                        cand_edges.append((x,y))
-
+                cand_edges = [(x,y) for (x,y) in all_edges
+                              if frozenset((x,y)) != frozenset(anchor) and len({a,b,x,y}) == 4]
                 if not cand_edges:
-                    continue  # nothing to learn this step
+                    continue
+                # ensure positive present
+                if frozenset(pos_partner) not in {frozenset(e) for e in cand_edges}:
+                    cand_edges.append(pos_partner)
 
-                # Build labels
-                # Partner label: index of the positive in cand_edges
+                # partner label index
                 pos_idx = None
                 for i, e in enumerate(cand_edges):
                     if frozenset(e) == frozenset(pos_partner):
                         pos_idx = i; break
+                if pos_idx is None:
+                    continue
 
                 orient_y = _orientation_label(anchor, pos_partner, removed_pair)
-                # ---- Model forward on G_t ----
-                data = graph_to_data(G_t, k_eigen) 
-                x, edge_index = data.x.to(device), data.edge_index.to(device)
 
+                # forward
+                data = graph_to_data(G_t, k_eigen)
+                x, edge_index = data.x.to(device), data.edge_index.to(device)
                 partner_logits, orient_logits = model(
                     x=x, edge_index=edge_index,
                     first_edge=anchor, candidate_edges=cand_edges, t=step_idx
-                )
-                # ---- Losses ----
-                # (1) Candidate partner classification (softmax CE over candidates)
+                )   # shapes: (C,), (C,2)
+
+                # losses
                 target_idx = torch.tensor([pos_idx], dtype=torch.long, device=device)
-                loss_partner = F.cross_entropy(partner_logits.unsqueeze(0), target_idx)
+                loss_partner = F.cross_entropy(partner_logits.unsqueeze(0), target_idx)   # (1,C) vs (1)
+                loss_orient  = F.cross_entropy(orient_logits[pos_idx].unsqueeze(0),
+                                               torch.tensor([orient_y], dtype=torch.long, device=device))
+                loss = loss_partner + 0.5 * loss_orient
 
-                # (2) Orientation classification *for the positive candidate only*
-                orient_logits_pos = orient_logits[pos_idx].unsqueeze(0)   # (1,2)
-                orient_target = torch.tensor([orient_y], dtype=torch.long, device=device)
-                loss_orient = F.cross_entropy(orient_logits_pos, orient_target)
-
-                loss = loss_partner + 0.5 * loss_orient  # λ=0.5 is a good start
-
-                # ---- Opt step ----
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
                 total_loss += float(loss.item())
-        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss:.4f}")
+
+        print(f"Epoch {epoch+1}/{num_epochs}  Loss: {total_loss:.4f}")
 
 
 def load_msvae_from_file(max_node,config, model_path):
