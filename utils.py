@@ -373,26 +373,31 @@ def havel_hakimi_construction(degree_sequence):
         deg_seq = [d for d in deg_seq if d > 0]
     return G
 
-
-def save_graphs(snapshots, save_to_local = True, filename="graphs", out_dir="logs"):
+def save_graphs(snapshots, save_to_local=True, filename="graphs", out_dir="logs"):
     """
-    Save a sequence of graph snapshots in a multi-panel figure with 8 columns per row.
-    No style/options exposed—uses NetworkX/Matplotlib defaults.
+    Draw a panel (8 per row). Accepts a list of nx.Graph objects.
+    Uses a union-graph layout so every node across all snapshots has a position.
     """
     os.makedirs(out_dir, exist_ok=True)
+    if not snapshots:
+        return
 
-    # Fixed positions from the first snapshot for comparability.
-    G0 = snapshots[0]
-    pos = nx.spring_layout(G0, seed=42)
+    # 1) Build a union graph over all snapshots (nodes+edges)
+    G_union = nx.Graph()
+    for G in snapshots:
+        G_union.add_nodes_from(G.nodes())
+        G_union.add_edges_from(G.edges())
 
+    # 2) Compute positions once for the union (covers *all* nodes)
+    pos = nx.spring_layout(G_union, seed=42)
+
+    # 3) Set up grid
     N = len(snapshots)
     ncols = 8
     nrows = math.ceil(N / ncols)
-
-    # Simple sizing heuristic; defaults only (no dpi arg exposed).
     fig, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 3.6 * nrows))
 
-    # Flatten axes without numpy.
+    # Flatten axes
     if nrows * ncols == 1:
         axes = [axes]
     elif nrows == 1:
@@ -400,21 +405,31 @@ def save_graphs(snapshots, save_to_local = True, filename="graphs", out_dir="log
     else:
         axes = [ax for row in axes for ax in row]
 
+    # 4) Draw each snapshot using the union positions
     for G, ax in zip(snapshots, axes):
-        nx.draw(G, pos=pos, with_labels=False, ax=ax)  # defaults for size/colors/widths
+        # (Optional safety) fill any unexpected missing nodes
+        missing = [n for n in G.nodes() if n not in pos]
+        if missing:
+            # Initialize missing nodes near origin; or re-run spring_layout seeded by existing pos:
+            # pos.update(nx.spring_layout(G, pos=pos, fixed=[n for n in pos if n in G], seed=42))
+            for n in missing:
+                pos[n] = np.zeros(2, dtype=float)
+
+        nx.draw(G, pos=pos, with_labels=False, ax=ax)
         ax.axis("off")
 
-    # Hide any unused axes.
+    # Hide any unused axes
     for j in range(N, nrows * ncols):
         axes[j].axis("off")
 
     plt.tight_layout()
     if save_to_local:
-        filename = os.path.join(out_dir, f"{filename}.png")
-        plt.savefig(filename, bbox_inches="tight")  # default DPI
+        path = os.path.join(out_dir, f"{filename}.png")
+        plt.savefig(path, bbox_inches="tight")
         plt.close(fig)
     else:
         plt.show()
+
 
 
 def hh_graph_from_G(G):
