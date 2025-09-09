@@ -45,7 +45,7 @@ class TimeEmbed(nn.Module):
         super().__init__()
         self.W = nn.Linear(1, dim // 2, bias=False)       # produces dim//2 channels
         self.P = nn.Parameter(torch.zeros(dim // 2))      # phase
-        
+
     def forward(self, t_scalar: int):
         t = torch.tensor([[float(t_scalar)]], device=self.P.device)    # (1,1)
         z = self.W(t) + self.P                                         # (1, dim//2)
@@ -193,8 +193,8 @@ class GraphER(nn.Module):
             generated_graphs.append(G)
 
         # Save a panel of final graphs (optional)
-        if len(generated_graphs):
-            save_graphs(generated_graphs, filename="seqs")
+        #if len(generated_graphs):
+        #    save_graphs(generated_graphs, filename="seqs")
         return generated_graphs, generated_seqs
 
     @torch.no_grad()
