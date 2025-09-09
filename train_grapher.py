@@ -24,45 +24,88 @@ from model_grapher import GraphER
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
 from utils import *
 
-
+# --- helper to infer orientation label (0 or 1) for reverse step ---
+def _orientation_label(anchor, partner, removed_pair):
+    """
+    anchor:   (a,b)  in G_t
+    partner:  (c,d)  in G_t
+    removed_pair: ((u,v), (x,y))  that were present in G_{t-1}
+    Return:
+      0 if { (a,c), (b,d) } equals removed edges (unordered)
+      1 if { (a,d), (b,c) } equals removed edges
+    Raises if neither matches (shouldn't happen if trajectory is consistent).
+    """
+    (a,b), (c,d) = anchor, partner
+    rem = {frozenset(removed_pair[0]), frozenset(removed_pair[1])}
+    opt0 = {frozenset((a, c)), frozenset((b, d))}
+    if opt0 == rem: return 0
+    opt1 = {frozenset((a, d)), frozenset((b, c))}
+    if opt1 == rem: return 1
+    # Fallback: pick the closer one (rare). Or raise.
+    raise ValueError("Orientation does not match removed edges; check trajectory construction.")
 
 def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = nn.BCEWithLogitsLoss()
-    model.to(device)
-    model.train()
+    model = model.to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     for epoch in range(num_epochs):
-        epoch_loss = 0.0
+        model.train()
+        total_loss = 0.0
         for G in graphs:
             G_hh = hh_graph_from_G(G)
             # --- Corrupt graph with t edge rewirings ---
             traj = transform_to_hh_via_stochastic_rewiring(G, G_hh, G.number_of_edges())
-            step = 0
-            for G_corrupt, added_pair, removed_pair in traj:
-                step += 1
-                # --- Define anchor and target edge ---
-                first_edge_added, second_edge_added = added_pair  # predict second_edge_added given first_edge_added
-                # --- Graph to PyG format ---
-                data = graph_to_data(G_corrupt,k_eigen).to(device)
-                # --- Edge candidates from corrupted graph ---
-                u, v = first_edge_added
-                uv = frozenset(first_edge_added)
-                candidate_edges = [e for e in G_corrupt.edges() if frozenset(e) != uv and len(set(e + first_edge_added)) == 4]
-                # --- Construct binary labels ---
-                labels = torch.tensor(
-                    [1.0 if frozenset(edge) == frozenset(second_edge_added) else 0.0 for edge in candidate_edges],
-                    dtype=torch.float32,
-                    device=device
+            for step_idx, (G_t, added_pair, removed_pair) in enumerate(traj, start=1):
+                # Teacher-forced anchor = one of added edges
+                (a,b), (c,d) = added_pair
+                anchor = (a, b)
+                pos_partner = (c, d)
+
+                # Build candidate set = all edges disjoint with anchor (a,b)
+                all_edges = list(G_t.edges())
+                cand_edges = []
+                for (x,y) in all_edges:
+                    if frozenset((x,y)) == frozenset(anchor):
+                        continue
+                    if len({a,b,x,y}) == 4:   # disjoint
+                        cand_edges.append((x,y))
+
+                if not cand_edges:
+                    continue  # nothing to learn this step
+
+                # Build labels
+                # Partner label: index of the positive in cand_edges
+                pos_idx = None
+                for i, e in enumerate(cand_edges):
+                    if frozenset(e) == frozenset(pos_partner):
+                        pos_idx = i; break
+
+                orient_y = _orientation_label(anchor, pos_partner, removed_pair)
+                # ---- Model forward on G_t ----
+                data = graph_to_data(G_t, k_eigen) 
+                x, edge_index = data.x.to(device), data.edge_index.to(device)
+
+                partner_logits, orient_logits = model(
+                    x=x, edge_index=edge_index,
+                    first_edge=anchor, candidate_edges=cand_edges, t=step_idx
                 )
-                # --- Forward pass ---
-                scores = model(data.x, data.edge_index, first_edge_added, candidate_edges, t=step)
-                loss = criterion(scores.squeeze(), labels)
-                # --- Backpropagation ---
-                optimizer.zero_grad()
+                # ---- Losses ----
+                # (1) Candidate partner classification (softmax CE over candidates)
+                target_idx = torch.tensor([pos_idx], dtype=torch.long, device=device)
+                loss_partner = F.cross_entropy(partner_logits.unsqueeze(0), target_idx)
+
+                # (2) Orientation classification *for the positive candidate only*
+                orient_logits_pos = orient_logits[pos_idx].unsqueeze(0)   # (1,2)
+                orient_target = torch.tensor([orient_y], dtype=torch.long, device=device)
+                loss_orient = F.cross_entropy(orient_logits_pos, orient_target)
+
+                loss = loss_partner + 0.5 * loss_orient  # λ=0.5 is a good start
+
+                # ---- Opt step ----
+                opt.zero_grad()
                 loss.backward()
-                optimizer.step()
-                epoch_loss += loss.item()
-        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
+                opt.step()
+                total_loss += float(loss.item())
+        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss:.4f}")
 
 
 def load_msvae_from_file(max_node,config, model_path):
@@ -119,33 +162,7 @@ def main(args):
         sample_graphs = random.choices(train_graphs,k=config['inference']['generate_samples'])
         test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
         degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
-        """
-        generated_graphs, generated_seqs = model.generate_from_sequences(T,degree_sequences,k_eigen,method = 'havei_hakimi')
-        print(f"Evaluate generated graphs sampled from training using havei-hakimi model")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-        
-        generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model,k_eigen,method = 'constraint_configuration_model')
-        print(f"Evaluate generated graphs using constraint Configuraiton Model")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-        deg_eval = DegreeSequenceEvaluator()
-        test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
-        print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-        print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-
-        generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model,k_eigen,method = 'configuration_model')
-        print(f"Evaluate generated graphs using  Configuraiton Model")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-        deg_eval = DegreeSequenceEvaluator()
-        test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
-        print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-        print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
-        """
+  
         if msvae_model:
             generated_graphs, generated_seqs = model.generate_with_msvae(config['inference']['generate_samples'],T, msvae_model,k_eigen)
             print(f"Evaluate generated graphs using Havei Hamimi Model and MS-VAE")
@@ -162,7 +179,7 @@ def main(args):
             print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
 
         generated_graphs, generated_seqs = model.generate_from_sequences(test_seqs, k_eigen, method='havel_hakimi')
-        print(f"Evaluate generated graphs using Havei Hamimi Model and Set-VAE")
+        print(f"Evaluate generated graphs using Havei Hamimi Model and test sequences")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
         print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")

@@ -229,7 +229,6 @@ def _propose_swap_with_locality(
     return None
 
 # ---------- main routine ----------
-
 def transform_to_hh_via_stochastic_rewiring(
     G,
     H,
@@ -313,7 +312,6 @@ def transform_to_hh_via_stochastic_rewiring(
     return traj
 
 
-
 def constraint_configuration_model_from_multiset(degree_sequence, max_retries=None, max_failures=1000):
     N = len(degree_sequence)
     if max_retries is None:
@@ -341,11 +339,13 @@ def constraint_configuration_model_from_multiset(degree_sequence, max_retries=No
             return G
     return None  # Failed to generate a valid graph
 
+
 def configuration_model_from_multiset(degrees):
     G = nx.configuration_model(degrees)
     G = nx.Graph(G)
     G.remove_edges_from(nx.selfloop_edges(G))
     return G
+
 
 def havel_hakimi_construction(degree_sequence):
     if not nx.is_valid_degree_sequence_havel_hakimi(degree_sequence):
@@ -373,74 +373,48 @@ def havel_hakimi_construction(degree_sequence):
         deg_seq = [d for d in deg_seq if d > 0]
     return G
 
-def save_graph_evolution(snapshots, idx, out_dir="evolutions"):
+
+def save_graphs(snapshots, save_to_local = True, filename="graphs", out_dir="logs"):
     """
-    Save a sequence of graph snapshots in one horizontal figure.
-
-    Args:
-        snapshots (list[tuple[nx.Graph, int]]): list of (graph, step) pairs, for ONE graph.
-        idx (int): 0-based index of this graph (used in filename).
-        out_dir (str): output folder.
+    Save a sequence of graph snapshots in a multi-panel figure with 8 columns per row.
+    No style/options exposed—uses NetworkX/Matplotlib defaults.
     """
-    import matplotlib.pyplot as plt
-    import os
-
-    if not snapshots:
-        return
-
     os.makedirs(out_dir, exist_ok=True)
 
-    # Use a FIXED layout across all panels for comparability.
-    # Compute on the first snapshot and reuse positions.
-    G0, _ = snapshots[0]
-    # Seeded layout for reproducibility; tweak seed if you like.
+    # Fixed positions from the first snapshot for comparability.
+    G0, _ = snaps[0]
     pos = nx.spring_layout(G0, seed=42)
 
-    fig, axes = plt.subplots(1, len(snapshots), figsize=(4 * len(snapshots), 4))
-    if len(snapshots) == 1:
-        axes = [axes]
+    N = len(snapshots)
+    ncols = 8
+    nrows = math.ceil(N / ncols)
 
-    for ax, (G, t) in zip(axes, snapshots):
-        # Draw with fixed positions; nodes that don't exist will be ignored (same N here).
-        nx.draw(G, pos=pos, node_size=40, with_labels=False, ax=ax)
-        ax.set_title(f"Step {t}")
+    # Simple sizing heuristic; defaults only (no dpi arg exposed).
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 3.6 * nrows))
+
+    # Flatten axes without numpy.
+    if nrows * ncols == 1:
+        axes = [axes]
+    elif nrows == 1:
+        axes = list(axes)
+    else:
+        axes = [ax for row in axes for ax in row]
+
+    for G, ax in zip(snapshots, axes):
+        nx.draw(G, pos=pos, with_labels=False, ax=ax)  # defaults for size/colors/widths
         ax.axis("off")
 
-    filename = os.path.join(out_dir, f"graph_{idx+1}_evolution.png")
-    plt.savefig(filename, dpi=150, bbox_inches="tight")
-    plt.close()
+    # Hide any unused axes.
+    for j in range(N, nrows * ncols):
+        axes[j].axis("off")
 
-
-def plot_graph_evolution(snapshots):
-    """
-    Plot a sequence of graph snapshots in one horizontal figure.
-
-    Args:
-        snapshots (list[tuple[nx.Graph, int]]): list of (graph, step) pairs, for ONE graph.
-        idx (int): 0-based index of this graph (used in filename).
-        out_dir (str): output folder.
-    """
-
-    if not snapshots:
-        return
-
-    # Use a FIXED layout across all panels for comparability.
-    # Compute on the first snapshot and reuse positions.
-    G0, _ = snapshots[0]
-    # Seeded layout for reproducibility; tweak seed if you like.
-    pos = nx.spring_layout(G0, seed=42)
-
-    fig, axes = plt.subplots(1, len(snapshots), figsize=(4 * len(snapshots), 4))
-    if len(snapshots) == 1:
-        axes = [axes]
-
-    for ax, (G, label) in zip(axes, snapshots):
-        # Draw with fixed positions; nodes that don't exist will be ignored (same N here).
-        nx.draw(G, pos=pos, node_size=40, with_labels=False, ax=ax)
-        ax.set_title(label)
-        ax.axis("off")
-
-    plt.show()
+    plt.tight_layout()
+    if save_to_local:
+        filename = os.path.join(out_dir, f"{filename}.png")
+        plt.savefig(filename, bbox_inches="tight")  # default DPI
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def hh_graph_from_G(G):
@@ -456,18 +430,9 @@ def hh_graph_from_G(G):
     H = nx.relabel_nodes(H_int, mapping, copy=True)
     return H
 
-
 def hh_graph_from_seq(seq):
-    """
-    Build a canonical Havel–Hakimi realization that uses the degree sequence seq
-    Ties are broken by (higher degree first, then smaller node id).
-    """
-    # Build HH graph on 0..n-1 then relabel back to original nodes in this order
     H_int = nx.havel_hakimi_graph(seq)
-    mapping = {i: deg_pairs[i][1] for i in range(len(seq))}
-    H = nx.relabel_nodes(H_int, mapping, copy=True)
-    return H
-
+    return H_int  # nodes are 0..n-1 already
 
 def edge_sets(G):
     return {tuple(sorted(e)) for e in G.edges()}
@@ -545,22 +510,21 @@ def swap_distance(G,H):
                 cycle_len += 1
                 prev, curr = curr, nxt
             expecting_blue = not expecting_blue
-
         cycles += 1
-
     # Each alternating cycle with 2ℓ edges contributes (ℓ-1) swaps.
     # Sum over cycles: total_red = sum ℓ, and #cycles = cycles ⇒ swaps = total_red - cycles
     return total_red - cycles
 
-def topk_normlap_eigvals(G, k=32):
-    L = nx.normalized_laplacian_matrix(G).astype(float)
-    # For small/medium graphs you can use dense eigendecomposition:
-    w = np.linalg.eigvalsh(L.A if hasattr(L, "A") else L.todense())
-    w.sort()
-    k = min(k, len(w))
-    return w[:k]
 
 def spectral_l2_distance(G,H,k=32):
+    def topk_normlap_eigvals(G, k=32):
+        L = nx.normalized_laplacian_matrix(G).astype(float)
+        # For small/medium graphs you can use dense eigendecomposition:
+        w = np.linalg.eigvalsh(L.A if hasattr(L, "A") else L.todense())
+        w.sort()
+        k = min(k, len(w))
+        return w[:k]
+
     a = topk_normlap_eigvals(G,k)
     b = topk_normlap_eigvals(H,k)
     # pad if needed
@@ -569,6 +533,7 @@ def spectral_l2_distance(G,H,k=32):
         a = np.pad(a, (0,m-len(a)))
         b = np.pad(b, (0,m-len(b)))
     return np.linalg.norm(a-b)
+
 
 def laplacian_eigs(G: nx.Graph, k: int, normed: bool = True):
     """
@@ -583,7 +548,6 @@ def laplacian_eigs(G: nx.Graph, k: int, normed: bool = True):
         vals = np.array([1.0] * min(k, max(0, n - 1)), dtype=np.float32)
         vecs = np.ones((n, min(k, max(0, n - 1))), dtype=np.float32) / np.sqrt(n or 1)
         return vals, vecs
-
     A = csr_matrix(nx.to_scipy_sparse_array(G, dtype=float))
     L = csgraph.laplacian(A, normed=normed)
 
@@ -594,7 +558,6 @@ def laplacian_eigs(G: nx.Graph, k: int, normed: bool = True):
     except Exception:
         # robust fallback
         return np.ones((k,), dtype=np.float32), np.ones((n, k), dtype=np.float32) / np.sqrt(n)
-
     idx = np.argsort(vals)
     vals, vecs = vals[idx], vecs[:, idx]
     # drop the (near-)zero eigenvalue
@@ -617,12 +580,44 @@ def normalized_laplacian_dense(G: nx.Graph) -> np.ndarray:
     ).toarray()
 
 
-# ---- inner-products needed for fast Frobenius scoring of a double-edge swap ----
-def _B_inner(M: np.ndarray, a: int, b: int) -> float:
-    # <M, (e_a - e_b)(e_a - e_b)^T> = M_aa + M_bb - 2 M_ab
-    return float(M[a, a] + M[b, b] - 2.0 * M[a, b])
-
-def _pair_inner(a: int, b: int, c: int, d: int) -> float:
-    # <B_ab, B_cd> = ( (e_a - e_b)^T (e_c - e_d) )^2
-    z = (a == c) - (a == d) - (b == c) + (b == d)
-    return float(z * z)
+def try_apply_swap_with_orientation(G, anchor, partner, orient_idx,
+                                    ensure_connected=True, k_hop=None):
+    """
+    anchor:  (u,v)
+    partner: (x,y)
+    orient_idx: 0 -> (u,x)&(v,y); 1 -> (u,y)&(v,x)
+    Returns True if applied; else False (graph is left unchanged).
+    """
+    (u,v), (x,y) = anchor, partner
+    if orient_idx == 0:
+        f1, f2 = (u, x), (v, y)
+    else:
+        f1, f2 = (u, y), (v, x)
+    # basic validity
+    if len({*f1}) < 2 or len({*f2}) < 2:  # self-loops
+        return False
+    if f1 == f2:
+        return False
+    if G.has_edge(*f1) or G.has_edge(*f2):
+        return False
+    # tentative commit
+    G.remove_edges_from([anchor, partner])
+    G.add_edges_from([f1, f2])
+    ok = True
+    if ensure_connected and not nx.is_connected(G):
+        ok = False
+    if ok and k_hop is not None:
+        for (p,q) in (f1, f2):
+            try:
+                d = nx.shortest_path_length(G, p, q)
+            except nx.NetworkXNoPath:
+                d = 10**9
+            if d > k_hop:
+                ok = False
+                break
+    if not ok:
+        # revert
+        G.remove_edges_from([f1, f2])
+        G.add_edges_from([anchor, partner])
+        return False
+    return True
