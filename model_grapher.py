@@ -251,8 +251,8 @@ class GraphER(nn.Module):
                         break
             generated_graphs.append(G)
 
-        if len(generated_graphs):
-            save_graphs(generated_graphs, filename="msvae")
+        #if len(generated_graphs):
+        #    save_graphs(generated_graphs, filename="msvae")
         return generated_graphs, generated_seqs
 
     @torch.no_grad()
@@ -302,6 +302,6 @@ class GraphER(nn.Module):
                         break
             generated_graphs.append(G)
 
-        if len(generated_graphs):
-            save_graphs(generated_graphs, filename="setvae")
+        #if len(generated_graphs):
+        #    save_graphs(generated_graphs, filename="setvae")
         return generated_graphs, generated_seqs
