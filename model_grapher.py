@@ -33,19 +33,19 @@ class ResGINLayer(nn.Module):
         self.bn = nn.BatchNorm1d(out_dim)
         self.drop = nn.Dropout(p_drop)
         self.proj = nn.Linear(in_dim, out_dim) if in_dim != out_dim else nn.Identity()
-    def forward(self, x, edge_index):
-        h = self.gin(x, edge_index)            # (n, out_dim)
-        h = self.bn(h)                         # (n, out_dim)
-        h = self.drop(h)                       # (n, out_dim)
-        return h + self.proj(x)                # (n, out_dim)
+    
+    def forward(self, t_scalar: int):
+        t = torch.tensor([[float(t_scalar)]], device=self.P.device)    # (1,1)
+        z = self.W(t) + self.P                                         # (1, dim//2)
+        return torch.cat([torch.sin(z), torch.cos(z)], dim=-1).squeeze(0)  # (dim,)
 
 class TimeEmbed(nn.Module):
     """Returns a vector of size dim for any scalar t."""
     def __init__(self, dim):
         super().__init__()
-        self.W = nn.Linear(1, dim // 2, bias=False)
-        self.P = nn.Parameter(torch.zeros(dim // 2))
-        self.aff = nn.Linear(1, dim - dim // 2)
+        self.W = nn.Linear(1, dim // 2, bias=False)       # produces dim//2 channels
+        self.P = nn.Parameter(torch.zeros(dim // 2))      # phase
+
     def forward(self, t_scalar: int):
         t = torch.tensor([[float(t_scalar)]], device=self.P.device)
         sincos = torch.cat([torch.sin(self.W(t)+self.P), torch.cos(self.W(t)+self.P)], dim=-1)  # (1, dim)
