@@ -382,7 +382,7 @@ def save_graphs(snapshots, save_to_local = True, filename="graphs", out_dir="log
     os.makedirs(out_dir, exist_ok=True)
 
     # Fixed positions from the first snapshot for comparability.
-    G0, _ = snaps[0]
+    G0, _ = snapshots[0]
     pos = nx.spring_layout(G0, seed=42)
 
     N = len(snapshots)
