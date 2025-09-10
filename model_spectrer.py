@@ -115,6 +115,62 @@ class SpectralER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
+    @torch.no_grad()
+    def predict_prev_lambda_from_y(
+        self,
+        G_t: nx.Graph,
+        step: int,
+        k_eigen: int,
+        device: torch.device,
+        deterministic: bool = True,
+        return_L_hat: bool = True,
+        eps: float = 1e-6,
+    ):
+        lam_t_np, U_np = laplacian_eigs(G_t, k_eigen, normed=True)  # (K,), (n,K)
+        V = G_t.number_of_nodes()
+        E = G_t.number_of_edges()
+        K = min(k_eigen, max(0, V - 1))
+        assert K > 0, "Expect K>0 (no tiny graphs)."
+
+        lam_t = torch.from_numpy(lam_t_np[:K]).to(device=device, dtype=torch.float32)
+        lam_t_in = _pad_or_trim_tensor_1d(lam_t, self.k)  # <-- ensure correct input dim
+
+        avg_deg = (2.0 * E) / max(1, V)
+        density = (2.0 * E) / max(1, V * (V - 1))
+        extra_feat = torch.tensor(
+            [math.log(max(V, 2)), avg_deg, density],
+            device=device, dtype=torch.float32,
+        )
+
+        mu_y, logvar_y = self(lam_t_in, step, extra_feat)  # shapes: (self.k,), (self.k,)
+        mu_y      = mu_y[:K]       # <-- slice back to K valid dims
+        logvar_y  = logvar_y[:K]
+
+        if deterministic:
+            y_hat = mu_y
+        else:
+            std = torch.exp(0.5 * logvar_y)
+            y_hat = mu_y + std * torch.randn_like(std)
+
+        lam_hat_prev = y_to_lam(y_hat, eps=eps)                 # (K,)
+        lam_hat_prev_np = lam_hat_prev.detach().cpu().numpy()
+
+        if return_L_hat:
+            A = nx.to_scipy_sparse_array(G_t, dtype=float)
+            L_t_np = csgraph.laplacian(A, normed=True).toarray()
+
+            U_t = torch.from_numpy(U_np[:, :K]).to(device=device, dtype=torch.float32)
+            L_t = torch.from_numpy(L_t_np).to(device=device, dtype=torch.float32)
+            lam_t_th = lam_t
+            lam_hat_prev_th = torch.from_numpy(lam_hat_prev_np).to(device=device, dtype=torch.float32)
+
+            L_hat = L_t - U_t @ torch.diag(lam_t_th) @ U_t.T + U_t @ torch.diag(lam_hat_prev_th) @ U_t.T
+            L_hat_np = L_hat.detach().cpu().numpy()
+        else:
+            L_hat_np = None
+
+        return lam_hat_prev_np, U_np[:, :K], L_hat_np, lam_t_np[:K]
+
     def generate_from_sequences(self, num_steps, degree_sequences, k_eigen, method='constraint_configuration_model'):
         self.eval()
         device = next(self.parameters()).device
@@ -129,38 +185,19 @@ class SpectralER(nn.Module):
 
         for idx, G in enumerate(initial_graphs):
             print(f"[spectral] Generating graph {idx + 1}")
-
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
                     continue
                 u, v = random.choice(edges)
 
-                # spectrum (clamp k to graph size)
-                n = G.number_of_nodes()
-                k_eff = min(k_eigen, max(1, n - 1))
-                lam_t_np, U_t = laplacian_eigs(G, k_eff, normed=True)
-                lam_t = torch.from_numpy(lam_t_np).to(device)
-
-                lam_t_in = _pad_or_trim_tensor_1d(lam_t, self.k)
-
-
-                # extras
-                m_edges = G.number_of_edges()
-                avg_deg = (2.0 * m_edges) / max(1, n)
-                density = (2.0 * m_edges) / max(1, n * (n - 1))
-                extra_feat = torch.tensor([math.log(max(n, 2)), avg_deg, density],
-                                          device=device, dtype=lam_t_in.dtype)
-
-                # predict lambda_{t-1}
-                lam_pred, _, _ = self.sample(lam_t_in, t, extra_feat)
-                lam_pred_np = lam_pred[:k_eff].clamp_min(0.0).clamp_max(2.0).cpu().numpy()
-
-                # build L_hat
-                L_t = normalized_laplacian_dense(G)
-                L_hat = (L_t
-                         - (U_t @ np.diag(lam_t_np) @ U_t.T)
-                         + (U_t @ np.diag(lam_pred_np) @ U_t.T)).astype(np.float64)
+                # --- new: predict y -> λ̂_{t-1} and build L̂ in one call
+                _, _, L_hat, _ = self.predict_prev_lambda_from_y(
+                    G_t=G, step=t, k_eigen=k_eigen, device=device,
+                    deterministic=True, return_L_hat=True, eps=1e-6
+                )
+                if L_hat is None:
+                    continue
 
                 # best second edge and apply swap (connectivity-safe)
                 choice, orient = pick_second_edge_by_spectral(G, u, v, L_hat)
@@ -168,7 +205,11 @@ class SpectralER(nn.Module):
                     continue
                 x, y = choice
                 p, q, r, s = orient
-                _apply_swap_if_valid(G, u, v, x, y, p, q, r, s)            
+                orient_idx = 0 if (p, q, r, s) == (u, x, v, y) else 1
+                try_apply_swap_with_orientation(
+                    G, (u, v), (x, y), orient_idx,
+                    ensure_connected=True, k_hop=None
+                )
             generated_graphs.append(G)
         save_graphs(generated_graphs)
         return generated_graphs, generated_seqs
@@ -181,9 +222,7 @@ class SpectralER(nn.Module):
         """
         self.eval()
         device = next(self.parameters()).device
-
         generated_graphs, generated_seqs, initial_graphs = [], [], []
-
         # Try to be robust to either API: generate(num_samples) or generate(batch_size, N_nodes)
         try:
             degree_sequences = msvae_model.generate(num_samples)
@@ -206,37 +245,19 @@ class SpectralER(nn.Module):
 
         for idx, G in enumerate(initial_graphs):
             print(f"[spectral] Generating graph {idx + 1}")
-
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
                     continue
                 u, v = random.choice(edges)
 
-                # spectrum (clamp k to graph size)
-                n = G.number_of_nodes()
-                k_eff = min(k_eigen, max(1, n - 1))
-                lam_t_np, U_t = laplacian_eigs(G, k_eff, normed=True)
-                lam_t = torch.from_numpy(lam_t_np).to(device)
-
-                lam_t_in = _pad_or_trim_tensor_1d(lam_t, self.k)
-
-                # extras
-                m_edges = G.number_of_edges()
-                avg_deg = (2.0 * m_edges) / max(1, n)
-                density = (2.0 * m_edges) / max(1, n * (n - 1))
-                extra_feat = torch.tensor([math.log(max(n, 2)), avg_deg, density],
-                                          device=device, dtype=lam_t_in.dtype)
-
-                # predict lambda_{t-1}
-                lam_pred, _, _ = self.sample(lam_t_in, t, extra_feat)
-                lam_pred_np = lam_pred[:k_eff].clamp_min(0.0).clamp_max(2.0).cpu().numpy()
-
-                # build L_hat
-                L_t = normalized_laplacian_dense(G)
-                L_hat = (L_t
-                         - (U_t @ np.diag(lam_t_np) @ U_t.T)
-                         + (U_t @ np.diag(lam_pred_np) @ U_t.T)).astype(np.float64)
+                # --- new: predict y -> λ̂_{t-1} and build L̂ in one call
+                _, _, L_hat, _ = self.predict_prev_lambda_from_y(
+                    G_t=G, step=t, k_eigen=k_eigen, device=device,
+                    deterministic=True, return_L_hat=True, eps=1e-6
+                )
+                if L_hat is None:
+                    continue
 
                 # best second edge and apply swap (connectivity-safe)
                 choice, orient = pick_second_edge_by_spectral(G, u, v, L_hat)
@@ -244,7 +265,11 @@ class SpectralER(nn.Module):
                     continue
                 x, y = choice
                 p, q, r, s = orient
-                _apply_swap_if_valid(G, u, v, x, y, p, q, r, s)
+                orient_idx = 0 if (p, q, r, s) == (u, x, v, y) else 1
+                try_apply_swap_with_orientation(
+                    G, (u, v), (x, y), orient_idx,
+                    ensure_connected=True, k_hop=None
+                )
             generated_graphs.append(G)
         save_graphs(generated_graphs)
         return generated_graphs, generated_seqs
@@ -272,31 +297,13 @@ class SpectralER(nn.Module):
                     continue
                 u, v = random.choice(edges)
 
-                # spectrum (clamp k to graph size)
-                n = G.number_of_nodes()
-                k_eff = min(k_eigen, max(1, n - 1))
-                lam_t_np, U_t = laplacian_eigs(G, k_eff, normed=True)
-                lam_t = torch.from_numpy(lam_t_np).to(device)
-
-                lam_t_in = _pad_or_trim_tensor_1d(lam_t, self.k)
-
-
-                # extras
-                m_edges = G.number_of_edges()
-                avg_deg = (2.0 * m_edges) / max(1, n)
-                density = (2.0 * m_edges) / max(1, n * (n - 1))
-                extra_feat = torch.tensor([math.log(max(n, 2)), avg_deg, density],
-                                          device=device, dtype=lam_t_in.dtype)
-
-                # predict lambda_{t-1}
-                lam_pred, _, _ = self.sample(lam_t_in, t, extra_feat)
-                lam_pred_np = lam_pred[:k_eff].clamp_min(0.0).clamp_max(2.0).cpu().numpy()
-
-                # build L_hat
-                L_t = normalized_laplacian_dense(G)
-                L_hat = (L_t
-                         - (U_t @ np.diag(lam_t_np) @ U_t.T)
-                         + (U_t @ np.diag(lam_pred_np) @ U_t.T)).astype(np.float64)
+                # --- new: predict y -> λ̂_{t-1} and build L̂ in one call
+                _, _, L_hat, _ = self.predict_prev_lambda_from_y(
+                    G_t=G, step=t, k_eigen=k_eigen, device=device,
+                    deterministic=True, return_L_hat=True, eps=1e-6
+                )
+                if L_hat is None:
+                    continue
 
                 # best second edge and apply swap (connectivity-safe)
                 choice, orient = pick_second_edge_by_spectral(G, u, v, L_hat)
@@ -304,7 +311,11 @@ class SpectralER(nn.Module):
                     continue
                 x, y = choice
                 p, q, r, s = orient
-                _apply_swap_if_valid(G, u, v, x, y, p, q, r, s)
+                orient_idx = 0 if (p, q, r, s) == (u, x, v, y) else 1
+                try_apply_swap_with_orientation(
+                    G, (u, v), (x, y), orient_idx,
+                    ensure_connected=True, k_hop=None
+                )
             generated_graphs.append(G)
         save_graphs(generated_graphs)
         return generated_graphs, generated_seqs

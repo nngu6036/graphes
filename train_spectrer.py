@@ -29,7 +29,6 @@ from utils import *
 
 def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
     opt = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = nn.BCEWithLogitsLoss()
     model.to(device)
     model.train()
     for epoch in range(num_epochs):
@@ -41,39 +40,40 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
             step = 0
             for step,(G_t, added_pair, removed_pair) in enumerate(traj,start=1):
                 # Undo the last swap to get G_{t-1}
-                G_prev = G_t.copy()
+                G_t_prev = G_t.copy()
                 (u, v), (x, y) = removed_pair
                 (a, b), (c, d) = added_pair
-                if G_prev.has_edge(a, b): G_prev.remove_edge(a, b)
-                if G_prev.has_edge(c, d): G_prev.remove_edge(c, d)
-                G_prev.add_edge(u, v); G_prev.add_edge(x, y)
+                if G_t_prev.has_edge(a, b): G_t_prev.remove_edge(a, b)
+                if G_t_prev.has_edge(c, d): G_t_prev.remove_edge(c, d)
+                G_t_prev.add_edge(u, v); G_t_prev.add_edge(x, y)
 
                 lam_t, _    = laplacian_eigs(G_t,   k_eigen, normed=True)
-                lam_prev, _ = laplacian_eigs(G_prev, k_eigen, normed=True)
+                lam_t_prev, _ = laplacian_eigs(G_t_prev, k_eigen, normed=True)
                 lam_t   = torch.from_numpy(lam_t).to(device)
-                lam_t_1 = torch.from_numpy(lam_prev).to(device)
+                lam_t_prev = torch.from_numpy(lam_t_prev).to(device)
 
-                # size features
-                n = G_t.number_of_nodes()
-                m_edges = G_t.number_of_edges()
-                avg_deg = (2.0 * m_edges) / max(1, n)
-                density = (2.0 * m_edges) / max(1, n * (n - 1))
-                extra_feat = torch.tensor([math.log(max(n, 2)), avg_deg, density],
-                                          device=device, dtype=lam_t.dtype)
+                # Compute extra features as before (size, avg_deg, density, step embedding, etc.)
+                mu_y, logvar_y = model(lam_t, step, extra_feat)   # shapes: (K,), (K,)
 
-                mu, logvar = model(lam_t, step, extra_feat)
+                # Number of valid eigenvalues for this graph
+                V = G_t.number_of_nodes()
+                V_valid = min(k_eigen, max(0, V - 1))
 
-                # Masked diagonal-Gaussian NLL over valid eigenvalues
-                m_valid = min(k_eigen, max(0, n - 1))
-                mask = torch.zeros_like(lam_t_1)
-                if m_valid > 0:
-                    mask[:m_valid] = 1.0
-                diff = lam_t_1 - mu
-                nll_vec = 0.5 * (diff.pow(2) * torch.exp(-logvar) + logvar)
-                nll = (nll_vec * mask).sum() / mask.sum().clamp_min(1.0)
+                # Target y from the ground-truth previous spectrum (only valid slice)
+                y_target = lam_to_y(lam_t_prev[:V_valid])  # (V_valid,)
 
-                opt.zero_grad()
+                # Slice predictions to the same valid length
+                mu_y_v      = mu_y[:V_valid]
+                logvar_y_v  = logvar_y[:V_valid]
+
+                # Gaussian NLL on y (per-dim)
+                # 0.5 * [ (y - mu)^2 / sigma^2 + log(sigma^2) ]
+                nll_vec = 0.5 * ((y_target - mu_y_v)**2 * torch.exp(-logvar_y_v) + logvar_y_v)
+                nll = nll_vec.mean()
+
+                opt.zero_grad(set_to_none=True)
                 nll.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 opt.step()
                 epoch_loss += float(nll.item())
         print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")

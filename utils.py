@@ -484,6 +484,7 @@ def normalized_laplacian_dense(G: nx.Graph) -> np.ndarray:
     ).toarray()
 
 
+# utils.py
 def try_apply_swap_with_orientation(G, anchor, partner, orient_idx,
                                     ensure_connected=True, k_hop=None):
     """
@@ -492,36 +493,85 @@ def try_apply_swap_with_orientation(G, anchor, partner, orient_idx,
     orient_idx: 0 -> (u,x)&(v,y); 1 -> (u,y)&(v,x)
     Returns True if applied; else False (graph is left unchanged).
     """
-    (u,v), (x,y) = anchor, partner
+    (u, v), (x, y) = anchor, partner
     if orient_idx == 0:
         f1, f2 = (u, x), (v, y)
     else:
         f1, f2 = (u, y), (v, x)
-    # basic validity
-    if len({*f1}) < 2 or len({*f2}) < 2:  # self-loops
+
+    # basic validity (simple graph)
+    if len({*f1}) < 2 or len({*f2}) < 2:
         return False
     if f1 == f2:
         return False
     if G.has_edge(*f1) or G.has_edge(*f2):
         return False
-    # tentative commit
+
+    # --- k-hop locality PRE-CHECK on the CURRENT graph (no new edges yet) ---
+    if k_hop is not None:
+        d1 = nx.single_source_shortest_path_length(G, f1[0], cutoff=k_hop)
+        d2 = nx.single_source_shortest_path_length(G, f2[0], cutoff=k_hop)
+        if (f1[1] not in d1) or (f2[1] not in d2):
+            return False
+
+    # tentative commit and connectivity enforcement
     G.remove_edges_from([anchor, partner])
     G.add_edges_from([f1, f2])
-    ok = True
+
     if ensure_connected and not nx.is_connected(G):
-        ok = False
-    if ok and k_hop is not None:
-        for (p,q) in (f1, f2):
-            try:
-                d = nx.shortest_path_length(G, p, q)
-            except nx.NetworkXNoPath:
-                d = 10**9
-            if d > k_hop:
-                ok = False
-                break
-    if not ok:
         # revert
         G.remove_edges_from([f1, f2])
         G.add_edges_from([anchor, partner])
         return False
+
     return True
+
+
+def lam_to_y(lam: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    lam: (K,) tensor of ascending normalized Laplacian eigenvalues in [0, 2],
+         excluding the trivial zero (i.e., the first is > 0).
+    Returns y: (K,) with
+      y1 = logit(lam1/2),  yi = log( (lam_i - lam_{i-1}) + eps ), i>=2
+    """
+    assert lam.dim() == 1, "lam must be 1D"
+    K = lam.numel()
+    if K == 0:
+        return lam
+
+    lam = lam.clamp(0.0, 2.0)
+    # y1 = logit(lam1/2)
+    s = (lam[0] / 2.0).clamp(min=eps, max=1.0 - eps)
+    y1 = torch.log(s) - torch.log1p(-s)
+
+    if K == 1:
+        return y1.unsqueeze(0)
+
+    gaps = lam[1:] - lam[:-1] + eps
+    gaps = gaps.clamp_min(eps)
+    yrest = torch.log(gaps)
+    return torch.cat([y1.unsqueeze(0), yrest], dim=0)
+
+
+def y_to_lam(y: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    y: (K,) with
+      y1 = logit(lam1/2), yi = log((lam_i - lam_{i-1}) + eps)
+    Returns lam in [0,2] and nondecreasing by construction.
+    """
+    assert y.dim() == 1, "y must be 1D"
+    K = y.numel()
+    if K == 0:
+        return y
+
+    lam = torch.empty_like(y)
+    lam[0] = 2.0 * torch.sigmoid(y[0])
+
+    for i in range(1, K):
+        gap = torch.exp(y[i]) - eps
+        gap = gap.clamp_min(0.0)
+        lam[i] = lam[i - 1] + gap
+
+    # cap at 2.0 (normalized Laplacian support)
+    lam = torch.minimum(lam, torch.full_like(lam, 2.0))
+    return lam
