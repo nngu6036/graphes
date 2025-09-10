@@ -52,6 +52,18 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
                 lam_t   = torch.from_numpy(lam_t).to(device)
                 lam_t_prev = torch.from_numpy(lam_t_prev).to(device)
 
+                V = G_t.number_of_nodes()
+                E = G_t.number_of_edges()
+                K = min(k_eigen, V) 
+
+                avg_deg = (2.0 * E) / V
+                density = (2.0 * E) / (V*(V-1))
+                extra_feat = torch.tensor(
+                    [math.log(max(V, 2)), avg_deg, density],
+                    device=device,
+                    dtype=torch.float32,
+                )
+
                 # Compute extra features as before (size, avg_deg, density, step embedding, etc.)
                 mu_y, logvar_y = model(lam_t, step, extra_feat)   # shapes: (K,), (K,)
 
