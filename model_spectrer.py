@@ -156,7 +156,7 @@ class SpectralER(nn.Module):
         lam_hat_prev_np = lam_hat_prev.detach().cpu().numpy()
 
         if return_L_hat:
-            A = nx.to_scipy_sparse_array(G_t, dtype=float)
+            A = csr_matrix(nx.to_scipy_sparse_array(G_t, dtype=float))
             L_t_np = csgraph.laplacian(A, normed=True).toarray()
 
             U_t = torch.from_numpy(U_np[:, :K]).to(device=device, dtype=torch.float32)
