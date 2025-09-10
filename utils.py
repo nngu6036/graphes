@@ -449,106 +449,6 @@ def hh_graph_from_seq(seq):
     H_int = nx.havel_hakimi_graph(seq)
     return H_int  # nodes are 0..n-1 already
 
-def edge_sets(G):
-    return {tuple(sorted(e)) for e in G.edges()}
-
-def jaccard_edge_similarity(G,H):
-    A, B = edge_sets(G), edge_sets(H)
-    inter, union = len(A & B), len(A | B)
-    return inter / union if union else 1.0
-
-def normalized_symdiff_distance(G,H):
-    A, B = edge_sets(G), edge_sets(H)
-    m = G.number_of_edges()
-    return len(A ^ B) / (2*m) if m else 0.0
-
-def swap_distance(G,H):
-    """Exact # of 2-switches via alternating-cycle decomposition."""
-    A, B = edge_sets(G), edge_sets(H)
-    red = A - B
-    blue = B - A
-    # Build adjacency by color
-    adjR, adjB = {}, {}
-    for u,v in red:
-        adjR.setdefault(u,set()).add(v)
-        adjR.setdefault(v,set()).add(u)
-    for u,v in blue:
-        adjB.setdefault(u,set()).add(v)
-        adjB.setdefault(v,set()).add(u)
-
-    usedR = set()
-    cycles = 0
-    total_red = len(red)
-
-    # Traverse alternating cycles: start from unused red edges
-    # store red edges as frozensets for quick membership
-    red_edges = {frozenset(e) for e in red}
-
-    for u,v in red:
-        e0 = frozenset((u,v))
-        if e0 in usedR:
-            continue
-        # start an alternating walk from (u,v), current node v, expecting blue next
-        curr = v
-        prev = u
-        expecting_blue = True
-        cycle_len = 1  # counts red edges; we'll count blue implicitly
-        usedR.add(e0)
-
-        while True:
-            if expecting_blue:
-                # take any unused blue edge from curr that doesn't go back to prev unless needed
-                nbrs = adjB.get(curr, set())
-                # choose a neighbor that continues the cycle; fall back if needed
-                next_nodes = [w for w in nbrs if w != prev]
-                if not next_nodes and prev in nbrs:
-                    next_nodes = [prev]
-                if not next_nodes:
-                    break  # should not happen if degrees match; defensive
-                nxt = next_nodes.pop()
-                prev, curr = curr, nxt
-            else:
-                # take a red edge; mark it used
-                nbrs = adjR.get(curr, set())
-                next_nodes = [w for w in nbrs if frozenset((curr,w)) not in usedR]
-                if not next_nodes:
-                    # closed the cycle if we’re back at start
-                    if curr == u:
-                        break
-                    else:
-                        # fallback to any red (should close)
-                        next_nodes = [w for w in nbrs if w == u]
-                        if not next_nodes:
-                            break
-                nxt = next_nodes.pop()
-                usedR.add(frozenset((curr,nxt)))
-                cycle_len += 1
-                prev, curr = curr, nxt
-            expecting_blue = not expecting_blue
-        cycles += 1
-    # Each alternating cycle with 2ℓ edges contributes (ℓ-1) swaps.
-    # Sum over cycles: total_red = sum ℓ, and #cycles = cycles ⇒ swaps = total_red - cycles
-    return total_red - cycles
-
-
-def spectral_l2_distance(G,H,k=32):
-    def topk_normlap_eigvals(G, k=32):
-        L = nx.normalized_laplacian_matrix(G).astype(float)
-        # For small/medium graphs you can use dense eigendecomposition:
-        w = np.linalg.eigvalsh(L.A if hasattr(L, "A") else L.todense())
-        w.sort()
-        k = min(k, len(w))
-        return w[:k]
-
-    a = topk_normlap_eigvals(G,k)
-    b = topk_normlap_eigvals(H,k)
-    # pad if needed
-    if len(a) != len(b):
-        m = max(len(a), len(b))
-        a = np.pad(a, (0,m-len(a)))
-        b = np.pad(b, (0,m-len(b)))
-    return np.linalg.norm(a-b)
-
 
 def laplacian_eigs(G: nx.Graph, k: int, normed: bool = True):
     """
@@ -556,23 +456,12 @@ def laplacian_eigs(G: nx.Graph, k: int, normed: bool = True):
     Falls back gracefully on tiny graphs.
     """
     n = G.number_of_nodes()
-    if n == 0:
-        return np.empty((0,), dtype=np.float32), np.empty((0, 0), dtype=np.float32)
-    if n <= 2:
-        # trivial spectrum: normalized Laplacian of K2 has {0, 2}
-        vals = np.array([1.0] * min(k, max(0, n - 1)), dtype=np.float32)
-        vecs = np.ones((n, min(k, max(0, n - 1))), dtype=np.float32) / np.sqrt(n or 1)
-        return vals, vecs
     A = csr_matrix(nx.to_scipy_sparse_array(G, dtype=float))
     L = csgraph.laplacian(A, normed=normed)
 
     # ask for k+1 to include the zero eigenvalue, then drop it
     want = min(max(1, k + 1), n - 1)
-    try:
-        vals, vecs = eigsh(L, k=want, which="SM")
-    except Exception:
-        # robust fallback
-        return np.ones((k,), dtype=np.float32), np.ones((n, k), dtype=np.float32) / np.sqrt(n)
+    vals, vecs = eigsh(L, k=want, which="SM")
     idx = np.argsort(vals)
     vals, vecs = vals[idx], vecs[:, idx]
     # drop the (near-)zero eigenvalue

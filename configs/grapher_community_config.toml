@@ -9,7 +9,7 @@ T = 100
 cycle = 4
 
 [data]
-k_eigen = 10
+k_eigen = 15
 
 [inference]
 threshold = 0.01

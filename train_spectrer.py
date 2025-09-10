@@ -39,8 +39,7 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen,device):
             # --- Corrupt graph with t edge rewirings ---
             traj = transform_to_hh_via_stochastic_rewiring(G, G_hh, G.number_of_edges())
             step = 0
-            for G_t, added_pair, removed_pair in traj:
-                step += 1
+            for step,(G_t, added_pair, removed_pair) in enumerate(traj,start=1):
                 # Undo the last swap to get G_{t-1}
                 G_prev = G_t.copy()
                 (u, v), (x, y) = removed_pair
