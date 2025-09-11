@@ -27,28 +27,22 @@ from eval import DegreeSequenceEvaluator, GraphsEvaluator
 from utils import *
 
 def gaussian_nll(y, mu, logvar):
-    # elementwise NLL for diagonal Gaussian
     return 0.5 * ((y - mu) ** 2 * torch.exp(-logvar) + logvar)
 
 def kl_to_std_normal(mu, logvar, prior_var=1.0):
-    # KL( N(mu, sigma^2) || N(0, prior_var) ) per-dimension
-    return 0.5 * (
-        (torch.exp(logvar) + mu**2) / prior_var
-        - 1.0
-        + math.log(prior_var)
-        - logvar
-    )
+    return 0.5 * ((torch.exp(logvar) + mu**2) / prior_var - 1.0 + math.log(prior_var) - logvar)
+
 
 def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
-                   beta_kl=0.0, gamma_lap=0.0):
-    """
-    Train SpectralER with reconstruction loss in y-space (required),
-    plus optional KL regularizer and optional Laplacian reconstruction auxiliary.
-
-    beta_kl:  weight on KL to N(0, I) in y-space
-    gamma_lap: weight on || L_{t-1} - L_hat(mu_y) ||_F^2
-    """
+                   beta_kl=0.0, gamma_lap=0.0, eps_y=1e-6, cycle=0):
     opt = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    if cycle and cycle > 0:
+        # Cosine annealing with warm restarts across 'cycle' epochs
+        T0 = max(1, num_epochs // cycle)
+        sched = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0=T0)
+    else:
+        sched = None
+
     model.to(device)
     model.train()
 
@@ -56,14 +50,14 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
         epoch_loss = 0.0
 
         for G in graphs:
-            # Build canonical HH and a stochastic trajectory toward it
+            # Build HH target & a stochastic path toward it (your existing utilities)
             G_hh = hh_graph_from_G(G)
             traj = transform_to_hh_via_stochastic_rewiring(
                 G, G_hh, G.number_of_edges()
             )
 
             for step, (G_t, added_pair, removed_pair) in enumerate(traj, start=1):
-                # Undo the last swap to get G_{t-1}
+                # Recover G_{t-1} by undoing the last swap
                 G_t_prev = G_t.copy()
                 (u, v), (x, y) = removed_pair
                 (a, b), (c, d) = added_pair
@@ -71,78 +65,74 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
                 if G_t_prev.has_edge(c, d): G_t_prev.remove_edge(c, d)
                 G_t_prev.add_edge(u, v); G_t_prev.add_edge(x, y)
 
-                # Current & previous spectra (keep U_t for Laplacian aux if used)
-                lam_t_np, U_t_np       = laplacian_eigs(G_t,      k_eigen, normed=True)
-                lam_t_prev_np, _       = laplacian_eigs(G_t_prev, k_eigen, normed=True)
-                lam_t      = torch.from_numpy(lam_t_np).to(device)
-                lam_t_prev = torch.from_numpy(lam_t_prev_np).to(device)
+                # Spectra
+                lam_t_np, U_t_np = laplacian_eigs(G_t,      k_eigen, normed=True)
+                lam_tm1_np, _    = laplacian_eigs(G_t_prev, k_eigen, normed=True)
 
-                # #nodes/#edges and valid eigen-count (exclude trivial zero)
+                lam_t   = torch.from_numpy(lam_t_np).to(device=device, dtype=torch.float32)
+                lam_tm1 = torch.from_numpy(lam_tm1_np).to(device=device, dtype=torch.float32)
+
                 V = G_t.number_of_nodes()
                 E = G_t.number_of_edges()
-                V_valid = min(k_eigen, max(0, V - 1))
+                K = min(k_eigen, max(0, V - 1))
+                if K <= 0:
+                    continue
 
-                # Extra conditioning features (as you already use at generation)
+                # Extras (match generation)
                 avg_deg = (2.0 * E) / max(1, V)
                 density = (2.0 * E) / max(1, V * (V - 1))
-                extra_feat = torch.tensor(
-                    [math.log(max(V, 2)), avg_deg, density],
-                    device=device, dtype=torch.float32,
-                )
+                extra = torch.tensor([math.log(max(V, 2)), avg_deg, density],
+                                     device=device, dtype=torch.float32)
 
-                # Predict y-parameters for p(y_{t-1} | lam_t, step, extras)
-                # (Your model expects exactly k dims; laplacian_eigs already pads to k) :contentReference[oaicite:0]{index=0}
-                mu_y_full, logvar_y_full = model(lam_t, step, extra_feat)  # :contentReference[oaicite:1]{index=1}
-                mu_y     = mu_y_full[:V_valid]
-                logvar_y = logvar_y_full[:V_valid]
+                # Predict Gaussian over y_{t-1} | lam_t
+                mu_y_full, logvar_y_full = model(lam_t, step, extra)  # model expects exactly k dims
+                mu_y, logvar_y = mu_y_full[:K], logvar_y_full[:K]
 
-                # Target y from ground-truth previous spectrum
-                y_target = lam_to_y(lam_t_prev[:V_valid])
+                # Target y from lam_{t-1}
+                y_target = lam_to_y(lam_tm1[:K], eps=eps_y)
 
-                # --- (1) Reconstruction NLL in y-space (primary loss) ---
-                nll_vec = gaussian_nll(y_target, mu_y, logvar_y)
-                recon_nll = nll_vec.mean()
+                # (1) Reconstruction NLL in y-space  <-- primary loss
+                recon_nll = gaussian_nll(y_target, mu_y, logvar_y).mean()
 
-                # --- (2) Optional KL regularizer (usually tiny) ---
+                # (2) Optional KL regularizer (tiny)
                 if beta_kl > 0.0:
-                    kl_vec = kl_to_std_normal(mu_y, logvar_y, prior_var=1.0)
-                    kl_loss = kl_vec.mean()
+                    kl_loss = kl_to_std_normal(mu_y, logvar_y).mean()
                 else:
-                    kl_loss = torch.tensor(0.0, device=device)
+                    kl_loss = torch.zeros((), device=device)
 
-                # --- (3) Optional Laplacian reconstruction aux ---
-                if gamma_lap > 0.0 and V_valid > 0:
-                    # Use deterministic spectrum (mean in y-space) to build L_hat
-                    lam_hat_prev_det = y_to_lam(mu_y.detach())  # (V_valid,)
-                    # Current L (dense) and basis U_t (K columns)
-                    L_t_np = normalized_laplacian_dense(G_t)
-                    U_t = torch.from_numpy(U_t_np[:, :V_valid]).to(device=device, dtype=torch.float32)
-                    L_t = torch.from_numpy(L_t_np).to(device=device, dtype=torch.float32)
+                # (3) Optional Laplacian reconstruction aux (align \hat L with L_{t-1})
+                if gamma_lap > 0.0:
+                    with torch.no_grad():
+                        # mean spectrum in y-space for stability
+                        lam_hat_tm1 = y_to_lam(mu_y.detach(), eps=eps_y)  # (K,)
 
-                    lam_t_th = lam_t[:V_valid]
-                    L_hat = L_t - U_t @ torch.diag(lam_t_th) @ U_t.T \
-                               + U_t @ torch.diag(lam_hat_prev_det) @ U_t.T
+                    L_t_np   = normalized_laplacian_dense(G_t)
+                    L_tm1_np = normalized_laplacian_dense(G_t_prev)
+                    L_t   = torch.from_numpy(L_t_np).to(device=device, dtype=torch.float32)
+                    L_tm1 = torch.from_numpy(L_tm1_np).to(device=device, dtype=torch.float32)
+                    U_t   = torch.from_numpy(U_t_np[:, :K]).to(device=device, dtype=torch.float32)
 
-                    # Ground-truth previous Laplacian
-                    L_prev_np = normalized_laplacian_dense(G_t_prev)
-                    L_prev = torch.from_numpy(L_prev_np).to(device=device, dtype=torch.float32)
-
-                    lap_recon = (L_prev - L_hat).pow(2).mean()
+                    L_hat = L_t - U_t @ torch.diag(lam_t[:K]) @ U_t.T \
+                               + U_t @ torch.diag(lam_hat_tm1) @ U_t.T
+                    lap_recon = (L_tm1 - L_hat).pow(2).mean()
                 else:
-                    lap_recon = torch.tensor(0.0, device=device)
+                    lap_recon = torch.zeros((), device=device)
 
-                # Total loss
                 loss = recon_nll + beta_kl * kl_loss + gamma_lap * lap_recon
 
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 opt.step()
 
                 epoch_loss += float(loss.item())
 
-        print(f"Epoch {epoch + 1}/{num_epochs} | loss={epoch_loss:.4f} "
-              f"(beta_kl={beta_kl}, gamma_lap={gamma_lap})")
+        if sched is not None:
+            sched.step(epoch)
+
+        print(f"Epoch {epoch+1}/{num_epochs} "
+              f"| loss={epoch_loss:.4f} "
+              f"(β_KL={beta_kl}, γ_Lap={gamma_lap}, eps_y={eps_y})")
 
 
 
