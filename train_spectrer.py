@@ -37,8 +37,9 @@ def affected_nodes_from_swap(G, removed_pair, added_pair):
     Return a small set of nodes affected by a (ground-truth) 2-swap:
     endpoints and their 1-hop neighbors in G.
     """
-    (u, v), (x, y) = removed_pair, added_pair
-    core = {u, v, x, y}
+    (a, b), (c, d) = removed_pair
+    (u, v), (x, y) = added_pair
+    core = {a, b, c, d, u, v, x, y}
     A = set(core)
     for a in core:
         A.update(G.neighbors(a))
