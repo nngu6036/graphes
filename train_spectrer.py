@@ -35,29 +35,44 @@ def kl_to_std_normal(mu, logvar, prior_var=1.0):
 
 def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
                    beta_kl=0.0, gamma_lap=0.0, eps_y=1e-6, cycle=0):
+
     opt = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    sched = None
     if cycle and cycle > 0:
-        # Cosine annealing with warm restarts across 'cycle' epochs
         T0 = max(1, num_epochs // cycle)
         sched = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0=T0)
-    else:
-        sched = None
 
     model.to(device)
     model.train()
 
+    # --- NEW: schedule for KL and Laplacian aux ---
+    KL_DELAY, KL_WARMUP = 10, 20       # epochs
+    LAP_WARMUP = 50                    # epochs
+    def kl_weight(epoch):
+        # 0 for first KL_DELAY epochs, linear up to beta_kl over KL_WARMUP
+        if beta_kl <= 0.0: return 0.0
+        if epoch < KL_DELAY: return 0.0
+        ramp = min(1.0, (epoch - KL_DELAY + 1) / max(1, KL_WARMUP))
+        return beta_kl * ramp
+
+    def lap_weight(epoch):
+        if gamma_lap <= 0.0: return 0.0
+        ramp = min(1.0, (epoch + 1) / max(1, LAP_WARMUP))
+        return gamma_lap * ramp
+
+    # --- NEW: bounds for log-variance in y-space ---
+    LOGVAR_MIN, LOGVAR_MAX = -5.0, 2.0   # sigma in [~0.007, ~7.4]
+
     for epoch in range(num_epochs):
         epoch_loss = 0.0
+        n_steps = 0                      # <-- NEW: count steps for averaging
 
         for G in graphs:
-            # Build HH target & a stochastic path toward it (your existing utilities)
             G_hh = hh_graph_from_G(G)
-            traj = transform_to_hh_via_stochastic_rewiring(
-                G, G_hh, G.number_of_edges()
-            )
+            traj = transform_to_hh_via_stochastic_rewiring(G, G_hh, G.number_of_edges())
 
             for step, (G_t, added_pair, removed_pair) in enumerate(traj, start=1):
-                # Recover G_{t-1} by undoing the last swap
+                # Recover G_{t-1}
                 G_t_prev = G_t.copy()
                 (u, v), (x, y) = removed_pair
                 (a, b), (c, d) = added_pair
@@ -68,7 +83,6 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
                 # Spectra
                 lam_t_np, U_t_np = laplacian_eigs(G_t,      k_eigen, normed=True)
                 lam_tm1_np, _    = laplacian_eigs(G_t_prev, k_eigen, normed=True)
-
                 lam_t   = torch.from_numpy(lam_t_np).to(device=device, dtype=torch.float32)
                 lam_tm1 = torch.from_numpy(lam_tm1_np).to(device=device, dtype=torch.float32)
 
@@ -78,61 +92,65 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
                 if K <= 0:
                     continue
 
-                # Extras (match generation)
+                # Extras
                 avg_deg = (2.0 * E) / max(1, V)
                 density = (2.0 * E) / max(1, V * (V - 1))
                 extra = torch.tensor([math.log(max(V, 2)), avg_deg, density],
                                      device=device, dtype=torch.float32)
 
                 # Predict Gaussian over y_{t-1} | lam_t
-                mu_y_full, logvar_y_full = model(lam_t, step, extra)  # model expects exactly k dims
+                mu_y_full, logvar_y_full = model(lam_t, step, extra)
                 mu_y, logvar_y = mu_y_full[:K], logvar_y_full[:K]
 
-                # Target y from lam_{t-1}
-                y_target = lam_to_y(lam_tm1[:K], eps=eps_y)
+                # --- NEW: clamp log-variance to stabilize NLL ---
+                logvar_y = logvar_y.clamp(LOGVAR_MIN, LOGVAR_MAX)
 
-                # (1) Reconstruction NLL in y-space  <-- primary loss
+                # Targets in y-space
+                y_target = lam_to_y(lam_tm1[:K])  # uses eps=1e-6 by default
+
+                # Losses
                 recon_nll = gaussian_nll(y_target, mu_y, logvar_y).mean()
 
-                # (2) Optional KL regularizer (tiny)
-                if beta_kl > 0.0:
+                bw_kl  = kl_weight(epoch)     # scheduled KL
+                bw_lap = lap_weight(epoch)    # scheduled Laplacian aux
+
+                if bw_kl > 0.0:
                     kl_loss = kl_to_std_normal(mu_y, logvar_y).mean()
                 else:
                     kl_loss = torch.zeros((), device=device)
 
-                # (3) Optional Laplacian reconstruction aux (align \hat L with L_{t-1})
-                if gamma_lap > 0.0:
+                if bw_lap > 0.0:
                     with torch.no_grad():
-                        # mean spectrum in y-space for stability
-                        lam_hat_tm1 = y_to_lam(mu_y.detach(), eps=eps_y)  # (K,)
-
+                        lam_hat_tm1 = y_to_lam(mu_y.detach())  # mean prediction
                     L_t_np   = normalized_laplacian_dense(G_t)
                     L_tm1_np = normalized_laplacian_dense(G_t_prev)
                     L_t   = torch.from_numpy(L_t_np).to(device=device, dtype=torch.float32)
                     L_tm1 = torch.from_numpy(L_tm1_np).to(device=device, dtype=torch.float32)
                     U_t   = torch.from_numpy(U_t_np[:, :K]).to(device=device, dtype=torch.float32)
-
                     L_hat = L_t - U_t @ torch.diag(lam_t[:K]) @ U_t.T \
                                + U_t @ torch.diag(lam_hat_tm1) @ U_t.T
                     lap_recon = (L_tm1 - L_hat).pow(2).mean()
                 else:
                     lap_recon = torch.zeros((), device=device)
 
-                loss = recon_nll + beta_kl * kl_loss + gamma_lap * lap_recon
+                loss = recon_nll + bw_kl * kl_loss + bw_lap * lap_recon
 
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 opt.step()
 
                 epoch_loss += float(loss.item())
+                n_steps += 1                   # <-- NEW
 
         if sched is not None:
             sched.step(epoch)
 
-        print(f"Epoch {epoch+1}/{num_epochs} "
-              f"| loss={epoch_loss:.4f} "
-              f"(β_KL={beta_kl}, γ_Lap={gamma_lap}, eps_y={eps_y})")
+        # --- NEW: print mean per-step loss
+        mean_loss = epoch_loss / max(1, n_steps)
+        print(f"Epoch {epoch+1}/{num_epochs} | mean_loss={mean_loss:.4f} "
+              f"(steps={n_steps}, β_KL_sched={kl_weight(epoch):.5f}, γ_Lap_sched={lap_weight(epoch):.5f})")
+
 
 
 
