@@ -32,9 +32,31 @@ def gaussian_nll(y, mu, logvar):
 def kl_to_std_normal(mu, logvar, prior_var=1.0):
     return 0.5 * ((torch.exp(logvar) + mu**2) / prior_var - 1.0 + math.log(prior_var) - logvar)
 
+def affected_nodes_from_swap(G, removed_pair, added_pair):
+    """
+    Return a small set of nodes affected by a (ground-truth) 2-swap:
+    endpoints and their 1-hop neighbors in G.
+    """
+    (u, v), (x, y) = removed_pair, added_pair
+    core = {u, v, x, y}
+    A = set(core)
+    for a in core:
+        A.update(G.neighbors(a))
+    return sorted(A)
+
+def laplacian_patch_mse(L_true: torch.Tensor, L_pred: torch.Tensor, idx: list[int]) -> torch.Tensor:
+    """
+    Frobenius MSE on the |idx| x |idx| submatrix (rows/cols = idx).
+    """
+    if not idx:
+        return torch.zeros((), device=L_true.device)
+    I = torch.as_tensor(idx, device=L_true.device, dtype=torch.long)
+    Lt = L_true.index_select(0, I).index_select(1, I)
+    Lp = L_pred.index_select(0, I).index_select(1, I)
+    return (Lt - Lp).pow(2).mean()
 
 def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
-                   beta_kl=0.0, gamma_lap=0.0, eps_y=1e-6, cycle=0):
+                   beta_kl=0.0, gamma_lap=0.0, eps_y=1e-6, cycle=0, gamma_local=0.0):
 
     opt = torch.optim.Adam(model.parameters(), lr=learning_rate)
     sched = None
@@ -45,11 +67,12 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
     model.to(device)
     model.train()
 
-    # --- NEW: schedule for KL and Laplacian aux ---
-    KL_DELAY, KL_WARMUP = 10, 20       # epochs
-    LAP_WARMUP = 50                    # epochs
+    # Schedules
+    KL_DELAY, KL_WARMUP = 10, 20
+    LAP_WARMUP = 50
+    LOC_WARMUP = 30
+
     def kl_weight(epoch):
-        # 0 for first KL_DELAY epochs, linear up to beta_kl over KL_WARMUP
         if beta_kl <= 0.0: return 0.0
         if epoch < KL_DELAY: return 0.0
         ramp = min(1.0, (epoch - KL_DELAY + 1) / max(1, KL_WARMUP))
@@ -60,12 +83,15 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
         ramp = min(1.0, (epoch + 1) / max(1, LAP_WARMUP))
         return gamma_lap * ramp
 
-    # --- NEW: bounds for log-variance in y-space ---
-    LOGVAR_MIN, LOGVAR_MAX = -5.0, 2.0   # sigma in [~0.007, ~7.4]
+    def loc_weight(epoch):
+        if gamma_local <= 0.0: return 0.0
+        ramp = min(1.0, (epoch + 1) / max(1, LOC_WARMUP))
+        return gamma_local * ramp
+
+    LOGVAR_MIN, LOGVAR_MAX = -5.0, 2.0
 
     for epoch in range(num_epochs):
-        epoch_loss = 0.0
-        n_steps = 0                      # <-- NEW: count steps for averaging
+        epoch_loss, n_steps = 0.0, 0
 
         for G in graphs:
             G_hh = hh_graph_from_G(G)
@@ -89,7 +115,7 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
                 V = G_t.number_of_nodes()
                 E = G_t.number_of_edges()
                 K = min(k_eigen, max(0, V - 1))
-                if K <= 0:
+                if K <= 0:  # (You said tiny graphs won't appear, but keep guard.)
                     continue
 
                 # Extras
@@ -101,39 +127,49 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
                 # Predict Gaussian over y_{t-1} | lam_t
                 mu_y_full, logvar_y_full = model(lam_t, step, extra)
                 mu_y, logvar_y = mu_y_full[:K], logvar_y_full[:K]
-
-                # --- NEW: clamp log-variance to stabilize NLL ---
                 logvar_y = logvar_y.clamp(LOGVAR_MIN, LOGVAR_MAX)
 
                 # Targets in y-space
-                y_target = lam_to_y(lam_tm1[:K])  # uses eps=1e-6 by default
+                y_target = lam_to_y(lam_tm1[:K])  # ε=1e-6 default
 
-                # Losses
+                # (1) Reconstruction NLL
                 recon_nll = gaussian_nll(y_target, mu_y, logvar_y).mean()
 
-                bw_kl  = kl_weight(epoch)     # scheduled KL
-                bw_lap = lap_weight(epoch)    # scheduled Laplacian aux
+                # Scheduled weights
+                bw_kl  = kl_weight(epoch)
+                bw_lap = lap_weight(epoch)
+                bw_loc = loc_weight(epoch)
 
-                if bw_kl > 0.0:
-                    kl_loss = kl_to_std_normal(mu_y, logvar_y).mean()
+                # (2) KL regularizer (tiny)
+                kl_loss = kl_to_std_normal(mu_y, logvar_y).mean() if bw_kl > 0.0 else torch.zeros((), device=device)
+
+                # Build predicted L̂_{t-1} once (deterministic mean in y-space)
+                lam_hat_tm1 = y_to_lam(mu_y.detach())  # (K,)
+                L_t_np   = normalized_laplacian_dense(G_t)
+                L_tm1_np = normalized_laplacian_dense(G_t_prev)
+                L_t   = torch.from_numpy(L_t_np).to(device=device, dtype=torch.float32)
+                L_tm1 = torch.from_numpy(L_tm1_np).to(device=device, dtype=torch.float32)
+                U_t   = torch.from_numpy(U_t_np[:, :K]).to(device=device, dtype=torch.float32)
+                L_hat = L_t - U_t @ torch.diag(lam_t[:K]) @ U_t.T \
+                           + U_t @ torch.diag(lam_hat_tm1) @ U_t.T
+
+                # (3) Global Laplacian reconstruction aux
+                lap_recon = (L_tm1 - L_hat).pow(2).mean() if bw_lap > 0.0 else torch.zeros((), device=device)
+
+                # (4) Local Laplacian patch aux on affected neighborhood only
+                if bw_loc > 0.0:
+                    # nodes impacted by the ground-truth swap (endpoints + their neighbors)
+                    A = affected_nodes_from_swap(G_t, removed_pair, added_pair)
+                    # The dense Laplacians above use G_t's node ordering. Because G_t_prev is a
+                    # direct edge edit of G_t, the order matches; we can index directly.
+                    # Map node labels to positions in the Laplacian:
+                    node_index = {n: i for i, n in enumerate(G_t.nodes())}
+                    idx = [node_index[n] for n in A if n in node_index]
+                    lap_local = laplacian_patch_mse(L_tm1, L_hat, idx)
                 else:
-                    kl_loss = torch.zeros((), device=device)
+                    lap_local = torch.zeros((), device=device)
 
-                if bw_lap > 0.0:
-                    with torch.no_grad():
-                        lam_hat_tm1 = y_to_lam(mu_y.detach())  # mean prediction
-                    L_t_np   = normalized_laplacian_dense(G_t)
-                    L_tm1_np = normalized_laplacian_dense(G_t_prev)
-                    L_t   = torch.from_numpy(L_t_np).to(device=device, dtype=torch.float32)
-                    L_tm1 = torch.from_numpy(L_tm1_np).to(device=device, dtype=torch.float32)
-                    U_t   = torch.from_numpy(U_t_np[:, :K]).to(device=device, dtype=torch.float32)
-                    L_hat = L_t - U_t @ torch.diag(lam_t[:K]) @ U_t.T \
-                               + U_t @ torch.diag(lam_hat_tm1) @ U_t.T
-                    lap_recon = (L_tm1 - L_hat).pow(2).mean()
-                else:
-                    lap_recon = torch.zeros((), device=device)
-
-                loss = recon_nll + bw_kl * kl_loss + bw_lap * lap_recon
+                loss = recon_nll + bw_kl * kl_loss + bw_lap * lap_recon + bw_loc * lap_local
 
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
@@ -141,17 +177,15 @@ def train_spectral(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
                 opt.step()
 
                 epoch_loss += float(loss.item())
-                n_steps += 1                   # <-- NEW
+                n_steps += 1
 
         if sched is not None:
             sched.step(epoch)
 
-        # --- NEW: print mean per-step loss
         mean_loss = epoch_loss / max(1, n_steps)
         print(f"Epoch {epoch+1}/{num_epochs} | mean_loss={mean_loss:.4f} "
-              f"(steps={n_steps}, β_KL_sched={kl_weight(epoch):.5f}, γ_Lap_sched={lap_weight(epoch):.5f})")
-
-
+              f"(steps={n_steps}, β_KL_sched={kl_weight(epoch):.5f}, "
+              f"γ_Lap_sched={lap_weight(epoch):.5f}, γ_Local_sched={loc_weight(epoch):.5f})")
 
 
 def load_msvae_from_file(max_node,config, model_path):
@@ -206,7 +240,8 @@ def main(args):
         learning_rate = config['training']['learning_rate']
         beta_kl = config['training']['beta_kl']
         gamma_lap = config['training']['gamma_lap']
-        train_spectral(model, train_graphs,num_epochs, learning_rate,T, k_eigen,'cpu',beta_kl, gamma_lap)
+        gamma_local = config['training'].get('gamma_local', 0.0)
+        train_spectral(model, train_graphs,num_epochs, learning_rate,T, k_eigen,'cpu',beta_kl, gamma_lap,gamma_local)
 
     if args.output_model:
         model.save_model(model_dir / args.output_model)
