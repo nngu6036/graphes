@@ -5,7 +5,8 @@ from torch_geometric.nn import GINConv, global_mean_pool
 import networkx as nx
 import random, math, numpy as np
 import matplotlib.pyplot as plt
-
+from scipy.sparse import csr_matrix
+from scipy.sparse import csgraph
 from utils import *
 
 # ---- inner-products needed for fast Frobenius scoring of a double-edge swap ----

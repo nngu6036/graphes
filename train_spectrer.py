@@ -236,12 +236,25 @@ def main(args):
         model.load_model(model_dir / args.input_model)
         print(f"SpectralER model loaded from {args.input_model}")
     else:
-        num_epochs    = config['training']['num_epochs']
-        learning_rate = config['training']['learning_rate']
-        beta_kl = config['training']['beta_kl']
-        gamma_lap = config['training']['gamma_lap']
-        gamma_local = config['training'].get('gamma_local', 0.0)
-        train_spectral(model, train_graphs,num_epochs, learning_rate,T, k_eigen,'cpu',beta_kl, gamma_lap,gamma_local)
+        num_epochs    = config["training"].get("num_epochs", 400)
+        learning_rate = config["training"].get("learning_rate", 1e-3)
+        T             = config["training"].get("T", 100)
+        beta_kl       = config["training"].get("beta_kl", 0.0)
+        gamma_lap     = config["training"].get("gamma_lap", 0.0)
+        gamma_local = config["training"].get("gamma_local", 0.0)
+
+        k_eigen       = config["data"].get("k_eigen", 15)
+
+        device = "cpu"  # or your chosen device
+        train_spectral(
+            model, train_graphs, num_epochs, learning_rate, T, k_eigen,
+            device=device,
+            beta_kl=beta_kl,
+            gamma_lap=gamma_lap,
+            eps_y=1e-6,
+            cycle=0,
+            gamma_local=gamma_local,
+        )
 
     if args.output_model:
         model.save_model(model_dir / args.output_model)
