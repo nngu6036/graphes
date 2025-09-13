@@ -81,7 +81,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen, device):
                 loss_partner = F.cross_entropy(partner_logits.unsqueeze(0), target_idx)   # (1,C) vs (1)
                 loss_orient  = F.cross_entropy(orient_logits[pos_idx].unsqueeze(0),
                                                torch.tensor([orient_y], dtype=torch.long, device=device))
-                loss = loss_partner + 0.5 * loss_orient
+                loss = loss_partner + 0.0 * loss_orient
 
                 opt.zero_grad()
                 loss.backward()
