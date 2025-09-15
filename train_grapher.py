@@ -81,7 +81,7 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen, device):
                 loss_partner = F.cross_entropy(partner_logits.unsqueeze(0), target_idx)   # (1,C) vs (1)
                 loss_orient  = F.cross_entropy(orient_logits[pos_idx].unsqueeze(0),
                                                torch.tensor([orient_y], dtype=torch.long, device=device))
-                loss = loss_partner + 0.0 * loss_orient
+                loss = loss_partner + 0.5 * loss_orient
 
                 opt.zero_grad()
                 loss.backward()
@@ -161,12 +161,7 @@ def main(args):
             print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
             print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
 
-        generated_graphs, generated_seqs = model.generate_from_sequences(test_seqs, k_eigen, method='havel_hakimi')
-        print(f"Evaluate generated graphs using Havei Hamimi Model and test sequences")
-        print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")
-        print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
-        print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
-
+     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GRAPH-ER Model')
     parser.add_argument('--dataset-dir', type=str, required=True,help='Path to the directory containing graph files')

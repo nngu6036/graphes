@@ -7,7 +7,7 @@ import networkx as nx
 import random
 import numpy as np
 
-from utils import graph_to_data, try_apply_swap_with_orientation, configuration_model_from_multiset, constraint_configuration_model_from_multiset, save_graphs
+from utils import *
 
 def decode_degree_sequence(seq):
     degrees = []

@@ -211,7 +211,10 @@ def _propose_swap_with_locality(
             continue
 
         # Two orientations; try the one sampled first, fall back to the other
-        for (f1, f2) in ( ((a, c), (b, d)), ((a, d), (b, c)) if rng.random() < 0.5 else ((a, d), (b, c),), ):
+        options = [((a, c), (b, d)), ((a, d), (b, c))]
+        if rng.random() < 0.5:
+            options.reverse()
+        for (f1, f2) in options:
             # simple-edge constraints
             if f1[0] == f1[1] or f2[0] == f2[1]:
                 continue
