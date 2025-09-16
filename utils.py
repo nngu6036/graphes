@@ -137,35 +137,7 @@ def check_sequence_validity(seq):
 def _ek(u, v):
     return (u, v) if u <= v else (v, u)
 
-def _pick_valid_swap(G, max_tries=128, rng=random):
-    """
-    Propose a valid 2-edge swap (e1, e2) -> (f1, f2).
-    Returns (e1, e2, f1, f2) or None if not found.
-    """
-    E = list(G.edges())
-    nE = len(E)
-    if nE < 2:
-        return None
-    for _ in range(max_tries):
-        (a, b) = E[rng.randrange(nE)]
-        (c, d) = E[rng.randrange(nE)]
-        if len({a, b, c, d}) != 4:  # endpoints must be all different
-            continue
-        # two possible rewires; pick one at random
-        if rng.random() < 0.5:
-            f1, f2 = (a, c), (b, d)
-        else:
-            f1, f2 = (a, d), (b, c)
-        # no self-loops and no multi-edges
-        if f1[0] == f1[1] or f2[0] == f2[1]:
-            continue
-        if G.has_edge(*f1) or G.has_edge(*f2):
-            continue
-        # Also avoid creating parallel edges across the pair
-        if _ek(*f1) == _ek(*f2):
-            continue
-        return ( (a,b), (c,d), f1, f2 )
-    return None
+
 
 def _khop_neighborhoods(G, k):
     """
@@ -350,31 +322,6 @@ def configuration_model_from_multiset(degrees):
     return G
 
 
-def havel_hakimi_construction(degree_sequence):
-    if not nx.is_valid_degree_sequence_havel_hakimi(degree_sequence):
-        print("The degree sequence is not graphical.")
-        return None
-    # Make a copy to avoid modifying the original
-    deg_seq = list(degree_sequence)
-    nodes = list(range(len(deg_seq)))
-    G = nx.Graph()
-    G.add_nodes_from(nodes)
-    while any(deg_seq):
-        # Sort nodes by remaining degree (descending)
-        node_deg_pairs = sorted(zip(nodes, deg_seq), key=lambda x: -x[1])
-        u, du = node_deg_pairs[0]
-        nodes = [x for x, _ in node_deg_pairs]
-        deg_seq = [d for _, d in node_deg_pairs]
-        # Take the top node and connect to next 'du' nodes
-        for i in range(1, du + 1):
-            v = nodes[i]
-            G.add_edge(u, v)
-            deg_seq[i] -= 1
-        deg_seq[0] = 0  # All of u's degree is used
-        # Remove nodes with 0 degree for next round
-        nodes = [n for n, d in zip(nodes, deg_seq) if d > 0]
-        deg_seq = [d for d in deg_seq if d > 0]
-    return G
 
 def save_graphs(snapshots, save_to_local=True, filename="graphs", out_dir="logs"):
     """
@@ -453,40 +400,6 @@ def hh_graph_from_seq(seq):
     return H_int  # nodes are 0..n-1 already
 
 
-def laplacian_eigs(G: nx.Graph, k: int, normed: bool = True):
-    """
-    Return (vals, vecs) for the K smallest *non-zero* eigenpairs of the (normalized) Laplacian.
-    Falls back gracefully on tiny graphs.
-    """
-    n = G.number_of_nodes()
-    A = csr_matrix(nx.to_scipy_sparse_array(G, dtype=float))
-    L = csgraph.laplacian(A, normed=normed)
-
-    # ask for k+1 to include the zero eigenvalue, then drop it
-    want = min(max(1, k + 1), n - 1)
-    vals, vecs = eigsh(L, k=want, which="SM")
-    idx = np.argsort(vals)
-    vals, vecs = vals[idx], vecs[:, idx]
-    # drop the (near-)zero eigenvalue
-    if vals[0] < 1e-8:
-        vals, vecs = vals[1:], vecs[:, 1:]
-    # cap/pad to exactly k
-    vals = vals[:k].astype(np.float32)
-    vecs = vecs[:, :k].astype(np.float32)
-    if vals.shape[0] < k:
-        pad = k - vals.shape[0]
-        vals = np.pad(vals, (0, pad))
-        vecs = np.pad(vecs, ((0, 0), (0, pad)))
-    return vals, vecs
-
-
-def normalized_laplacian_dense(G: nx.Graph) -> np.ndarray:
-    """Dense normalized Laplacian as float64 ndarray (for small graphs this is fine)."""
-    return csgraph.laplacian(
-        csr_matrix(nx.to_scipy_sparse_array(G, dtype=float)), normed=True
-    ).toarray()
-
-
 # utils.py
 def try_apply_swap_with_orientation(G, anchor, partner, orient_idx,
                                     ensure_connected=True, k_hop=None):
@@ -528,57 +441,6 @@ def try_apply_swap_with_orientation(G, anchor, partner, orient_idx,
         return False
 
     return True
-
-
-def lam_to_y(lam: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """
-    lam: (K,) tensor of ascending normalized Laplacian eigenvalues in [0, 2],
-         excluding the trivial zero (i.e., the first is > 0).
-    Returns y: (K,) with
-      y1 = logit(lam1/2),  yi = log( (lam_i - lam_{i-1}) + eps ), i>=2
-    """
-    assert lam.dim() == 1, "lam must be 1D"
-    K = lam.numel()
-    if K == 0:
-        return lam
-
-    lam = lam.clamp(0.0, 2.0)
-    # y1 = logit(lam1/2)
-    s = (lam[0] / 2.0).clamp(min=eps, max=1.0 - eps)
-    y1 = torch.log(s) - torch.log1p(-s)
-
-    if K == 1:
-        return y1.unsqueeze(0)
-
-    gaps = lam[1:] - lam[:-1] + eps
-    gaps = gaps.clamp_min(eps)
-    yrest = torch.log(gaps)
-    return torch.cat([y1.unsqueeze(0), yrest], dim=0)
-
-
-def y_to_lam(y: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """
-    y: (K,) with
-      y1 = logit(lam1/2), yi = log((lam_i - lam_{i-1}) + eps)
-    Returns lam in [0,2] and nondecreasing by construction.
-    """
-    assert y.dim() == 1, "y must be 1D"
-    K = y.numel()
-    if K == 0:
-        return y
-
-    lam = torch.empty_like(y)
-    lam[0] = 2.0 * torch.sigmoid(y[0])
-
-    for i in range(1, K):
-        gap = torch.exp(y[i]) - eps
-        gap = gap.clamp_min(0.0)
-        lam[i] = lam[i - 1] + gap
-
-    # cap at 2.0 (normalized Laplacian support)
-    lam = torch.minimum(lam, torch.full_like(lam, 2.0))
-    return lam
-
 
 
 # -----------------------

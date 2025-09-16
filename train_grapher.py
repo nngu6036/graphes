@@ -136,15 +136,16 @@ def main(args):
     # Orientation toggle can come from CLI (highest priority) or config (fallback).
     cfg_use_orient = bool(config['training'].get('predict_orientation', True))
     model = GraphER(k_eigen, hidden_dim, num_layer, T,
-+                    use_orientation=cfg_use_orient,
-+                    partner_k_hop=partner_k_hop)
+                    use_orientation=cfg_use_orient,
+                    partner_k_hop=partner_k_hop)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
         print(f"Model Graph-ER loaded from {args.input_model}")
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_grapher(model, train_graphs,num_epochs, learning_rate,T, k_eigen,'cpu')
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        train_grapher(model, train_graphs, num_epochs, learning_rate, T, k_eigen, device)
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
