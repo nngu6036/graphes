@@ -67,8 +67,8 @@ def heat_kernel_numpy(G: nx.Graph, t: float = 0.5) -> np.ndarray:
     """
     if G.number_of_nodes() == 0:
         return np.zeros((0, 0), dtype=np.float64)
-    A = nx.to_scipy_sparse_array(G, dtype=float, format="csr")
-    L = csgraph.laplacian(A, normed=True)
+    L = nx.normalized_laplacian_matrix(G)  # scipy.sparse matrix
+    import scipy.linalg as LA
     return LA.expm(-t * L.toarray())
 
 
