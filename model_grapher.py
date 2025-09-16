@@ -61,10 +61,11 @@ class GraphER(nn.Module):
       - MLP input = [uv(2H), xy(2H), t_emb(H)] = R^{5H}
       - partner_logits: (C,), orient_logits: (C,2)
     """
-    def __init__(self, in_channels, hidden_dim, num_layer, T):
+    def __init__(self, in_channels, hidden_dim, num_layer, T, use_orientation: bool = True,partner_k_hop: int = 2):
         super().__init__()
+        self.use_orientation = use_orientation
         self.hidden_dim = hidden_dim
-
+        self.partner_k_hop = int(partner_k_hop)
         # Encoder: (n, in_channels) -> (n, H)
         self.gin_layers = nn.ModuleList([
             ResGINLayer(in_channels if i == 0 else hidden_dim, hidden_dim)
@@ -82,11 +83,14 @@ class GraphER(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 1)
         )
-        self.orient_head = nn.Sequential(
-            nn.Linear(in_feat, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 2)
-        )
+        if self.use_orientation:
+            self.orient_head = nn.Sequential(
+                 nn.Linear(in_feat, hidden_dim),
+                 nn.ReLU(),
+                 nn.Linear(hidden_dim, 2)
+             )
+        else:
+            self.orient_head = None
 
     def _time_embed(self, t: int, device):
         # TimeEmbed handles device internally; just pass scalar.
@@ -126,11 +130,13 @@ class GraphER(nn.Module):
             feats.append(f)
 
         if len(feats) == 0:
-            return (torch.empty(0, device=device), torch.empty(0, 2, device=device))
+            empty_partner = torch.empty(0, device=device)
+            empty_orient  = None if not self.use_orientation else torch.empty(0, 2, device=device)
+            return (empty_partner, empty_orient)
 
         Fmat = torch.stack(feats, dim=0)               # (C, 5H)
         partner_logits = self.edge_predictor(Fmat).squeeze(-1)  # (C,)
-        orient_logits  = self.orient_head(Fmat)                 # (C, 2)
+        orient_logits  = self.orient_head(Fmat) if self.use_orientation else None
         return partner_logits, orient_logits
 
     def save_model(self, file_path):
@@ -163,11 +169,11 @@ class GraphER(nn.Module):
                 # anchor (u,v) and disjoint candidates
                 u, v = random.choice(edges)
                 anchor = (u, v)
-                cand_edges = [e for e in edges if frozenset(e) != frozenset(anchor)
-                              and len({e[0], e[1], u, v}) == 4]
+                cand_edges = local_partner_candidates(G, anchor, self.partner_k_hop)
                 if not cand_edges:
-                    continue
-
+                    cand_edges = [e for e in edges if len({e[0], e[1], u, v}) == 4]
+                    if not cand_edges:
+                        continue
                 data = graph_to_data(G, k_eigen)
                 x, edge_index = data.x.to(device), data.edge_index.to(device)
 
@@ -182,13 +188,22 @@ class GraphER(nn.Module):
                 committed = False
                 for idx_best in order:
                     partner = cand_edges[idx_best]
-                    oi = int(torch.argmax(orient_logits[idx_best]).item())
-                    if try_apply_swap_with_orientation(G, anchor, partner, oi, ensure_connected=True, k_hop=2):
-                        committed = True
-                        break
-                    if try_apply_swap_with_orientation(G, anchor, partner, 1 - oi, ensure_connected=True, k_hop=2):
-                        committed = True
-                        break
+                    if self.use_orientation:
+                        oi = int(torch.argmax(orient_logits[idx_best]).item())
+                        if try_apply_swap_with_orientation(G, anchor, partner, oi, ensure_connected=True, k_hop=2):
+                            committed = True
+                            break
+                        if try_apply_swap_with_orientation(G, anchor, partner, 1 - oi, ensure_connected=True, k_hop=2):
+                            committed = True
+                            break
+                    else:
+                        # No orientation predictor: just try both orientations.
+                        if try_apply_swap_with_orientation(G, anchor, partner, 0, ensure_connected=True, k_hop=2):
+                            committed = True
+                            break
+                        if try_apply_swap_with_orientation(G, anchor, partner, 1, ensure_connected=True, k_hop=2):
+                            committed = True
+                            break
 
             generated_graphs.append(G)
 
@@ -224,10 +239,11 @@ class GraphER(nn.Module):
                     continue
                 u, v = random.choice(edges)
                 anchor = (u, v)
-                cand_edges = [e for e in edges if frozenset(e) != frozenset(anchor)
-                              and len({e[0], e[1], u, v}) == 4]
+                cand_edges = local_partner_candidates(G, anchor, self.partner_k_hop)
                 if not cand_edges:
-                    continue
+                    cand_edges = [e for e in edges if len({e[0], e[1], u, v}) == 4]
+                    if not cand_edges:
+                        continue
 
                 data = graph_to_data(G, k_eigen)
                 x, edge_index = data.x.to(device), data.edge_index.to(device)
@@ -242,13 +258,22 @@ class GraphER(nn.Module):
                 committed = False
                 for idx_best in order:
                     partner = cand_edges[idx_best]
-                    oi = int(torch.argmax(orient_logits[idx_best]).item())
-                    if try_apply_swap_with_orientation(G, anchor, partner, oi, ensure_connected=True, k_hop=2):
-                        committed = True
-                        break
-                    if try_apply_swap_with_orientation(G, anchor, partner, 1 - oi, ensure_connected=True, k_hop=2):
-                        committed = True
-                        break
+                    if self.use_orientation:
+                        oi = int(torch.argmax(orient_logits[idx_best]).item())
+                        if try_apply_swap_with_orientation(G, anchor, partner, oi, ensure_connected=True, k_hop=2):
+                            committed = True
+                            break
+                        if try_apply_swap_with_orientation(G, anchor, partner, 1 - oi, ensure_connected=True, k_hop=2):
+                            committed = True
+                            break
+                    else:
+                        # No orientation predictor: just try both orientations.
+                        if try_apply_swap_with_orientation(G, anchor, partner, 0, ensure_connected=True, k_hop=2):
+                            committed = True
+                            break
+                        if try_apply_swap_with_orientation(G, anchor, partner, 1, ensure_connected=True, k_hop=2):
+                            committed = True
+                            break
             generated_graphs.append(G)
 
         #if len(generated_graphs):
@@ -275,10 +300,11 @@ class GraphER(nn.Module):
                     continue
                 u, v = random.choice(edges)
                 anchor = (u, v)
-                cand_edges = [e for e in edges if frozenset(e) != frozenset(anchor)
-                              and len({e[0], e[1], u, v}) == 4]
+                cand_edges = local_partner_candidates(G, anchor, self.partner_k_hop)
                 if not cand_edges:
-                    continue
+                    cand_edges = [e for e in edges if len({e[0], e[1], u, v}) == 4]
+                    if not cand_edges:
+                        continue
 
                 data = graph_to_data(G, k_eigen)
                 x, edge_index = data.x.to(device), data.edge_index.to(device)
@@ -293,13 +319,22 @@ class GraphER(nn.Module):
                 committed = False
                 for idx_best in order:
                     partner = cand_edges[idx_best]
-                    oi = int(torch.argmax(orient_logits[idx_best]).item())
-                    if try_apply_swap_with_orientation(G, anchor, partner, oi, ensure_connected=True, k_hop=2):
-                        committed = True
-                        break
-                    if try_apply_swap_with_orientation(G, anchor, partner, 1 - oi, ensure_connected=True, k_hop=2):
-                        committed = True
-                        break
+                    if self.use_orientation:
+                        oi = int(torch.argmax(orient_logits[idx_best]).item())
+                        if try_apply_swap_with_orientation(G, anchor, partner, oi, ensure_connected=True, k_hop=2):
+                            committed = True
+                            break
+                        if try_apply_swap_with_orientation(G, anchor, partner, 1 - oi, ensure_connected=True, k_hop=2):
+                            committed = True
+                            break
+                    else:
+                        # No orientation predictor: just try both orientations.
+                        if try_apply_swap_with_orientation(G, anchor, partner, 0, ensure_connected=True, k_hop=2):
+                            committed = True
+                            break
+                        if try_apply_swap_with_orientation(G, anchor, partner, 1, ensure_connected=True, k_hop=2):
+                            committed = True
+                            break
             generated_graphs.append(G)
 
         #if len(generated_graphs):

@@ -578,3 +578,48 @@ def y_to_lam(y: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     # cap at 2.0 (normalized Laplacian support)
     lam = torch.minimum(lam, torch.full_like(lam, 2.0))
     return lam
+
+
+
+# -----------------------
+# K-hop locality helpers
+# -----------------------
+def k_hop_nodes(G: nx.Graph, sources, k: int) -> set:
+    """
+    Return nodes within <= k hops from any node in `sources` (inclusive).
+    """
+    if k <= 0:
+        return set(sources)
+    srcs = list(sources) if isinstance(sources, (list, tuple, set)) else [sources]
+    seen = set(srcs)
+    frontier = deque((s, 0) for s in srcs)
+    while frontier:
+        u, d = frontier.popleft()
+        if d == k:
+            continue
+        for v in G.neighbors(u):
+            if v not in seen:
+                seen.add(v)
+                frontier.append((v, d + 1))
+    return seen
+
+def local_partner_candidates(G: nx.Graph, anchor: tuple, k: int) -> list[tuple]:
+    """
+    Candidate partner edges for rewiring:
+      - edges disjoint from `anchor`
+      - BOTH endpoints lie in k-hop neighborhood of anchor endpoints (union).
+    Returns a list of edges as (u,v) with u < v for consistency.
+    """
+    (a, b) = anchor
+    if a == b:
+        return []
+    nh = k_hop_nodes(G, {a, b}, max(0, int(k)))
+    disjoint_ok = lambda e: (a not in e) and (b not in e)
+    def canon(u, v): return (u, v) if u < v else (v, u)
+    out = []
+    for (u, v) in G.edges():
+        if disjoint_ok((u, v)) and (u in nh) and (v in nh):
+            out.append(canon(u, v))
+    # unique & stable
+    out = sorted(set(out))
+    return out

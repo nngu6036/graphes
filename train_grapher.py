@@ -23,7 +23,7 @@ from model_msvae import MSVAE
 from model_setvae import SetVAE
 from model_grapher import GraphER
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
-from utils import graph_to_data, hh_graph_from_G, transform_to_hh_via_stochastic_rewiring, load_graph_from_directory, check_sequence_validity
+from utils import *
 
 def _orientation_label(anchor, partner, removed_pair):
     (a,b), (c,d) = anchor, partner
@@ -49,12 +49,10 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen, device):
                 pos_partner = (c, d)
 
                 # candidates = all edges disjoint with anchor
-                all_edges = list(G_t.edges())
-                cand_edges = [(x,y) for (x,y) in all_edges
-                              if frozenset((x,y)) != frozenset(anchor) and len({a,b,x,y}) == 4]
-                if not cand_edges:
-                    continue
-                # ensure positive present
+                # Build LOCAL candidate partners within k hops of the anchor.
+                k_local = getattr(model, "partner_k_hop", 2)
+                cand_edges = local_partner_candidates(G_t, anchor, k_local)
+                # Ensure the positive partner is present even if it lies outside k-hop
                 if frozenset(pos_partner) not in {frozenset(e) for e in cand_edges}:
                     cand_edges.append(pos_partner)
 
@@ -79,9 +77,14 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen, device):
                 # losses
                 target_idx = torch.tensor([pos_idx], dtype=torch.long, device=device)
                 loss_partner = F.cross_entropy(partner_logits.unsqueeze(0), target_idx)   # (1,C) vs (1)
-                loss_orient  = F.cross_entropy(orient_logits[pos_idx].unsqueeze(0),
-                                               torch.tensor([orient_y], dtype=torch.long, device=device))
-                loss = loss_partner + 0.5 * loss_orient
+                if model.use_orientation:
+                    loss_orient = F.cross_entropy(
+                        orient_logits[pos_idx].unsqueeze(0),
+                        torch.tensor([orient_y], dtype=torch.long, device=device)
+                    )
+                    loss = loss_partner + 0.5 * loss_orient
+                else:
+                    loss = loss_partner
 
                 opt.zero_grad()
                 loss.backward()
@@ -128,7 +131,13 @@ def main(args):
     num_layer = config['training']['num_layer']
     T = config['training']['T']
     k_eigen = config['data']['k_eigen']
-    model = GraphER(k_eigen, hidden_dim,num_layer,T)
+    partner_k_hop = int(config['training'].get('partner_k_hop', 2))
+    # Orientation toggle can come from CLI (highest priority) or config (fallback).
+    # Orientation toggle can come from CLI (highest priority) or config (fallback).
+    cfg_use_orient = bool(config['training'].get('predict_orientation', True))
+    model = GraphER(k_eigen, hidden_dim, num_layer, T,
++                    use_orientation=cfg_use_orient,
++                    partner_k_hop=partner_k_hop)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
         print(f"Model Graph-ER loaded from {args.input_model}")

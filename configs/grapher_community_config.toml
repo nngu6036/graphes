@@ -10,7 +10,8 @@ gamma_lap = 0.0001
 gamma_local = 0.0001
 T = 100
 cycle = 4
-
+partner_k_hop = 2          # ← set your k here
+predict_orientation = false
 [data]
 k_eigen = 15
 
