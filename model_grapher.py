@@ -60,7 +60,7 @@ class GraphER(nn.Module):
       - MLP input = [uv(2H), xy(2H), t_emb(H)] = R^{5H}
       - partner_logits: (C,), orient_logits: (C,2)
     """
-    def __init__(self, in_channels, hidden_dim, num_layer, T, use_orientation: bool = True,partner_k_hop: int = 2):
+    def __init__(self, in_channels, hidden_dim, num_layer, T, use_orientation: bool = True, partner_k_hop: int = 2, t_heat: float = 0.5):
         super().__init__()
         self.use_orientation = use_orientation
         self.hidden_dim = hidden_dim
