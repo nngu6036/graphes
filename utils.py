@@ -13,6 +13,7 @@ import numpy as np
 from collections import deque
 import math
 import matplotlib.pyplot as plt
+import scipy.linalg as LA
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
@@ -58,6 +59,17 @@ def load_graph_from_directory(directory_path):
             graph = nx.convert_node_labels_to_integers(G)
             graphs.append(graph)
     return graphs, max_node, min_node
+
+def heat_kernel_numpy(G: nx.Graph, t: float = 0.5) -> np.ndarray:
+    """
+    Return the heat kernel K = exp(-t * L_norm) as a dense NumPy array.
+    Uses the normalized Laplacian to align with spectral features.
+    """
+    if G.number_of_nodes() == 0:
+        return np.zeros((0, 0), dtype=np.float64)
+    A = nx.to_scipy_sparse_array(G, dtype=float, format="csr")
+    L = csgraph.laplacian(A, normed=True)
+    return LA.expm(-t * L.toarray())
 
 
 def _safe_eigvecs(G: nx.Graph, k: int) -> np.ndarray:

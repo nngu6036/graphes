@@ -6,7 +6,6 @@ from torch_geometric.nn import GINConv
 import networkx as nx
 import random
 import numpy as np
-
 from utils import *
 
 def decode_degree_sequence(seq):
@@ -66,6 +65,7 @@ class GraphER(nn.Module):
         self.use_orientation = use_orientation
         self.hidden_dim = hidden_dim
         self.partner_k_hop = int(partner_k_hop)
+        self.t_heat = float(t_heat)  # heat-kernel time for auxiliary loss
         # Encoder: (n, in_channels) -> (n, H)
         self.gin_layers = nn.ModuleList([
             ResGINLayer(in_channels if i == 0 else hidden_dim, hidden_dim)
@@ -91,10 +91,45 @@ class GraphER(nn.Module):
              )
         else:
             self.orient_head = None
+        self.q_proj = nn.Linear(hidden_dim, hidden_dim, bias=False)
+        self.k_proj = nn.Linear(hidden_dim, hidden_dim, bias=False)
 
     def _time_embed(self, t: int, device):
         # TimeEmbed handles device internally; just pass scalar.
         return self.t_embed(int(t))                     # (H,)
+
+
+    # ---------- Auxiliary: encode + kernel prediction ----------
+    def encode(self, x, edge_index):
+        """Expose the encoder so training can reuse embeddings for the kernel head."""
+        for gin in self.gin_layers:
+            x = gin(x, edge_index)
+        return x  # (n,H)
+
+    def soft_adjacency(self, h: torch.Tensor) -> torch.Tensor:
+        """
+        From node embeddings h∈R^{n×H}, build a symmetric, loop-free soft adjacency S∈[0,1]^{n×n}.
+        """
+        q = self.q_proj(h)                     # (n,H)
+        k = self.k_proj(h)                     # (n,H)
+        S = torch.sigmoid(q @ k.T)             # (n,n)
+        S = 0.5 * (S + S.T)                    # symmetrize
+        S.fill_diagonal_(0.0)                  # no self-loops
+        return S
+
+    def heat_kernel_from_soft_adj(self, S: torch.Tensor, t: float = None) -> torch.Tensor:
+        """
+        Build normalized adjacency Ā, normalized Laplacian L = I - Ā, then K = exp(-t L).
+        """
+        t = self.t_heat if t is None else float(t)
+        deg = torch.clamp(S.sum(dim=1), min=1e-8)     # (n,)
+        invsqrt = deg.pow(-0.5)                        # (n,)
+        Dm = torch.diag(invsqrt)                       # (n,n)
+        Abar = Dm @ S @ Dm                             # (n,n)
+        I = torch.eye(Abar.size(0), device=Abar.device, dtype=Abar.dtype)
+        L = I - Abar
+        return torch.matrix_exp(-t * L)                # (n,n)
+
 
     @staticmethod
     def _edge_rep(h, a, b):

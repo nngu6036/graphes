@@ -32,7 +32,8 @@ def _orientation_label(anchor, partner, removed_pair):
     if {frozenset((a,d)), frozenset((b,c))} == rem: return 1
     raise ValueError("Orientation does not match removed edges.")
 
-def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen, device):
+def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen, device,
+                  lambda_kernel: float = 0.1, t_heat: float = 0.5):
     model = model.to(device)
     opt = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 
@@ -42,6 +43,9 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen, device):
 
         for G in graphs:
             G_hh = hh_graph_from_G(G)
+            # ---- Precompute target heat kernel on HH once per graph (no grad) ----
+            K_tgt_np = heat_kernel_numpy(G_hh, t=t_heat)
+            K_tgt = torch.from_numpy(K_tgt_np).to(device=device, dtype=torch.float32)
             traj = transform_to_hh_via_stochastic_rewiring(G, G_hh, G.number_of_edges())
             for step_idx, (G_t, added_pair, removed_pair) in enumerate(traj, start=1):
                 (a,b), (c,d) = added_pair
@@ -82,9 +86,20 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen, device):
                         orient_logits[pos_idx].unsqueeze(0),
                         torch.tensor([orient_y], dtype=torch.long, device=device)
                     )
-                    loss = loss_partner + 0.5 * loss_orient
+                    loss_ce = loss_partner + 0.5 * loss_orient
                 else:
-                    loss = loss_partner
+                    loss_ce = loss_partner
+
+                with torch.no_grad():
+                    n_nodes = x.size(0)
+                h = model.encode(x, edge_index)                         # (n,H)
+                S = model.soft_adjacency(h)                              # (n,n)
+                K_pred = model.heat_kernel_from_soft_adj(S, t=t_heat)    # (n,n)
+                # If node counts differ (shouldn't for same graph), align by min-n
+                n_common = min(K_pred.size(0), K_tgt.size(0))
+                loss_kernel = F.mse_loss(K_pred[:n_common, :n_common], K_tgt[:n_common, :n_common])
+
+                loss = loss_ce + (lambda_kernel * loss_kernel)
 
                 opt.zero_grad()
                 loss.backward()
