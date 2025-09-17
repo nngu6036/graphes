@@ -271,6 +271,7 @@ def transform_to_hh_via_stochastic_rewiring(
             continue
 
         # Tentatively apply and enforce connectivity
+        Gb = Gc.copy()  
         Gc.remove_edges_from([e1, e2])
         Gc.add_edges_from([f1, f2])
 
@@ -280,7 +281,7 @@ def transform_to_hh_via_stochastic_rewiring(
             Gc.add_edges_from([e1, e2])
             continue
         else:
-            traj.append((Gc.copy(),(f1, f2),(e1, e2)))
+            traj.append((Gb,(e1, e2), (f1, f2)))
 
         # Commit
         cur_matches += dmatches
@@ -295,7 +296,6 @@ def transform_to_hh_via_stochastic_rewiring(
             for u in {e1[0], e1[1], e2[0], e2[1], f1[0], f1[1], f2[0], f2[1]}:
                 dists = nx.single_source_shortest_path_length(Gc, u, cutoff=k_hop)
                 neighborhoods[u] = {x for x, dist in dists.items() if 0 < dist <= k_hop}
-    #plot_graph_evolution([(G,"G"),(Gc,"G_to_HH"),(H,"H")])
     return traj
 
 

@@ -8,11 +8,6 @@ import random
 import numpy as np
 from utils import *
 
-def decode_degree_sequence(seq):
-    degrees = []
-    for degree, count in enumerate(seq):
-        degrees.extend([degree] * int(count))
-    return degrees
 
 def initialize_graphs(method, seq):
     if method == 'havel_hakimi':
@@ -60,12 +55,11 @@ class GraphER(nn.Module):
       - MLP input = [uv(2H), xy(2H), t_emb(H)] = R^{5H}
       - partner_logits: (C,), orient_logits: (C,2)
     """
-    def __init__(self, in_channels, hidden_dim, num_layer, T, use_orientation: bool = True, partner_k_hop: int = 2, t_heat: float = 0.5):
+    def __init__(self, in_channels, hidden_dim, num_layer, T, use_orientation: bool = True, partner_k_hop: int = 2:
         super().__init__()
         self.use_orientation = use_orientation
         self.hidden_dim = hidden_dim
         self.partner_k_hop = int(partner_k_hop)
-        self.t_heat = float(t_heat)  # heat-kernel time for auxiliary loss
         # Encoder: (n, in_channels) -> (n, H)
         self.gin_layers = nn.ModuleList([
             ResGINLayer(in_channels if i == 0 else hidden_dim, hidden_dim)
@@ -91,45 +85,10 @@ class GraphER(nn.Module):
              )
         else:
             self.orient_head = None
-        self.q_proj = nn.Linear(hidden_dim, hidden_dim, bias=False)
-        self.k_proj = nn.Linear(hidden_dim, hidden_dim, bias=False)
 
     def _time_embed(self, t: int, device):
         # TimeEmbed handles device internally; just pass scalar.
         return self.t_embed(int(t))                     # (H,)
-
-
-    # ---------- Auxiliary: encode + kernel prediction ----------
-    def encode(self, x, edge_index):
-        """Expose the encoder so training can reuse embeddings for the kernel head."""
-        for gin in self.gin_layers:
-            x = gin(x, edge_index)
-        return x  # (n,H)
-
-    def soft_adjacency(self, h: torch.Tensor) -> torch.Tensor:
-        """
-        From node embeddings h∈R^{n×H}, build a symmetric, loop-free soft adjacency S∈[0,1]^{n×n}.
-        """
-        q = self.q_proj(h)                     # (n,H)
-        k = self.k_proj(h)                     # (n,H)
-        S = torch.sigmoid(q @ k.T)             # (n,n)
-        S = 0.5 * (S + S.T)                    # symmetrize
-        S.fill_diagonal_(0.0)                  # no self-loops
-        return S
-
-    def heat_kernel_from_soft_adj(self, S: torch.Tensor, t: float = None) -> torch.Tensor:
-        """
-        Build normalized adjacency Ā, normalized Laplacian L = I - Ā, then K = exp(-t L).
-        """
-        t = self.t_heat if t is None else float(t)
-        deg = torch.clamp(S.sum(dim=1), min=1e-8)     # (n,)
-        invsqrt = deg.pow(-0.5)                        # (n,)
-        Dm = torch.diag(invsqrt)                       # (n,n)
-        Abar = Dm @ S @ Dm                             # (n,n)
-        I = torch.eye(Abar.size(0), device=Abar.device, dtype=Abar.dtype)
-        L = I - Abar
-        return torch.matrix_exp(-t * L)                # (n,n)
-
 
     @staticmethod
     def _edge_rep(h, a, b):
@@ -164,11 +123,6 @@ class GraphER(nn.Module):
             f = torch.cat([uv_repr, xy_repr, t_emb], dim=-1)  # (4H + H,)
             feats.append(f)
 
-        if len(feats) == 0:
-            empty_partner = torch.empty(0, device=device)
-            empty_orient  = None if not self.use_orientation else torch.empty(0, 2, device=device)
-            return (empty_partner, empty_orient)
-
         Fmat = torch.stack(feats, dim=0)               # (C, 5H)
         partner_logits = self.edge_predictor(Fmat).squeeze(-1)  # (C,)
         orient_logits  = self.orient_head(Fmat) if self.use_orientation else None
@@ -185,6 +139,7 @@ class GraphER(nn.Module):
     def generate_from_sequences(self, degree_sequences, k_eigen, method='havel_hakimi'):
         self.eval()
         device = next(self.parameters()).device
+        kh = getattr(self, "partner_k_hop", 2)
         generated_graphs, generated_seqs = [], []
 
         initial_graphs = []
@@ -225,18 +180,18 @@ class GraphER(nn.Module):
                     partner = cand_edges[idx_best]
                     if self.use_orientation:
                         oi = int(torch.argmax(orient_logits[idx_best]).item())
-                        if try_apply_swap_with_orientation(G, anchor, partner, oi, ensure_connected=True, k_hop=2):
+                        if try_apply_swap_with_orientation(G, anchor, partner, oi, ensure_connected=True, k_hop=kh):
                             committed = True
                             break
-                        if try_apply_swap_with_orientation(G, anchor, partner, 1 - oi, ensure_connected=True, k_hop=2):
+                        if try_apply_swap_with_orientation(G, anchor, partner, 1 - oi, ensure_connected=True, k_hop=kh):
                             committed = True
                             break
                     else:
                         # No orientation predictor: just try both orientations.
-                        if try_apply_swap_with_orientation(G, anchor, partner, 0, ensure_connected=True, k_hop=2):
+                        if try_apply_swap_with_orientation(G, anchor, partner, 0, ensure_connected=True, k_hop=kh):
                             committed = True
                             break
-                        if try_apply_swap_with_orientation(G, anchor, partner, 1, ensure_connected=True, k_hop=2):
+                        if try_apply_swap_with_orientation(G, anchor, partner, 1, ensure_connected=True, k_hop=kh):
                             committed = True
                             break
 
@@ -251,6 +206,7 @@ class GraphER(nn.Module):
     def generate_with_msvae(self, num_samples, num_steps, msvae_model, k_eigen, method='havel_hakimi'):
         self.eval()
         device = next(self.parameters()).device
+        kh = getattr(self, "partner_k_hop", 2)
         generated_graphs, generated_seqs = [], []
 
         # init graphs from MSVAE sequences
@@ -295,18 +251,18 @@ class GraphER(nn.Module):
                     partner = cand_edges[idx_best]
                     if self.use_orientation:
                         oi = int(torch.argmax(orient_logits[idx_best]).item())
-                        if try_apply_swap_with_orientation(G, anchor, partner, oi, ensure_connected=True, k_hop=2):
+                        if try_apply_swap_with_orientation(G, anchor, partner, oi, ensure_connected=True, k_hop=kh):
                             committed = True
                             break
-                        if try_apply_swap_with_orientation(G, anchor, partner, 1 - oi, ensure_connected=True, k_hop=2):
+                        if try_apply_swap_with_orientation(G, anchor, partner, 1 - oi, ensure_connected=True, k_hop=kh):
                             committed = True
                             break
                     else:
                         # No orientation predictor: just try both orientations.
-                        if try_apply_swap_with_orientation(G, anchor, partner, 0, ensure_connected=True, k_hop=2):
+                        if try_apply_swap_with_orientation(G, anchor, partner, 0, ensure_connected=True, k_hop=kh):
                             committed = True
                             break
-                        if try_apply_swap_with_orientation(G, anchor, partner, 1, ensure_connected=True, k_hop=2):
+                        if try_apply_swap_with_orientation(G, anchor, partner, 1, ensure_connected=True, k_hop=kh):
                             committed = True
                             break
             generated_graphs.append(G)
@@ -319,6 +275,7 @@ class GraphER(nn.Module):
     def generate_with_setvae(self, N_nodes, num_steps, setvae_model, k_eigen, method='havel_hakimi'):
         self.eval()
         device = next(self.parameters()).device
+        kh = getattr(self, "partner_k_hop", 2)
         generated_graphs, generated_seqs = [], []
 
         degree_sequences = setvae_model.generate(N_nodes)
@@ -356,18 +313,18 @@ class GraphER(nn.Module):
                     partner = cand_edges[idx_best]
                     if self.use_orientation:
                         oi = int(torch.argmax(orient_logits[idx_best]).item())
-                        if try_apply_swap_with_orientation(G, anchor, partner, oi, ensure_connected=True, k_hop=2):
+                        if try_apply_swap_with_orientation(G, anchor, partner, oi, ensure_connected=True, k_hop=kh):
                             committed = True
                             break
-                        if try_apply_swap_with_orientation(G, anchor, partner, 1 - oi, ensure_connected=True, k_hop=2):
+                        if try_apply_swap_with_orientation(G, anchor, partner, 1 - oi, ensure_connected=True, k_hop=kh):
                             committed = True
                             break
                     else:
                         # No orientation predictor: just try both orientations.
-                        if try_apply_swap_with_orientation(G, anchor, partner, 0, ensure_connected=True, k_hop=2):
+                        if try_apply_swap_with_orientation(G, anchor, partner, 0, ensure_connected=True, k_hop=kh):
                             committed = True
                             break
-                        if try_apply_swap_with_orientation(G, anchor, partner, 1, ensure_connected=True, k_hop=2):
+                        if try_apply_swap_with_orientation(G, anchor, partner, 1, ensure_connected=True, k_hop=kh):
                             committed = True
                             break
             generated_graphs.append(G)
