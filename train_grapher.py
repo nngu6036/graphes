@@ -25,7 +25,6 @@ from eval import DegreeSequenceEvaluator, GraphsEvaluator
 from utils import *
 
 # --- Add these helpers near the top of train_grapher.py (or move to utils.py if you prefer) ---
-
 def _count_simple_paths_exact_k(G: nx.Graph, s: int, t: int, k: int, forbidden_edge=None, cap=100000):
     """
     Count simple paths of *exact* length k (in edges) from s to t, without revisiting nodes.
@@ -63,6 +62,7 @@ def _count_simple_paths_exact_k(G: nx.Graph, s: int, t: int, k: int, forbidden_e
     dfs(s, 0, {s})
     return count
 
+
 def count_edge_cycles_n(G: nx.Graph, u: int, v: int, n: int) -> int:
     """
     Number of simple cycles of length n that contain edge (u,v).
@@ -76,6 +76,7 @@ def count_edge_cycles_n(G: nx.Graph, u: int, v: int, n: int) -> int:
         return len(set(G.neighbors(u)) & set(G.neighbors(v)))
     forb = frozenset((u, v))
     return _count_simple_paths_exact_k(G, u, v, n - 1, forbidden_edge=forb)
+
 
 def count_cycles_if_add_edge_n(G: nx.Graph, a: int, b: int, n: int) -> int:
     """
@@ -156,6 +157,7 @@ def count_common_neighbors(G, a, b):
     """Return number of common neighbors of nodes a and b."""
     return len(set(G.neighbors(a)) & set(G.neighbors(b)))
 
+
 def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,cycle,device):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.BCEWithLogitsLoss()
@@ -164,35 +166,34 @@ def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,cycle,dev
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for G in graphs:
-            # --- Corrupt graph with t edge rewirings ---
-            num_rewirings = random.randint(1,T)
-            G_corrupt, removed_pair, added_pair,step = rewire_edges(G.copy(),num_rewirings)
-            if not removed_pair or not added_pair:
-                continue
-            # --- Define anchor and target edge ---
-            first_edge_added, second_edge_added = added_pair  # predict second_edge_added given first_edge_added
-            # --- Graph to PyG format ---
-            data = graph_to_data(G_corrupt,k_eigen).to(device)
-            # --- Edge candidates from corrupted graph ---
-            u, v = first_edge_added
-            candidate_edges = [
-                e for e in G_corrupt.edges()
-                if len(set(e + (u, v))) == 4  # disjoint
-            ]
-            # --- Construct binary labels ---
-            labels = torch.tensor(
-                [1.0 if frozenset(edge) == frozenset(second_edge_added) else 0.0 for edge in candidate_edges],
-                dtype=torch.float32,
-                device=device
-            )
-            # --- Forward pass ---
-            scores = model(data.x, data.edge_index, first_edge_added, candidate_edges, t=step)
-            loss = criterion(scores.squeeze(), labels)
-            # --- Backpropagation ---
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            epoch_loss += loss.item()
+            G_hh = hh_graph_from_G(G)
+            # ---- Compute trajector from G to G_hh (Havel-Hakimi graph)
+            traj = transform_to_hh_via_stochastic_rewiring(G, G_hh, G.number_of_edges())
+            for step_idx, (G_pre, removed_pair, added_pair) in enumerate(traj, start=1):
+                (a,b), (c,d) = removed_pair
+                anchor      = (a, b)
+                pos_partner = (c, d)
+                # --- Graph to PyG format ---
+                data = graph_to_data(G_pre,k_eigen).to(device)
+                # --- Edge candidates from corrupted graph ---
+                candidate_edges = [
+                    e for e in G_corrupt.edges()
+                    if len(set(e + (a, b))) == 4  # disjoint
+                ]
+                # --- Construct binary labels ---
+                labels = torch.tensor(
+                    [1.0 if frozenset(edge) == frozenset(pos_partner) else 0.0 for edge in candidate_edges],
+                    dtype=torch.float32,
+                    device=device
+                )
+                # --- Forward pass ---
+                scores = model(data.x, data.edge_index, anchor, candidate_edges, t=step)
+                loss = criterion(scores.squeeze(), labels)
+                # --- Backpropagation ---
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item()
         print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
 
 
@@ -203,6 +204,7 @@ def load_msvae_from_file(max_node,config, model_path):
     print(f"MS-VAE Model loaded from {model_path}")
     model.load_model(model_path)
     return model
+
 
 def main(args):
     config_dir = Path("configs")
@@ -243,8 +245,6 @@ def main(args):
         print(f"MMD Clustering Coefficient: {graph_eval.compute_mmd_cluster(test_graphs,generated_graphs)}")
         print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
 
-        print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(test_seqs,generated_seqs,max_node)}")
-        print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(test_seqs,generated_seqs,max_node)}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GRAPH-ER Model')
