@@ -1,0 +1,11 @@
+[training]
+num_epochs = 200     # Number of training epochs
+learning_rate = 0.001    # Learning rate for the optimizer
+hidden_dim = 128          # Hidden dimension size
+num_layers = 5					   # GIN layer
+pairs_per_graph = 4
+rewires_per_pair = 5
+in_channels = 1
+proj_dim = 128
+dec_hidden = 128
+batch_size = 4
