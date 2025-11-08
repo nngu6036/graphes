@@ -144,6 +144,20 @@ class GraphER(nn.Module):
         logits = torch.cat(scores)
         return logits
 
+    # NEW: just run GIN and return node embeddings
+    def encode_nodes(self, x, edge_index):
+        for gin in self.gin_layers:
+            x = gin(x, edge_index)
+        return x  # [num_nodes, hidden_dim]
+
+    # NEW: pooled graph embedding (single-graph batch)
+    def encode_graph(self, x, edge_index):
+        x = self.encode_nodes(x, edge_index)
+        # single graph => batch of zeros
+        batch = x.new_zeros(x.size(0), dtype=torch.long)
+        g = global_mean_pool(x, batch)  # [1, hidden_dim]
+        return g
+
     def save_model(self, file_path):
         torch.save(self.state_dict(), file_path)
 

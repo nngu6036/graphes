@@ -6,6 +6,7 @@ import numpy as np
 from scipy.sparse import csgraph
 from scipy.sparse.linalg import eigsh
 from scipy.sparse import csr_matrix
+import random
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
@@ -155,6 +156,35 @@ def _propose_swap_with_locality(
                 continue
             return ( (a,b), (c,d), f1, f2 )
     return None
+
+def _ek(u, v):
+    return (u, v) if u <= v else (v, u)
+
+def _khop_neighborhoods(G, k):
+    """
+    Precompute closed k-hop neighborhoods (excluding the center itself).
+    """
+    N = {}
+    for u in G.nodes():
+        dists = nx.single_source_shortest_path_length(G, u, cutoff=k)
+        N[u] = {v for v, dist in dists.items() if 0 < dist <= k}
+    return N
+
+
+def _within_k(u, v, k, neighborhoods, G_current, locality_reference, cache_dynamic):
+    """
+    Check if dist(u, v) <= k according to chosen reference.
+    """
+    if k is None:
+        return True
+    if locality_reference == "initial":
+        return v in neighborhoods[u]
+    # dynamic: compute on-demand BFS (cached per (anchor, k))
+    key = (u, k)
+    if key not in cache_dynamic:
+        dists = nx.single_source_shortest_path_length(G_current, u, cutoff=k)
+        cache_dynamic[key] = {x for x, dist in dists.items() if 0 < dist <= k}
+    return v in cache_dynamic[key]
 
 
 def transform_to_hh_via_stochastic_rewiring(

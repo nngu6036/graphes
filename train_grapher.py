@@ -158,43 +158,83 @@ def count_common_neighbors(G, a, b):
     return len(set(G.neighbors(a)) & set(G.neighbors(b)))
 
 
-def train_grapher(model, graphs, num_epochs, learning_rate, T, k_eigen,cycle,device):
+def train_grapher(
+    model,
+    graphs,
+    num_epochs,
+    learning_rate,
+    T,
+    k_eigen,
+    cycle,
+    device,
+    lambda_rec: float = 0.5  # weight for embedding reconstruction loss
+):
+    """
+    Training with edge-pair BCE loss + embedding reconstruction loss (MSE).
+
+    Reconstruction target = HH(G) embedding.
+    """
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = nn.BCEWithLogitsLoss()
+    bce = nn.BCEWithLogitsLoss()
+    mse = nn.MSELoss()
+
     model.to(device)
     model.train()
+
     for epoch in range(num_epochs):
         epoch_loss = 0.0
+
         for G in graphs:
+            # HH target (same labels as G)
             G_hh = hh_graph_from_G(G)
-            # ---- Compute trajector from G to G_hh (Havel-Hakimi graph)
+
+            # Precompute HH graph embedding once
+            data_H = graph_to_data(G_hh, k_eigen).to(device)
+            with torch.no_grad():
+                H_repr = model.encode_graph(data_H.x, data_H.edge_index)  # [1, hidden_dim]
+
+            # Forward diffusion trajectory (stochastic rewiring toward HH)
             traj = transform_to_hh_via_stochastic_rewiring(G, G_hh, G.number_of_edges())
+
             for step_idx, (G_pre, removed_pair, added_pair) in enumerate(traj, start=1):
-                (a,b), (c,d) = removed_pair
+                (a, b), (c, d) = removed_pair
                 anchor      = (a, b)
                 pos_partner = (c, d)
-                # --- Graph to PyG format ---
-                data = graph_to_data(G_pre,k_eigen).to(device)
-                # --- Edge candidates from corrupted graph ---
+
+                # Current graph features
+                data = graph_to_data(G_pre, k_eigen).to(device)
+
+                # Candidate edges: disjoint from anchor, from CURRENT graph
                 candidate_edges = [
-                    e for e in G_corrupt.edges()
-                    if len(set(e + (a, b))) == 4  # disjoint
+                    e for e in G_pre.edges()
+                    if len(set(e + (a, b))) == 4
                 ]
-                # --- Construct binary labels ---
+                if not candidate_edges:
+                    continue
+
                 labels = torch.tensor(
                     [1.0 if frozenset(edge) == frozenset(pos_partner) else 0.0 for edge in candidate_edges],
                     dtype=torch.float32,
                     device=device
                 )
-                # --- Forward pass ---
-                scores = model(data.x, data.edge_index, anchor, candidate_edges, t=step)
-                loss = criterion(scores.squeeze(), labels)
-                # --- Backpropagation ---
+
+                # Edge-pair prediction loss
+                scores = model(data.x, data.edge_index, anchor, candidate_edges, t=step_idx).squeeze()
+                loss_edge = bce(scores, labels)
+
+                # Embedding reconstruction loss (current → HH)
+                G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
+                loss_rec = mse(G_repr, H_repr)
+
+                loss = loss_edge + lambda_rec * loss_rec
+
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+
                 epoch_loss += loss.item()
-        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.4f}")
+
+        print(f"Epoch {epoch + 1}/{num_epochs}  Loss: {epoch_loss:.4f}")
 
 
 def load_msvae_from_file(max_node,config, model_path):
