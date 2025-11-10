@@ -110,3 +110,8 @@ python train_grapher.py --config grapher_grid_config.toml  --dataset-dir dataset
 ```bash
 python model_graph_sed.py  --dataset-dir dataset1_community_edgelists --config  graph_sed_config.toml  --output-model grapher_sed_community 
 ```
+
+## Test Graph-SED model
+```bash
+python test_graph_sed.py  --dataset-dir dataset1_community_edgelists --config  graph_sed_config.toml   --input-model grapher_sed_community 
+```
