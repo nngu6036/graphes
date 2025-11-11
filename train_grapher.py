@@ -90,10 +90,10 @@ def train_grapher(
                 loss_edge = bce(scores, labels)
 
                 # Embedding reconstruction loss (current → HH)
-                G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
-                loss_rec = mse(G_repr, H_repr)
+                #G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
+                #loss_rec = mse(G_repr, H_repr)
 
-                loss = loss_edge + lambda_rec * loss_rec
+                loss = loss_edge #+ lambda_rec * loss_rec
 
                 optimizer.zero_grad()
                 loss.backward()
