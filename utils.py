@@ -8,6 +8,8 @@ from scipy.sparse.linalg import eigsh
 from scipy.sparse import csr_matrix
 import random
 
+from model_graph_sed import GraphSEDModel
+
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
     max_edge = 0
