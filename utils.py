@@ -230,6 +230,7 @@ def transform_to_hh_via_guided_rewiring(
         best_step_dist = math.inf
         best_step_graph = None
         best_step_added = None
+        best_step_removed = None
         for e2 in e2_pool:
             for orient in (0, 1):
                 out = _rewire(G, e1, e2, orient, ensure_connected)
@@ -241,11 +242,12 @@ def transform_to_hh_via_guided_rewiring(
                     best_step_dist = dist
                     best_step_graph = G_cand
                     best_step_added = added_pair
+                    best_step_removed = removed_pair
         # Decide whether to take a greedy move, a random valid move, or skip
         if best_step_graph is not None and best_step_dist <= best_global:
             # Greedy non-worsening move
             G = best_step_graph
-            traj.append((G, best_step_added))  # graph AFTER rewiring
+            traj.append((G, best_step_added, best_step_removed))  # graph AFTER rewiring
             best_global = best_step_dist
         else:
             rng.shuffle(edges)
@@ -260,7 +262,7 @@ def transform_to_hh_via_guided_rewiring(
                             continue
                         G_cand, added_pair, removed_pair = out
                         G = G_cand.copy()
-                        traj.append((G, added_pair))
+                        traj.append((G, added_pair, removed_pair))
                         best_global = lambda_dist(G)
                         moved = True
                         break

@@ -61,7 +61,7 @@ def train_grapher(
 
             # Build trajectory (list of (G_after_rewire, added_pair))
             traj = transform_to_hh_via_guided_rewiring(G, G_hh, lambda_dist, G.number_of_edges())
-            for step_idx, (G_post, added_pair) in enumerate(traj, start=1):
+            for step_idx, (G_post, added_pair, removed_pair) in enumerate(traj, start=1):
                 (a, b), (c, d) = added_pair
                 anchor      = (a, b)
                 pos_partner = (c, d)
