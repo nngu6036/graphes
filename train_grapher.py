@@ -52,9 +52,9 @@ def train_grapher(
         epoch_loss = 0.0
 
         for G, G_hh in graphs:
-            H_data = graph_to_data(G_hh, k_eigen)
-            with torch.no_grad():
-                H_repr = model.encode_graph(H_data.x, H_data.edge_index).detach()  # [1, hidden_dim]
+            #H_data = graph_to_data(G_hh, k_eigen)
+            #with torch.no_grad():
+            #    H_repr = model.encode_graph(H_data.x, H_data.edge_index).detach()  # [1, hidden_dim]
 
             # Forward diffusion trajectory (stochastic rewiring toward HH)
             lambda_dist = make_lambda_dist(dist_name, G_hh)
@@ -85,10 +85,10 @@ def train_grapher(
                 loss_edge = bce(scores, labels)
        
                 # Embedding reconstruction loss (current → HH)
-                G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
-                loss_rec = mse(G_repr, H_repr)
+                #G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
+                #loss_rec = mse(G_repr, H_repr)
 
-                loss = loss_edge + lambda_rec * loss_rec
+                loss = loss_edge #+ lambda_rec * loss_rec
 
                 optimizer.zero_grad()
                 loss.backward()
