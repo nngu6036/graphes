@@ -103,9 +103,16 @@ def graph_to_data(G, k_gen):
     # --------------------------------------
     # Laplacian positional encoding
     # --------------------------------------
-    L = nx.normalized_laplacian_matrix(G).astype(float)
-    # csr_array / csr_matrix -> dense NumPy array
-    L_dense = L.toarray()
+    A = nx.to_numpy_array(G, dtype=float)
+    deg = A.sum(axis=1)
+    deg_sqrt_inv = np.zeros_like(deg)
+    deg_sqrt_inv[deg > 0] = 1.0 / np.sqrt(deg[deg > 0])
+
+    # Compute D^{-1/2} * A * D^{-1/2}
+    D_inv_sqrt = np.diag(deg_sqrt_inv)
+    I = np.eye(G.number_of_nodes())
+
+    L_dense = I - D_inv_sqrt @ A @ D_inv_sqrt
     eigvals, eigvecs = np.linalg.eigh(L_dense)
 
     k = min(k_gen, eigvecs.shape[1])
