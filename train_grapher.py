@@ -81,12 +81,9 @@ def train_grapher(
                 )
 
                 # Edge-pair prediction loss
-                scores = model(data.x, data.edge_index, anchor, candidate_edges, t=step_idx).squeeze()
-                try:
-                    loss_edge = bce(scores, labels)
-                except:
-                    import pdb
-                    pdb.set_trace()
+                scores = model(data.x, data.edge_index, anchor, candidate_edges, t=step_idx)
+                loss_edge = bce(scores, labels)
+       
                 # Embedding reconstruction loss (current → HH)
                 G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
                 loss_rec = mse(G_repr, H_repr)

@@ -81,7 +81,7 @@ def main(args):
     trajectory = transform_to_hh_via_guided_rewiring(
         G_init, G_hh, lambda_dist, max_steps
     )
-    frames = [graph for graph, _ in trajectory]
+    frames = [graph for graph, _, _ in trajectory]
     print("Trajectory length", len(frames))
     frames = [G_init] + frames + [G_hh] 
 
