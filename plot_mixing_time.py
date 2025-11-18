@@ -69,7 +69,7 @@ def main(args):
     config = toml.load(config_dir / args.config)
     graphs, max_node = load_graph_from_directory(dataset_dir)
 
-    sample_count = config['mixing_time'].get('sample_count', 1)
+    rewiring_time = config['mixing_time'].get('sample_count', 1)
     total_steps = 0
     all_distances = []
 

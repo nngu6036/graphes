@@ -8,7 +8,7 @@ import random
 import math
 import numpy as np
 
-from utils import graph_to_data, check_sequence_validity
+from utils import graph_to_data, check_sequence_validity, build_candidates, _rewire
 
 def get_edge_representation(x, u, v, method="sum_absdiff"):
     x_u, x_v = x[u], x[v]
@@ -63,10 +63,9 @@ def configuration_model_from_multiset(degrees):
     return G
 
 def get_sinusoidal_embedding(t, dim, max_period=10000):
-    device = t.device
     half_dim = dim // 2
     freqs = torch.exp(
-        -torch.arange(0, half_dim, dtype=torch.float32, device=device) * (math.log(max_period) / half_dim)
+        -torch.arange(0, half_dim, dtype=torch.float32) * (math.log(max_period) / half_dim)
     )
     t = t.float().unsqueeze(-1)  # shape [1, 1]
     args = t * freqs  # shape [1, half_dim]
@@ -109,39 +108,59 @@ def initialize_graphs(method, seq):
     return G
     
 class GraphER(nn.Module):
-    def __init__(self, in_channels, hidden_dim, num_layer,T):
+    def __init__(self, in_channels, hidden_dim, num_layer, T):
+        """
+        in_channels: we treat this as `k_eigen` (number of Laplacian PE dims).
+        Actual node feature dim from graph_to_data is:
+            1 (degree) + in_channels (k_eigen) = in_channels + 1
+        """
         super().__init__()
         self.hidden_dim = hidden_dim
+
+        # Actual input feature dimension = degree (1) + Laplacian PE (in_channels)
+        node_in_dim = in_channels + 1
+
         self.gin_layers = nn.ModuleList([
-            GINConv(nn.Sequential(nn.Linear(in_channels if i == 0 else hidden_dim, hidden_dim),
-                                  nn.ReLU(),
-                                  nn.Linear(hidden_dim, hidden_dim)))
+            GINConv(
+                nn.Sequential(
+                    nn.Linear(node_in_dim if i == 0 else hidden_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                )
+            )
             for i in range(num_layer)
         ])
+
+        # get_edge_representation("sum_absdiff") gives 2*hidden_dim per edge,
+        # so [first_edge_feat (2h), edge_feat (2h), t_embed (h)] -> 5h total.
         self.edge_predictor = nn.Sequential(
             nn.Linear(hidden_dim * 4 + hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
+            nn.Linear(hidden_dim, 1),
         )
+
         self.t_embed = nn.Embedding(T + 1, hidden_dim)
         nn.init.xavier_uniform_(self.t_embed.weight)
 
     def forward(self, x, edge_index, first_edge, candidate_edges, t):
-        device = x.device
+        # x: [num_nodes, 1 + k_eigen]
         for gin in self.gin_layers:
             x = gin(x, edge_index)
+
+        # first edge feature
         first_edge_feat = get_edge_representation(x, first_edge[0], first_edge[1])
-        #t_tensor = torch.tensor([t], dtype=torch.float32, device=device)
-        #t_embed = get_sinusoidal_embedding(t_tensor, dim=self.hidden_dim)  # [hidden_dim]
-        t_tensor = torch.tensor([t], dtype=torch.long, device=device)  # or pass t directly if it's already a tensor
-        t_embed = self.t_embed(t_tensor).squeeze(0)  # shape: [hidden_dim]
+        # time embedding
+        t_tensor = torch.tensor([t], dtype=torch.long, device=x.device)
+        t_embed = self.t_embed(t_tensor).squeeze(0)  # [hidden_dim]
+
         scores = []
         for edge in candidate_edges:
             edge_feat = get_edge_representation(x, edge[0], edge[1])
-            feat = torch.cat([first_edge_feat, edge_feat, t_embed], dim=-1)
+            feat = torch.cat([first_edge_feat, edge_feat, t_embed], dim=-1)  # [5 * hidden_dim]
             score = self.edge_predictor(feat)
             scores.append(score)
-        logits = torch.cat(scores)
+
+        logits = torch.cat(scores)  # [num_candidates, 1] squeezed later
         return logits
 
     # NEW: just run GIN and return node embeddings
@@ -165,86 +184,103 @@ class GraphER(nn.Module):
         self.load_state_dict(torch.load(file_path))
         self.eval()
 
-    def generate_without_msvae(self, num_steps, degree_sequences,k_eigen, method = 'constraint_configuration_model'):
-        self.eval()
-        device = next(self.parameters()).device
-        generated_graphs = []
-        generated_seqs = []
-        initial_graphs = []
-        for seq in degree_sequences:
-            G = initialize_graphs(method, seq)
-            if G:
-                initial_graphs.append(G)
-                generated_seqs.append(seq)
-        for idx, G in enumerate(initial_graphs):
-            print(f"Generating graph {idx + 1}")
-            for t in reversed(range(num_steps + 1)):
-                edges = list(G.edges())
-                if len(edges) < 2:
-                    continue
-                # Select a random anchor edge
-                u, v = random.choice(edges)
-                # Generate swappable candidates (disjoint with (u,v))
-                all_candidates = [
-                    e for e in edges if e != (u, v) and len(set(e + (u, v))) == 4
-                ]
-                if not all_candidates:
-                    continue
-                data = graph_to_data(G,k_eigen).to(device)
-                scores = self(data.x,data.edge_index,(u,v), all_candidates,t).squeeze(-1) 
-                top_idx = torch.argmax(scores).item()
-                x_, y_ = all_candidates[top_idx]
-                # Rewire using valid option that matches triangle analysis
-                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, x_), (v, y_)])
-                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, y_), (v, x_)])
-            generated_graphs.append(G)
-        return generated_graphs, generated_seqs
 
-    def generate(self, num_samples, num_steps, msvae_model,k_eigen,method = 'constraint_configuration_model',threshold = 0.01):
+    def generate(
+        self,
+        num_samples,
+        num_steps,
+        msvae_model,
+        k_eigen,
+        method: str = 'havei_hakimi',
+        threshold: float = 0.01,
+        ensure_connected: bool = True,
+        k_hop: int = 2,
+    ):
+        """
+        Sample degree sequences from msvae_model, build initial graphs
+        with `initialize_graphs`, then run a learned edge-rewiring process.
+
+        Uses build_candidates(...) so that at each step the model only
+        scores feasible partner edges (at least one valid orientation),
+        and applies swaps via _rewire to preserve constraints.
+        """
         self.eval()
-        device = next(self.parameters()).device
+
         generated_graphs = []
         generated_seqs = []
         initial_graphs = []
+
+        # 1) Sample degree sequences and build initial graphs
         degree_sequences = msvae_model.generate(num_samples)
-        for idx, seq in enumerate(degree_sequences):
+        for seq in degree_sequences:
             valid, _ = check_sequence_validity(seq)
             if not valid:
                 continue
-            G = initialize_graphs(method, seq) 
-            if G:
-                initial_graphs.append(G)
-                generated_seqs.append(seq)
-                if len(initial_graphs) >= num_samples:
-                    break
-        for idx, G in enumerate(initial_graphs): 
+
+            G0 = initialize_graphs(method, seq)
+            if G0 is None:
+                continue
+
+            initial_graphs.append(G0)
+            generated_seqs.append(seq)
+            if len(initial_graphs) >= num_samples:
+                break
+
+       # 2) Reverse-time rewiring for each initial graph
+        for idx, G0 in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
+            G = G0.copy()
+
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
                     continue
-                # Select a random anchor edge
-                u, v = random.choice(edges)
-                # Generate swappable candidates (disjoint with (u,v))
-                all_candidates = [
-                    e for e in edges if e != (u, v) and len(set(e + (u, v))) == 4
-                ]
-                if not all_candidates:
+
+                # Random anchor edge
+                anchor = random.choice(edges)
+                u, v = anchor
+
+                # Feasible candidates under same constraints as training
+                candidate_edges = build_candidates(
+                    G,
+                    anchor,
+                    ensure_connected=ensure_connected,
+                    k_hop=k_hop,
+                )
+                if not candidate_edges:
                     continue
-                data = graph_to_data(G,k_eigen).to(device)
-                scores = self(data.x,data.edge_index,(u,v), all_candidates,t).squeeze(-1) 
+
+                # Encode current graph
+                data = graph_to_data(G, k_eigen)
+
+                # Score candidate edges
+                scores = self(
+                    data.x,
+                    data.edge_index,
+                    (u, v),
+                    candidate_edges,
+                    t,
+                ).squeeze(-1)  # [num_candidates]
+
                 top_idx = torch.argmax(scores).item()
-                x_, y_ = all_candidates[top_idx]
-                # Rewire only if no duplicates
-                if not G.has_edge(u, x_) and not G.has_edge(v, y_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, x_), (v, y_)])
-                elif not G.has_edge(u, y_) and not G.has_edge(v, x_):
-                    G.remove_edges_from([(u, v), (x_, y_)])
-                    G.add_edges_from([(u, y_), (v, x_)])
+                e2 = candidate_edges[top_idx]
+
+                # Apply the swap via _rewire to keep constraints consistent
+                applied = False
+                for orient in (0, 1):
+                    out = _rewire(G, anchor, e2, orient, ensure_connected=ensure_connected)
+                    if out is None:
+                        continue
+                    G_post, added_edges, removed_edges = out
+                    G = G_post
+                    applied = True
+                    break
+
+                if not applied:
+                    # Should be rare; candidate was feasible in build_candidates but
+                    # may fail here if the graph changed in the meantime
+                    continue
+
             generated_graphs.append(G)
+
         return generated_graphs, generated_seqs

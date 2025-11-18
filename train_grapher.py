@@ -30,10 +30,9 @@ def train_grapher(
     graphs,
     num_epochs,
     learning_rate,
-    T,
+    num_rewirings,
+    dist_name,
     k_eigen,
-    cycle,
-    device,
     lambda_rec: float = 0.5  # weight for embedding reconstruction loss
 ):
     """
@@ -45,44 +44,42 @@ def train_grapher(
     bce = nn.BCEWithLogitsLoss()
     mse = nn.MSELoss()
 
-    model.to(device)
     model.train()
 
+    graphs = [(G, hh_graph_from_G(G)) for G in graphs]
+
     for epoch in range(num_epochs):
+        print("Starging epoch", epoch)
         epoch_loss = 0.0
 
-        for G in graphs:
-            # HH target (same labels as G)
-            G_hh = hh_graph_from_G(G)
-
-            # Precompute HH graph embedding once
-            data_H = graph_to_data(G_hh, k_eigen).to(device)
+        for G, G_hh in graphs:
+            print("Processing graph")
+            H_data = graph_to_data(G_hh, k_eigen)
             with torch.no_grad():
-                H_repr = model.encode_graph(data_H.x, data_H.edge_index)  # [1, hidden_dim]
+                H_repr = model.encode_graph(H_data.x, H_data.edge_index).detach()  # [1, hidden_dim]
 
             # Forward diffusion trajectory (stochastic rewiring toward HH)
-            traj = transform_to_hh_via_stochastic_rewiring(G, G_hh, G.number_of_edges())
+            lambda_dist = make_lambda_dist(dist_name, G_hh)
 
-            for step_idx, (G_post, removed_pair, added_pair) in enumerate(traj, start=1):
-                (a, b), (c, d) = removed_pair
+            # Build trajectory (list of (G_after_rewire, added_pair))
+            traj = transform_to_hh_via_guided_rewiring(G, G_hh, lambda_dist, G.number_of_edges())
+            for step_idx, (G_post, added_pair) in enumerate(traj, start=1):
+                (a, b), (c, d) = added_pair
                 anchor      = (a, b)
                 pos_partner = (c, d)
 
                 # Current graph features
-                data = graph_to_data(G_post, k_eigen).to(device)
+                data = graph_to_data(G_post, k_eigen)
 
                 # Candidate edges: disjoint from anchor, from CURRENT graph
-                candidate_edges = [
-                    e for e in G_post.edges()
-                    if len(set(e + (a, b))) == 4
-                ]
+                candidate_edges = build_candidates(G_post,anchor, ensure_connected=True,k_hop=2)
+
                 if not candidate_edges:
                     continue
 
                 labels = torch.tensor(
                     [1.0 if frozenset(edge) == frozenset(pos_partner) else 0.0 for edge in candidate_edges],
-                    dtype=torch.float32,
-                    device=device
+                    dtype=torch.float32
                 )
 
                 # Edge-pair prediction loss
@@ -90,10 +87,10 @@ def train_grapher(
                 loss_edge = bce(scores, labels)
 
                 # Embedding reconstruction loss (current → HH)
-                #G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
-                #loss_rec = mse(G_repr, H_repr)
+                G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
+                loss_rec = mse(G_repr, H_repr)
 
-                loss = loss_edge #+ lambda_rec * loss_rec
+                loss = loss_edge + lambda_rec * loss_rec
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -126,8 +123,8 @@ def main(args):
     hidden_dim = config['training']['hidden_dim']
     num_layer = config['training']['num_layer']
     T = config['training']['T']
-    k_eigen = config['data']['k_eigen']
-    cycle = config['training']['cycle']
+    k_eigen = config['training']['k_eigen']
+    dist_name = config['training']['dist_name']
     model = GraphER(k_eigen, hidden_dim,num_layer,T)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
@@ -135,7 +132,7 @@ def main(args):
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_grapher(model, train_graphs,num_epochs, learning_rate,T, k_eigen,cycle,'cpu')
+        train_grapher(model, train_graphs,num_epochs, learning_rate,T, dist_name,k_eigen)
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
