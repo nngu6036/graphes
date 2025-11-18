@@ -49,11 +49,9 @@ def train_grapher(
     graphs = [(G, hh_graph_from_G(G)) for G in graphs]
 
     for epoch in range(num_epochs):
-        print("Starging epoch", epoch)
         epoch_loss = 0.0
 
         for G, G_hh in graphs:
-            print("Processing graph")
             H_data = graph_to_data(G_hh, k_eigen)
             with torch.no_grad():
                 H_repr = model.encode_graph(H_data.x, H_data.edge_index).detach()  # [1, hidden_dim]
@@ -84,8 +82,11 @@ def train_grapher(
 
                 # Edge-pair prediction loss
                 scores = model(data.x, data.edge_index, anchor, candidate_edges, t=step_idx).squeeze()
-                loss_edge = bce(scores, labels)
-
+                try:
+                    loss_edge = bce(scores, labels)
+                except:
+                    import pdb
+                    pdb.set_trace()
                 # Embedding reconstruction loss (current → HH)
                 G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
                 loss_rec = mse(G_repr, H_repr)
