@@ -198,7 +198,7 @@ def transform_to_hh_via_guided_rewiring(
     H,
     lambda_dist,
     max_steps,
-    ensure_connected=True,
+    ensure_connected=False,
     k_hop=2,         # e.g., 2 or 3 to preserve locality; None disables
     max_e2_candidates: Optional[int] = None,  # subsample second-edge candidates for speed
 ):
@@ -294,6 +294,67 @@ def hh_graph_from_G(G):
     mapping = {i: deg_pairs[i][1] for i in range(len(seq))}
     H = nx.relabel_nodes(H_int, mapping, copy=True)
     return H
+
+def connected_hh_graph_from_G(
+    G: nx.Graph,
+    nswap_factor: int = 5,
+    seed: Optional[int] = 0,
+) -> nx.Graph:
+    """
+    Return a connected 'canonical' target graph with the same degree sequence as G.
+
+    Strategy:
+    1. Build the Havel–Hakimi realization H_hh with hh_graph_from_G(G).
+       If H_hh is connected, return it.
+    2. Otherwise, fall back to a connected, degree-preserving randomization of G
+       using connected_double_edge_swap. This keeps the graph connected and
+       preserves the degree sequence, but changes the structure.
+
+    Parameters
+    ----------
+    G : nx.Graph
+        Input connected graph.
+    nswap_factor : int
+        Number of swaps = nswap_factor * |E(G)|. Larger -> more mixing.
+    seed : Optional[int]
+        Random seed for determinism.
+
+    Returns
+    -------
+    H_conn : nx.Graph
+        A connected graph with the same degree sequence as G.
+    """
+    # Step 1: canonical HH realization (may be disconnected)
+    H_hh = hh_graph_from_G(G)
+
+    # If HH is already connected, we can use it as target
+    if nx.is_connected(H_hh):
+        return H_hh
+
+    # Step 2: fallback – connected degree-preserving randomization of G
+    H_conn = G.copy()
+    m = H_conn.number_of_edges()
+    if m == 0:
+        # Degenerate case: no edges, just return the copy
+        return H_conn
+
+    nswap = max(1, nswap_factor * m)
+    max_tries = 10 * nswap
+
+    try:
+        # This preserves degrees and keeps the graph connected
+        from networkx.algorithms.swap import connected_double_edge_swap
+        connected_double_edge_swap(
+            H_conn,
+            nswap=nswap,
+            max_tries=max_tries,
+            seed=seed,
+        )
+    except Exception:
+        # If anything goes wrong (older NetworkX, etc.), just return G.copy()
+        H_conn = G.copy()
+
+    return H_conn
 
 
 def _align_nodelist(G: nx.Graph, H: nx.Graph, nodelist: Optional[Iterable]=None):
@@ -519,10 +580,10 @@ def make_lambda_dist(
 
 def draw_graphs_grid(
     graphs,
-    n_cols: int = 8,
+    n_cols: int = 10,
     layout: str = "spring",
-    figsize_per_graph=(3.5, 3.5),
-    node_size=300,
+    figsize_per_graph=(1.5, 1.5),
+    node_size=3,
     with_labels=True,
     titles=None,
     seed: int = 42,
@@ -606,7 +667,7 @@ def draw_graphs_grid(
 def build_candidates(
     G,
     amchor_edge,
-    ensure_connected: bool = True,
+    ensure_connected: bool = False,
     k_hop: int = 2,
 ):
     """

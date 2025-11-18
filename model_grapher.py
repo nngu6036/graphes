@@ -192,8 +192,7 @@ class GraphER(nn.Module):
         msvae_model,
         k_eigen,
         method: str = 'havei_hakimi',
-        threshold: float = 0.01,
-        ensure_connected: bool = True,
+        ensure_connected: bool = False,
         k_hop: int = 2,
     ):
         """
@@ -280,7 +279,7 @@ class GraphER(nn.Module):
                     # Should be rare; candidate was feasible in build_candidates but
                     # may fail here if the graph changed in the meantime
                     continue
-
-            generated_graphs.append(G)
+            if nx.is_connected(G):
+                generated_graphs.append(G)
 
         return generated_graphs, generated_seqs

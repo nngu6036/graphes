@@ -1,0 +1,16 @@
+[training]
+num_epochs = 200     # Number of training epochs
+learning_rate = 0.001    # Learning rate for the optimizer
+hidden_dim = 64          # Hidden dimension size
+batch_size = 8					 # Batch size
+num_layer = 5					   # GIN layer
+T = 100
+dist_name = 'spectral'
+k_eigen = 8
+
+[guided_rewiring]
+ensure_connected = 1
+k_hop = 2
+
+[inference]
+generate_samples = 200    # Number of samples to generate

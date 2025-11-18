@@ -12,6 +12,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from utils import (
     load_graph_from_directory,
     hh_graph_from_G,
+    connected_hh_graph_from_G,
     make_lambda_dist,
     transform_to_hh_via_guided_rewiring,
     draw_graphs_grid
@@ -50,7 +51,7 @@ def main(args):
     max_steps = config.get('rewiring', {}).get('max_steps', 100)
 
     # pick an initial graph and its HH target
-    rng = random.Random(42)
+    rng = random.Random(37)
     G_init = rng.choice(graphs)
     G_hh = hh_graph_from_G(G_init)
 
@@ -58,34 +59,31 @@ def main(args):
     # we use the same node set (rewiring preserves node set)
     pos = nx.spring_layout(G_init, seed=42)
 
-    name = 'spectral'
-    """
-        [
+    names = [
             'symmetric_edit',
             'spectral',
             'bures_wasserstein',
             'effective_resistance_fro',
             'deltacon',
-            'netlsd',
-            'degree_emd',
+            'netlsd'
         ]
-    """
+    for name in names:
 
-    print("Computing trajectory & plots for:", name)
-    frames = []
+        print("Computing trajectory & plots for:", name)
+        frames = []
 
-    # Build callable d(G, H)
-    lambda_dist = make_lambda_dist(name, G_hh)
+        # Build callable d(G, H)
+        lambda_dist = make_lambda_dist(name, G_hh)
 
-    # Build trajectory (list of (G_after_rewire, added_pair))
-    trajectory = transform_to_hh_via_guided_rewiring(
-        G_init, G_hh, lambda_dist, max_steps
-    )
-    frames = [graph for graph, _, _ in trajectory]
-    print("Trajectory length", len(frames))
-    frames = [G_init] + frames + [G_hh] 
+        # Build trajectory (list of (G_after_rewire, added_pair))
+        trajectory = transform_to_hh_via_guided_rewiring(
+            G_init, G_hh, lambda_dist, max_steps
+        )
+        frames = [graph for graph, _, _ in trajectory]
+        print("Trajectory length", len(frames))
+        frames = [G_init] + frames + [G_hh]
 
-    draw_graphs_grid(frames)
+        draw_graphs_grid(frames)
 
 
 if __name__ == "__main__":
