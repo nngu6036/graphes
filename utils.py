@@ -198,7 +198,7 @@ def transform_to_hh_via_guided_rewiring(
     H,
     lambda_dist,
     max_steps,
-    ensure_connected=False,
+    ensure_connected=True,
     k_hop=2,         # e.g., 2 or 3 to preserve locality; None disables
     max_e2_candidates: Optional[int] = None,  # subsample second-edge candidates for speed
 ):
@@ -667,7 +667,7 @@ def draw_graphs_grid(
 def build_candidates(
     G,
     amchor_edge,
-    ensure_connected: bool = False,
+    ensure_connected: bool = True,
     k_hop: int = 2,
 ):
     """

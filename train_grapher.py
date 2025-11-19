@@ -70,7 +70,15 @@ def train_grapher(
                 data = graph_to_data(G_post, k_eigen)
 
                 # Candidate edges: disjoint from anchor, from CURRENT graph
-                candidate_edges = build_candidates(G_post,anchor, ensure_connected=True,k_hop=2)
+                candidate_edges = []
+                for e2 in edges:
+                    if e2 == anchor:
+                        continue
+                    x, y = e2
+                    # require four distinct endpoints so swap makes sense
+                    if len({u, v, x, y}) < 4:
+                        continue
+                    candidate_edges.append(e2)
 
                 if not candidate_edges:
                     continue
