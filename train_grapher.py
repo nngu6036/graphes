@@ -71,7 +71,7 @@ def train_grapher(
 
                 # Candidate edges: disjoint from anchor, from CURRENT graph
                 candidate_edges = []
-                for e2 in edges:
+                for e2 in candidate_edges:
                     if e2 == anchor:
                         continue
                     x, y = e2
