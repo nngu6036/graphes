@@ -21,6 +21,12 @@ python create_dataset.py  --dataset-prefix dataset1 --config  dataset1_config.to
 python plot_mixing_time.py  --dataset-dir dataset1_ego_edgelists --config  plot_config.toml
 ```
 
+## Compute mixing time
+```bash
+python plot_distance.py  --dataset-dir dataset1_community_edgelists --config  distance_config.toml
+```
+
+
 ## Train and evaluate MS-VAE model
 ```bash
 python train_msvae.py  --dataset-dir dataset1_ego_edgelists --config  msvae_config1.toml --output-model msvae_ego --evaluate

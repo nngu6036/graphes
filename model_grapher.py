@@ -108,7 +108,7 @@ def initialize_graphs(method, seq):
     return G
     
 class GraphER(nn.Module):
-    def __init__(self, in_channels, hidden_dim, num_layer, T):
+    def __init__(self, in_channels, hidden_dim, num_layer, T,num_energy_targets: int = 2,energy_hidden_dim: int = 64):
         """
         in_channels: we treat this as `k_eigen` (number of Laplacian PE dims).
         Actual node feature dim from graph_to_data is:
@@ -141,6 +141,15 @@ class GraphER(nn.Module):
 
         self.t_embed = nn.Embedding(T + 1, hidden_dim)
         nn.init.xavier_uniform_(self.t_embed.weight)
+
+        if num_energy_targets > 0:
+            self.energy_head = nn.Sequential(
+                nn.Linear(hidden_dim, energy_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(energy_hidden_dim, num_energy_targets),
+            )
+        else:
+            self.energy_head = None
 
     def forward(self, x, edge_index, first_edge, candidate_edges, t):
         # x: [num_nodes, 1 + k_eigen]
@@ -183,6 +192,17 @@ class GraphER(nn.Module):
     def load_model(self, file_path):
         self.load_state_dict(torch.load(file_path))
         self.eval()
+
+    def predict_energy(self, x, edge_index):
+        """
+        x, edge_index: same as encode_graph
+        Returns tensor of shape [num_energy_targets]
+        """
+        if self.energy_head is None:
+            raise RuntimeError("energy_head is not defined (num_energy_targets=0).")
+        g = self.encode_graph(x, edge_index)  # [1, hidden_dim]
+        energy_pred = self.energy_head(g)      # [1, num_energy_targets]
+        return energy_pred.squeeze(0)
 
 
     def generate(
@@ -279,7 +299,6 @@ class GraphER(nn.Module):
                     # Should be rare; candidate was feasible in build_candidates but
                     # may fail here if the graph changed in the meantime
                     continue
-            if nx.is_connected(G):
-                generated_graphs.append(G)
+            generated_graphs.append(G)
 
         return generated_graphs, generated_seqs

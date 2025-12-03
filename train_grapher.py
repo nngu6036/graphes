@@ -24,7 +24,6 @@ from model_grapher import GraphER
 from eval import DegreeSequenceEvaluator, GraphsEvaluator
 from utils import *
 
-
 def train_grapher(
     model,
     graphs,
@@ -33,34 +32,45 @@ def train_grapher(
     num_rewirings,
     dist_name,
     k_eigen,
-    lambda_rec: float = 0.5  # weight for embedding reconstruction loss
+    lambda_rec: float = 0.5,   # currently unused
+    energy_weight: float = 0.1 # NEW: weight for structural energy loss
 ):
     """
-    Training with edge-pair BCE loss + embedding reconstruction loss (MSE).
+    Training with edge-pair BCE loss + optional structural energy prediction loss.
 
-    Reconstruction target = HH(G) embedding.
+    Reconstruction target = HH(G) embedding (currently commented out).
     """
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     bce = nn.BCEWithLogitsLoss()
     mse = nn.MSELoss()
 
     model.train()
-
-    graphs = [(G, hh_graph_from_G(G)) for G in graphs]
+    # Precompute HH graphs for each G
+    graphs_tuple = []
+    for G in graphs:
+        import pdb
+        pdb.set_trace()
+        G_hh =  deterministic_connected_havel_hakimi_from_graph(G)
+        graphs_tuple.append((G,G_hh))
 
     for epoch in range(num_epochs):
         epoch_loss = 0.0
-
-        for G, G_hh in graphs:
-            #H_data = graph_to_data(G_hh, k_eigen)
-            #with torch.no_grad():
-            #    H_repr = model.encode_graph(H_data.x, H_data.edge_index).detach()  # [1, hidden_dim]
-
+        
+        for G, G_hh in graphs_tuple:
             # Forward diffusion trajectory (stochastic rewiring toward HH)
             lambda_dist = make_lambda_dist(dist_name, G_hh)
 
-            # Build trajectory (list of (G_after_rewire, added_pair))
-            traj = transform_to_hh_via_guided_rewiring(G, G_hh, lambda_dist, G.number_of_edges())
+            # Optionally: add community-like energy to trajectory builder
+            # traj = transform_to_hh_via_guided_rewiring(
+            #     G, G_hh, lambda_dist, G.number_of_edges(),
+            #     energy_fn=community_like_energy, energy_weight=0.0
+            # )
+            traj = transform_to_hh_via_guided_rewiring(
+                G, G_hh, lambda_dist, G.number_of_edges(),
+                energy_fn=community_like_energy,  # from utils
+                energy_weight=beta  # e.g., 0.1 or 0.01
+            )
+
             for step_idx, (G_post, added_pair, removed_pair) in enumerate(traj, start=1):
                 (a, b), (c, d) = added_pair
                 anchor      = (a, b)
@@ -69,42 +79,57 @@ def train_grapher(
                 # Current graph features
                 data = graph_to_data(G_post, k_eigen)
 
-                # Candidate edges: disjoint from anchor, from CURRENT graph
-                candidate_edges = []
-                for e2 in candidate_edges:
-                    if e2 == anchor:
-                        continue
-                    x, y = e2
-                    # require four distinct endpoints so swap makes sense
-                    if len({u, v, x, y}) < 4:
-                        continue
-                    candidate_edges.append(e2)
+                # Candidate edges: use build_candidates under same constraints as inference
+                candidate_edges = build_candidates(
+                    G_post,
+                    anchor,
+                    ensure_connected=True,
+                    k_hop=2,
+                )
 
                 if not candidate_edges:
                     continue
 
                 labels = torch.tensor(
-                    [1.0 if frozenset(edge) == frozenset(pos_partner) else 0.0 for edge in candidate_edges],
-                    dtype=torch.float32
+                    [1.0 if frozenset(edge) == frozenset(pos_partner) else 0.0
+                     for edge in candidate_edges],
+                    dtype=torch.float32,
+                    device=data.x.device
                 )
 
                 # Edge-pair prediction loss
-                scores = model(data.x, data.edge_index, anchor, candidate_edges, t=step_idx)
-                loss_edge = bce(scores, labels)
-       
-                # Embedding reconstruction loss (current → HH)
-                #G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
-                #loss_rec = mse(G_repr, H_repr)
+                scores = model(
+                    data.x,
+                    data.edge_index,
+                    anchor,
+                    candidate_edges,
+                    t=step_idx
+                ).squeeze(-1)  # [num_candidates]
 
-                loss = loss_edge #+ lambda_rec * loss_rec
+                loss_edge = bce(scores, labels)
+
+                # NEW: structural energy prediction loss (multi-task)
+                if hasattr(model, "energy_head") and model.energy_head is not None and energy_weight > 0.0:
+                    # Graph embedding
+                    G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
+                    energy_pred = model.energy_head(G_repr).squeeze(0)    # [num_energy_targets]
+
+                    # True structural features (modularity, clustering)
+                    struct_targets = compute_struct_features(G_post).to(energy_pred.device)
+
+                    energy_loss = F.mse_loss(energy_pred, struct_targets)
+                    loss = loss_edge + energy_weight * energy_loss
+                else:
+                    loss = loss_edge
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-                epoch_loss += loss.item()
+                epoch_loss += float(loss.item())
 
         print(f"Epoch {epoch + 1}/{num_epochs}  Loss: {epoch_loss:.4f}")
+
 
 
 def load_msvae_from_file(max_node,config, model_path):

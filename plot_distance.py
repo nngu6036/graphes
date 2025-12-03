@@ -11,8 +11,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 # bring in the helpers we use
 from utils import (
     load_graph_from_directory,
-    hh_graph_from_G,
-    connected_hh_graph_from_G,
+    deterministic_connected_havel_hakimi_from_graph,
     make_lambda_dist,
     transform_to_hh_via_guided_rewiring,
     draw_graphs_grid
@@ -51,9 +50,8 @@ def main(args):
     max_steps = config.get('rewiring', {}).get('max_steps', 100)
 
     # pick an initial graph and its HH target
-    rng = random.Random(37)
-    G_init = rng.choice(graphs)
-    G_hh = hh_graph_from_G(G_init)
+    G_init = graphs[0]
+    G_hh = deterministic_connected_havel_hakimi_from_graph(G_init)
 
     # fixed positions for consistent visualization across trajectory
     # we use the same node set (rewiring preserves node set)
@@ -67,7 +65,8 @@ def main(args):
             'deltacon',
             'netlsd'
         ]
-    for name in names:
+    name = 'netlsd'
+    for _ in range(6):
 
         print("Computing trajectory & plots for:", name)
         frames = []

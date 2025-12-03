@@ -11,6 +11,7 @@ import math
 from typing import Optional, Iterable
 import matplotlib.pyplot as plt
 from torch_geometric.data import Data
+from networkx.algorithms import community as nx_comm  # near the other nx imports
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0 
@@ -192,7 +193,6 @@ def _k_hop_ok(G, e, k_hop) -> bool:
     except nx.NetworkXNoPath:
         return False
 
-
 def transform_to_hh_via_guided_rewiring(
     G,
     H,
@@ -201,11 +201,21 @@ def transform_to_hh_via_guided_rewiring(
     ensure_connected=True,
     k_hop=2,         # e.g., 2 or 3 to preserve locality; None disables
     max_e2_candidates: Optional[int] = None,  # subsample second-edge candidates for speed
+    energy_fn=None,           # NEW: optional energy function E(G) -> float
+    energy_weight: float = 0  # NEW: weight for energy in the objective
 ):
     rng = random.Random()
     G = G.copy()
     traj = []
-    best_global = lambda_dist(G)
+
+    def combined_score(graph: nx.Graph) -> float:
+        """Distance to HH + optionally energy term."""
+        base = lambda_dist(graph)
+        if energy_fn is not None and energy_weight != 0.0:
+            return base + energy_weight * energy_fn(graph)
+        return base
+
+    best_global = combined_score(G)
     no_improve = 0
 
     for step in range(max_steps):
@@ -227,7 +237,7 @@ def transform_to_hh_via_guided_rewiring(
             rng.shuffle(e2_pool)
             e2_pool = e2_pool[:max_e2_candidates]
 
-        best_step_dist = math.inf
+        best_step_score = math.inf
         best_step_graph = None
         best_step_added = None
         best_step_removed = None
@@ -237,18 +247,19 @@ def transform_to_hh_via_guided_rewiring(
                 if out is None:
                     continue
                 G_cand, added_pair, removed_pair = out
-                dist = lambda_dist(G_cand)
-                if dist < best_step_dist:
-                    best_step_dist = dist
+                score = combined_score(G_cand)   # NEW: use combined score
+                if score < best_step_score:
+                    best_step_score = score
                     best_step_graph = G_cand
                     best_step_added = added_pair
                     best_step_removed = removed_pair
+
         # Decide whether to take a greedy move, a random valid move, or skip
-        if best_step_graph is not None and best_step_dist <= best_global:
+        if best_step_graph is not None and best_step_score <= best_global:
             # Greedy non-worsening move
             G = best_step_graph
             traj.append((G, best_step_added, best_step_removed))  # graph AFTER rewiring
-            best_global = best_step_dist
+            best_global = best_step_score
         else:
             rng.shuffle(edges)
             moved = False
@@ -263,7 +274,7 @@ def transform_to_hh_via_guided_rewiring(
                         G_cand, added_pair, removed_pair = out
                         G = G_cand.copy()
                         traj.append((G, added_pair, removed_pair))
-                        best_global = lambda_dist(G)
+                        best_global = combined_score(G)  # NEW
                         moved = True
                         break
                     if moved:
@@ -282,79 +293,158 @@ def transform_to_hh_via_guided_rewiring(
     return traj
 
 
-def hh_graph_from_G(G):
+def havel_hakimi_construction(G: nx.Graph) -> nx.Graph:
     """
     Build a canonical Havel–Hakimi realization that uses the same node labels as G.
-    Ties are broken by (higher degree first, then smaller node id).
+    Ties are broken deterministically by (higher degree first, then smaller node id).
     """
-    deg_pairs = sorted(((d, u) for u, d in G.degree()), key=lambda x: (-x[0], x[1]))
+    # (degree, node) pairs
+    deg_pairs = sorted(
+        ((d, u) for u, d in G.degree()),
+        key=lambda x: (-x[0], x[1])  # sort by degree desc, node id asc
+    )
     seq = [d for d, _ in deg_pairs]
-    # Build HH graph on 0..n-1 then relabel back to original nodes in this order
+
+    # HH on integer-labeled nodes 0..n-1
     H_int = nx.havel_hakimi_graph(seq)
+
+    # Map back to original node labels according to deg_pairs order
     mapping = {i: deg_pairs[i][1] for i in range(len(seq))}
     H = nx.relabel_nodes(H_int, mapping, copy=True)
     return H
 
-def connected_hh_graph_from_G(
-    G: nx.Graph,
-    nswap_factor: int = 5,
-    seed: Optional[int] = 0,
-) -> nx.Graph:
+def _merge_two_components_deterministically(H: nx.Graph,
+                                            comp1_nodes,
+                                            comp2_nodes):
     """
-    Return a connected 'canonical' target graph with the same degree sequence as G.
+    Deterministically merge two connected components of H (with node sets comp1_nodes
+    and comp2_nodes) via degree-preserving edge rewiring.
 
     Strategy:
-    1. Build the Havel–Hakimi realization H_hh with hh_graph_from_G(G).
-       If H_hh is connected, return it.
-    2. Otherwise, fall back to a connected, degree-preserving randomization of G
-       using connected_double_edge_swap. This keeps the graph connected and
-       preserves the degree sequence, but changes the structure.
-
-    Parameters
-    ----------
-    G : nx.Graph
-        Input connected graph.
-    nswap_factor : int
-        Number of swaps = nswap_factor * |E(G)|. Larger -> more mixing.
-    seed : Optional[int]
-        Random seed for determinism.
-
-    Returns
-    -------
-    H_conn : nx.Graph
-        A connected graph with the same degree sequence as G.
+      - Consider all internal edges in comp1 (sorted) and comp2 (sorted).
+      - For each pair of edges (a,b) in C1 and (c,d) in C2 (in sorted order),
+        consider the two possible cross-rewirings:
+          (a,b) + (c,d) -> (a,c)+(b,d) or (a,d)+(b,c)
+        - Canonicalize each new edge as (min, max).
+        - Reject if any self-loop or multi-edge would be created.
+        - Accept the lexicographically smallest valid rewiring.
+    This procedure is fully deterministic and preserves degrees.
     """
-    # Step 1: canonical HH realization (may be disconnected)
-    H_hh = hh_graph_from_G(G)
 
-    # If HH is already connected, we can use it as target
-    if nx.is_connected(H_hh):
-        return H_hh
+    # Ensure deterministic ordering of node sets
+    comp1_nodes = sorted(comp1_nodes)
+    comp2_nodes = sorted(comp2_nodes)
 
-    # Step 2: fallback – connected degree-preserving randomization of G
-    H_conn = G.copy()
-    m = H_conn.number_of_edges()
-    if m == 0:
-        # Degenerate case: no edges, just return the copy
-        return H_conn
+    # Subgraphs for each component
+    H1 = H.subgraph(comp1_nodes)
+    H2 = H.subgraph(comp2_nodes)
 
-    nswap = max(1, nswap_factor * m)
-    max_tries = 10 * nswap
+    # Collect and sort internal edges in each component
+    edges1 = sorted(
+        (tuple(sorted(e)) for e in H1.edges()),
+        key=lambda e: (e[0], e[1])
+    )
+    edges2 = sorted(
+        (tuple(sorted(e)) for e in H2.edges()),
+        key=lambda e: (e[0], e[1])
+    )
 
-    try:
-        # This preserves degrees and keeps the graph connected
-        from networkx.algorithms.swap import connected_double_edge_swap
-        connected_double_edge_swap(
-            H_conn,
-            nswap=nswap,
-            max_tries=max_tries,
-            seed=seed,
+    # Sanity: we expect a connected component to have at least one edge
+    if not edges1 or not edges2:
+        raise RuntimeError(
+            "Unexpected component without edges while merging; "
+            "original graphs should be connected with min degree >= 1."
         )
-    except Exception:
-        # If anything goes wrong (older NetworkX, etc.), just return G.copy()
-        H_conn = G.copy()
 
-    return H_conn
+    # Search deterministically for the first valid rewiring
+    best_choice = None  # ( (a,b), (c,d), (u1,v1), (u2,v2) )
+
+    for (a, b) in edges1:
+        for (c, d) in edges2:
+            # Two possible cross rewirings
+            candidate_pairs = [
+                ((a, c), (b, d)),
+                ((a, d), (b, c)),
+            ]
+
+            # Canonicalize each pair's edges as (min, max)
+            # and sort candidate pairs lexicographically so
+            # choice is deterministic regardless of enumeration order.
+            canon_pairs = []
+            for (x1, y1), (x2, y2) in candidate_pairs:
+                e1 = (min(x1, y1), max(x1, y1))
+                e2 = (min(x2, y2), max(x2, y2))
+                canon_pairs.append((e1, e2))
+            canon_pairs.sort(key=lambda pair: (pair[0][0], pair[0][1],
+                                               pair[1][0], pair[1][1]))
+
+            for (u1, v1), (u2, v2) in canon_pairs:
+                # No self-loops
+                if u1 == v1 or u2 == v2:
+                    continue
+                # No multi-edges
+                if H.has_edge(u1, v1) or H.has_edge(u2, v2):
+                    continue
+
+                # First valid choice we encounter (due to sorting) is deterministic
+                best_choice = ((a, b), (c, d), (u1, v1), (u2, v2))
+                break
+
+            if best_choice is not None:
+                break
+        if best_choice is not None:
+            break
+
+    if best_choice is None:
+        # If this ever happens, something is pathological for this degree sequence.
+        raise RuntimeError("Could not find a valid degree-preserving rewiring to merge components.")
+
+    # Apply the rewiring to H (in-place)
+    (a, b), (c, d), (u1, v1), (u2, v2) = best_choice
+    H.remove_edge(a, b)
+    H.remove_edge(c, d)
+    H.add_edge(u1, v1)
+    H.add_edge(u2, v2)
+
+def deterministic_connected_havel_hakimi_from_graph(G: nx.Graph) -> nx.Graph:
+    """
+    Deterministic Connected Havel–Hakimi (DCHH) realization for a connected graph G.
+
+    Steps:
+      1. Build the standard HH realization H with the same node labels as G
+         (using havel_hakimi_construction).
+      2. If H is connected, return it.
+      3. Otherwise, merge connected components one-by-one using deterministic,
+         degree-preserving rewiring until the graph is connected.
+
+    This yields a unique, fully deterministic connected realization for each degree
+    sequence (given the same labeled input graph G).
+    """
+
+    # Step 1: canonical HH realization
+    H = havel_hakimi_construction(G)
+
+    # Quick exit if already connected
+    if nx.is_connected(H):
+        return H
+
+    # Step 2: deterministically merge components via rewiring
+    while not nx.is_connected(H):
+        # Connected components as sorted lists of nodes
+        components = [sorted(c) for c in nx.connected_components(H)]
+        # Sort components by (size, smallest node id) to make selection deterministic
+        components.sort(key=lambda comp: (len(comp), comp[0]))
+
+        # Choose the two smallest components to merge
+        comp1 = components[0]
+        comp2 = components[1]
+
+        # Merge them deterministically (in-place)
+        _merge_two_components_deterministically(H, comp1, comp2)
+
+        # Loop continues until the whole graph is connected
+
+    return H
 
 
 def _align_nodelist(G: nx.Graph, H: nx.Graph, nodelist: Optional[Iterable]=None):
@@ -725,3 +815,45 @@ def build_candidates(
             candidates.append(e2)
 
     return candidates
+
+
+def compute_struct_features(G: nx.Graph):
+    """
+    Compute simple structural features for auxiliary prediction:
+    - modularity (via greedy modularity communities, if possible)
+    - average clustering coefficient
+
+    Returns: torch.tensor of shape [2] = [modularity, avg_clustering]
+    """
+    # Modularity: if community detection fails or trivial, use 0.0
+    try:
+        comms = list(nx_comm.greedy_modularity_communities(G))
+        if len(comms) > 1:
+            Q = nx_comm.modularity(G, comms)
+        else:
+            Q = 0.0
+    except Exception:
+        Q = 0.0
+
+    # Average clustering: 0.0 if no edges
+    if G.number_of_edges() > 0:
+        C = nx.average_clustering(G)
+    else:
+        C = 0.0
+
+    return torch.tensor([Q, C], dtype=torch.float32)
+
+
+def community_like_energy(G: nx.Graph) -> float:
+    """
+    A scalar 'energy' lower for 'good' community graphs.
+
+    We simply use negative modularity + clustering as an example:
+      E(G) = -(Q(G) + C(G))
+
+    You can tweak this if you want different behaviour.
+    """
+    feats = compute_struct_features(G)
+    Q, C = float(feats[0]), float(feats[1])
+    # Lower energy for higher modularity & clustering
+    return -(Q + C)
