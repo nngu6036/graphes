@@ -198,8 +198,8 @@ def transform_to_hh_via_guided_rewiring(
     H,
     lambda_dist,
     max_steps,
-    ensure_connected=True,
-    k_hop=2,         # e.g., 2 or 3 to preserve locality; None disables
+    ensure_connected,
+    k_hop,         # e.g., 2 or 3 to preserve locality; None disables
     max_e2_candidates: Optional[int] = None,  # subsample second-edge candidates for speed
     energy_fn=None,           # NEW: optional energy function E(G) -> float
     energy_weight: float = 0  # NEW: weight for energy in the objective
@@ -233,6 +233,7 @@ def transform_to_hh_via_guided_rewiring(
                 print("No edge candidate found")
                 continue
         # Optional subsample for speed on dense graphs
+        print(len(e2_pool))
         if (max_e2_candidates is not None) and (len(e2_pool) > max_e2_candidates):
             rng.shuffle(e2_pool)
             e2_pool = e2_pool[:max_e2_candidates]
@@ -286,8 +287,8 @@ def transform_to_hh_via_guided_rewiring(
             if not moved:
                 print("Cannot move")
                 break
-
         # Early exit if we’ve matched H exactly (or near-exactly if lambda is continuous)
+        print(best_global)
         if best_global == 0.0 or best_global < 1e-12:
             break
     return traj

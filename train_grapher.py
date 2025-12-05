@@ -32,8 +32,7 @@ def train_grapher(
     num_rewirings,
     dist_name,
     k_eigen,
-    lambda_rec: float = 0.5,   # currently unused
-    energy_weight: float = 0.1 # NEW: weight for structural energy loss
+    energy_weight
 ):
     """
     Training with edge-pair BCE loss + optional structural energy prediction loss.
@@ -48,8 +47,6 @@ def train_grapher(
     # Precompute HH graphs for each G
     graphs_tuple = []
     for G in graphs:
-        import pdb
-        pdb.set_trace()
         G_hh =  deterministic_connected_havel_hakimi_from_graph(G)
         graphs_tuple.append((G,G_hh))
 
@@ -68,7 +65,7 @@ def train_grapher(
             traj = transform_to_hh_via_guided_rewiring(
                 G, G_hh, lambda_dist, G.number_of_edges(),
                 energy_fn=community_like_energy,  # from utils
-                energy_weight=beta  # e.g., 0.1 or 0.01
+                energy_weight=energy_weight  # e.g., 0.1 or 0.01
             )
 
             for step_idx, (G_post, added_pair, removed_pair) in enumerate(traj, start=1):
@@ -155,7 +152,8 @@ def main(args):
     num_layer = config['training']['num_layer']
     T = config['training']['T']
     k_eigen = config['training']['k_eigen']
-    dist_name = config['training']['dist_name']
+    dist_name = config['guided_rewiring']['dist_name']
+    energy_weight = config['guided_rewiring']['energy_weight']
     model = GraphER(k_eigen, hidden_dim,num_layer,T)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
@@ -163,7 +161,7 @@ def main(args):
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
-        train_grapher(model, train_graphs,num_epochs, learning_rate,T, dist_name,k_eigen)
+        train_grapher(model, train_graphs,num_epochs, learning_rate,T, dist_name,k_eigen,energy_weight)
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
@@ -173,7 +171,6 @@ def main(args):
         sample_graphs = random.choices(train_graphs,k=config['inference']['generate_samples'])
         test_seqs = [[deg for _, deg in graph.degree()] for graph in test_graphs ]
         degree_sequences = [[deg for _, deg in graph.degree()] for graph in sample_graphs]
-    
         generated_graphs, generated_seqs = model.generate(config['inference']['generate_samples'],T, msvae_model,k_eigen,method = 'havei_hakimi')
         print(f"Evaluate generated graphs using Havei Hamimi Model and MS-VAE")
         print(f"MMD Degree: {graph_eval.compute_mmd_degree_emd(test_graphs,generated_graphs,max_node)}")

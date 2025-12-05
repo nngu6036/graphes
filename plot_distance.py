@@ -14,7 +14,8 @@ from utils import (
     deterministic_connected_havel_hakimi_from_graph,
     make_lambda_dist,
     transform_to_hh_via_guided_rewiring,
-    draw_graphs_grid
+    draw_graphs_grid,
+    community_like_energy
 )
 
 def _sample_indices(n, max_samples=12):
@@ -51,6 +52,7 @@ def main(args):
 
     # pick an initial graph and its HH target
     G_init = graphs[0]
+    print("Making G_hh")
     G_hh = deterministic_connected_havel_hakimi_from_graph(G_init)
 
     # fixed positions for consistent visualization across trajectory
@@ -65,24 +67,24 @@ def main(args):
             'deltacon',
             'netlsd'
         ]
-    name = 'netlsd'
-    for _ in range(6):
+    name = 'effective_resistance_fro'
 
-        print("Computing trajectory & plots for:", name)
-        frames = []
+    print("Computing trajectory & plots for:", name)
+    frames = []
 
-        # Build callable d(G, H)
-        lambda_dist = make_lambda_dist(name, G_hh)
+    # Build callable d(G, H)
+    lambda_dist = make_lambda_dist(name, G_hh)
+    max_steps = max(max_steps, G_init.number_of_edges())
+    print(max_steps)
+    # Build trajectory (list of (G_after_rewire, added_pair))
+    trajectory = transform_to_hh_via_guided_rewiring(
+        G_init, G_hh, lambda_dist, max_steps, ensure_connected = True, k_hop = 2, energy_fn = community_like_energy, energy_weight = 0.1
+    )
+    frames = [graph for graph, _, _ in trajectory]
+    print("Trajectory length", len(frames))
+    frames = [G_init] + frames + [G_hh]
 
-        # Build trajectory (list of (G_after_rewire, added_pair))
-        trajectory = transform_to_hh_via_guided_rewiring(
-            G_init, G_hh, lambda_dist, max_steps
-        )
-        frames = [graph for graph, _, _ in trajectory]
-        print("Trajectory length", len(frames))
-        frames = [G_init] + frames + [G_hh]
-
-        draw_graphs_grid(frames)
+    draw_graphs_grid(frames)
 
 
 if __name__ == "__main__":

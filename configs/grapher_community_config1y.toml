@@ -5,12 +5,13 @@ hidden_dim = 64          # Hidden dimension size
 batch_size = 8					 # Batch size
 num_layer = 5					   # GIN layer
 T = 100
-dist_name = 'netlsd'
 k_eigen = 8
 
 [guided_rewiring]
 ensure_connected = 1
-k_hop = 2
+k_hop = 8
+energy_weight = 0.1
+dist_name = 'netlsd'
 
 [inference]
 generate_samples = 200    # Number of samples to generate
