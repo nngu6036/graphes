@@ -67,20 +67,19 @@ def main(args):
             'deltacon',
             'netlsd'
         ]
-    name = 'effective_resistance_fro'
+    name = 'deltacon'
 
     print("Computing trajectory & plots for:", name)
     frames = []
 
     # Build callable d(G, H)
     lambda_dist = make_lambda_dist(name, G_hh)
-    max_steps = max(max_steps, G_init.number_of_edges())
-    print(max_steps)
-    # Build trajectory (list of (G_after_rewire, added_pair))
-    trajectory = transform_to_hh_via_guided_rewiring(
-        G_init, G_hh, lambda_dist, max_steps, ensure_connected = True, k_hop = 2, energy_fn = community_like_energy, energy_weight = 0.1
-    )
-    frames = [graph for graph, _, _ in trajectory]
+    max_steps = max(max_steps, 1000)
+    for Gt, _, _, best_global  in transform_to_hh_via_guided_rewiring(
+            G_init, G_hh, lambda_dist, max_steps, ensure_connected = True, k_hop = 2, energy_fn = community_like_energy, energy_weight = 0.1
+        ):
+        print(best_global)
+        frames.append(Gt)
     print("Trajectory length", len(frames))
     frames = [G_init] + frames + [G_hh]
 

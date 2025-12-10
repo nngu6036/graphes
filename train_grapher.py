@@ -29,7 +29,7 @@ def train_grapher(
     graphs,
     num_epochs,
     learning_rate,
-    num_rewirings,
+    T,
     dist_name,
     k_eigen,
     energy_weight
@@ -56,19 +56,12 @@ def train_grapher(
         for G, G_hh in graphs_tuple:
             # Forward diffusion trajectory (stochastic rewiring toward HH)
             lambda_dist = make_lambda_dist(dist_name, G_hh)
-
-            # Optionally: add community-like energy to trajectory builder
-            # traj = transform_to_hh_via_guided_rewiring(
-            #     G, G_hh, lambda_dist, G.number_of_edges(),
-            #     energy_fn=community_like_energy, energy_weight=0.0
-            # )
-            traj = transform_to_hh_via_guided_rewiring(
+            step = 1
+            for step_idx, (G_post, added_pair, removed_pair) in transform_to_hh_via_guided_rewiring(
                 G, G_hh, lambda_dist, G.number_of_edges(),
                 energy_fn=community_like_energy,  # from utils
                 energy_weight=energy_weight  # e.g., 0.1 or 0.01
-            )
-
-            for step_idx, (G_post, added_pair, removed_pair) in enumerate(traj, start=1):
+            ):
                 (a, b), (c, d) = added_pair
                 anchor      = (a, b)
                 pos_partner = (c, d)
@@ -83,10 +76,8 @@ def train_grapher(
                     ensure_connected=True,
                     k_hop=2,
                 )
-
                 if not candidate_edges:
                     continue
-
                 labels = torch.tensor(
                     [1.0 if frozenset(edge) == frozenset(pos_partner) else 0.0
                      for edge in candidate_edges],
@@ -102,18 +93,14 @@ def train_grapher(
                     candidate_edges,
                     t=step_idx
                 ).squeeze(-1)  # [num_candidates]
-
                 loss_edge = bce(scores, labels)
-
                 # NEW: structural energy prediction loss (multi-task)
                 if hasattr(model, "energy_head") and model.energy_head is not None and energy_weight > 0.0:
                     # Graph embedding
                     G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
                     energy_pred = model.energy_head(G_repr).squeeze(0)    # [num_energy_targets]
-
                     # True structural features (modularity, clustering)
                     struct_targets = compute_struct_features(G_post).to(energy_pred.device)
-
                     energy_loss = F.mse_loss(energy_pred, struct_targets)
                     loss = loss_edge + energy_weight * energy_loss
                 else:
@@ -122,8 +109,8 @@ def train_grapher(
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-
                 epoch_loss += float(loss.item())
+                step += 1
 
         print(f"Epoch {epoch + 1}/{num_epochs}  Loss: {epoch_loss:.4f}")
 

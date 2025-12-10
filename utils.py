@@ -182,58 +182,112 @@ def _rewire(graph: nx.Graph, e1, e2, orientation: int, ensure_connected):
 
     return G_post, add_edges, remove_edges
 
-def _k_hop_ok(G, e, k_hop) -> bool:
+def _k_hop_ok(G, e1,e2, k_hop) -> bool:
+    """
+    Return True if the distance between two edges e1, e2 in G
+    is at most k_hop, i.e. there exists at least one pair of
+    endpoints (a from e1, b from e2) with dist_G(a, b) <= k_hop.
+    If k_hop is None, no locality constraint is enforced.
+    """
     if k_hop is None:
         return True
-    # Option: prefer edges whose endpoints are not too far apart to preserve locality.
-    (s, t) = e
-    try:
-        # Use a quick bound; exact APSP would be overkill here.
-        return nx.shortest_path_length(G, s, t) <= k_hop
-    except nx.NetworkXNoPath:
-        return False
+    (u, v) = e1
+    (x, y) = e2
+    for a in (u, v):
+        for b in (x, y):
+            try:
+                d = nx.shortest_path_length(G, a, b)
+            except nx.NetworkXNoPath:
+                continue  # no path between a and b, skip this pair
+            if d <= k_hop:
+                return True
+
+    return False
+
 
 def transform_to_hh_via_guided_rewiring(
-    G,
-    H,
+    G: nx.Graph,
+    H: nx.Graph,
     lambda_dist,
-    max_steps,
-    ensure_connected,
-    k_hop,         # e.g., 2 or 3 to preserve locality; None disables
-    max_e2_candidates: Optional[int] = None,  # subsample second-edge candidates for speed
-    energy_fn=None,           # NEW: optional energy function E(G) -> float
-    energy_weight: float = 0  # NEW: weight for energy in the objective
+    max_steps: int,
+    ensure_connected: bool,
+    k_hop: Optional[int],
+    max_e2_candidates: Optional[int] = None,
+    energy_fn=None,
+    energy_weight: float = 0.0,
 ):
+    """
+    Guided edge-rewiring trajectory from G toward H, implemented as a generator.
+
+    This function no longer materializes the whole trajectory in memory.
+    Instead, it yields each step as soon as it is found:
+
+        yields: (G_t, added_edges, removed_edges, score_t)
+
+    where:
+        - G_t          : graph AFTER performing the rewiring at this step
+        - added_edges  : ((a,b), (c,d)) edges added in this step
+        - removed_edges: ((u,v), (x,y)) edges removed in this step
+        - score_t      : combined_score(G_t) = lambda_dist(G_t) + energy term
+
+    Example usage:
+        for G_t, added, removed, score in transform_to_hh_via_guided_rewiring(
+                G, H, lambda_dist, max_steps=1000,
+                ensure_connected=True, k_hop=2,
+                max_e2_candidates=128,
+                energy_fn=community_like_energy,
+                energy_weight=0.1,
+        ):
+            # do something with this step, or break early if desired
+            pass
+
+    Notes:
+        - `H` is not used directly here, but is assumed to have been used to
+          build `lambda_dist` (e.g. via `make_lambda_dist`).
+        - The original behavior of stopping early when distance ~= 0 is kept.
+        - This is a generator: calling the function returns an iterator object.
+    """
     rng = random.Random()
-    G = G.copy()
-    traj = []
+    G_curr = G.copy()
 
     def combined_score(graph: nx.Graph) -> float:
-        """Distance to HH + optionally energy term."""
         base = lambda_dist(graph)
         if energy_fn is not None and energy_weight != 0.0:
             return base + energy_weight * energy_fn(graph)
         return base
 
-    best_global = combined_score(G)
-    no_improve = 0
+    best_global = combined_score(G_curr)
 
     for step in range(max_steps):
-        edges = list(G.edges())
+        edges = list(G_curr.edges())
+        if len(edges) < 2:
+            # not enough edges to rewire
+            break
 
-        # Draw first edge uniformly
+        # 1) Sample first edge uniformly
         e1 = edges[rng.randrange(len(edges))]
 
-        # Candidate pool for e2
-        e2_pool = [e for e in edges if e != e1 and len(set(e1 + e)) == 4 and _k_hop_ok(G, e, k_hop)]
+        # 2) Build candidate pool for second edge, respecting k-hop locality
+        e2_pool = [
+            e
+            for e in edges
+            if e != e1
+            and len(set(e1 + e)) == 4
+            and _k_hop_ok(G_curr, e1, e, k_hop)  # <-- bugfix: pass e1, e2
+        ]
+
+        # If no candidates under k-hop constraint, relax locality for this step
         if not e2_pool:
-            # fallback: ignore k_hop restriction for this step
-            e2_pool = [e for e in edges if e != e1 and len(set(e1 + e)) == 4]
+            e2_pool = [
+                e
+                for e in edges
+                if e != e1 and len(set(e1 + e)) == 4
+            ]
             if not e2_pool:
-                print("No edge candidate found")
-                continue
-        # Optional subsample for speed on dense graphs
-        print(len(e2_pool))
+                # Truly stuck
+                break
+
+        # Optional subsample for speed
         if (max_e2_candidates is not None) and (len(e2_pool) > max_e2_candidates):
             rng.shuffle(e2_pool)
             e2_pool = e2_pool[:max_e2_candidates]
@@ -242,56 +296,33 @@ def transform_to_hh_via_guided_rewiring(
         best_step_graph = None
         best_step_added = None
         best_step_removed = None
+
+        # 3) Greedy search over candidate second edges and orientations
         for e2 in e2_pool:
             for orient in (0, 1):
-                out = _rewire(G, e1, e2, orient, ensure_connected)
+                out = _rewire(G_curr, e1, e2, orient, ensure_connected)
                 if out is None:
                     continue
                 G_cand, added_pair, removed_pair = out
-                score = combined_score(G_cand)   # NEW: use combined score
+                score = combined_score(G_cand)
                 if score < best_step_score:
                     best_step_score = score
                     best_step_graph = G_cand
                     best_step_added = added_pair
                     best_step_removed = removed_pair
 
-        # Decide whether to take a greedy move, a random valid move, or skip
+        # 4) Decide move: greedy non-worsening if possible, else random valid move
         if best_step_graph is not None and best_step_score <= best_global:
-            # Greedy non-worsening move
-            G = best_step_graph
-            traj.append((G, best_step_added, best_step_removed))  # graph AFTER rewiring
+            # Greedy move (non-worsening)
+            G_curr = best_step_graph
             best_global = best_step_score
-        else:
-            rng.shuffle(edges)
-            moved = False
-            for e1_try in edges:
-                for e2_try in edges:
-                    if e2_try == e1_try or len(set(e1_try + e2_try)) < 4:
-                        continue
-                    for orient in (0, 1):
-                        out = _rewire(G, e1_try, e2_try, orient, ensure_connected)
-                        if out is None:
-                            continue
-                        G_cand, added_pair, removed_pair = out
-                        G = G_cand.copy()
-                        traj.append((G, added_pair, removed_pair))
-                        best_global = combined_score(G)  # NEW
-                        moved = True
-                        break
-                    if moved:
-                        break
-                if moved:
-                    break
+            # Yield this step
+            yield G_curr, best_step_added, best_step_removed, best_global
 
-            # If we still couldn’t move, we’re truly stuck; exit early.
-            if not moved:
-                print("Cannot move")
-                break
-        # Early exit if we’ve matched H exactly (or near-exactly if lambda is continuous)
-        print(best_global)
+        # 5) Early stop when we are effectively at H
         if best_global == 0.0 or best_global < 1e-12:
             break
-    return traj
+
 
 
 def havel_hakimi_construction(G: nx.Graph) -> nx.Graph:
