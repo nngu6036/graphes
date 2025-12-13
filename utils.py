@@ -323,7 +323,20 @@ def transform_to_hh_via_guided_rewiring(
         if best_global == 0.0 or best_global < 1e-12:
             break
 
+def havel_hakimi_construction_from_seq(seq) -> nx.Graph:
+    """
+    Build a canonical Havel–Hakimi realization that uses the same node labels as G.
+    Ties are broken deterministically by (higher degree first, then smaller node id).
+    """
+    # (degree, node) pairs
 
+    # HH on integer-labeled nodes 0..n-1
+    H_int = nx.havel_hakimi_graph(seq)
+
+    # Map back to original node labels according to deg_pairs order
+    mapping = {i: deg_pairs[i][1] for i in range(len(seq))}
+    H = nx.relabel_nodes(H_int, mapping, copy=True)
+    return H
 
 def havel_hakimi_construction(G: nx.Graph) -> nx.Graph:
     """
@@ -437,6 +450,41 @@ def _merge_two_components_deterministically(H: nx.Graph,
     H.remove_edge(c, d)
     H.add_edge(u1, v1)
     H.add_edge(u2, v2)
+
+
+def constraint_configuration_model_from_multiset(degree_sequence, max_retries=None, max_failures=1000):
+    N = len(degree_sequence)
+    if max_retries is None:
+        max_retries = N
+    for _ in range(max_retries):
+        stubs = []
+        for node, deg in enumerate(degree_sequence):
+            stubs.extend([node] * deg)
+        random.shuffle(stubs)
+        G = nx.Graph()
+        G.add_nodes_from(range(N))
+        failures = 0
+        while len(stubs) >= 2 and failures < max_failures:
+            u = stubs.pop()
+            v = stubs.pop()
+            if u == v or G.has_edge(u, v):
+                # Invalid pair: put them back and count as failure
+                stubs.extend([u, v])
+                random.shuffle(stubs)
+                failures += 1
+                continue
+            G.add_edge(u, v)
+            failures = 0  # Reset on success
+        if sorted([d for _, d in G.degree()]) == sorted(degree_sequence):
+            return G
+    return None  # Failed to generate a valid graph
+
+def configuration_model_from_multiset(degrees):
+    G = nx.configuration_model(degrees)
+    G = nx.Graph(G)
+    G.remove_edges_from(nx.selfloop_edges(G))
+    return G
+
 
 def deterministic_connected_havel_hakimi_from_graph(G: nx.Graph) -> nx.Graph:
     """
@@ -889,3 +937,87 @@ def community_like_energy(G: nx.Graph) -> float:
     Q, C = float(feats[0]), float(feats[1])
     # Lower energy for higher modularity & clustering
     return -(Q + C)
+
+def ego_like_energy(G: nx.Graph) -> float:
+    """
+    A scalar 'energy' lower for ego-like graphs.
+
+    Heuristic:
+    - Ego/star-like graphs have one dominant hub connected to most nodes.
+    - Most edges are incident to that hub.
+    - There should ideally be only one such hub.
+
+    We measure:
+        - center_edge_fraction = max_deg / |E|
+        - hubs = number of nodes with degree >= 0.5 * max_deg
+
+    Then define:
+        score = center_edge_fraction - 0.1 * max(0, hubs - 1)
+        E(G) = -score  (lower energy for more ego-like)
+    """
+    n = G.number_of_nodes()
+    m = G.number_of_edges()
+    if n == 0 or m == 0:
+        # Neutral energy if graph is empty or edgeless
+        return 0.0
+
+    degs = np.array([d for _, d in G.degree()], dtype=float)
+    max_deg = float(degs.max())
+    num_edges = float(m)
+
+    # Fraction of edges incident to the main hub:
+    # for a perfect star on n nodes: max_deg = n-1, |E| = n-1 => fraction = 1.0
+    center_edge_fraction = max_deg / max(1.0, num_edges)
+
+    # Count "hubs" that are at least half as connected as the main hub.
+    # Ego/star-like graphs ideally have exactly one such hub.
+    hubs = int((degs >= 0.5 * max_deg).sum())
+    hub_penalty = max(0, hubs - 1)
+
+    score = center_edge_fraction - 0.1 * hub_penalty
+    return -float(score)  # lower energy for higher score (more ego-like)
+
+
+def grid_like_energy(G: nx.Graph) -> float:
+    """
+    A scalar 'energy' lower for grid-like graphs.
+
+    Heuristic properties of a 2D grid:
+    - Degrees mostly in {2, 3, 4}.
+    - Degree variance is small.
+    - Clustering coefficient is very low (exactly 0 for an ideal grid).
+
+    We combine:
+        p_234    = fraction of nodes whose degree is in {2,3,4}
+        var_term = 1 / (1 + Var(deg))
+        cl_term  = 1 - C(G)    (larger when clustering is small)
+
+    Then:
+        score = p_234 + var_term + cl_term
+        E(G)  = -score  (lower energy for more grid-like)
+    """
+    n = G.number_of_nodes()
+    m = G.number_of_edges()
+    if n == 0:
+        return 0.0
+
+    degs = np.array([d for _, d in G.degree()], dtype=float)
+    if len(degs) == 0:
+        return 0.0
+
+    # Fraction of degrees in {2,3,4}
+    p_234 = float(np.isin(degs, [2, 3, 4]).mean())
+
+    # Degree variance term: small variance -> term close to 1
+    var_deg = float(degs.var()) if len(degs) > 1 else 0.0
+    var_term = 1.0 / (1.0 + var_deg)  # in (0,1]
+
+    # Clustering: for an ideal grid, this is 0
+    if m > 0:
+        C = float(nx.average_clustering(G))
+    else:
+        C = 0.0
+    cl_term = 1.0 - max(0.0, min(1.0, C))  # keep in [0,1]
+
+    score = p_234 + var_term + cl_term
+    return -float(score)  # lower energy for more grid-like

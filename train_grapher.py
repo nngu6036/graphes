@@ -50,69 +50,61 @@ def train_grapher(
         G_hh =  deterministic_connected_havel_hakimi_from_graph(G)
         graphs_tuple.append((G,G_hh))
 
-    for epoch in range(num_epochs):
-        epoch_loss = 0.0
-        
-        for G, G_hh in graphs_tuple:
-            # Forward diffusion trajectory (stochastic rewiring toward HH)
-            lambda_dist = make_lambda_dist(dist_name, G_hh)
-            step = 1
-            for step_idx, (G_post, added_pair, removed_pair) in transform_to_hh_via_guided_rewiring(
-                G, G_hh, lambda_dist, G.number_of_edges(),
-                energy_fn=community_like_energy,  # from utils
-                energy_weight=energy_weight  # e.g., 0.1 or 0.01
-            ):
-                (a, b), (c, d) = added_pair
-                anchor      = (a, b)
-                pos_partner = (c, d)
 
-                # Current graph features
-                data = graph_to_data(G_post, k_eigen)
+    for G, G_hh in graphs_tuple:
+        # Forward diffusion trajectory (stochastic rewiring toward HH)
+        lambda_dist = make_lambda_dist(dist_name, G_hh)
+        step_idx = 0
+        traj_loss = 0
+        for (G_post, added_pair, removed_pair,_) in transform_to_hh_via_guided_rewiring(
+            G, G_hh, lambda_dist, T,
+            ensure_connected = True, k_hop = 2, energy_fn = community_like_energy, energy_weight = 0.1
+        ):
+            (a, b), (c, d) = added_pair
+            anchor      = (a, b)
+            pos_partner = (c, d)
 
-                # Candidate edges: use build_candidates under same constraints as inference
-                candidate_edges = build_candidates(
-                    G_post,
-                    anchor,
-                    ensure_connected=True,
-                    k_hop=2,
-                )
-                if not candidate_edges:
-                    continue
-                labels = torch.tensor(
-                    [1.0 if frozenset(edge) == frozenset(pos_partner) else 0.0
-                     for edge in candidate_edges],
-                    dtype=torch.float32,
-                    device=data.x.device
-                )
+            # Current graph features
+            data = graph_to_data(G_post, k_eigen)
 
-                # Edge-pair prediction loss
-                scores = model(
-                    data.x,
-                    data.edge_index,
-                    anchor,
-                    candidate_edges,
-                    t=step_idx
-                ).squeeze(-1)  # [num_candidates]
-                loss_edge = bce(scores, labels)
-                # NEW: structural energy prediction loss (multi-task)
-                if hasattr(model, "energy_head") and model.energy_head is not None and energy_weight > 0.0:
-                    # Graph embedding
-                    G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
-                    energy_pred = model.energy_head(G_repr).squeeze(0)    # [num_energy_targets]
-                    # True structural features (modularity, clustering)
-                    struct_targets = compute_struct_features(G_post).to(energy_pred.device)
-                    energy_loss = F.mse_loss(energy_pred, struct_targets)
-                    loss = loss_edge + energy_weight * energy_loss
-                else:
-                    loss = loss_edge
+            # Candidate edges: use build_candidates under same constraints as inference
+            candidate_edges = build_candidates(
+                G_post,
+                anchor,
+                ensure_connected=True,
+                k_hop=2,
+            )
+            if not candidate_edges:
+                continue
+            labels = torch.tensor(
+                [1.0 if frozenset(edge) == frozenset(pos_partner) else 0.0
+                 for edge in candidate_edges],
+                dtype=torch.float32,
+                device=data.x.device
+            )
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                epoch_loss += float(loss.item())
-                step += 1
+            # Edge-pair prediction loss
+            scores = model( data.x, data.edge_index, anchor, candidate_edges, t=step_idx).squeeze(-1)  # [num_candidates]
+            loss_edge = bce(scores, labels)
+            # NEW: structural energy prediction loss (multi-task)
+            if hasattr(model, "energy_head") and model.energy_head is not None and energy_weight > 0.0:
+                # Graph embedding
+                G_repr = model.encode_graph(data.x, data.edge_index)  # [1, hidden_dim]
+                energy_pred = model.energy_head(G_repr).squeeze(0)    # [num_energy_targets]
+                # True structural features (modularity, clustering)
+                struct_targets = compute_struct_features(G_post).to(energy_pred.device)
+                energy_loss = F.mse_loss(energy_pred, struct_targets)
+                loss = loss_edge + energy_weight * energy_loss
+            else:
+                loss = loss_edge
 
-        print(f"Epoch {epoch + 1}/{num_epochs}  Loss: {epoch_loss:.4f}")
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            traj_loss += float(loss.item())
+            step_idx += 1
+
+            print(f" Loss: {traj_loss:.4f}")
 
 
 

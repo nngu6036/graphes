@@ -15,7 +15,9 @@ from utils import (
     make_lambda_dist,
     transform_to_hh_via_guided_rewiring,
     draw_graphs_grid,
-    community_like_energy
+    community_like_energy,
+    ego_like_energy,
+    grid_like_energy
 )
 
 def _sample_indices(n, max_samples=12):
@@ -67,7 +69,7 @@ def main(args):
             'deltacon',
             'netlsd'
         ]
-    name = 'deltacon'
+    name = 'symmetric_edit'
 
     print("Computing trajectory & plots for:", name)
     frames = []
@@ -76,13 +78,13 @@ def main(args):
     lambda_dist = make_lambda_dist(name, G_hh)
     max_steps = max(max_steps, 1000)
     for Gt, _, _, best_global  in transform_to_hh_via_guided_rewiring(
-            G_init, G_hh, lambda_dist, max_steps, ensure_connected = True, k_hop = 2, energy_fn = community_like_energy, energy_weight = 0.1
+            G_init, G_hh, lambda_dist, max_steps, ensure_connected = True, k_hop = 2, energy_fn = grid_like_energy, energy_weight = 0.1
         ):
         print(best_global)
         frames.append(Gt)
     print("Trajectory length", len(frames))
-    frames = [G_init] + frames + [G_hh]
-
+    frames =   [G_init] + frames+ [G_hh] 
+    frames =  list(reversed(frames))
     draw_graphs_grid(frames)
 
 

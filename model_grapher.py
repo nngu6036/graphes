@@ -8,7 +8,7 @@ import random
 import math
 import numpy as np
 
-from utils import graph_to_data, check_sequence_validity, build_candidates, _rewire
+from utils import *
 
 def get_edge_representation(x, u, v, method="sum_absdiff"):
     x_u, x_v = x[u], x[v]
@@ -29,38 +29,6 @@ def decode_degree_sequence(seq):
         degrees.extend([degree] * int(count))
     return degrees
 
-def constraint_configuration_model_from_multiset(degree_sequence, max_retries=None, max_failures=1000):
-    N = len(degree_sequence)
-    if max_retries is None:
-        max_retries = N
-    for _ in range(max_retries):
-        stubs = []
-        for node, deg in enumerate(degree_sequence):
-            stubs.extend([node] * deg)
-        random.shuffle(stubs)
-        G = nx.Graph()
-        G.add_nodes_from(range(N))
-        failures = 0
-        while len(stubs) >= 2 and failures < max_failures:
-            u = stubs.pop()
-            v = stubs.pop()
-            if u == v or G.has_edge(u, v):
-                # Invalid pair: put them back and count as failure
-                stubs.extend([u, v])
-                random.shuffle(stubs)
-                failures += 1
-                continue
-            G.add_edge(u, v)
-            failures = 0  # Reset on success
-        if sorted([d for _, d in G.degree()]) == sorted(degree_sequence):
-            return G
-    return None  # Failed to generate a valid graph
-
-def configuration_model_from_multiset(degrees):
-    G = nx.configuration_model(degrees)
-    G = nx.Graph(G)
-    G.remove_edges_from(nx.selfloop_edges(G))
-    return G
 
 def get_sinusoidal_embedding(t, dim, max_period=10000):
     half_dim = dim // 2
@@ -72,35 +40,9 @@ def get_sinusoidal_embedding(t, dim, max_period=10000):
     emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)  # shape [1, dim]
     return emb.squeeze(0)  # shape [dim]
 
-def havel_hakimi_construction(degree_sequence):
-    if not nx.is_valid_degree_sequence_havel_hakimi(degree_sequence):
-        print("The degree sequence is not graphical.")
-        return None
-    # Make a copy to avoid modifying the original
-    deg_seq = list(degree_sequence)
-    nodes = list(range(len(deg_seq)))
-    G = nx.Graph()
-    G.add_nodes_from(nodes)
-    while any(deg_seq):
-        # Sort nodes by remaining degree (descending)
-        node_deg_pairs = sorted(zip(nodes, deg_seq), key=lambda x: -x[1])
-        u, du = node_deg_pairs[0]
-        nodes = [x for x, _ in node_deg_pairs]
-        deg_seq = [d for _, d in node_deg_pairs]
-        # Take the top node and connect to next 'du' nodes
-        for i in range(1, du + 1):
-            v = nodes[i]
-            G.add_edge(u, v)
-            deg_seq[i] -= 1
-        deg_seq[0] = 0  # All of u's degree is used
-        # Remove nodes with 0 degree for next round
-        nodes = [n for n, d in zip(nodes, deg_seq) if d > 0]
-        deg_seq = [d for d in deg_seq if d > 0]
-    return G
-
 def initialize_graphs(method, seq):
     if method == 'havei_hakimi':
-        G = havel_hakimi_construction(seq)
+        G = havel_hakimi_construction_from_seq(seq)
     if method == 'configuration_model':
         G = configuration_model_from_multiset(seq)
     if method == 'constraint_configuration_model':
@@ -237,9 +179,6 @@ class GraphER(nn.Module):
                 continue
 
             G0 = initialize_graphs(method, seq)
-            if G0 is None:
-                continue
-
             initial_graphs.append(G0)
             generated_seqs.append(seq)
             if len(initial_graphs) >= num_samples:
