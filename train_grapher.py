@@ -51,7 +51,7 @@ def train_grapher(
         graphs_tuple.append((G,G_hh))
 
 
-    for G, G_hh in graphs_tuple:
+    for idx,(G, G_hh) in enumerate(graphs_tuple):
         # Forward diffusion trajectory (stochastic rewiring toward HH)
         lambda_dist = make_lambda_dist(dist_name, G_hh)
         step_idx = 0
@@ -104,7 +104,7 @@ def train_grapher(
             traj_loss += float(loss.item())
             step_idx += 1
 
-            print(f" Loss: {traj_loss:.4f}")
+        print(f"{idx+1}/{len(graphs)} graph, Average Loss: {traj_loss/T:.4f}")
 
 
 
