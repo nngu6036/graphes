@@ -179,7 +179,8 @@ class GraphER(nn.Module):
 
         # 1) Sample degree sequences and build initial graphs
         degree_sequences = msvae_model.generate(num_samples)
-        for seq in degree_sequences:
+        print("Initialize sequqnces")
+        for idx,seq in  enumerate(degree_sequences):
             valid, _ = check_sequence_validity(seq)
             if not valid:
                 continue
@@ -187,10 +188,11 @@ class GraphER(nn.Module):
             G0 = initialize_graphs(method, seq)
             initial_graphs.append(G0)
             generated_seqs.append(seq)
+            print("Initialize graph", idx)
             if len(initial_graphs) >= num_samples:
                 break
-
-       # 2) Reverse-time rewiring for each initial graph
+        print("Initialize graphes")
+        # 2) Reverse-time rewiring for each initial graph
         for idx, G0 in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")
             G = G0.copy()
