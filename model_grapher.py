@@ -11,6 +11,7 @@ import numpy as np
 from utils import (
     build_candidates,
     _rewire,
+    graph_to_data,
     check_sequence_validity,
     deterministic_connected_havel_hakimi,
 )
