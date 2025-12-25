@@ -47,7 +47,7 @@ def train_grapher(
     # Precompute HH graphs for each G
     graphs_tuple = []
     for G in graphs:
-        G_hh =  deterministic_connected_havel_hakimi_from_graph(G)
+        G_hh =  deterministic_connected_havel_hakimi(G = G)
         graphs_tuple.append((G,G_hh))
 
 

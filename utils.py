@@ -323,19 +323,7 @@ def transform_to_hh_via_guided_rewiring(
         if best_global == 0.0 or best_global < 1e-12:
             break
 
-def havel_hakimi_construction_from_seq(seq) -> nx.Graph:
-    """
-    Build a canonical Havel–Hakimi realization that uses the same node labels as G.
-    Ties are broken deterministically by (higher degree first, then smaller node id).
-    """
-    # (degree, node) pairs
 
-    H_int = nx.havel_hakimi_graph(seq)
-
-    # Map back to original node labels according to deg_pairs order
-    mapping = {i: deg_pairs[i][1] for i in range(len(seq))}
-    H = nx.relabel_nodes(H_int, mapping, copy=True)
-    return H
 
 def havel_hakimi_construction(G: nx.Graph) -> nx.Graph:
     """
@@ -485,7 +473,7 @@ def configuration_model_from_multiset(degrees):
     return G
 
 
-def deterministic_connected_havel_hakimi_from_graph(G: nx.Graph) -> nx.Graph:
+def deterministic_connected_havel_hakimi(G = None, seq = None) -> nx.Graph:
     """
     Deterministic Connected Havel–Hakimi (DCHH) realization for a connected graph G.
 
@@ -501,8 +489,10 @@ def deterministic_connected_havel_hakimi_from_graph(G: nx.Graph) -> nx.Graph:
     """
 
     # Step 1: canonical HH realization
-    H = havel_hakimi_construction(G)
-
+    if G is not None:
+        H = havel_hakimi_construction(G)
+    if seq is not None:
+        H = nx.havel_hakimi_graph(seq)
     # Quick exit if already connected
     if nx.is_connected(H):
         return H

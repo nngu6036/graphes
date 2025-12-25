@@ -42,7 +42,7 @@ def get_sinusoidal_embedding(t, dim, max_period=10000):
 
 def initialize_graphs(method, seq):
     if method == 'havei_hakimi':
-        G = havel_hakimi_construction_from_seq(seq)
+        G = deterministic_connected_havel_hakimi(seq = seq)
     if method == 'configuration_model':
         G = configuration_model_from_multiset(seq)
     if method == 'constraint_configuration_model':
