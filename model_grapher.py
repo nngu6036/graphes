@@ -8,7 +8,11 @@ import random
 import math
 import numpy as np
 
-from utils import *
+from utils import (
+    build_candidates,
+    _rewire,
+    deterministic_connected_havel_hakimi,
+)
 
 def get_edge_representation(x, u, v, method="sum_absdiff"):
     x_u, x_v = x[u], x[v]
