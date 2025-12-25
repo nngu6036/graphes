@@ -330,12 +330,8 @@ def havel_hakimi_construction_from_seq(seq) -> nx.Graph:
     """
     # (degree, node) pairs
 
-    # HH on integer-labeled nodes 0..n-1
     H_int = nx.havel_hakimi_graph(seq)
-    deg_pairs = sorted(
-        ((d, u) for u, d in G.degree()),
-        key=lambda x: (-x[0], x[1])  # sort by degree desc, node id asc
-    )
+
     # Map back to original node labels according to deg_pairs order
     mapping = {i: deg_pairs[i][1] for i in range(len(seq))}
     H = nx.relabel_nodes(H_int, mapping, copy=True)
