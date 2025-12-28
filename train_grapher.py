@@ -291,11 +291,11 @@ def main(args):
         print(f"Model Graph-ER loaded from {args.input_model}")
     else:
         print("Train GraphER without energy")
-        #train_grapher(model, train_graphs, learning_rate,T, dist_name,k_eigen,energy_mlp = None, energy_weight = energy_weight)
-        #evaluate(train_graphs, test_graphs, model, msvae_model,T,k_eigen ,num_samples)
+        train_grapher(model, train_graphs, learning_rate,T, dist_name,k_eigen,energy_mlp = None, energy_weight = energy_weight)
+        evaluate(train_graphs, test_graphs, model, msvae_model,T,k_eigen ,num_samples)
         train_energy(energy_model, model,train_graphs,steps_per_graph,dist_name,learning_rate,l2_reg,grad_clip, tau, k_eigen)
         print("Train GraphER with energy")
-        #train_grapher(model, train_graphs, learning_rate,T, dist_name,k_eigen,energy_mlp = energy_model, energy_weight= energy_weight)
+        train_grapher(model, train_graphs, learning_rate,T, dist_name,k_eigen,energy_mlp = energy_model, energy_weight= energy_weight)
     if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
