@@ -3,6 +3,7 @@ import os
 import networkx as nx
 from torch_geometric.utils.convert import from_networkx
 import numpy as np
+from typing import Dict
 from scipy.sparse import csgraph
 from scipy.sparse.linalg import eigsh
 from scipy.sparse import csr_matrix
@@ -51,6 +52,16 @@ def load_graph_from_directory(directory_path):
             graphs.append(graph)
     return graphs, max_node
 
+def nx_to_undirected_edge_index(G):
+    edges = list(G.edges())
+    if len(edges) == 0:
+        return torch.empty((2, 0), dtype=torch.long)
+
+    ei = torch.tensor(edges, dtype=torch.long).t().contiguous()  # [2, E]
+    ei_rev = ei.flip(0)                                         # [2, E]
+    ei = torch.cat([ei, ei_rev], dim=1)                         # [2, 2E]
+    return ei
+
 def graph_to_data(G, k_gen):
     """
     Convert nx.Graph into PyG Data for GraphER.
@@ -71,8 +82,6 @@ def graph_to_data(G, k_gen):
     # Edge index
     # --------------------------------------
     edges = list(G.edges())
-    ei = torch.tensor(edges, dtype=torch.long).t().contiguous()
-
     # --------------------------------------
     # Build disjoint edge pairs
     # --------------------------------------
@@ -93,9 +102,10 @@ def graph_to_data(G, k_gen):
     # --------------------------------------
     # Build PyG Data
     # --------------------------------------
+    edge_index  = nx_to_undirected_edge_index(G)
     data = Data(
         x=x,                                   # node features
-        edge_index=ei,                         # edges
+        edge_index=edge_index,                         # edges
         edge_pairs=edge_pairs,                 # candidate swap pairs
         num_nodes=G.number_of_nodes(),
         num_edges=G.number_of_edges(),
@@ -119,7 +129,6 @@ def graph_to_data(G, k_gen):
     k = min(k_gen, eigvecs.shape[1])
     pe = torch.tensor(eigvecs[:, :k], dtype=torch.float)
     data.x = torch.cat([data.x, pe], dim=-1)
-
     return data
 
 
@@ -312,16 +321,18 @@ def transform_to_hh_via_guided_rewiring(
                     best_step_removed = removed_pair
 
         # 4) Decide move: greedy non-worsening if possible, else random valid move
-        if best_step_graph is not None and best_step_score <= best_global:
+        if best_step_graph is None:
+            continue
+        if best_step_score <= best_global:
             # Greedy move (non-worsening)
             G_curr = best_step_graph
             best_global = best_step_score
             # Yield this step
             yield G_curr, best_step_added, best_step_removed, best_global
-
-        # 5) Early stop when we are effectively at H
-        if best_global == 0.0 or best_global < 1e-12:
-            break
+        else:
+            G_curr = best_step_graph
+            best_global = best_step_score
+            yield G_curr, best_step_added, best_step_removed, best_global
 
 
 
@@ -362,7 +373,6 @@ def _merge_two_components_deterministically(H: nx.Graph,
         - Accept the lexicographically smallest valid rewiring.
     This procedure is fully deterministic and preserves degrees.
     """
-
     # Ensure deterministic ordering of node sets
     comp1_nodes = sorted(comp1_nodes)
     comp2_nodes = sorted(comp2_nodes)
@@ -380,14 +390,12 @@ def _merge_two_components_deterministically(H: nx.Graph,
         (tuple(sorted(e)) for e in H2.edges()),
         key=lambda e: (e[0], e[1])
     )
-
     # Sanity: we expect a connected component to have at least one edge
     if not edges1 or not edges2:
         raise RuntimeError(
             "Unexpected component without edges while merging; "
             "original graphs should be connected with min degree >= 1."
         )
-
     # Search deterministically for the first valid rewiring
     best_choice = None  # ( (a,b), (c,d), (u1,v1), (u2,v2) )
 
@@ -409,7 +417,6 @@ def _merge_two_components_deterministically(H: nx.Graph,
                 canon_pairs.append((e1, e2))
             canon_pairs.sort(key=lambda pair: (pair[0][0], pair[0][1],
                                                pair[1][0], pair[1][1]))
-
             for (u1, v1), (u2, v2) in canon_pairs:
                 # No self-loops
                 if u1 == v1 or u2 == v2:
@@ -736,7 +743,6 @@ def make_lambda_dist(
 
     raise ValueError(f"Unknown distance '{name}'.")
 
-
 def draw_graphs_grid(
     graphs,
     n_cols: int = 10,
@@ -747,29 +753,48 @@ def draw_graphs_grid(
     titles=None,
     seed: int = 42,
     savepath: str = None,
+    show: bool = True,
+    dpi: int = 300,
     **draw_kwargs,
 ):
     """
-    Draw a list of NetworkX graphs on one figure in a grid (n_cols per row).
+    Draw a list of NetworkX graphs on one figure in a grid.
 
-    Args:
-        graphs (List[nx.Graph]): graphs to draw.
-        n_cols (int): number of graphs per row.
-        layout (str): one of {'spring','kamada_kawai','circular','spectral','shell','random'}.
-        figsize_per_graph (tuple): (width,height) inches per subplot.
-        node_size (int): node size passed to nx.draw.
-        with_labels (bool): show node labels.
-        titles (List[str] or None): optional titles per graph.
-        seed (int): random seed for layouts that accept it.
-        savepath (str or None): if given, save the figure here.
-        **draw_kwargs: forwarded to nx.draw (e.g., node_color, edge_color, width, alpha).
-    Returns:
-        (fig, axes): Matplotlib figure and axes array.
+    Parameters
+    ----------
+    graphs : List[nx.Graph]
+        Graphs to draw.
+    n_cols : int
+        Number of graphs per row.
+    layout : str
+        One of {'spring','kamada_kawai','circular','spectral','shell','random'}.
+    figsize_per_graph : tuple
+        (width, height) in inches per subplot.
+    node_size : int
+        Node size passed to nx.draw.
+    with_labels : bool
+        Whether to show node labels.
+    titles : list[str] or None
+        Optional titles per graph.
+    seed : int
+        Random seed for layouts that accept it.
+    savepath : str or None
+        If provided, save the figure to this path.
+    show : bool
+        Whether to display the figure with plt.show().
+    dpi : int
+        DPI for saving.
+    **draw_kwargs :
+        Forwarded to nx.draw (edge_color, node_color, width, alpha, etc.)
+
+    Returns
+    -------
+    fig, axes
+        Matplotlib figure and axes.
     """
     if not graphs:
         raise ValueError("`graphs` is empty.")
 
-    # Pick a layout function
     layout_fn_map = {
         "spring": lambda G: nx.spring_layout(G, seed=seed),
         "kamada_kawai": lambda G: nx.kamada_kawai_layout(G),
@@ -779,13 +804,16 @@ def draw_graphs_grid(
         "random": lambda G: nx.random_layout(G, seed=seed),
     }
     if layout not in layout_fn_map:
-        raise ValueError(f"Unknown layout '{layout}'. Choose from {list(layout_fn_map)}.")
+        raise ValueError(f"Unknown layout '{layout}'.")
 
     n = len(graphs)
     n_rows = math.ceil(n / n_cols)
     fig_w = figsize_per_graph[0] * n_cols
     fig_h = figsize_per_graph[1] * n_rows
+
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_w, fig_h))
+
+    # Normalize axes to 2D list
     if isinstance(axes, plt.Axes):
         axes = [[axes]]
     elif n_rows == 1:
@@ -793,12 +821,14 @@ def draw_graphs_grid(
     elif n_cols == 1:
         axes = [[ax] for ax in axes]
 
-    # Draw each graph
     for idx, G in enumerate(graphs):
         r, c = divmod(idx, n_cols)
         ax = axes[r][c]
         pos = layout_fn_map[layout](G)
-        ax.set_title(titles[idx] if titles and idx < len(titles) else f"G{idx}", fontsize=10)
+
+        title = titles[idx] if titles and idx < len(titles) else f"G{idx}"
+        ax.set_title(title, fontsize=9)
+
         nx.draw(
             G,
             pos=pos,
@@ -809,23 +839,23 @@ def draw_graphs_grid(
         )
         ax.set_axis_off()
 
-    # Hide any leftover empty subplots
+    # Hide unused subplots
     for idx in range(n, n_rows * n_cols):
         r, c = divmod(idx, n_cols)
         axes[r][c].set_visible(False)
-
     plt.tight_layout()
-    if savepath:
-        fig.savefig(savepath, bbox_inches="tight", dpi=300)
-        plt.close(fig)
-    else:
+    if savepath is not None:
+        os.makedirs(os.path.dirname(savepath), exist_ok=True) if os.path.dirname(savepath) else None
+        fig.savefig(savepath, bbox_inches="tight", dpi=dpi)
+    if show:
         plt.show()
+    else:
+        plt.close(fig)
     return fig, axes
-
 
 def build_candidates(
     G,
-    amchor_edge,
+    anchor_edge,
     ensure_connected: bool = True,
     k_hop: int = 2,
 ):
@@ -839,21 +869,18 @@ def build_candidates(
       at least one endpoint of the candidate is within distance <= k_hop from at
       least one endpoint of the anchor edge. If k_hop is None, locality is ignored.
     """
-    u, v = amchor_edge
+    u, v = anchor_edge
     edges = list(G.edges())
     candidates = []
 
     for e2 in edges:
         # skip same edge
-        if e2 == amchor_edge:
+        if e2 == anchor_edge:
             continue
-
         x, y = e2
-
         # require 4 distinct endpoints to allow a proper swap
         if len({u, v, x, y}) < 4:
             continue
-
         # --- k-hop locality between anchor endpoints and candidate endpoints ---
         if k_hop is not None:
             close_enough = False
@@ -868,18 +895,15 @@ def build_candidates(
                         continue
                 if close_enough:
                     break
-
             if not close_enough:
                 continue
-
         # --- check if at least one orientation yields a valid rewiring ---
         valid = False
         for orient in (0, 1):
-            out = _rewire(G, amchor_edge, e2, orient, ensure_connected)
+            out = _rewire(G, anchor_edge, e2, orient, ensure_connected)
             if out is not None:
                 valid = True
                 break
-
         if valid:
             candidates.append(e2)
 

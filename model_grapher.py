@@ -51,8 +51,6 @@ def initialize_graphs(method, seq):
         G = deterministic_connected_havel_hakimi(seq = seq)
     if method == 'configuration_model':
         G = configuration_model_from_multiset(seq)
-    if method == 'constraint_configuration_model':
-        G = constraint_cos_from([(u, y), (v, x)])
     return G
     
 class GraphER(nn.Module):
@@ -117,7 +115,7 @@ class GraphER(nn.Module):
             score = self.edge_predictor(feat)
             scores.append(score)
 
-        logits = torch.cat(scores)  # [num_candidates, 1] squeezed later
+        logits = torch.cat(scores, dim=0).squeeze(-1) 
         return logits
 
     # NEW: just run GIN and return node embeddings
@@ -172,7 +170,6 @@ class GraphER(nn.Module):
         and applies swaps via _rewire to preserve constraints.
         """
         self.eval()
-
         generated_graphs = []
         generated_seqs = []
         initial_graphs = []
@@ -215,18 +212,9 @@ class GraphER(nn.Module):
                 )
                 if not candidate_edges:
                     continue
-
-                # Encode current graph
-                data = graph_to_data(G, k_eigen)
-
-                # Score candidate edges
-                scores = self(
-                    data.x,
-                    data.edge_index,
-                    (u, v),
-                    candidate_edges,
-                    t,
-                ).squeeze(-1)  # [num_candidates]
+                device = next(self.parameters()).device
+                data = graph_to_data(G, k_eigen).to(device)
+                scores = self(data.x, data.edge_index, anchor, candidate_edges, t=t)
 
                 top_idx = torch.argmax(scores).item()
                 e2 = candidate_edges[top_idx]
