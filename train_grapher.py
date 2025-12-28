@@ -27,8 +27,10 @@ from utils import (
     rewire,
     graph_to_data,
     load_graph_from_directory,
+    transform_to_hh_via_guided_rewiring,
     deterministic_connected_havel_hakimi,
     make_lambda_dist,
+    compute_struct_features,
 )
 
 def energy_softmax_nce(
