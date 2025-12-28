@@ -10,7 +10,7 @@ import numpy as np
 
 from utils import (
     build_candidates,
-    _rewire,
+    rewire,
     graph_to_data,
     check_sequence_validity,
     deterministic_connected_havel_hakimi,
@@ -222,7 +222,7 @@ class GraphER(nn.Module):
                 # Apply the swap via _rewire to keep constraints consistent
                 applied = False
                 for orient in (0, 1):
-                    out = _rewire(G, anchor, e2, orient, ensure_connected=ensure_connected)
+                    out = rewire(G, anchor, e2, orient, ensure_connected=ensure_connected)
                     if out is None:
                         continue
                     G_post, added_edges, removed_edges = out

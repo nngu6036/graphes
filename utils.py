@@ -158,7 +158,7 @@ def _simple_valid(graph: nx.Graph, a: int, b: int, c: int, d: int) -> bool:
     # We will check duplicates after removing old edges in the temp graph.
     return True
 
-def _rewire(graph: nx.Graph, e1, e2, orientation: int, ensure_connected):
+def rewire(graph: nx.Graph, e1, e2, orientation: int, ensure_connected):
     """
     orientation=0 -> add (u,x) and (v,y)
     orientation=1 -> add (u,y) and (v,x)
@@ -309,7 +309,7 @@ def transform_to_hh_via_guided_rewiring(
         # 3) Greedy search over candidate second edges and orientations
         for e2 in e2_pool:
             for orient in (0, 1):
-                out = _rewire(G_curr, e1, e2, orient, ensure_connected)
+                out = rewire(G_curr, e1, e2, orient, ensure_connected)
                 if out is None:
                     continue
                 G_cand, added_pair, removed_pair = out
@@ -900,7 +900,7 @@ def build_candidates(
         # --- check if at least one orientation yields a valid rewiring ---
         valid = False
         for orient in (0, 1):
-            out = _rewire(G, anchor_edge, e2, orient, ensure_connected)
+            out = rewire(G, anchor_edge, e2, orient, ensure_connected)
             if out is not None:
                 valid = True
                 break
