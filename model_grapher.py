@@ -115,7 +115,7 @@ class GraphER(nn.Module):
             score = self.edge_predictor(feat)
             scores.append(score)
 
-        logits = torch.cat(scores, dim=0).squeeze(-1) 
+        logits = torch.cat(scores, dim=0)
         return logits
 
     # NEW: just run GIN and return node embeddings
