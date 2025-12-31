@@ -185,10 +185,8 @@ class GraphER(nn.Module):
             G0 = initialize_graphs(method, seq)
             initial_graphs.append(G0)
             generated_seqs.append(seq)
-            print("Initialize graph", idx)
             if len(initial_graphs) >= num_samples:
                 break
-        print("Initialize graphes")
         # 2) Reverse-time rewiring for each initial graph
         for idx, G0 in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")

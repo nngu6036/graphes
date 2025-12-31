@@ -91,6 +91,7 @@ def train_energy(
     for idx, (G0, G_hh) in enumerate(graphs_tuple):
         # Work on a copy so we can optionally "walk" along positives
         G = G0.copy()
+        total_loss = 0
         # Build once per graph
         lambda_dist = make_lambda_dist(dist_name, G_hh)
         for _ in range(steps_per_graph):
@@ -145,18 +146,9 @@ def train_energy(
             if grad_clip and grad_clip > 0:
                 nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
-            # Optional: walk forward along the positive candidate
             G = cand_graphs[pos_idx]
-            with torch.no_grad():
-                stats = {
-                    "loss": float(loss.item()),
-                    "E_pos": float(E[pos_idx].item()),
-                    "E_min": float(E.min().item()),
-                    "E_mean": float(E.mean().item()),
-                    "E_max": float(E.max().item()),
-                    "pos_is_argmin": bool(int(E.argmin().item()) == pos_idx),
-                }
-                print(stats)
+            total_loss += loss.item()
+        print(f"{idx+1}/{len(graphs)} graph, Average Loss: {total_loss/steps_per_graph:.4f}")
 
             
 
@@ -175,7 +167,6 @@ def train_grapher(
 
     Reconstruction target = HH(G) embedding (currently commented out).
     """
-    print("Trainng GraphER")
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     device = next(model.parameters()).device
     bce = nn.BCEWithLogitsLoss()
