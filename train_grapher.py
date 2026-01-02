@@ -87,69 +87,72 @@ def train_energy(
     for G in graphs:
         G_hh = deterministic_connected_havel_hakimi(G=G)
         graphs_tuple.append((G, G_hh))
-
-    for idx, (G0, G_hh) in enumerate(graphs_tuple):
-        # Work on a copy so we can optionally "walk" along positives
-        G = G0.copy()
-        total_loss = 0
-        # Build once per graph
-        lambda_dist = make_lambda_dist(dist_name, G_hh)
-        for _ in range(steps_per_graph):
-            edges = list(G.edges())
-            if len(edges) < 2:
-                break
-            anchor = edges[rng.randrange(len(edges))]
-            candidate_edges = build_candidates(
-                G,
-                anchor,
-                ensure_connected=True,
-                k_hop=2,
-            )
-            if not candidate_edges:
-                continue
-            z_candidates = []
-            cand_dists = []
-            cand_graphs = []   # <-- FIX: track graphs
-            # One candidate per partner edge: choose best orientation
-            for edge in candidate_edges:
-                best = None
-                for orient in (0, 1):
-                    out = rewire(G, anchor, edge, orient, ensure_connected=True)
-                    if out is None:
-                        continue
-                    Gc, _, _ = out
-                    d = lambda_dist(Gc)
-                    if best is None or d < best[0]:
-                        best = (d, Gc)
-
-                if best is None:
+    try:
+        for idx, (G0, G_hh) in enumerate(graphs_tuple):
+            # Work on a copy so we can optionally "walk" along positives
+            G = G0.copy()
+            total_loss = 0
+            # Build once per graph
+            lambda_dist = make_lambda_dist(dist_name, G_hh)
+            for _ in range(steps_per_graph):
+                edges = list(G.edges())
+                if len(edges) < 2:
+                    break
+                anchor = edges[rng.randrange(len(edges))]
+                candidate_edges = build_candidates(
+                    G,
+                    anchor,
+                    ensure_connected=True,
+                    k_hop=2,
+                )
+                if not candidate_edges:
                     continue
-                best_d, best_graph = best
-                data = graph_to_data(best_graph, k_eigen).to(device)
-                with torch.no_grad():
-                    z_cand = grapher.encode_graph(data.x, data.edge_index).squeeze(0)  # [h]
-                z_candidates.append(z_cand)
-                cand_dists.append(best_d)
-                cand_graphs.append(best_graph)
-            if not z_candidates:
-                continue
-            pos_idx = int(np.argmin(cand_dists))
-            Z = torch.stack(z_candidates, dim=0)   # [K, h]
-            E = model(Z)                           # [K]
-            E_all = E.view(1, -1)                  # [1, K]
-            pos_index = torch.tensor([pos_idx], device=device, dtype=torch.long)
-            loss = energy_softmax_nce(E_all, pos_index, tau=tau)
-            if l2_reg > 0:
-                loss = loss + l2_reg * (E.pow(2).mean())
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            if grad_clip and grad_clip > 0:
-                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
-            G = cand_graphs[pos_idx]
-            total_loss += loss.item()
-        print(f"{idx+1}/{len(graphs)} graph, Average Loss: {total_loss/steps_per_graph:.4f}")
+                z_candidates = []
+                cand_dists = []
+                cand_graphs = []   # <-- FIX: track graphs
+                # One candidate per partner edge: choose best orientation
+                for edge in candidate_edges:
+                    best = None
+                    for orient in (0, 1):
+                        out = rewire(G, anchor, edge, orient, ensure_connected=True)
+                        if out is None:
+                            continue
+                        Gc, _, _ = out
+                        d = lambda_dist(Gc)
+                        if best is None or d < best[0]:
+                            best = (d, Gc)
 
+                    if best is None:
+                        continue
+                    best_d, best_graph = best
+                    data = graph_to_data(best_graph, k_eigen).to(device)
+                    with torch.no_grad():
+                        z_cand = grapher.encode_graph(data.x, data.edge_index).squeeze(0)  # [h]
+                    z_candidates.append(z_cand)
+                    cand_dists.append(best_d)
+                    cand_graphs.append(best_graph)
+                if not z_candidates:
+                    continue
+                pos_idx = int(np.argmin(cand_dists))
+                Z = torch.stack(z_candidates, dim=0)   # [K, h]
+                E = model(Z)                           # [K]
+                E_all = E.view(1, -1)                  # [1, K]
+                pos_index = torch.tensor([pos_idx], device=device, dtype=torch.long)
+                loss = energy_softmax_nce(E_all, pos_index, tau=tau)
+                if l2_reg > 0:
+                    loss = loss + l2_reg * (E.pow(2).mean())
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                if grad_clip and grad_clip > 0:
+                    nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                optimizer.step()
+                G = cand_graphs[pos_idx]
+                total_loss += loss.item()
+            print(f"{idx+1}/{len(graphs)} graph, Average Loss: {total_loss/steps_per_graph:.4f}")
+    finally:
+        for p in grapher.parameters():
+            p.requires_grad_(True)
+        grapher.train()
             
 
 def train_grapher(

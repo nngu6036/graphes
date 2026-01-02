@@ -14,7 +14,7 @@ dist_name = 'netlsd'
 
 
 [energy]
-steps_per_graph = 20
+steps_per_graph = 1
 learning_rate = 0.001
 hidden_dim = 256
 num_layers = 3
