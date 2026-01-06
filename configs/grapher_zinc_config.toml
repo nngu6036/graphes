@@ -1,11 +1,27 @@
 [training]
-num_epochs = 800     # Number of training epochs
 learning_rate = 0.001    # Learning rate for the optimizer
 hidden_dim = 64          # Hidden dimension size
-batch_size = 1					 # Batch size
-num_layer = 3					   # GIN layer
-T = 200
+batch_size = 8					 # Batch size
+num_layer = 5					   # GIN layer
+T = 50
+k_eigen = 8
 
+[guided_rewiring]
+ensure_connected = 1
+k_hop = 2
+energy_weight = 0.1
+dist_name = 'netlsd'
+
+
+[energy]
+steps_per_graph = 20
+learning_rate = 0.001
+hidden_dim = 256
+num_layers = 3
+dropout = 0.1
+tau = 0.2
+grad_clip = 1.0
+l2_reg = 0.0
 
 [inference]
 generate_samples = 200    # Number of samples to generate
