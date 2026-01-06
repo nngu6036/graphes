@@ -17,6 +17,7 @@ probabilities = [[0.25, 0.05, 0.05, 0.05],
 [[datasets]]
 type = "ego"
 count = 757
+k_hop = 3
 max_node = 399
 min_node = 50
 

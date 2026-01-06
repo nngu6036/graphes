@@ -93,7 +93,7 @@ def load_ego_graph(min_node, max_node, count):
     G = to_networkx(data, to_undirected=True)
     ego_graphs = []
     for node in G.nodes:
-        ego = nx.ego_graph(G, node, radius=1)
+        ego = nx.ego_graph(G, node, radius=3)
         if ego.number_of_nodes() >= min_node and ego.number_of_nodes() <= max_node and can_be_rewired(ego):  
             ego_graphs.append(ego)
             count-= 1
