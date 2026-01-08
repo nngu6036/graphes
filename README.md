@@ -18,7 +18,8 @@ python create_dataset.py  --dataset-prefix dataset1 --config  dataset1_config.to
 
 ## Plot distance 
 ```bash
- python plot_distance.py  --dataset-dir dataset1_community_edgelists --config  distance_config.toml
+python plot_distance.py  --dataset-dir dataset1_community_edgelists --config  distance_config.toml
+python plot_distance.py  --dataset-dir dataset1_ego_edgelists --config  distance_config.toml
 ```
 
 ## Compute mixing time

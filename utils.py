@@ -356,94 +356,118 @@ def havel_hakimi_construction(G: nx.Graph) -> nx.Graph:
     H = nx.relabel_nodes(H_int, mapping, copy=True)
     return H
 
-def _merge_two_components_deterministically(H: nx.Graph,
-                                            comp1_nodes,
-                                            comp2_nodes):
+def _merge_two_components_deterministically(H: nx.Graph, comp1_nodes, comp2_nodes):
     """
-    Deterministically merge two connected components of H (with node sets comp1_nodes
-    and comp2_nodes) via degree-preserving edge rewiring.
+    Deterministically merge two connected components via degree-preserving rewiring,
+    but ONLY accept a rewiring that truly merges the two components.
 
-    Strategy:
-      - Consider all internal edges in comp1 (sorted) and comp2 (sorted).
-      - For each pair of edges (a,b) in C1 and (c,d) in C2 (in sorted order),
-        consider the two possible cross-rewirings:
-          (a,b) + (c,d) -> (a,c)+(b,d) or (a,d)+(b,c)
-        - Canonicalize each new edge as (min, max).
-        - Reject if any self-loop or multi-edge would be created.
-        - Accept the lexicographically smallest valid rewiring.
-    This procedure is fully deterministic and preserves degrees.
+    Key idea:
+      - Enumerate candidate internal edges from each component (deterministic order).
+      - Prefer non-bridge edges (so removing them doesn't split the component).
+      - For each edge pair and orientation, simulate the swap and check that
+        comp1 and comp2 become connected (i.e., component count decreases).
     """
-    # Ensure deterministic ordering of node sets
     comp1_nodes = sorted(comp1_nodes)
     comp2_nodes = sorted(comp2_nodes)
 
-    # Subgraphs for each component
-    H1 = H.subgraph(comp1_nodes)
-    H2 = H.subgraph(comp2_nodes)
+    # induced subgraphs
+    H1 = H.subgraph(comp1_nodes).copy()
+    H2 = H.subgraph(comp2_nodes).copy()
 
-    # Collect and sort internal edges in each component
-    edges1 = sorted(
-        (tuple(sorted(e)) for e in H1.edges()),
-        key=lambda e: (e[0], e[1])
-    )
-    edges2 = sorted(
-        (tuple(sorted(e)) for e in H2.edges()),
-        key=lambda e: (e[0], e[1])
-    )
-    # Sanity: we expect a connected component to have at least one edge
-    if not edges1 or not edges2:
+    edges1_all = sorted((tuple(sorted(e)) for e in H1.edges()))
+    edges2_all = sorted((tuple(sorted(e)) for e in H2.edges()))
+
+    if not edges1_all or not edges2_all:
         raise RuntimeError(
-            "Unexpected component without edges while merging; "
-            "original graphs should be connected with min degree >= 1."
+            "Cannot merge a component with no internal edges. "
+            "If your degree sequence contains 0s, a connected realization may be impossible."
         )
-    # Search deterministically for the first valid rewiring
-    best_choice = None  # ( (a,b), (c,d), (u1,v1), (u2,v2) )
 
-    for (a, b) in edges1:
-        for (c, d) in edges2:
-            # Two possible cross rewirings
-            candidate_pairs = [
-                ((a, c), (b, d)),
-                ((a, d), (b, c)),
-            ]
+    # Prefer non-bridge edges (removing a bridge splits the component)
+    bridges1 = set(tuple(sorted(e)) for e in nx.bridges(H1)) if H1.number_of_edges() else set()
+    bridges2 = set(tuple(sorted(e)) for e in nx.bridges(H2)) if H2.number_of_edges() else set()
 
-            # Canonicalize each pair's edges as (min, max)
-            # and sort candidate pairs lexicographically so
-            # choice is deterministic regardless of enumeration order.
-            canon_pairs = []
-            for (x1, y1), (x2, y2) in candidate_pairs:
-                e1 = (min(x1, y1), max(x1, y1))
-                e2 = (min(x2, y2), max(x2, y2))
-                canon_pairs.append((e1, e2))
-            canon_pairs.sort(key=lambda pair: (pair[0][0], pair[0][1],
-                                               pair[1][0], pair[1][1]))
-            for (u1, v1), (u2, v2) in canon_pairs:
-                # No self-loops
-                if u1 == v1 or u2 == v2:
-                    continue
-                # No multi-edges
-                if H.has_edge(u1, v1) or H.has_edge(u2, v2):
-                    continue
+    edges1_pref = [e for e in edges1_all if e not in bridges1] + [e for e in edges1_all if e in bridges1]
+    edges2_pref = [e for e in edges2_all if e not in bridges2] + [e for e in edges2_all if e in bridges2]
 
-                # First valid choice we encounter (due to sorting) is deterministic
-                best_choice = ((a, b), (c, d), (u1, v1), (u2, v2))
+    # Representative nodes to test "merged-ness"
+    r1 = comp1_nodes[0]
+    r2 = comp2_nodes[0]
+
+    base_cc = nx.number_connected_components(H)
+
+    def try_swap(a, b, c, d, orient):
+        # orient 0: (a,c),(b,d) ; orient 1: (a,d),(b,c)
+        if orient == 0:
+            u1, v1 = a, c
+            u2, v2 = b, d
+        else:
+            u1, v1 = a, d
+            u2, v2 = b, c
+
+        e_new1 = (min(u1, v1), max(u1, v1))
+        e_new2 = (min(u2, v2), max(u2, v2))
+
+        # no self-loops
+        if e_new1[0] == e_new1[1] or e_new2[0] == e_new2[1]:
+            return None
+
+        # simulate on a copy
+        G = H.copy()
+        if not G.has_edge(a, b) or not G.has_edge(c, d):
+            return None
+
+        G.remove_edge(a, b)
+        G.remove_edge(c, d)
+
+        # disallow multi-edges after removal
+        if G.has_edge(*e_new1) or G.has_edge(*e_new2):
+            return None
+
+        G.add_edge(*e_new1)
+        G.add_edge(*e_new2)
+
+        # must actually merge comp1 and comp2 (strict progress)
+        if nx.number_connected_components(G) >= base_cc:
+            return None
+        # (optional extra safety)
+        if not nx.has_path(G, r1, r2):
+            return None
+
+        return (G, (a, b), (c, d), e_new1, e_new2)
+
+    # Deterministic search: edges1, edges2, orientation
+    best = None
+    for (a, b) in edges1_pref:
+        for (c, d) in edges2_pref:
+            # small determinism tweak: try orientation 0 then 1
+            out = try_swap(a, b, c, d, orient=0)
+            if out is None:
+                out = try_swap(a, b, c, d, orient=1)
+            if out is not None:
+                best = out
                 break
-
-            if best_choice is not None:
-                break
-        if best_choice is not None:
+        if best is not None:
             break
 
-    if best_choice is None:
-        # If this ever happens, something is pathological for this degree sequence.
-        raise RuntimeError("Could not find a valid degree-preserving rewiring to merge components.")
+    if best is None:
+        # This can happen if the degree sequence *cannot* admit a connected realization
+        # or if these components are "all degree-1 matchings" and there's no higher-degree
+        # component to absorb them via a non-bridge edge.
+        raise RuntimeError(
+            "Could not find a degree-preserving swap that reduces components. "
+            "Try merging tiny components into a large cyclic component first, "
+            "or verify the degree sequence admits a connected realization."
+        )
 
-    # Apply the rewiring to H (in-place)
-    (a, b), (c, d), (u1, v1), (u2, v2) = best_choice
+    G_new, (a, b), (c, d), e_new1, e_new2 = best
+
+    # Apply in-place
     H.remove_edge(a, b)
     H.remove_edge(c, d)
-    H.add_edge(u1, v1)
-    H.add_edge(u2, v2)
+    H.add_edge(*e_new1)
+    H.add_edge(*e_new2)
+
 
 
 def constraint_configuration_model_from_multiset(degree_sequence, max_retries=None, max_failures=1000):
@@ -508,18 +532,20 @@ def deterministic_connected_havel_hakimi(G = None, seq = None) -> nx.Graph:
     while not nx.is_connected(H):
         # Connected components as sorted lists of nodes
         components = [sorted(c) for c in nx.connected_components(H)]
+        print('Len components', len(components))
         # Sort components by (size, smallest node id) to make selection deterministic
         components.sort(key=lambda comp: (len(comp), comp[0]))
 
         # Choose the two smallest components to merge
-        comp1 = components[0]
-        comp2 = components[1]
+        comp_small = components[0]
+        comp_big   = components[-1]
 
         # Merge them deterministically (in-place)
-        _merge_two_components_deterministically(H, comp1, comp2)
+        _merge_two_components_deterministically(H, comp_small, comp_big)
 
         # Loop continues until the whole graph is connected
-
+        nx.draw(H)
+        plt.show()
     return H
 
 

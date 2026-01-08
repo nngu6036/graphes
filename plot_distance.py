@@ -11,7 +11,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 # bring in the helpers we use
 from utils import (
     load_graph_from_directory,
-    deterministic_connected_havel_hakimi_from_graph,
+    deterministic_connected_havel_hakimi,
     make_lambda_dist,
     transform_to_hh_via_guided_rewiring,
     draw_graphs_grid,
@@ -55,7 +55,7 @@ def main(args):
     # pick an initial graph and its HH target
     G_init = graphs[0]
     print("Making G_hh")
-    G_hh = deterministic_connected_havel_hakimi_from_graph(G_init)
+    G_hh = deterministic_connected_havel_hakimi(G_init)
 
     # fixed positions for consistent visualization across trajectory
     # we use the same node set (rewiring preserves node set)

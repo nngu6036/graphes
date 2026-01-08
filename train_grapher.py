@@ -180,14 +180,16 @@ def train_grapher(
         energy_fn = make_energy_fn(model, energy_mlp, k_eigen, device=device)
     # Precompute HH graphs for each G
     graphs_tuple = []
-    for G in graphs:
+    for idx,(G) in enumerate(graphs):
+        import pdb
+        pdb.set_trace()
+        print("Preparing endpoint G_HH")
         G_hh =  deterministic_connected_havel_hakimi(G = G)
-        graphs_tuple.append((G,G_hh))
-    for idx,(G, G_hh) in enumerate(graphs_tuple):
         # Forward diffusion trajectory (stochastic rewiring toward HH)
         lambda_dist = make_lambda_dist(dist_name, G_hh)
         step_idx = 0
         traj_loss = 0
+        print("Build trajectory to endpoint G_HH")
         for (G_post, added_pair, removed_pair,_) in transform_to_hh_via_guided_rewiring(
             G, G_hh, lambda_dist, T,
             ensure_connected = True, k_hop = 2, energy_fn = energy_fn, energy_weight = energy_weight
