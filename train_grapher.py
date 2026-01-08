@@ -188,10 +188,11 @@ def train_grapher(
         step_idx = 0
         traj_loss = 0
         print("Build trajectory to endpoint G_HH")
-        for (G_post, added_pair, removed_pair,_) in transform_to_hh_via_guided_rewiring(
+        trajectory = transform_to_hh_via_guided_rewiring(
             G, G_hh, lambda_dist, T,
             ensure_connected = True, k_hop = 2, energy_fn = energy_fn, energy_weight = energy_weight
-        ):
+        )
+        for (G_post, added_pair, removed_pair,_) in trajectory:
             (a, b), (c, d) = added_pair
             anchor      = (a, b)
             pos_partner = (c, d)

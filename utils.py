@@ -543,8 +543,6 @@ def deterministic_connected_havel_hakimi(G = None, seq = None) -> nx.Graph:
         _merge_two_components_deterministically(H, comp_small, comp_big)
 
         # Loop continues until the whole graph is connected
-        nx.draw(H)
-        plt.show()
     return H
 
 
