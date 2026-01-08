@@ -181,8 +181,6 @@ def train_grapher(
     # Precompute HH graphs for each G
     graphs_tuple = []
     for idx,(G) in enumerate(graphs):
-        import pdb
-        pdb.set_trace()
         print("Preparing endpoint G_HH")
         G_hh =  deterministic_connected_havel_hakimi(G = G)
         # Forward diffusion trajectory (stochastic rewiring toward HH)
