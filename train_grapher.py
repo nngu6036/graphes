@@ -181,19 +181,16 @@ def train_grapher(
     # Precompute HH graphs for each G
     graphs_tuple = []
     for idx,(G) in enumerate(graphs):
-        print("Preparing endpoint G_HH")
         G_hh =  deterministic_connected_havel_hakimi(G = G)
         # Forward diffusion trajectory (stochastic rewiring toward HH)
         lambda_dist = make_lambda_dist(dist_name, G_hh)
         step_idx = 0
         traj_loss = 0
-        print("Build trajectory to endpoint G_HH")
         trajectory = transform_to_hh_via_guided_rewiring(
             G, G_hh, lambda_dist, T,
             ensure_connected = True, k_hop = 2, energy_fn = energy_fn, energy_weight = energy_weight
         )
         for (G_post, added_pair, removed_pair,_) in trajectory:
-            print("step")
             (a, b), (c, d) = added_pair
             anchor      = (a, b)
             pos_partner = (c, d)
