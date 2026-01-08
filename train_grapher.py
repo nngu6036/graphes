@@ -193,6 +193,7 @@ def train_grapher(
             ensure_connected = True, k_hop = 2, energy_fn = energy_fn, energy_weight = energy_weight
         )
         for (G_post, added_pair, removed_pair,_) in trajectory:
+            print("step")
             (a, b), (c, d) = added_pair
             anchor      = (a, b)
             pos_partner = (c, d)
