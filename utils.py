@@ -532,7 +532,6 @@ def deterministic_connected_havel_hakimi(G = None, seq = None) -> nx.Graph:
     while not nx.is_connected(H):
         # Connected components as sorted lists of nodes
         components = [sorted(c) for c in nx.connected_components(H)]
-        print('Len components', len(components))
         # Sort components by (size, smallest node id) to make selection deterministic
         components.sort(key=lambda comp: (len(comp), comp[0]))
 
