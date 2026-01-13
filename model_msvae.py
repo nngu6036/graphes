@@ -60,6 +60,7 @@ class MSVAE(torch.nn.Module):
         self.decoder = MSVAEDecoder(latent_dim, hidden_dim,max_input_dim,max_frequency)
     
     def reparameterize(self, mean, logvar):
+        logvar = torch.clamp(logvar, -30.0, 20.0)
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mean + eps * std
@@ -72,27 +73,36 @@ class MSVAE(torch.nn.Module):
 
     def fix_degree_sum_even(self, freq: torch.Tensor) -> torch.Tensor:
         """
-        Ensures the sum of degrees in `freq` is even.
-        Subtracts 1 from the highest non-zero entry if sum is odd.
+        Ensures the sum of degrees is even.
+        If odd, decrement the count of the largest odd degree that has freq>0.
         """
-        indices = torch.arange(1, self.max_input_dim+1).float().to(freq.device)
-        total = torch.sum(freq * indices).item()
-        if total % 2 != 0:
-            even_indices = torch.arange(0, freq.size(0), 2)  # get even indices: 0, 2, 4, ...
-            even_values = freq[even_indices]                # values at even indices
-            relative_max_idx = torch.argmax(even_values)    # index within the even subset
-            max_idx = even_indices[relative_max_idx]        # map back to original index
-            if freq[max_idx] > 0:
-                freq[max_idx] += 1
+        indices = torch.arange(1, self.max_input_dim + 1, device=freq.device, dtype=freq.dtype)
+        total = torch.sum(freq * indices)
+
+        if int(total.item()) % 2 != 0:
+            # odd degrees are 1,3,5,... => indices 1-based odd => positions 0,2,4,...
+            odd_pos = torch.arange(0, freq.numel(), 2, device=freq.device)
+
+            # choose the largest odd degree with freq > 0
+            candidates = odd_pos[freq[odd_pos] > 0]
+            if candidates.numel() > 0:
+                pos = candidates[-1]   # largest odd degree bin
+                freq[pos] -= 1
+            else:
+                # fallback: if no odd-degree count exists, increment smallest odd degree count
+                # (rare; happens if all degrees are even)
+                freq[0] += 1
+
         return freq
 
-    def generate(self, num_samples ):
+
+    def generate(self, num_samples):
         self.eval()
+        device = next(self.parameters()).device
         with torch.no_grad():
-            z = torch.randn((num_samples, self.latent_dim))
-            
-            # Get (B, D, N) probabilities from decoder
-            logits = self.decoder(z, None) 
+            z = torch.randn((num_samples, self.latent_dim), device=device)
+
+            logits = self.decoder(z, None)
             probs = F.softmax(logits, dim=-1)
             B, D, N = probs.shape
             samples = torch.multinomial(probs.view(-1, N), 1).view(B, D)

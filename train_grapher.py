@@ -231,10 +231,10 @@ def train_grapher(
             step_idx += 1
         print(f"{idx+1}/{len(graphs)} graph, Average Loss: {traj_loss/T:.4f}")
 
-def load_msvae_from_file(max_node,config, model_path):
+def load_msvae_from_file(max_degree,config, model_path):
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
-    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node)
+    model = MSVAE(max_input_dim=max_degree, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node)
     print(f"MS-VAE Model loaded from {model_path}")
     model.load_model(model_path)
     return model
@@ -258,10 +258,10 @@ def main(args):
     model_dir = Path("models")
     grapher_config = toml.load(config_dir / args.config)
     msvae_config = toml.load(config_dir / args.msvae_config)
-    graphs, max_node = load_graph_from_directory(dataset_dir)
+    graphs, max_node, max_degree = load_graph_from_directory(dataset_dir)
     print(f"Loading graphs dataset {len(graphs)}")
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
-    msvae_model  = load_msvae_from_file(max_node, msvae_config, model_dir /args.msvae_model)
+    msvae_model  = load_msvae_from_file(max_degree, msvae_config, model_dir /args.msvae_model)
     grapher_hidden_dim = grapher_config['training']['hidden_dim']
     num_layer = grapher_config['training']['num_layer']
     T = grapher_config['training']['T']
@@ -287,11 +287,12 @@ def main(args):
     else:
         print("Train GraphER without energy")
         train_grapher(model, train_graphs, learning_rate,T, dist_name,k_eigen,energy_mlp = None, energy_weight = energy_weight)
+        print(f"Model saved to {args.output_model}")
+        model.save_model(model_dir / args.output_model)
         evaluate(train_graphs, test_graphs, model, msvae_model,T,k_eigen ,num_samples)
         train_energy(energy_model, model,train_graphs,steps_per_graph,dist_name,learning_rate,l2_reg,grad_clip, tau, k_eigen)
         print("Train GraphER with energy")
         train_grapher(model, train_graphs, learning_rate,T, dist_name,k_eigen,energy_mlp = energy_model, energy_weight= energy_weight)
-    if args.output_model:
         model.save_model(model_dir / args.output_model)
         print(f"Model saved to {args.output_model}")
     if args.evaluate:

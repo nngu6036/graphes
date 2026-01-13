@@ -101,23 +101,6 @@ def load_ego_graph(min_node, max_node, count):
                 break
     return ego_graphs
 
-def load_qm9_graph():
-    """Load QM9 graph dataset."""
-    qm9_dataset = QM9(root='datasets/QM9')
-    qm9_graphs = []
-    for qm9_graph in qm9_dataset:
-        G = to_networkx(qm9_graph, to_undirected=True)
-        qm9_graphs.append(G)
-    return qm9_graphs
-
-def load_zinc_graph():
-    """Load ZINC graph dataset."""
-    zinc_dataset = ZINC(root='datasets/ZINC', subset=True)
-    zinc_graphs = []
-    for zinc_graph in zinc_dataset:
-        G = to_networkx(zinc_graph, to_undirected=True)
-        zinc_graphs.append(G)
-    return zinc_graphs
 
 def generate_sbm_graph(block_sizes, probabilities):
     """Generate a Stochastic Block Model graph."""
@@ -143,6 +126,11 @@ def save_graphs(graphs, edge_list_dir):
             nx.write_edgelist(relabeled_graph, edge_list_path, data=False)
         else:
             nx.write_edgelist(graph, edge_list_path, data=False)
+
+
+def save_pyg_graphs(out_dir):
+    qm9_dataset = QM9(root=out_dir/'QM9')
+    zinc_dataset = ZINC(root=out_dir/'ZINC', subset=True)
 
 
 def main(args):

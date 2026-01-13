@@ -15,42 +15,79 @@ from torch_geometric.data import Data
 from networkx.algorithms import community as nx_comm  # near the other nx imports
 
 def load_degree_sequence_from_directory(directory_path):
-    max_node = 0 
+    max_node = 0
     max_edge = 0
+    max_degree = 0
     seqs = []
-    for filename in os.listdir(directory_path):
-        file_path = os.path.join(directory_path, filename)
-        if os.path.isfile(file_path):
-            G = nx.read_edgelist(file_path, nodetype=int)
-            max_node = max(max_node, G.number_of_nodes())
-            max_edge = max(max_node, G.number_of_edges())
-    print("Max node: ", max_node, " Max edge:", max_edge)
+
+    # First pass: compute statistics
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
             G = nx.read_edgelist(file_path, nodetype=int)
             G = nx.convert_node_labels_to_integers(G)
+
+            max_node = max(max_node, G.number_of_nodes())
+            max_edge = max(max_edge, G.number_of_edges())
+
+            if G.number_of_nodes() > 0:
+                local_max_deg = max(dict(G.degree()).values())
+                max_degree = max(max_degree, local_max_deg)
+
+    print(
+        "Max node:", max_node,
+        "Max edge:", max_edge,
+        "Max degree:", max_degree
+    )
+
+    # Second pass: collect degree sequences
+    for filename in os.listdir(directory_path):
+        file_path = os.path.join(directory_path, filename)
+        if os.path.isfile(file_path):
+            G = nx.read_edgelist(file_path, nodetype=int)
+            G = nx.convert_node_labels_to_integers(G)
+
             seq = [deg for _, deg in G.degree()]
-            if seq is not None:
+            if seq:
                 seqs.append(seq)
-    return seqs, max_node
+
+    # return max_degree instead of max_node
+    return seqs, max_node, max_degree
 
 def load_graph_from_directory(directory_path):
-    max_node = 0 
+    max_node = 0
+    max_degree = 0
     graphs = []
+
+    # First pass: compute statistics
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
-            graph = nx.read_edgelist(file_path, nodetype=int)
-            max_node = max(max_node, graph.number_of_nodes())
-    print("Max node: ", max_node)
+            G = nx.read_edgelist(file_path, nodetype=int)
+            G = nx.convert_node_labels_to_integers(G)
+
+            max_node = max(max_node, G.number_of_nodes())
+
+            if G.number_of_nodes() > 0:
+                local_max_deg = max(dict(G.degree()).values())
+                max_degree = max(max_degree, local_max_deg)
+
+    print(
+        "Max node:", max_node,
+        "Max degree:", max_degree
+    )
+
+    # Second pass: load graphs
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
         if os.path.isfile(file_path):
-            graph = nx.read_edgelist(file_path, nodetype=int)
-            graph = nx.convert_node_labels_to_integers(graph)
-            graphs.append(graph)
-    return graphs, max_node
+            G = nx.read_edgelist(file_path, nodetype=int)
+            G = nx.convert_node_labels_to_integers(G)
+            graphs.append(G)
+
+    # return max_degree instead of max_node
+    return graphs, max_node, max_degree
+
 
 def nx_to_undirected_edge_index(G):
     edges = list(G.edges())
@@ -62,7 +99,7 @@ def nx_to_undirected_edge_index(G):
     ei = torch.cat([ei, ei_rev], dim=1)                         # [2, 2E]
     return ei
 
-def graph_to_data(G, k_gen):
+def graph_to_data(G, k_gen, x = None):
     """
     Convert nx.Graph into PyG Data for GraphER.
     Includes:
@@ -75,16 +112,14 @@ def graph_to_data(G, k_gen):
     # --------------------------------------
     # Node features (degree only for now)
     # --------------------------------------
-    deg = np.array([d for _, d in G.degree()], dtype=np.float32)
-    x = torch.tensor(deg).view(-1, 1)
+    if not x:
+        deg = np.array([d for _, d in G.degree()], dtype=np.float32)
+        x = torch.tensor(deg).view(-1, 1)
 
     # --------------------------------------
     # Edge index
     # --------------------------------------
     edges = list(G.edges())
-    # --------------------------------------
-    # Build disjoint edge pairs
-    # --------------------------------------
     valid_pairs = []
     m = len(edges)
     for i in range(m):

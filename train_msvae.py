@@ -35,6 +35,7 @@ def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_ep
             # Compute the loss
             loss = loss_function(X, logits, mean, logvar, weights,warmup_epochs, epoch, max_node)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             total_loss += loss.item()
         print(f"Epoch Multiset-VAE [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
@@ -42,8 +43,10 @@ def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_ep
 def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch,max_node):
     logits_flat = logits.view(-1, logits.size(-1))        # shape (B×D, N)
     targets_flat = target_freq.long().view(-1)                    # shape (B×D,)
-    recon_loss = F.cross_entropy(logits_flat, targets_flat, reduction='sum')
-    kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
+    recon_loss = F.cross_entropy(logits_flat, targets_flat, reduction='mean')
+    LOGVAR_MIN, LOGVAR_MAX = -30.0, 20.0
+    logvar_c = torch.clamp(logvar, LOGVAR_MIN, LOGVAR_MAX)
+    kl_loss = -0.5 * torch.sum(1.0 + logvar_c - mean.pow(2) - torch.exp(logvar_c))
     lambda_entropy = weights.get("entropy", 0.0)
     probs = F.softmax(logits, dim=-1)  # shape: (B, D, N)
     entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)  # shape: (B, D)
@@ -59,13 +62,13 @@ def main(args):
     model_dir = Path("models")
     config = toml.load(config_dir / args.config)
     batch_size = config['training']['batch_size']
-    input_data, max_node = load_degree_sequence_from_directory(dataset_dir)
+    input_data, max_node, max_degree = load_degree_sequence_from_directory(dataset_dir)
     train_data, test_data = train_test_split(input_data, test_size=0.2, random_state=42)
-    train_dataset = TensorDataset(torch.stack([encode_degree_sequence(seq,max_node) for seq in train_data]))
+    train_dataset = TensorDataset(torch.stack([encode_degree_sequence(seq,max_degree) for seq in train_data]))
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
-    model = MSVAE(max_input_dim=max_node, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node)
+    model = MSVAE(max_input_dim=max_degree, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node)
     if args.input_model:
         model.load_model(model_dir / args.input_model)
         print(f"Model loaded from {model_dir / args.input_model}")
@@ -82,11 +85,11 @@ def main(args):
         deg_eval = DegreeSequenceEvaluator()
         generated_data = model.generate(config['inference']['generate_samples'])
         print(f"Generated degree sequence validity: {deg_eval.evaluate_sequences(generated_data)}")
-        print(f"Evaluate baseline: train <-> test")
+        #print(f"Evaluate baseline: train <-> test")
         #print(f"Chamfer Distance: {deg_eval.evaluate_multisets_chamfer_distance(train_data,test_data)}")
         #print(f"Earth Mover Distance: {deg_eval.evaluate_multisets_earth_mover_distance(train_data,test_data)}")
-        print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(train_data,test_data,max_node)}")
-        print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(train_data,test_data,max_node)}")
+        #print(f"KL Distance: {deg_eval.evaluate_multisets_kl_distance(train_data,test_data,max_node)}")
+        #print(f"MMD Distance: {deg_eval.evaluate_multisets_mmd_distance(train_data,test_data,max_node)}")
         print(f"Evaluate fit: train <-> generated")
         #print(f"Chamfer Distance: {deg_eval.evaluate_multisets_chamfer_distance(train_data,generated_data)}")
         #print(f"Earth Mover Distance: {deg_eval.evaluate_multisets_earth_mover_distance(train_data,generated_data)}")
