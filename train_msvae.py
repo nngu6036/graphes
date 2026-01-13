@@ -35,7 +35,6 @@ def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_ep
             # Compute the loss
             loss = loss_function(X, logits, mean, logvar, weights,warmup_epochs, epoch, max_node)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             total_loss += loss.item()
         print(f"Epoch Multiset-VAE [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
@@ -43,7 +42,7 @@ def train_msvae(model, dataloader, num_epochs, learning_rate, weights, warmup_ep
 def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch,max_node):
     logits_flat = logits.view(-1, logits.size(-1))        # shape (B×D, N)
     targets_flat = target_freq.long().view(-1)                    # shape (B×D,)
-    recon_loss = F.cross_entropy(logits_flat, targets_flat, reduction='mean')
+    recon_loss = F.cross_entropy(logits_flat, targets_flat, reduction='sum')
     LOGVAR_MIN, LOGVAR_MAX = -30.0, 20.0
     logvar_c = torch.clamp(logvar, LOGVAR_MIN, LOGVAR_MAX)
     kl_loss = -0.5 * torch.sum(1.0 + logvar_c - mean.pow(2) - torch.exp(logvar_c))
@@ -55,6 +54,7 @@ def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch
                   weights['kl_divergence'] * kl_loss +
                   lambda_entropy * entropy)
     return total_loss
+
 
 def main(args):
     config_dir = Path("configs")
