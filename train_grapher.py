@@ -27,6 +27,7 @@ from utils import (
     rewire,
     graph_to_data,
     load_graph_from_directory,
+    load_pyg_degree_sequence_from_directory,
     transform_to_hh_via_guided_rewiring,
     deterministic_connected_havel_hakimi,
     make_lambda_dist,
@@ -258,7 +259,10 @@ def main(args):
     model_dir = Path("models")
     grapher_config = toml.load(config_dir / args.config)
     msvae_config = toml.load(config_dir / args.msvae_config)
-    graphs, max_node, max_degree = load_graph_from_directory(dataset_dir)
+    if args.pyg_name:
+        graphs, max_node, max_degree = load_pyg_graph_from_directory(args.pyg_name,dataset_dir)
+    else:
+        graphs, max_node, max_degree = load_graph_from_directory(dataset_dir)
     print(f"Loading graphs dataset {len(graphs)}")
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
     msvae_model  = load_msvae_from_file(max_degree, max_node, msvae_config, model_dir /args.msvae_model)
@@ -310,5 +314,6 @@ if __name__ == "__main__":
     parser.add_argument('--output-model', type=str, help='Path to save the trained model')
     parser.add_argument('--input-model', type=str, help='Path to load a pre-trained model')
     parser.add_argument('--evaluate', action='store_true', help='Whether we evaluate the model')
+    parser.add_argument('--pyg-name', type=str, help='Name of the PYG dataset')
     args = parser.parse_args()
     main(args)
