@@ -231,7 +231,7 @@ def train_grapher(
             step_idx += 1
         print(f"{idx+1}/{len(graphs)} graph, Average Loss: {traj_loss/T:.4f}")
 
-def load_msvae_from_file(max_degree,config, model_path):
+def load_msvae_from_file(max_degree,max_node, config, model_path):
     hidden_dim = config['training']['hidden_dim']
     latent_dim = config['training']['latent_dim']
     model = MSVAE(max_input_dim=max_degree, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node)
@@ -261,7 +261,7 @@ def main(args):
     graphs, max_node, max_degree = load_graph_from_directory(dataset_dir)
     print(f"Loading graphs dataset {len(graphs)}")
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
-    msvae_model  = load_msvae_from_file(max_degree, msvae_config, model_dir /args.msvae_model)
+    msvae_model  = load_msvae_from_file(max_degree, max_node, msvae_config, model_dir /args.msvae_model)
     grapher_hidden_dim = grapher_config['training']['hidden_dim']
     num_layer = grapher_config['training']['num_layer']
     T = grapher_config['training']['T']
@@ -291,6 +291,8 @@ def main(args):
         model.save_model(model_dir / args.output_model)
         evaluate(train_graphs, test_graphs, model, msvae_model,T,k_eigen ,num_samples)
         train_energy(energy_model, model,train_graphs,steps_per_graph,dist_name,learning_rate,l2_reg,grad_clip, tau, k_eigen)
+        print(f"Energy model saved to energy")
+        energy_model.save_model(model_dir / 'energy')
         print("Train GraphER with energy")
         train_grapher(model, train_graphs, learning_rate,T, dist_name,k_eigen,energy_mlp = energy_model, energy_weight= energy_weight)
         model.save_model(model_dir / args.output_model)

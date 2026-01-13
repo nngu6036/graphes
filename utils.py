@@ -226,27 +226,14 @@ def rewire(graph: nx.Graph, e1, e2, orientation: int, ensure_connected):
 
     return G_post, add_edges, remove_edges
 
-def _k_hop_ok(G, e1,e2, k_hop) -> bool:
+def _k_hop_ok_cached(e1, e2, dist_u, dist_v):
     """
-    Return True if the distance between two edges e1, e2 in G
-    is at most k_hop, i.e. there exists at least one pair of
-    endpoints (a from e1, b from e2) with dist_G(a, b) <= k_hop.
-    If k_hop is None, no locality constraint is enforced.
+    Fast k-hop check using cached BFS maps from endpoints of e1 = (u,v).
+    dist_u: nodes within k hops of u
+    dist_v: nodes within k hops of v
     """
-    if k_hop is None:
-        return True
-    (u, v) = e1
     (x, y) = e2
-    for a in (u, v):
-        for b in (x, y):
-            try:
-                d = nx.shortest_path_length(G, a, b)
-            except nx.NetworkXNoPath:
-                continue  # no path between a and b, skip this pair
-            if d <= k_hop:
-                return True
-
-    return False
+    return (x in dist_u) or (y in dist_u) or (x in dist_v) or (y in dist_v)
 
 
 def transform_to_hh_via_guided_rewiring(
@@ -254,8 +241,8 @@ def transform_to_hh_via_guided_rewiring(
     H: nx.Graph,
     lambda_dist,
     max_steps: int,
-    ensure_connected: bool,
-    k_hop: Optional[int],
+    ensure_connected: bool = True,
+    k_hop: Optional[int] = 2,
     max_e2_candidates: Optional[int] = None,
     energy_fn=None,
     energy_weight: float = 0.0,
@@ -312,12 +299,15 @@ def transform_to_hh_via_guided_rewiring(
         e1 = edges[rng.randrange(len(edges))]
 
         # 2) Build candidate pool for second edge, respecting k-hop locality
+        u, v = e1
+        dist_u = nx.single_source_shortest_path_length(G_curr, u, cutoff=k_hop)
+        dist_v = nx.single_source_shortest_path_length(G_curr, v, cutoff=k_hop)
+
         e2_pool = [
-            e
-            for e in edges
+            e for e in edges
             if e != e1
             and len(set(e1 + e)) == 4
-            and _k_hop_ok(G_curr, e1, e, k_hop)  # <-- bugfix: pass e1, e2
+            and _k_hop_ok_cached(e1, e, dist_u, dist_v)
         ]
 
         # If no candidates under k-hop constraint, relax locality for this step
@@ -368,7 +358,6 @@ def transform_to_hh_via_guided_rewiring(
             G_curr = best_step_graph
             best_global = best_step_score
             yield G_curr, best_step_added, best_step_removed, best_global
-
 
 
 def havel_hakimi_construction(G: nx.Graph) -> nx.Graph:
@@ -918,50 +907,58 @@ def build_candidates(
     k_hop: int = 2,
 ):
     """
-    Return a list of candidate edges given the anchor edge, under the following constraints:
-    - Candidate edge is disjoint from the anchor edge (4 distinct endpoints).
-    - At least one orientation of rewiring (u,v) with candidate edge is valid:
-        * no self-loops or parallel edges
-        * (optionally) resulting graph remains connected if `ensure_connected` is True
-    - Locality: the candidate edge is within `k_hop` hops of the anchor edge, i.e.
-      at least one endpoint of the candidate is within distance <= k_hop from at
-      least one endpoint of the anchor edge. If k_hop is None, locality is ignored.
+    Optimized version:
+    - Computes BFS distance maps once from each endpoint of anchor_edge (cutoff=k_hop)
+    - Candidate locality check becomes O(1) per edge instead of repeated shortest_path_length calls.
+
+    Constraints preserved:
+      - disjoint endpoints
+      - within k_hop of anchor endpoints (if k_hop is not None)
+      - at least one orientation yields a valid rewiring (simple + optionally connected)
     """
     u, v = anchor_edge
     edges = list(G.edges())
     candidates = []
 
+    # --- Precompute distances from u and v up to cutoff k_hop ---
+    dist_u = dist_v = None
+    if k_hop is not None:
+        # single_source_shortest_path_length returns {node: dist} for nodes within cutoff
+        dist_u = nx.single_source_shortest_path_length(G, u, cutoff=k_hop)
+        dist_v = nx.single_source_shortest_path_length(G, v, cutoff=k_hop)
+
+        def close_enough(x, y):
+            # True if x or y is within k hops of u or v
+            return (
+                (x in dist_u) or (y in dist_u) or
+                (x in dist_v) or (y in dist_v)
+            )
+    else:
+        def close_enough(x, y):
+            return True
+
     for e2 in edges:
-        # skip same edge
         if e2 == anchor_edge:
             continue
+
         x, y = e2
-        # require 4 distinct endpoints to allow a proper swap
+
+        # Need 4 distinct endpoints
         if len({u, v, x, y}) < 4:
             continue
-        # --- k-hop locality between anchor endpoints and candidate endpoints ---
-        if k_hop is not None:
-            close_enough = False
-            for a in (u, v):
-                for b in (x, y):
-                    try:
-                        if nx.shortest_path_length(G, a, b) <= k_hop:
-                            close_enough = True
-                            break
-                    except nx.NetworkXNoPath:
-                        # if there's no path between a and b, this pair can't be "local"
-                        continue
-                if close_enough:
-                    break
-            if not close_enough:
-                continue
-        # --- check if at least one orientation yields a valid rewiring ---
+
+        # k-hop locality in O(1)
+        if not close_enough(x, y):
+            continue
+
+        # Check if at least one orientation yields valid rewiring
         valid = False
         for orient in (0, 1):
             out = rewire(G, anchor_edge, e2, orient, ensure_connected)
             if out is not None:
                 valid = True
                 break
+
         if valid:
             candidates.append(e2)
 
