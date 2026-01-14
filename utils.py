@@ -15,7 +15,8 @@ from torch_geometric.data import Data
 from torch_geometric.utils import to_networkx
 from networkx.algorithms import community as nx_comm  # near the other nx imports
 from torch_geometric.datasets import ZINC, QM9
-
+from scipy.sparse import csr_matrix
+from scipy.sparse.linalg import eigsh
 
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0

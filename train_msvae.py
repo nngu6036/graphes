@@ -57,11 +57,12 @@ def loss_function(target_freq, logits,mean, logvar, weights,warmup_epochs, epoch
 
 
 def main(args):
-    config_dir = Path("configs")
-    dataset_dir = Path("datasets") / args.dataset_dir
-    model_dir = Path("models")
-    config = toml.load(config_dir / args.config)
+    dataset_dir = args.dataset_dir
+    config = toml.load(args.config)
     batch_size = config['training']['batch_size']
+    model_dir = Path(args.model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+
     if args.pyg_name:
         input_data, max_node, max_degree = load_pyg_degree_sequence_from_directory(args.pyg_name,dataset_dir)
     else:
@@ -108,6 +109,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='MS-VAE for Graph Generation')
     parser.add_argument('--dataset-dir', type=str, help='Path to the directory containing graph files')
+    parser.add_argument('--model-dir', type=str, help='Path to the directory containing models')
     parser.add_argument('--config', type=str, required=True, help='Path to the configuration file in TOML format')
     parser.add_argument('--output-model', type=str, help='Path to save the trained model')
     parser.add_argument('--input-model', type=str, help='Path to load a pre-trained model')

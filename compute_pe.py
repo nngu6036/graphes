@@ -124,7 +124,7 @@ def load_dataset(name: str, root: str, subset: bool) -> Tuple[torch.utils.data.D
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, required=True, choices=["QM9", "ZINC"])
-    parser.add_argument("--root", type=str, required=True, help="PyG dataset root directory")
+    parser.add_argument("--dataset-dir", type=str, required=True, help="PyG dataset root directory")
     parser.add_argument("--k", type=int, default=8, help="PE dimension")
     parser.add_argument("--normalized", action="store_true", help="Use normalized Laplacian (default)")
     parser.add_argument("--combinatorial", action="store_true", help="Use combinatorial Laplacian instead")
@@ -142,9 +142,9 @@ def main():
 
     device = torch.device(args.device if (args.device == "cpu" or torch.cuda.is_available()) else "cpu")
 
-    ds, tag = load_dataset(args.dataset, args.root, args.subset)
+    ds, tag = load_dataset(args.dataset, args.dataset_dir, args.subset)
 
-    out_dir = Path(args.root) / "pe_cache"
+    out_dir = Path(args.dataset_dir) / "pe_cache"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     lap_kind = "norm" if use_normalized else "comb"

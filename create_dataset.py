@@ -135,32 +135,18 @@ def save_pyg_graphs(out_dir):
 
 def main(args):
     """Main function to generate datasets based on a configuration file."""
-    config_dir = Path("configs")
-    dataset_dir = Path("datasets")
-    dataset_prefix = args.dataset_prefix
-
-    config_path = config_dir / args.config
-    if not config_path.exists():
-        raise FileNotFoundError(f"Configuration file not found: {config_path}")
-
-    with open(config_path, 'r') as f:
+    dataset_dir = Path(args.dataset_dir)
+    with open(args.config, 'r') as f:
         config = toml.load(f)
 
     dataset_dir.mkdir(parents=True, exist_ok=True)
 
     for dataset in config["datasets"]:
         graph_type = dataset["type"]
-        node_count = dataset.get("nodes", None)
-        edge_count = dataset.get("edges", None)
-
         graphs = []
         if graph_type == "ego":
             graph_count = dataset["count"]
             graphs = load_ego_graph(dataset["min_node"],dataset["max_node"],graph_count)
-        if graph_type == "qm9":
-            graphs = load_qm9_graph()
-        if graph_type == "zinc":
-            graphs = load_zinc_graph()
         if graph_type == "grid":
             graph_count = dataset["count"]
             for _ in range(graph_count):
@@ -173,14 +159,14 @@ def main(args):
                 graphs.append(G)
 
         print(f"Generate synthetic datasets for graph type {graph_type}")
-        edge_list_dir = dataset_dir / f"{dataset_prefix}_{graph_type}_edgelists"
+        edge_list_dir = dataset_dir / f"{graph_type}_edgelists"
         print(f"Saving datasets for graph type {graph_type}")
         save_graphs(graphs, edge_list_dir)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate graphs based on configuration.")
     parser.add_argument("--config", type=str, required=True, help="Name of the TOML configuration file in the input folder.")
-    parser.add_argument("--dataset-prefix", type=str, required=True, help="Prefix for naming the dataset files.")
+    parser.add_argument("--dataset-dir", type=str, required=True, help="Root directory to store dataset")
     args = parser.parse_args()
 
     main(args)
