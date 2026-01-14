@@ -54,45 +54,34 @@ def load_degree_sequence_from_directory(directory_path):
     return seqs, max_node, max_degree
 
 
-def load_pyg_degree_sequence_from_directory(pyg_name, directory_path):
-    max_node = 0
-    max_edge = 0
-    max_degree = 0
-    seqs = []
-    if pyg_name =='QM9':
+def load_pyg_graph_from_directory(pyg_name, directory_path):
+    if pyg_name == 'QM9':
         dataset = QM9(root=directory_path)
-    elif pyg_name =='ZINC':
+    elif pyg_name == 'ZINC':
         dataset = ZINC(root=directory_path, subset=True)
     else:
-        raise Error("Invalid PYG dataset name")
+        raise ValueError("Invalid PYG dataset name")
+
     graphs = []
+    max_node = max_edge = max_degree = 0
+
     for data in dataset:
         G = to_networkx(
             data,
             to_undirected=True,
-            node_attrs=['x'],
-            edge_attrs=['edge_attr'],
+            node_attrs=['x'],        # keep if you want later
+            edge_attrs=['edge_attr'] # keep if you want later
         )
+        G = nx.convert_node_labels_to_integers(G, ordering="sorted")
         graphs.append(G)
-    # First pass: compute statistics
-    for G in graphs:
+
         max_node = max(max_node, G.number_of_nodes())
         max_edge = max(max_edge, G.number_of_edges())
         if G.number_of_nodes() > 0:
-            local_max_deg = max(dict(G.degree()).values())
-            max_degree = max(max_degree, local_max_deg)
-    print(
-        "Max node:", max_node,
-        "Max edge:", max_edge,
-        "Max degree:", max_degree
-    )
-    # Second pass: collect degree sequences
-    for G in graphs:
-        seq = [deg for _, deg in G.degree()]
-        if seq:
-            seqs.append(seq)
-    # return max_degree instead of max_node
-    return seqs, max_node, max_degree
+            max_degree = max(max_degree, max(dict(G.degree()).values()))
+
+    print("Max node:", max_node, "Max edge:", max_edge, "Max degree:", max_degree)
+    return graphs, max_node, max_degree
 
 
 def load_graph_from_directory(directory_path):
@@ -190,7 +179,7 @@ def graph_to_data(G, k_gen, x = None):
     # --------------------------------------
     # Node features (degree only for now)
     # --------------------------------------
-    if not x:
+    if x is None:
         deg = np.array([d for _, d in G.degree()], dtype=np.float32)
         x = torch.tensor(deg).view(-1, 1)
     # --------------------------------------

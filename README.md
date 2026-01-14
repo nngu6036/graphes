@@ -22,9 +22,10 @@ python plot_distance.py  --dataset-dir dataset1_community_edgelists --config  di
 python plot_distance.py  --dataset-dir dataset1_ego_edgelists --config  distance_config.toml
 ```
 
-## Compute mixing time
+## Compute PE for PyG dataset
 ```bash
-python plot_distance.py  --dataset-dir dataset1_community_edgelists --config  distance_config.toml
+python compute_pe.py  --dataset QM9 --root datasets/QM9 --k 8
+python compute_pe.py  --dataset ZINC --root datasets/ZINC --k 16 --subset
 ```
 
 
