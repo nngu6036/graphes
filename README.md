@@ -13,7 +13,7 @@ pip install -r requirements.txt
 
 ## Generate input dataset
 ```bash
-python create_dataset.py  --dataset-dir datasets --config  config/dataset1_config.toml
+python create_dataset.py  --dataset-dir datasets --config  configs/dataset_config.toml
 ```
 
 ## Plot distance 
@@ -25,78 +25,61 @@ python plot_distance.py  --dataset-dir datasets/ego_edgelists --config  config/d
 ## Compute PE for PyG dataset
 ```bash
 python compute_pe.py  --dataset QM9 --dataset-dir datasets/QM9 --k 8
-python compute_pe.py  --dataset ZINC --dataset-dir datasets/ZINC --k 16 --subset
+python compute_pe.py  --dataset ZINC --dataset-dir datasets/ZINC --k 8 --subset
 ```
 
 
 ## Train and evaluate MS-VAE model
 ```bash
-python train_msvae.py  --dataset-dir datasets/ego_edgelists --config  config/msvae_config1.toml --output-model models/msvae_ego --evaluate
+python train_msvae.py  --dataset-dir datasets/ego_edgelists --config  configs/msvae_config1.toml --output-model models/msvae_ego --evaluate
 ```
 ```bash
-python train_msvae.py  --dataset-dir datasets/grid_edgelists --config  config/msvae_config1.toml --output-model models/msvae_grid --evaluate
+python train_msvae.py  --dataset-dir datasets/grid_edgelists --config  configs/msvae_config1.toml --output-model models/msvae_grid --evaluate
 ```
 ```bash
-python train_msvae.py  --dataset-dir datasets/community_edgelists  --config config/ msvae_config1.toml --output-model models/msvae_community --evaluate
+python train_msvae.py  --dataset-dir datasets/community_edgelists  --config configs/msvae_config1.toml --output-model models/msvae_community --evaluate
 ```
 ```bash
-python train_msvae.py  --dataset-dir datasets/QM9 --config  config/msvae_config1.toml --output-model models/msvae_qm9 --dataset QM9 --evaluate
+python train_msvae.py  --dataset-dir datasets/QM9 --config  configs/msvae_config1.toml --output-model models/msvae_qm9 --dataset QM9 --evaluate
 ```
 ```bash
-python train_msvae.py  --dataset-dir datasets/ZINC --config  config/msvae_config1.toml --output-model models/msvae_zinc --dataset ZINC --evaluate
+python train_msvae.py  --dataset-dir datasets/ZINC --config  configs/msvae_config1.toml --output-model models/msvae_zinc --dataset ZINC --evaluate
 ```
 
 ## Evaluate MS-VAE model
 ```bash
-python train_msvae.py  --dataset-dir datasets/ego_edgelists --config  config/msvae_config1.toml --input-model models/msvae_ego --evaluate
+python train_msvae.py  --dataset-dir datasets/ego_edgelists --config  configs/msvae_config1.toml --input-model models/msvae_ego --evaluate
 ```
 ```bash
-python train_msvae.py  --dataset-dir datasets/community_edgelists --config  config/msvae_config1.toml --input-model models/msvae_community --evaluate
+python train_msvae.py  --dataset-dir datasets/community_edgelists --config  configs/msvae_config1.toml --input-model models/msvae_community --evaluate
 ```
 ```bash
-python train_msvae.py  --dataset-dir datasets/grid_edgelists --config  config/msvae_config1.toml --input-model models/msvae_grid --evaluate
+python train_msvae.py  --dataset-dir datasets/grid_edgelists --config  configs/msvae_config1.toml --input-model models/msvae_grid --evaluate
 ```
 ```bash
-python train_msvae.py  --dataset-dir datasets/QM9 --config  config/msvae_config1.toml --input-model models/msvae_qm9  --dataset QM9  --evaluate
+python train_msvae.py  --dataset-dir datasets/QM9 --config  configs/msvae_config1.toml --input-model models/msvae_qm9  --dataset QM9  --evaluate
 ```
 ```bash
-python train_msvae.py  --dataset-dir datasets/ZINC --config  config/msvae_config1.toml --input-model models/msvae_zinc  --dataset ZINC --evaluate
+python train_msvae.py  --dataset-dir datasets/ZINC --config  configs/msvae_config1.toml --input-model models/msvae_zinc  --dataset ZINC --evaluate
 ```
 
 
 ## Training and evaluate GraphER model
 ```bash
-python train_grapher.py --config grapher_ego_config.toml  --dataset-dir dataset1_ego_edgelists --msvae-model msvae_ego --msvae-config msvae_config1.toml --output-model grapher_ego --evaluate 
+python train_grapher.py --config configs/grapher_ego_config.toml  --dataset-dir datasets/ego_edgelists --msvae-model models/msvae_ego --msvae-config models/msvae_config1.toml --output-model models//grapher_ego --evaluate 
 ```
 ```bash
-python train_grapher.py --config grapher_community_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config msvae_config1.toml --output-model grapher_community --evaluate 
+python train_grapher.py --config configs/grapher_community_config.toml  --dataset-dir datasets/community_edgelists --msvae-model models/msvae_community --msvae-config configs/msvae_config1.toml --output-model models/grapher_community --evaluate 
 ```
 ```bash
-python train_grapher.py --config grapher_grid_config.toml  --dataset-dir dataset1_grid_edgelists --msvae-model msvae_grid --msvae-config msvae_config1.toml --output-model grapher_grid --evaluate 
+python train_grapher.py --config configs/grapher_grid_config.toml  --dataset-dir datasets/grid_edgelists --msvae-model models/msvae_grid --msvae-config configs/msvae_config1.toml --output-model models/grapher_grid --evaluate 
 ```
 ```bash
-python train_grapher.py --config grapher_qm9_config.toml  --dataset-dir QM9 --msvae-model msvae_qm9 --msvae-config msvae_config1.toml --output-model grapher_qm9 --dataset QM9  --evaluate 
+python train_grapher.py --config configs/grapher_qm9_config.toml  --dataset-dir datasets/QM9 --dataset QM9 --msvae-model models/msvae_qm9 --msvae-config configs/msvae_config1.toml --output-model models/grapher_qm9  --evaluate 
 ```
 ```bash
-python train_grapher.py --config grapher_zinc_config.toml  --dataset-dir ZINC --msvae-model msvae_zinc --msvae-config msvae_config1.toml --output-model grapher_zinc --dataset ZINC  --evaluate 
-```
-
-## Evaluate GraphER model
-```bash
-python train_grapher.py --config grapher_ego_config.toml  --dataset-dir dataset1_ego_edgelists --msvae-model msvae_ego --msvae-config msvae_config1.toml --input-model grapher_ego --evaluate 
+python train_grapher.py --config configs/grapher_zinc_config.toml  --dataset-dir datasets/ZINC --msvae-model models/msvae_zinc --msvae-config configs/msvae_config1.toml --output-model models/grapher_zinc --dataset ZINC  --evaluate 
 ```
 ```bash
-python train_grapher.py --config grapher_community_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config msvae_config1.toml --input-model grapher_community --evaluate 
-```
-```bash
-python train_grapher.py --config grapher_grid_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_grid --msvae-config msvae_config1.toml --input-model grapher_grid --evaluate 
-```
-```bash
-python train_grapher.py --config grapher_ego_config.toml  --dataset-dir dataset1_ego_edgelists --msvae-model msvae_ego --msvae-config msvae_config1.toml --input-model grapher_ego --evaluate  --ablation
-```
-```bash
-python train_grapher.py --config grapher_community_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_community --msvae-config msvae_config1.toml --input-model grapher_community --evaluate  --ablation
-```
-```bash
-python train_grapher.py --config grapher_grid_config.toml  --dataset-dir dataset1_community_edgelists --msvae-model msvae_grid --msvae-config msvae_config1.toml --input-model grapher_grid --evaluate  --ablation
+python train_grapher.py --config configs/grapher_grid_config.toml  --dataset-dir datasets/grid_edgelists --msvae-model models/msvae_grid --msvae-config configs/msvae_config1.toml --input-model models/grapher_grid --evaluate 
 ```

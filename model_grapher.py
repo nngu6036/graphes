@@ -16,6 +16,7 @@ from utils import (
     deterministic_connected_havel_hakimi,
 )
 
+
 def get_edge_representation(x, u, v, method="sum_absdiff"):
     x_u, x_v = x[u], x[v]
     if method == "mean":
@@ -28,6 +29,7 @@ def get_edge_representation(x, u, v, method="sum_absdiff"):
         return torch.cat([x_u + x_v, torch.abs(x_u - x_v)], dim=-1)
     else:
         return torch.cat([x_u, x_v], dim=-1)
+
 
 def decode_degree_sequence(seq):
     degrees = []
@@ -46,15 +48,43 @@ def get_sinusoidal_embedding(t, dim, max_period=10000):
     emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)  # shape [1, dim]
     return emb.squeeze(0)  # shape [dim]
 
+
 def initialize_graphs(method, seq):
     if method == 'havei_hakimi':
         G = deterministic_connected_havel_hakimi(seq = seq)
     if method == 'configuration_model':
         G = configuration_model_from_multiset(seq)
     return G
-    
+
+
+class AtomHead(nn.Module):
+    def __init__(self, hidden_dim, num_atom_types):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, num_atom_types),
+        )
+
+    def forward(self, node_emb):   # [N, hidden]
+        return self.mlp(node_emb)  # [N, num_atom_types]
+
+
+class BondHead(nn.Module):
+    def __init__(self, hidden_dim, num_bond_types):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(2*hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, num_bond_types),
+        )
+
+    def forward(self, edge_feats):   # [E, 2h]
+        return self.mlp(edge_feats)  # [E, num_bonds]
+
+
 class GraphER(nn.Module):
-    def __init__(self, in_channels, hidden_dim, num_layer, T,num_energy_targets: int = 2,energy_hidden_dim: int = 64):
+    def __init__(self, node_in_dim, hidden_dim, num_layer, T,num_energy_targets: int = 2,energy_hidden_dim: int = 64):
         """
         in_channels: we treat this as `k_eigen` (number of Laplacian PE dims).
         Actual node feature dim from graph_to_data is:
@@ -64,7 +94,6 @@ class GraphER(nn.Module):
         self.hidden_dim = hidden_dim
 
         # Actual input feature dimension = degree (1) + Laplacian PE (in_channels)
-        node_in_dim = in_channels + 1
 
         self.gin_layers = nn.ModuleList([
             GINConv(

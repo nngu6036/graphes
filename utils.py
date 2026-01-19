@@ -18,116 +18,68 @@ from torch_geometric.datasets import ZINC, QM9
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import eigsh
 
+import os
+import networkx as nx
+from torch_geometric.utils import to_networkx
+from torch_geometric.datasets import ZINC, QM9
+
 def load_degree_sequence_from_directory(directory_path):
     max_node = 0
     max_edge = 0
     max_degree = 0
     seqs = []
-
-    # First pass: compute statistics
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
-        if os.path.isfile(file_path):
-            G = nx.read_edgelist(file_path, nodetype=int)
-            G = nx.convert_node_labels_to_integers(G)
-
-            max_node = max(max_node, G.number_of_nodes())
-            max_edge = max(max_edge, G.number_of_edges())
-
-            if G.number_of_nodes() > 0:
-                local_max_deg = max(dict(G.degree()).values())
-                max_degree = max(max_degree, local_max_deg)
-    print(
-        "Max node:", max_node,
-        "Max edge:", max_edge,
-        "Max degree:", max_degree
-    )
-    # Second pass: collect degree sequences
-    for filename in os.listdir(directory_path):
-        file_path = os.path.join(directory_path, filename)
-        if os.path.isfile(file_path):
-            G = nx.read_edgelist(file_path, nodetype=int)
-            G = nx.convert_node_labels_to_integers(G)
-            seq = [deg for _, deg in G.degree()]
-            if seq:
-                seqs.append(seq)
-    # return max_degree instead of max_node
-    return seqs, max_node, max_degree
-
-
-def load_pyg_graph_from_directory(pyg_name, directory_path):
-    if pyg_name == 'QM9':
-        dataset = QM9(root=directory_path)
-    elif pyg_name == 'ZINC':
-        dataset = ZINC(root=directory_path, subset=True)
-    else:
-        raise ValueError("Invalid PYG dataset name")
-
-    graphs = []
-    max_node = max_edge = max_degree = 0
-
-    for data in dataset:
-        G = to_networkx(
-            data,
-            to_undirected=True,
-            node_attrs=['x'],        # keep if you want later
-            edge_attrs=['edge_attr'] # keep if you want later
-        )
-        G = nx.convert_node_labels_to_integers(G, ordering="sorted")
-        graphs.append(G)
-
-        max_node = max(max_node, G.number_of_nodes())
-        max_edge = max(max_edge, G.number_of_edges())
-        if G.number_of_nodes() > 0:
-            max_degree = max(max_degree, max(dict(G.degree()).values()))
-
+        if not os.path.isfile(file_path):
+            continue
+        G = nx.read_edgelist(file_path, nodetype=int)
+        G = nx.convert_node_labels_to_integers(G)
+        n = G.number_of_nodes()
+        m = G.number_of_edges()
+        max_node = max(max_node, n)
+        max_edge = max(max_edge, m)
+        if n > 0:
+            degs = [deg for _, deg in G.degree()]
+            local_max_deg = max(degs) if degs else 0
+            max_degree = max(max_degree, local_max_deg)
+            if degs:
+                seqs.append(degs)
     print("Max node:", max_node, "Max edge:", max_edge, "Max degree:", max_degree)
-    return graphs, max_node, max_degree
+    return seqs, max_node, max_degree
 
 
 def load_graph_from_directory(directory_path):
     max_node = 0
     max_degree = 0
     graphs = []
-    # First pass: compute statistics
     for filename in os.listdir(directory_path):
         file_path = os.path.join(directory_path, filename)
-        if os.path.isfile(file_path):
-            G = nx.read_edgelist(file_path, nodetype=int)
-            G = nx.convert_node_labels_to_integers(G)
-
-            max_node = max(max_node, G.number_of_nodes())
-
-            if G.number_of_nodes() > 0:
-                local_max_deg = max(dict(G.degree()).values())
-                max_degree = max(max_degree, local_max_deg)
-    print(
-        "Max node:", max_node,
-        "Max degree:", max_degree
-    )
-    # Second pass: load graphs
-    for filename in os.listdir(directory_path):
-        file_path = os.path.join(directory_path, filename)
-        if os.path.isfile(file_path):
-            G = nx.read_edgelist(file_path, nodetype=int)
-            G = nx.convert_node_labels_to_integers(G)
-            graphs.append(G)
-    # return max_degree instead of max_node
+        if not os.path.isfile(file_path):
+            continue
+        G = nx.read_edgelist(file_path, nodetype=int)
+        G = nx.convert_node_labels_to_integers(G)
+        graphs.append(G)
+        n = G.number_of_nodes()
+        max_node = max(max_node, n)
+        if n > 0:
+            degs = [deg for _, deg in G.degree()]
+            local_max_deg = max(degs) if degs else 0
+            max_degree = max(max_degree, local_max_deg)
+    print("Max node:", max_node, "Max degree:", max_degree)
     return graphs, max_node, max_degree
 
 
-def load_pyg_graph_from_directory(pyg_name, directory_path):
+def load_pyg_degree_sequence_from_directory(pyg_name, directory_path):
+    if pyg_name == 'QM9':
+        dataset = QM9(root=directory_path)
+    elif pyg_name == 'ZINC':
+        dataset = ZINC(root=directory_path, subset=True)
+    else:
+        raise ValueError("Invalid PYG dataset name")
     max_node = 0
     max_edge = 0
     max_degree = 0
     seqs = []
-    if pyg_name =='QM9':
-        dataset = QM9(root=directory_path)
-    elif pyg_name =='ZINC':
-        dataset = ZINC(root=directory_path, subset=True)
-    else:
-        raise Error("Invalid PYG dataset name")
-    graphs = []
     for data in dataset:
         G = to_networkx(
             data,
@@ -135,25 +87,52 @@ def load_pyg_graph_from_directory(pyg_name, directory_path):
             node_attrs=['x'],
             edge_attrs=['edge_attr'],
         )
-        graphs.append(G)
-    # First pass: compute statistics
-    for G in graphs:
-        max_node = max(max_node, G.number_of_nodes())
-        max_edge = max(max_edge, G.number_of_edges())
-        if G.number_of_nodes() > 0:
-            local_max_deg = max(dict(G.degree()).values())
+        n = G.number_of_nodes()
+        m = G.number_of_edges()
+        max_node = max(max_node, n)
+        max_edge = max(max_edge, m)
+        if n > 0:
+            degs = [deg for _, deg in G.degree()]
+            local_max_deg = max(degs) if degs else 0
             max_degree = max(max_degree, local_max_deg)
-    print(
-        "Max node:", max_node,
-        "Max edge:", max_edge,
-        "Max degree:", max_degree
-    )
-    # Second pass: load graphs
-    for G in graphs:
-        G = nx.read_edgelist(file_path, nodetype=int)
-        G = nx.convert_node_labels_to_integers(G)
+            if degs:
+                seqs.append(degs)
+    print("Max node:", max_node, "Max edge:", max_edge, "Max degree:", max_degree)
+    return seqs, max_node, max_degree
+
+
+def load_pyg_graph_from_directory(pyg_name, directory_path, pe_cache_path):
+    if pyg_name == 'QM9':
+        dataset = QM9(root=directory_path)
+    elif pyg_name == 'ZINC':
+        dataset = ZINC(root=directory_path, subset=True)
+    else:
+        raise ValueError("Invalid PYG dataset name")
+    payload = torch.load(pe_cache_path, map_location="cpu")
+    pe_list = payload["pe"]
+    if len(pe_list) != len(dataset):
+        raise ValueError(f"PE length mismatch: len(pe_list)={len(pe_list)} vs len(dataset)={len(dataset)}")
+    max_node = max_edge = max_degree = 0
+    graphs = []
+    for idx, data in enumerate(dataset):
+        pe = pe_list[idx]
+        if pe.size(0) != data.num_nodes:
+            raise ValueError(f"Graph {idx}: PE rows {pe.size(0)} != num_nodes {data.num_nodes}")
+        data.pe = pe  # must be set before to_networkx
+        G = to_networkx(
+            data,
+            to_undirected=True,
+            node_attrs=['x', 'pe'],          # <-- include pe here
+            edge_attrs=['edge_attr'],
+        )
         graphs.append(G)
-    # return max_degree instead of max_node
+        n = G.number_of_nodes()
+        m = G.number_of_edges()
+        max_node = max(max_node, n)
+        max_edge = max(max_edge, m)
+        if n > 0:
+            max_degree = max(max_degree, max(dict(G.degree()).values(), default=0))
+    print("Max node:", max_node, "Max edge:", max_edge, "Max degree:", max_degree)
     return graphs, max_node, max_degree
 
 
@@ -168,7 +147,26 @@ def nx_to_undirected_edge_index(G):
     return ei
 
 
-def graph_to_data(G, k_gen, x = None):
+def _get_node_attr_matrix(G, key, node_order):
+    rows = []
+    for u in node_order:
+        v = G.nodes[u].get(key, None)
+        if v is None:
+            return None
+        rows.append(v)
+    return rows
+
+def _stack_node_attr(G, key, node_order):
+    rows = _get_node_attr_matrix(G, key, node_order)
+    if rows is None:
+        return None
+    first = rows[0]
+    if torch.is_tensor(first):
+        return torch.stack([r.detach().cpu() for r in rows], dim=0).float()
+    else:
+        return torch.tensor(np.asarray(rows), dtype=torch.float)
+        
+def graph_to_data(G, k_gen):
     """
     Convert nx.Graph into PyG Data for GraphER.
     Includes:
@@ -180,8 +178,14 @@ def graph_to_data(G, k_gen, x = None):
     # --------------------------------------
     # Node features (degree only for now)
     # --------------------------------------
-    if x is None:
-        deg = np.array([d for _, d in G.degree()], dtype=np.float32)
+    # If molecular NX graph came from PyG, it has node attr 'x' already.
+    node_order = list(G.nodes())
+    n = len(node_order)
+    x_rows = _stack_node_attr(G, "x", node_order)
+    if x_rows is not None:
+        x = torch.as_tensor(np.asarray(x_rows), dtype=torch.float)
+    else:
+        deg = np.array([G.degree(u) for u in node_order], dtype=np.float32)
         x = torch.tensor(deg).view(-1, 1)
     # --------------------------------------
     # Edge index
@@ -213,18 +217,24 @@ def graph_to_data(G, k_gen, x = None):
     # --------------------------------------
     # Laplacian positional encoding
     # --------------------------------------
-    A = nx.to_numpy_array(G, dtype=float)
-    deg = A.sum(axis=1)
-    deg_sqrt_inv = np.zeros_like(deg)
-    deg_sqrt_inv[deg > 0] = 1.0 / np.sqrt(deg[deg > 0])
-    # Compute D^{-1/2} * A * D^{-1/2}
-    D_inv_sqrt = np.diag(deg_sqrt_inv)
-    I = np.eye(G.number_of_nodes())
-    L_dense = I - D_inv_sqrt @ A @ D_inv_sqrt
-    eigvals, eigvecs = np.linalg.eigh(L_dense)
-    k = min(k_gen, eigvecs.shape[1])
-    pe = torch.tensor(eigvecs[:, :k], dtype=torch.float)
-    data.x = torch.cat([data.x, pe], dim=-1)
+    pe_rows = _stack_node_attr(G, "pe", node_order)
+    if pe_rows is not None:
+        pe = torch.as_tensor(np.asarray(pe_rows), dtype=torch.float)
+        pe = pe[:, :min(k_gen, pe.size(1))]
+    else:
+        # fallback compute (your existing Laplacian PE compute),
+        # but make sure adjacency uses the SAME node_order:
+        A = nx.to_numpy_array(G, nodelist=node_order, dtype=float)
+        deg = A.sum(axis=1)
+        deg_sqrt_inv = np.zeros_like(deg)
+        deg_sqrt_inv[deg > 0] = 1.0 / np.sqrt(deg[deg > 0])
+        D_inv_sqrt = np.diag(deg_sqrt_inv)
+        L_dense = np.eye(n) - D_inv_sqrt @ A @ D_inv_sqrt
+        eigvals, eigvecs = np.linalg.eigh(L_dense)
+        k = min(k_gen, eigvecs.shape[1])
+        pe = torch.tensor(eigvecs[:, :k], dtype=torch.float)
+    data.pe = pe
+    data.x = torch.cat([data.x, pe], dim=-1) if pe.numel() > 0 else data.x
     return data
 
 

@@ -101,17 +101,34 @@ class MSVAE(torch.nn.Module):
         device = next(self.parameters()).device
         with torch.no_grad():
             z = torch.randn((num_samples, self.latent_dim), device=device)
-
-            logits = self.decoder(z, None)
-            probs = F.softmax(logits, dim=-1)
+            logits = self.decoder(z, None)               # (B, D, N)
+            probs = F.softmax(logits, dim=-1)            # (B, D, N)
             B, D, N = probs.shape
-            samples = torch.multinomial(probs.view(-1, N), 1).view(B, D)
-
+            # sample raw counts per degree-bin (independent; will be renormalized)
+            raw = torch.multinomial(probs.view(-1, N), 1).view(B, D).float()  # (B, D)
             fixed_sequences = []
-            for freq in samples:
-                freq_fixed = self.fix_degree_sum_even(freq.float())
-                fixed_sequences.append(decode_degree_sequence(freq_fixed))
+            for freq in raw:
+                freq = torch.clamp(freq, min=0)
+                # --- NEW: force sum(freq) == max_node (n) ---
+                n = self.max_frequency  # you set max_frequency=max_node in train_msvae.py
+                s = int(freq.sum().item())
+                if s <= 0:
+                    freq.zero_()
+                    freq[0] = n
+                else:
+                    scaled = freq / (freq.sum() + 1e-8) * n
+                    base = torch.floor(scaled)
+                    remainder = n - int(base.sum().item())
+                    if remainder > 0:
+                        frac = scaled - base
+                        idx = torch.topk(frac, k=min(remainder, D)).indices
+                        base[idx] += 1
+                    freq = base
+                # even degree-sum
+                freq = self.fix_degree_sum_even(freq)
+                fixed_sequences.append(decode_degree_sequence(freq))
             return fixed_sequences
+
             
     def save_model(self, file_path):
         torch.save(self.state_dict(), file_path)

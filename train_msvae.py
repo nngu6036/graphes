@@ -60,11 +60,9 @@ def main(args):
     dataset_dir = args.dataset_dir
     config = toml.load(args.config)
     batch_size = config['training']['batch_size']
-    model_dir = Path(args.model_dir)
-    model_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.pyg_name:
-        input_data, max_node, max_degree = load_pyg_degree_sequence_from_directory(args.pyg_name,dataset_dir)
+    if args.dataset:
+        input_data, max_node, max_degree = load_pyg_degree_sequence_from_directory(args.dataset,dataset_dir)
     else:
         input_data, max_node, max_degree = load_degree_sequence_from_directory(dataset_dir)
     train_data, test_data = train_test_split(input_data, test_size=0.2, random_state=42)
@@ -74,8 +72,8 @@ def main(args):
     latent_dim = config['training']['latent_dim']
     model = MSVAE(max_input_dim=max_degree, hidden_dim=hidden_dim, latent_dim=latent_dim, max_frequency = max_node)
     if args.input_model:
-        model.load_model(model_dir / args.input_model)
-        print(f"Model loaded from {model_dir / args.input_model}")
+        model.load_model( args.input_model)
+        print(f"Model loaded from { args.input_model}")
     else:
         num_epochs = config['training']['num_epochs']
         learning_rate = config['training']['learning_rate']
@@ -83,7 +81,7 @@ def main(args):
         weights = config['training']['weights']
         train_msvae(model, train_dataloader, num_epochs, learning_rate, weights,warmup_epochs, max_node)
     if args.output_model:
-        model.save_model(model_dir / args.output_model)
+        model.save_model( args.output_model)
         print(f"Model saved to {args.output_model}")
     if args.evaluate:
         deg_eval = DegreeSequenceEvaluator()
@@ -108,12 +106,12 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='MS-VAE for Graph Generation')
+    parser.add_argument("--dataset", type=str,choices=["QM9", "ZINC"])
     parser.add_argument('--dataset-dir', type=str, help='Path to the directory containing graph files')
     parser.add_argument('--model-dir', type=str, help='Path to the directory containing models')
     parser.add_argument('--config', type=str, required=True, help='Path to the configuration file in TOML format')
     parser.add_argument('--output-model', type=str, help='Path to save the trained model')
     parser.add_argument('--input-model', type=str, help='Path to load a pre-trained model')
     parser.add_argument('--evaluate', action='store_true', help='Whether we evaluate the model')
-    parser.add_argument('--pyg-name', type=str, help='Name of the PYG dataset')
     args = parser.parse_args()
     main(args)

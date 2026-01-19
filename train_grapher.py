@@ -28,6 +28,7 @@ from utils import (
     graph_to_data,
     load_graph_from_directory,
     load_pyg_degree_sequence_from_directory,
+    load_pyg_graph_from_directory,
     transform_to_hh_via_guided_rewiring,
     deterministic_connected_havel_hakimi,
     make_lambda_dist,
@@ -254,18 +255,12 @@ def evaluate(train_graphs, test_graphs, model, msvae_model, T, k_eigen, num_samp
     print(f"MMD Orbit count: {graph_eval.compute_mmd_orbit(test_graphs,generated_graphs)}")
 
 def main(args):
-    config_dir = Path("configs")
-    dataset_dir = Path("datasets") / args.dataset_dir
-    model_dir = Path("models")
-    grapher_config = toml.load(config_dir / args.config)
-    msvae_config = toml.load(config_dir / args.msvae_config)
-    if args.pyg_name:
-        graphs, max_node, max_degree = load_pyg_graph_from_directory(args.pyg_name,dataset_dir)
-    else:
-        graphs, max_node, max_degree = load_graph_from_directory(dataset_dir)
+    grapher_config = toml.load(args.config)
+    msvae_config = toml.load(args.msvae_config)
+    graphs, max_node, max_degree = load_graph_from_directory(args.dataset_dir)
     print(f"Loading graphs dataset {len(graphs)}")
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
-    msvae_model  = load_msvae_from_file(max_degree, max_node, msvae_config, model_dir /args.msvae_model)
+    msvae_model  = load_msvae_from_file(max_degree, max_node, msvae_config, args.msvae_model)
     grapher_hidden_dim = grapher_config['training']['hidden_dim']
     num_layer = grapher_config['training']['num_layer']
     T = grapher_config['training']['T']
@@ -283,23 +278,23 @@ def main(args):
     tau = grapher_config['energy']['tau']
     num_samples = grapher_config['inference']['generate_samples']
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = GraphER(k_eigen, grapher_hidden_dim,num_layer,T).to(device)
+    model = GraphER(k_eigen + 1, grapher_hidden_dim,num_layer,T).to(device)
     energy_model = EnergyMLP(emb_dim=emb_dim, hidden_dim=energy_hidden_dim, num_layers=num_layers, dropout=dropout).to(device)
     if args.input_model:
-        model.load_model(model_dir / args.input_model)
+        model.load_model(args.input_model)
         print(f"Model Graph-ER loaded from {args.input_model}")
     else:
         print("Train GraphER without energy")
         train_grapher(model, train_graphs, learning_rate,T, dist_name,k_eigen,energy_mlp = None, energy_weight = energy_weight)
         print(f"Model saved to {args.output_model}")
-        model.save_model(model_dir / args.output_model)
+        model.save_model( args.output_model)
         evaluate(train_graphs, test_graphs, model, msvae_model,T,k_eigen ,num_samples)
         train_energy(energy_model, model,train_graphs,steps_per_graph,dist_name,learning_rate,l2_reg,grad_clip, tau, k_eigen)
         print(f"Energy model saved to energy")
-        energy_model.save_model(model_dir / 'energy')
+        energy_model.save_model( 'energy')
         print("Train GraphER with energy")
         train_grapher(model, train_graphs, learning_rate,T, dist_name,k_eigen,energy_mlp = energy_model, energy_weight= energy_weight)
-        model.save_model(model_dir / args.output_model)
+        model.save_model( args.output_model)
         print(f"Model saved to {args.output_model}")
     if args.evaluate:
         evaluate(train_graphs, test_graphs, model, msvae_model,T,k_eigen ,num_samples)
@@ -314,6 +309,5 @@ if __name__ == "__main__":
     parser.add_argument('--output-model', type=str, help='Path to save the trained model')
     parser.add_argument('--input-model', type=str, help='Path to load a pre-trained model')
     parser.add_argument('--evaluate', action='store_true', help='Whether we evaluate the model')
-    parser.add_argument('--pyg-name', type=str, help='Name of the PYG dataset')
     args = parser.parse_args()
     main(args)
