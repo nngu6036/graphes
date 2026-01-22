@@ -66,7 +66,7 @@ python train_msvae.py  --dataset-dir datasets/ZINC --config  configs/msvae_confi
 
 ## Training and evaluate GraphER model
 ```bash
-python train_grapher.py --config configs/grapher_ego_config.toml  --dataset-dir datasets/ego_edgelists --msvae-model models/msvae_ego --msvae-config models/msvae_config1.toml --output-model models//grapher_ego --evaluate 
+python train_grapher.py --config configs/grapher_ego_config.toml  --dataset-dir datasets/ego_edgelists --msvae-model models/msvae_ego --msvae-config configs/msvae_config1.toml --output-model models/grapher_ego --evaluate 
 ```
 ```bash
 python train_grapher.py --config configs/grapher_community_config.toml  --dataset-dir datasets/community_edgelists --msvae-model models/msvae_community --msvae-config configs/msvae_config1.toml --output-model models/grapher_community --evaluate 
@@ -80,6 +80,11 @@ python train_grapher.py --config configs/grapher_qm9_config.toml  --dataset-dir 
 ```bash
 python train_grapher.py --config configs/grapher_zinc_config.toml  --dataset-dir datasets/ZINC --msvae-model models/msvae_zinc --msvae-config configs/msvae_config1.toml --output-model models/grapher_zinc --dataset ZINC  --evaluate 
 ```
+
 ```bash
 python train_grapher.py --config configs/grapher_grid_config.toml  --dataset-dir datasets/grid_edgelists --msvae-model models/msvae_grid --msvae-config configs/msvae_config1.toml --input-model models/grapher_grid --evaluate 
+```
+
+```bash
+python train_grapher_step1.py --config configs/grapher_ego_config.toml --input-model models/grapher_ego --dataset-dir datasets/ego_edgelists --msvae-model models/msvae_ego --msvae-config configs/msvae_config1.toml --output-model models/grapher_ego --evaluate 
 ```

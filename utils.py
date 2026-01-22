@@ -165,7 +165,7 @@ def _stack_node_attr(G, key, node_order):
         return torch.stack([r.detach().cpu() for r in rows], dim=0).float()
     else:
         return torch.tensor(np.asarray(rows), dtype=torch.float)
-        
+
 def graph_to_data(G, k_gen):
     """
     Convert nx.Graph into PyG Data for GraphER.
@@ -549,6 +549,8 @@ def _merge_two_components_deterministically(H: nx.Graph, comp1_nodes, comp2_node
         # This can happen if the degree sequence *cannot* admit a connected realization
         # or if these components are "all degree-1 matchings" and there's no higher-degree
         # component to absorb them via a non-bridge edge.
+        import pdb
+        pdb.set_trace()
         raise RuntimeError(
             "Could not find a degree-preserving swap that reduces components. "
             "Try merging tiny components into a large cyclic component first, "
@@ -636,7 +638,6 @@ def deterministic_connected_havel_hakimi(G = None, seq = None) -> nx.Graph:
 
         # Merge them deterministically (in-place)
         _merge_two_components_deterministically(H, comp_small, comp_big)
-
         # Loop continues until the whole graph is connected
     return H
 
@@ -1061,102 +1062,3 @@ def compute_struct_features(G: nx.Graph):
         C = 0.0
 
     return torch.tensor([Q, C], dtype=torch.float32)
-
-
-def community_like_energy(G: nx.Graph) -> float:
-    """
-    A scalar 'energy' lower for 'good' community graphs.
-
-    We simply use negative modularity + clustering as an example:
-      E(G) = -(Q(G) + C(G))
-
-    You can tweak this if you want different behaviour.
-    """
-    feats = compute_struct_features(G)
-    Q, C = float(feats[0]), float(feats[1])
-    # Lower energy for higher modularity & clustering
-    return -(Q + C)
-
-def ego_like_energy(G: nx.Graph) -> float:
-    """
-    A scalar 'energy' lower for ego-like graphs.
-
-    Heuristic:
-    - Ego/star-like graphs have one dominant hub connected to most nodes.
-    - Most edges are incident to that hub.
-    - There should ideally be only one such hub.
-
-    We measure:
-        - center_edge_fraction = max_deg / |E|
-        - hubs = number of nodes with degree >= 0.5 * max_deg
-
-    Then define:
-        score = center_edge_fraction - 0.1 * max(0, hubs - 1)
-        E(G) = -score  (lower energy for more ego-like)
-    """
-    n = G.number_of_nodes()
-    m = G.number_of_edges()
-    if n == 0 or m == 0:
-        # Neutral energy if graph is empty or edgeless
-        return 0.0
-
-    degs = np.array([d for _, d in G.degree()], dtype=float)
-    max_deg = float(degs.max())
-    num_edges = float(m)
-
-    # Fraction of edges incident to the main hub:
-    # for a perfect star on n nodes: max_deg = n-1, |E| = n-1 => fraction = 1.0
-    center_edge_fraction = max_deg / max(1.0, num_edges)
-
-    # Count "hubs" that are at least half as connected as the main hub.
-    # Ego/star-like graphs ideally have exactly one such hub.
-    hubs = int((degs >= 0.5 * max_deg).sum())
-    hub_penalty = max(0, hubs - 1)
-
-    score = center_edge_fraction - 0.1 * hub_penalty
-    return -float(score)  # lower energy for higher score (more ego-like)
-
-
-def grid_like_energy(G: nx.Graph) -> float:
-    """
-    A scalar 'energy' lower for grid-like graphs.
-
-    Heuristic properties of a 2D grid:
-    - Degrees mostly in {2, 3, 4}.
-    - Degree variance is small.
-    - Clustering coefficient is very low (exactly 0 for an ideal grid).
-
-    We combine:
-        p_234    = fraction of nodes whose degree is in {2,3,4}
-        var_term = 1 / (1 + Var(deg))
-        cl_term  = 1 - C(G)    (larger when clustering is small)
-
-    Then:
-        score = p_234 + var_term + cl_term
-        E(G)  = -score  (lower energy for more grid-like)
-    """
-    n = G.number_of_nodes()
-    m = G.number_of_edges()
-    if n == 0:
-        return 0.0
-
-    degs = np.array([d for _, d in G.degree()], dtype=float)
-    if len(degs) == 0:
-        return 0.0
-
-    # Fraction of degrees in {2,3,4}
-    p_234 = float(np.isin(degs, [2, 3, 4]).mean())
-
-    # Degree variance term: small variance -> term close to 1
-    var_deg = float(degs.var()) if len(degs) > 1 else 0.0
-    var_term = 1.0 / (1.0 + var_deg)  # in (0,1]
-
-    # Clustering: for an ideal grid, this is 0
-    if m > 0:
-        C = float(nx.average_clustering(G))
-    else:
-        C = 0.0
-    cl_term = 1.0 - max(0.0, min(1.0, C))  # keep in [0,1]
-
-    score = p_234 + var_term + cl_term
-    return -float(score)  # lower energy for more grid-like

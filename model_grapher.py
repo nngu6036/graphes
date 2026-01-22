@@ -210,12 +210,14 @@ class GraphER(nn.Module):
             valid, _ = check_sequence_validity(seq)
             if not valid:
                 continue
-
-            G0 = initialize_graphs(method, seq)
-            initial_graphs.append(G0)
-            generated_seqs.append(seq)
-            if len(initial_graphs) >= num_samples:
-                break
+            try:
+                G0 = initialize_graphs(method, seq)
+                initial_graphs.append(G0)
+                generated_seqs.append(seq)
+                if len(initial_graphs) >= num_samples:
+                    break
+            except:
+                print("Failed to initialize graph, then skipped.")
         # 2) Reverse-time rewiring for each initial graph
         for idx, G0 in enumerate(initial_graphs):
             print(f"Generating graph {idx + 1}")

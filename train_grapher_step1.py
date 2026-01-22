@@ -257,7 +257,7 @@ def evaluate(train_graphs, test_graphs, model, msvae_model, T, k_eigen, num_samp
 def main(args):
     grapher_config = toml.load(args.config)
     msvae_config = toml.load(args.msvae_config)
-        graphs, max_node, max_degree = load_graph_from_directory(args.dataset_dir)
+    graphs, max_node, max_degree = load_graph_from_directory(args.dataset_dir)
     print(f"Loading graphs dataset {len(graphs)}")
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
     msvae_model  = load_msvae_from_file(max_degree, max_node, msvae_config, args.msvae_model)
@@ -284,10 +284,6 @@ def main(args):
         model.load_model(args.input_model)
         print(f"Model Graph-ER loaded from {args.input_model}")
     else:
-        print("Train GraphER without energy")
-        train_grapher(model, train_graphs, learning_rate,T, dist_name,k_eigen,energy_mlp = None, energy_weight = energy_weight)
-        print(f"Model saved to {args.output_model}")
-        model.save_model( args.output_model)
         evaluate(train_graphs, test_graphs, model, msvae_model,T,k_eigen ,num_samples)
         train_energy(energy_model, model,train_graphs,steps_per_graph,dist_name,learning_rate,l2_reg,grad_clip, tau, k_eigen)
         print(f"Energy model saved to energy")
