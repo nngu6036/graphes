@@ -280,18 +280,15 @@ def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = GraphER(k_eigen + 1, grapher_hidden_dim,num_layer,T).to(device)
     energy_model = EnergyMLP(emb_dim=emb_dim, hidden_dim=energy_hidden_dim, num_layers=num_layers, dropout=dropout).to(device)
-    if args.input_model:
-        model.load_model(args.input_model)
-        print(f"Model Graph-ER loaded from {args.input_model}")
-    else:
-        evaluate(train_graphs, test_graphs, model, msvae_model,T,k_eigen ,num_samples)
-        train_energy(energy_model, model,train_graphs,steps_per_graph,dist_name,learning_rate,l2_reg,grad_clip, tau, k_eigen)
-        print(f"Energy model saved to energy")
-        energy_model.save_model( 'energy')
-        print("Train GraphER with energy")
-        train_grapher(model, train_graphs, learning_rate,T, dist_name,k_eigen,energy_mlp = energy_model, energy_weight= energy_weight)
-        model.save_model( args.output_model)
-        print(f"Model saved to {args.output_model}")
+    model.load_model(args.input_model)
+    print(f"Model Graph-ER loaded from {args.input_model}")
+    train_energy(energy_model, model,train_graphs,steps_per_graph,dist_name,learning_rate,l2_reg,grad_clip, tau, k_eigen)
+    print(f"Energy model saved to energy")
+    energy_model.save_model( 'energy')
+    print("Train GraphER with energy")
+    train_grapher(model, train_graphs, learning_rate,T, dist_name,k_eigen,energy_mlp = energy_model, energy_weight= energy_weight)
+    model.save_model( args.output_model)
+    print(f"Model saved to {args.output_model}")
     if args.evaluate:
         evaluate(train_graphs, test_graphs, model, msvae_model,T,k_eigen ,num_samples)
 

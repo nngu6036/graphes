@@ -549,8 +549,6 @@ def _merge_two_components_deterministically(H: nx.Graph, comp1_nodes, comp2_node
         # This can happen if the degree sequence *cannot* admit a connected realization
         # or if these components are "all degree-1 matchings" and there's no higher-degree
         # component to absorb them via a non-bridge edge.
-        import pdb
-        pdb.set_trace()
         raise RuntimeError(
             "Could not find a degree-preserving swap that reduces components. "
             "Try merging tiny components into a large cyclic component first, "
