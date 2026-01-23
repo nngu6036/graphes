@@ -257,7 +257,7 @@ def evaluate(train_graphs, test_graphs, model, msvae_model, T, k_eigen, num_samp
 def main(args):
     grapher_config = toml.load(args.config)
     msvae_config = toml.load(args.msvae_config)
-        graphs, max_node, max_degree = load_graph_from_directory(args.dataset_dir)
+    graphs, max_node, max_degree = load_graph_from_directory(args.dataset_dir)
     print(f"Loading graphs dataset {len(graphs)}")
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.2, random_state=42)
     msvae_model  = load_msvae_from_file(max_degree, max_node, msvae_config, args.msvae_model)

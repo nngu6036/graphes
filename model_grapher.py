@@ -14,6 +14,7 @@ from utils import (
     graph_to_data,
     check_sequence_validity,
     deterministic_connected_havel_hakimi,
+    draw_graphs_grid
 )
 
 
@@ -220,9 +221,10 @@ class GraphER(nn.Module):
                 print("Failed to initialize graph, then skipped.")
         # 2) Reverse-time rewiring for each initial graph
         for idx, G0 in enumerate(initial_graphs):
+            graph_evol = []
             print(f"Generating graph {idx + 1}")
             G = G0.copy()
-
+            graph_evol.append(G)
             for t in reversed(range(num_steps + 1)):
                 edges = list(G.edges())
                 if len(edges) < 2:
@@ -256,6 +258,7 @@ class GraphER(nn.Module):
                         continue
                     G_post, added_edges, removed_edges = out
                     G = G_post
+                    graph_evol.append(G_post)
                     applied = True
                     break
 
@@ -264,5 +267,7 @@ class GraphER(nn.Module):
                     # may fail here if the graph changed in the meantime
                     continue
             generated_graphs.append(G)
+            draw_graphs_grid(graph_evol, "grid_graph.png")
+            break
 
         return generated_graphs, generated_seqs
