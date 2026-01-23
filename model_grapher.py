@@ -267,7 +267,6 @@ class GraphER(nn.Module):
                     # may fail here if the graph changed in the meantime
                     continue
             generated_graphs.append(G)
-            draw_graphs_grid(graph_evol, "grid_graph.png")
             break
-
+        draw_graphs_grid(graph_evol, savepath = "grid_graph.png")
         return generated_graphs, generated_seqs

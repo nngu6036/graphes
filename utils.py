@@ -925,6 +925,7 @@ def draw_graphs_grid(
 
     n = len(graphs)
     n_rows = math.ceil(n / n_cols)
+
     fig_w = figsize_per_graph[0] * n_cols
     fig_h = figsize_per_graph[1] * n_rows
 
@@ -970,6 +971,39 @@ def draw_graphs_grid(
         plt.close(fig)
     return fig, axes
 
+
+def draw_large_graph_sfdp(G: nx.Graph, out_png="graph.png", max_edges=20000, seed=0):
+    """
+    Draw a large graph using Graphviz 'sfdp' (good for hundreds/thousands of nodes).
+    Saves to a PNG.
+    """
+    try:
+        import pygraphviz as pgv
+    except ImportError as e:
+        raise ImportError(
+            "pygraphviz is not installed. Install Graphviz and pygraphviz first.\n"
+            "On Ubuntu: sudo apt-get install graphviz graphviz-dev\n"
+            "Then: pip install pygraphviz"
+        ) from e
+
+    # Optionally subsample edges to reduce clutter / file size
+    if G.number_of_edges() > max_edges:
+        rng = __import__("random").Random(seed)
+        edges = list(G.edges())
+        rng.shuffle(edges)
+        H = nx.Graph()
+        H.add_nodes_from(G.nodes())
+        H.add_edges_from(edges[:max_edges])
+    else:
+        H = G
+
+    A = nx.nx_agraph.to_agraph(H)
+    # sfdp is designed for large graphs (spring-like, scalable)
+    A.graph_attr.update(overlap="false", outputorder="edgesfirst")
+    A.draw(out_png, prog="sfdp")
+    print(f"Saved: {out_png} (nodes={H.number_of_nodes()}, edges={H.number_of_edges()})")
+
+    
 def build_candidates(
     G,
     anchor_edge,
