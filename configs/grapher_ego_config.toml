@@ -24,4 +24,4 @@ grad_clip = 1.0
 l2_reg = 0.0
 
 [inference]
-generate_samples = 1    # Number of samples to generate
+generate_samples = 200    # Number of samples to generate
