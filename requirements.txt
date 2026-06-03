@@ -1,11 +1,12 @@
-tensorboard-logger
-tensorflow
-networkx==3.1
-pyemd
-matplotlib
-scipy
-numpy==1.24.0
-python-louvain
-torchvision
-torch_geometric
-scikit-learn
+networkx>=3.1
+numpy>=1.24
+scipy>=1.10
+pandas>=2.0
+PyYAML>=6.0
+matplotlib>=3.7
+scikit-learn>=1.3
+tqdm>=4.66
+torch>=2.0
+torch-geometric>=2.4  # PyG Planetoid CiteSeer, QM9, and ZINC dataset loaders
+# Optional for molecule preparation from SMILES/SDF. Install from conda-forge if pip wheels are unavailable.
+rdkit>=2023.9; python_version >= "3.10"
