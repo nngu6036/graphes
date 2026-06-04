@@ -1,0 +1,21 @@
+# Attributed-graph configuration shares the same topology-first GraphER runner.
+# Native atom/bond generation is intentionally left unchanged for this revision;
+# evaluation can still measure attributes if generated samples contain them.
+model: grapher
+hidden_dim: 128
+num_layers: 3
+k_eigen: 4
+num_steps: 32
+learning_rate: 0.001
+weight_decay: 0.0
+epochs: 5
+max_graphs: null
+max_steps_per_graph: 8
+candidate_budget: 64
+k_hop: 2
+ensure_connected: true
+init_method: havel_hakimi
+degree_sample_temperature: 1.0
+checkpoint_path: outputs/checkpoints/{dataset}/grapher/grapher.pt
+msvae_checkpoint_path: outputs/checkpoints/{dataset}/msvae/msvae.pt
+samples_path: outputs/samples/{dataset}/grapher.pkl
