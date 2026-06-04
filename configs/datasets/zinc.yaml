@@ -1,0 +1,25 @@
+name: zinc
+seed: 42
+root: outputs/datasets
+
+source: smiles_rdkit
+smiles_path: null
+smiles_column: smiles
+split_column: null
+target_column: null
+id_column: null
+keep_hs: false
+requires_atomic_numbers: true
+node_atomic_number_attr: atomic_number
+
+max_graphs: null
+max_train_graphs: null
+max_val_graphs: null
+max_test_graphs: null
+shuffle: false
+remove_self_loops: true
+
+include_node_features: true
+include_edge_features: true
+include_targets: true
+target_index: null

@@ -81,7 +81,7 @@ DATASET_REGISTRY = LazyRegistry(
             "grapher.datasets.molecular",
             "ZINCDatasetBuilder",
             "dataset",
-            "Install torch-geometric to download and process ZINC.",
+            "Prepare ZINC with scripts/prepare_zinc_from_smiles.py and RDKit; PyG ZINC is not used because its atom-type ids are not atomic numbers.",
         ),
     }
 )
@@ -89,6 +89,7 @@ DATASET_REGISTRY = LazyRegistry(
 MODEL_REGISTRY = LazyRegistry(
     {
         "msvae": RegistrySpec("grapher.models.model_msvae", "MSVAE", "model"),
+        "dhvae": RegistrySpec("grapher.models.model_msvae", "DHVAE", "model"),
         "grapher": RegistrySpec(
             "grapher.models.model_grapher",
             "GraphER",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import random
 from typing import Iterable, Optional, Sequence
 
 import networkx as nx
@@ -33,6 +34,52 @@ try:  # pragma: no cover - optional dependency.
     from torch_geometric.data import Data as PyGData  # type: ignore
 except Exception:  # pragma: no cover
     PyGData = None
+
+
+@dataclass(frozen=True)
+class RewireAction:
+    """A complete Graph-ER double-edge-swap action a=(e1,e2,r).
+
+    ``e1`` and ``e2`` are the two removed edges. ``orientation`` is the
+    reconnection pattern: 0 creates (u,x),(v,y), and 1 creates (u,y),(v,x), for
+    e1=(u,v), e2=(x,y).  Endpoints are sorted only within each edge so that
+    equality/hashing are stable for simple undirected graphs.  The order of the
+    two removed edges is kept because the orientation convention is defined with
+    respect to that order.
+    """
+
+    e1: tuple[int, int]
+    e2: tuple[int, int]
+    orientation: int
+
+    def __post_init__(self) -> None:
+        e1 = tuple(sorted((int(self.e1[0]), int(self.e1[1]))))
+        e2 = tuple(sorted((int(self.e2[0]), int(self.e2[1]))))
+        object.__setattr__(self, "e1", e1)
+        object.__setattr__(self, "e2", e2)
+        object.__setattr__(self, "orientation", int(self.orientation))
+        if self.orientation not in (0, 1):
+            raise ValueError("RewireAction.orientation must be 0 or 1.")
+
+    def as_tuple(self) -> tuple[tuple[int, int], tuple[int, int], int]:
+        return self.e1, self.e2, self.orientation
+
+
+def action_new_edges(action: RewireAction) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return the two edges created by a complete rewiring action."""
+
+    (u, v), (x, y) = action.e1, action.e2
+    if int(action.orientation) == 0:
+        return tuple(sorted((u, x))), tuple(sorted((v, y)))
+    return tuple(sorted((u, y))), tuple(sorted((v, x)))
+
+
+def action_removed_edges(action: RewireAction) -> tuple[tuple[int, int], tuple[int, int]]:
+    return tuple(sorted(action.e1)), tuple(sorted(action.e2))
+
+
+def action_signature(action: RewireAction) -> tuple[tuple[int, int], tuple[int, int], int]:
+    return action.e1, action.e2, int(action.orientation)
 
 
 def degree_sequence(graph: nx.Graph) -> list[int]:
@@ -215,6 +262,107 @@ def _within_k_hop(graph: nx.Graph, e1: tuple[int, int], e2: tuple[int, int], k_h
     dist_u = nx.single_source_shortest_path_length(graph, u, cutoff=int(k_hop))
     dist_v = nx.single_source_shortest_path_length(graph, v, cutoff=int(k_hop))
     return x in dist_u or y in dist_u or x in dist_v or y in dist_v
+
+
+def rewire_action(
+    graph: nx.Graph,
+    action: RewireAction,
+    *,
+    ensure_connected: bool = True,
+):
+    """Apply a complete double-edge-swap action, or return None if invalid."""
+
+    return rewire(graph, action.e1, action.e2, action.orientation, ensure_connected=ensure_connected)
+
+
+def enumerate_rewire_actions(
+    graph: nx.Graph,
+    *,
+    ensure_connected: bool = True,
+    k_hop: int | None = 2,
+    max_candidates: int | None = None,
+    anchor_edges: Sequence[tuple[int, int]] | None = None,
+    rng: random.Random | None = None,
+    shuffle: bool = False,
+) -> list[RewireAction]:
+    """Enumerate or sample valid complete Graph-ER actions.
+
+    This is the target-free candidate constructor used for neural training and
+    generation.  It returns actions a=(e1,e2,r), not only partner edges, so the
+    model can score the reconnection orientation r as required by the paper's
+    categorical action field.
+    """
+
+    g_edges = [tuple(sorted((int(u), int(v)))) for u, v in graph.edges()]
+    g_edges = sorted(set(g_edges))
+    if len(g_edges) < 2:
+        return []
+
+    edge_pairs: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    if anchor_edges is not None:
+        seen_pairs: set[tuple[tuple[int, int], tuple[int, int]]] = set()
+        anchors = [tuple(sorted((int(u), int(v)))) for u, v in anchor_edges]
+        for e1 in anchors:
+            if e1 not in g_edges:
+                continue
+            for e2 in g_edges:
+                if e1 == e2:
+                    continue
+                if len(set(e1 + e2)) != 4:
+                    continue
+                if not _within_k_hop(graph, e1, e2, k_hop):
+                    continue
+                key = (e1, e2) if e1 <= e2 else (e2, e1)
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
+                # Keep the requested anchor as e1 for deterministic teacher
+                # construction; orientation is defined relative to this order.
+                edge_pairs.append((e1, e2))
+    else:
+        for i, e1 in enumerate(g_edges):
+            for e2 in g_edges[i + 1 :]:
+                if len(set(e1 + e2)) != 4:
+                    continue
+                if not _within_k_hop(graph, e1, e2, k_hop):
+                    continue
+                edge_pairs.append((e1, e2))
+
+    if shuffle:
+        (rng or random).shuffle(edge_pairs)
+
+    actions: list[RewireAction] = []
+    seen_actions: set[tuple[tuple[int, int], tuple[int, int], int]] = set()
+    for e1, e2 in edge_pairs:
+        for orient in (0, 1):
+            action = RewireAction(e1=e1, e2=e2, orientation=orient)
+            sig = action_signature(action)
+            if sig in seen_actions:
+                continue
+            if rewire_action(graph, action, ensure_connected=ensure_connected) is None:
+                continue
+            seen_actions.add(sig)
+            actions.append(action)
+            if max_candidates is not None and len(actions) >= int(max_candidates):
+                return actions
+    return actions
+
+
+def merge_action_sets(*action_sets: Sequence[RewireAction], max_candidates: int | None = None) -> list[RewireAction]:
+    """Merge action lists while preserving order and removing duplicates."""
+
+    merged: list[RewireAction] = []
+    seen: set[tuple[tuple[int, int], tuple[int, int], int]] = set()
+    for actions in action_sets:
+        for action in actions:
+            sig = action_signature(action)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            merged.append(action)
+            if max_candidates is not None and len(merged) >= int(max_candidates):
+                return merged
+    return merged
 
 
 def build_candidates(

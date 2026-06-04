@@ -9,6 +9,7 @@ from grapher.registry import DATASET_REGISTRY
 from grapher.utils.io import load_pickle, load_yaml, save_pickle, save_json, save_yaml, stable_hash
 from grapher.datasets.base import graph_statistics
 from grapher.graphs.attributes import attribute_coverage, canonicalize_graph_attributes, fit_attribute_statistics, normalize_schema
+from grapher.datasets.zinc_utils import assert_zinc_atomic_numbers, is_zinc_dataset, zinc_preparation_error, zinc_preparation_hint
 
 
 def dataset_output_dir(dataset: str, output_root: str | Path = "outputs/datasets") -> Path:
@@ -26,6 +27,8 @@ def metadata_path(dataset: str, output_root: str | Path = "outputs/datasets") ->
 def build_dataset_splits(dataset: str, config: dict[str, Any]) -> dict[str, list[nx.Graph]]:
     if dataset not in DATASET_REGISTRY:
         raise KeyError(f"Dataset '{dataset}' is not registered. Available: {sorted(DATASET_REGISTRY.keys())}")
+    if is_zinc_dataset(dataset):
+        raise zinc_preparation_error("build ZINC from configs/datasets/zinc.yaml")
     return DATASET_REGISTRY[dataset](config).build()
 
 
@@ -43,6 +46,12 @@ def save_dataset_splits(
     all_raw_graphs: list[nx.Graph] = []
     for graphs in splits.values():
         all_raw_graphs.extend(list(graphs))
+    zinc_atomic_number_stats = None
+    if is_zinc_dataset(dataset):
+        zinc_atomic_number_stats = assert_zinc_atomic_numbers(
+            all_raw_graphs,
+            context="save_dataset_splits(dataset='zinc')",
+        )
     all_attr_stats = fit_attribute_statistics(all_raw_graphs, attr_schema)
     canonical_splits: dict[str, list[nx.Graph]] = {}
     for split, graphs in splits.items():
@@ -70,6 +79,8 @@ def save_dataset_splits(
             },
         },
     }
+    if zinc_atomic_number_stats is not None:
+        metadata["zinc_atomic_number_stats"] = zinc_atomic_number_stats
     save_json(metadata, metadata_path(dataset, output_root), force=force)
     save_yaml(config, out_dir / "resolved_dataset_config.yaml", force=force)
     return out_dir
@@ -89,7 +100,11 @@ def load_dataset_splits(
 
     if not build_if_missing:
         missing = [str(p) for p in required if not p.exists()]
-        raise FileNotFoundError(f"Missing persisted dataset split files: {missing}")
+        extra = " " + zinc_preparation_hint() if is_zinc_dataset(dataset) else ""
+        raise FileNotFoundError(f"Missing persisted dataset split files: {missing}.{extra}")
+
+    if is_zinc_dataset(dataset):
+        raise zinc_preparation_error("auto-build missing persisted ZINC splits")
 
     cfg_path = Path(config_path) if config_path else Path("configs/datasets") / f"{dataset}.yaml"
     if not cfg_path.exists():

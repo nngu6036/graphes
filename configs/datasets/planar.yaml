@@ -1,0 +1,18 @@
+name: planar
+seed: 42
+root: outputs/datasets
+num_graphs: 10240
+num_nodes: 64
+remove_self_loops: true
+preprocessing:
+  make_undirected: true
+  relabel_nodes: true
+  graph_size_filter:
+    min_nodes: 1
+    max_nodes: 64
+hard_constraints:
+  planar: true
+split:
+  train: 0.8
+  val: 0.1
+  test: 0.1

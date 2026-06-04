@@ -26,10 +26,10 @@ def sample_graphs(
     set_seed(seed, include_torch=True)
     model_key = model_name.lower()
     device = model_cfg.get("device") or ("cuda" if torch.cuda.is_available() else "cpu")
-    if model_key == "msvae":
+    if model_key in {"msvae", "dhvae"}:
         checkpoint = Path(model_cfg.get("checkpoint_path") or "outputs/checkpoints/msvae.pt")
         model, _ = load_msvae_checkpoint(checkpoint, device=device)
-        sequences = model.generate(int(num_graphs))
+        sequences = model.generate(int(num_graphs), temperature=float(model_cfg.get("sample_temperature", 1.0)))
         return sequences
     if model_key in {"grapher", "grapher_generic", "grapher_attributed"}:
         grapher_checkpoint = Path(model_cfg.get("checkpoint_path") or "outputs/checkpoints/grapher.pt")
@@ -52,6 +52,9 @@ def sample_graphs(
                     ensure_connected=bool(model_cfg.get("ensure_connected", True)),
                     k_hop=int(model_cfg.get("k_hop", 2)),
                     max_candidates=int(model_cfg.get("candidate_budget", 64)),
+                    degree_temperature=float(model_cfg.get("degree_sample_temperature", model_cfg.get("msvae_temperature", 1.0))),
+                    action_temperature=float(model_cfg.get("action_temperature", model_cfg.get("temperature", 1.0))),
+                    sample_actions=bool(model_cfg.get("sample_actions", True)),
                 )
                 if not batch:
                     break
@@ -59,12 +62,12 @@ def sample_graphs(
                 update_progress(update, min(len(batch), need))
         assert_finite_graphs(graphs, context=f"{model_name}.sample output")
         return graphs
-    raise KeyError(f"Unknown model_name={model_name!r}; expected 'msvae' or 'grapher'.")
+    raise KeyError(f"Unknown model_name={model_name!r}; expected 'msvae'/'dhvae' or 'grapher'.")
 
 
 def model_capabilities(model_name: str) -> dict[str, bool]:
     model_key = model_name.lower()
-    if model_key == "msvae":
+    if model_key in {"msvae", "dhvae"}:
         return {
             "supports_training": True,
             "supports_sampling": True,

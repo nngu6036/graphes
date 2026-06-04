@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
 import sys
 import time
 from pathlib import Path
-from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -13,24 +11,34 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from grapher.evaluation.data_io import build_dataset_splits, save_dataset_splits
+from grapher.datasets.zinc_utils import is_zinc_dataset, zinc_preparation_hint
 from grapher.registry import available_datasets
-from grapher.utils.io import load_pickle, load_yaml
+from grapher.utils.io import load_yaml
 from grapher.utils.logging import get_logger
 from grapher.utils.seed import set_seed
 
 logger = get_logger(__name__)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build and persist benchmark dataset splits.")
     parser.add_argument("--dataset", required=True, choices=available_datasets())
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--output-root", type=str, default="outputs/datasets")
-    parser.add_argument("--download-root", type=str, default=None, help="Override raw download/cache root for PyG-backed datasets such as ego_citeseer, QM9, and ZINC.")
+    parser.add_argument("--download-root", type=str, default=None, help="Override raw download/cache root for PyG-backed datasets such as ego_citeseer and QM9.")
     parser.add_argument("--raw-graph-path", type=str, default=None, help="Optional local source graph file, e.g. ind.citeseer.graph for ego_citeseer.")
     parser.add_argument("--max-graphs", type=int, default=None, help="Optional cap on the number of raw graphs converted before splitting.")
+    parser.add_argument("--strict-num-graphs", action="store_true", help="For finite-source datasets such as ego_citeseer, fail instead of using min(requested, available).")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--force", action="store_true", help="Overwrite existing persisted splits and metadata.")
     args = parser.parse_args()
+
+    if is_zinc_dataset(args.dataset):
+        parser.error(
+            "ZINC cannot be prepared with scripts/prepare_dataset.py because the PyG ZINC "
+            "node labels are categorical atom-type ids, not atomic numbers. "
+            + zinc_preparation_hint()
+        )
 
     cfg_path = Path(args.config) if args.config else Path("configs/datasets") / f"{args.dataset}.yaml"
     cfg = load_yaml(cfg_path)
@@ -42,6 +50,8 @@ def main() -> None:
         cfg["raw_graph_path"] = args.raw_graph_path
     if args.max_graphs is not None:
         cfg["max_graphs"] = int(args.max_graphs)
+    if args.strict_num_graphs:
+        cfg["strict_num_graphs"] = True
     seed = int(cfg.get("seed", 42))
     set_seed(seed)
 

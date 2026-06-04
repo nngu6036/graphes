@@ -15,6 +15,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from grapher.evaluation.data_io import save_dataset_splits
+from grapher.datasets.zinc_utils import assert_zinc_atomic_numbers
 from grapher.utils.io import load_yaml
 
 
@@ -229,11 +230,21 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
+    cfg["seed"] = int(args.seed)
     cfg["source"] = "smiles_rdkit"
     cfg["smiles_path"] = str(Path(args.csv).resolve())
     cfg["smiles_column"] = args.smiles_col
     cfg["split_column"] = args.split_col
     cfg["target_column"] = args.target_col
+    cfg["id_column"] = args.id_col
+    cfg["preparation_script"] = "scripts/prepare_zinc_from_smiles.py"
+    cfg["requires_atomic_numbers"] = True
+    cfg["node_atomic_number_attr"] = "atomic_number"
+    cfg["keep_hs"] = bool(args.keep_hs)
+    cfg["max_graphs"] = args.max_graphs
+    cfg["split"] = {"train": float(args.train_frac), "val": float(args.val_frac), "test": max(0.0, 1.0 - float(args.train_frac) - float(args.val_frac))}
+    if args.train_count is not None:
+        cfg["split_counts"] = {"train": int(args.train_count), "val": int(args.val_count or 0), "test": int(args.test_count or 0)}
 
     # Not needed when raw node labels are explicit strings like atomic_number=6.
     cfg["rdkit_atomic_number_mapping"] = None
@@ -244,6 +255,10 @@ def main() -> None:
 
     items = _read_graphs(args)
     splits = _make_splits(items, args)
+    atomic_number_stats = assert_zinc_atomic_numbers(
+        splits,
+        context="scripts/prepare_zinc_from_smiles.py",
+    )
 
     save_dataset_splits(
         "zinc",
@@ -254,6 +269,7 @@ def main() -> None:
     )
 
     print("Saved ZINC splits:", {k: len(v) for k, v in splits.items()})
+    print("Atomic-number coverage:", atomic_number_stats)
 
 
 if __name__ == "__main__":

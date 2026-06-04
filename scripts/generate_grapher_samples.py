@@ -85,6 +85,9 @@ def generate_grapher_samples(
                 ensure_connected=bool(cfg.get("ensure_connected", True)),
                 k_hop=int(cfg.get("k_hop", 2)),
                 max_candidates=int(cfg.get("candidate_budget", 64)),
+                degree_temperature=float(cfg.get("degree_sample_temperature", cfg.get("msvae_temperature", 1.0))),
+                action_temperature=float(cfg.get("action_temperature", cfg.get("temperature", 1.0))),
+                sample_actions=bool(cfg.get("sample_actions", True)),
             )
             if not graphs:
                 break
@@ -120,7 +123,14 @@ def generate_grapher_samples(
         "quality": quality,
         "degree_sequences": {
             "num_recorded": len(degree_sequences),
-            "source": "sampled from MS-VAE and accepted by GraphER canonical-source construction",
+            "source": "sampled from size-conditioned DH-VAE and accepted by GraphER canonical-source construction",
+            "degree_sample_temperature": float(cfg.get("degree_sample_temperature", cfg.get("msvae_temperature", 1.0))),
+        },
+        "rewiring_policy": {
+            "action_type": "complete_double_edge_swap_(e1,e2,r)",
+            "candidate_set": "target-free local/random valid connected actions",
+            "action_temperature": float(cfg.get("action_temperature", cfg.get("temperature", 1.0))),
+            "sample_actions": bool(cfg.get("sample_actions", True)),
         },
         "training_stats": {
             "grapher": grapher_payload.get("training_graph_stats", {}),
@@ -133,7 +143,7 @@ def generate_grapher_samples(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate graph samples from trained MS-VAE + GraphER checkpoints.")
+    parser = argparse.ArgumentParser(description="Generate graph samples from trained DH-VAE + GraphER checkpoints.")
     parser.add_argument("--dataset", required=True, choices=available_datasets())
     parser.add_argument("--num-samples", type=int, default=128)
     parser.add_argument("--model-config", type=str, default="configs/models/grapher_generic.yaml")
