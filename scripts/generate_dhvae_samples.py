@@ -14,7 +14,7 @@ if str(SRC) not in sys.path:
 
 from grapher.evaluation.run_utils import make_model_run_config, sample_metadata_path, sample_path
 from grapher.generation.rewiring import check_sequence_validity, connected_sequence_feasible
-from grapher.models.checkpoint import load_msvae_checkpoint
+from grapher.models.checkpoint import load_dhvae_checkpoint
 from grapher.registry import available_datasets
 from grapher.utils.compute import PeakMemoryMonitor, compute_report
 from grapher.utils.io import load_yaml, save_json, save_pickle, save_yaml
@@ -36,7 +36,7 @@ def _resolved_sample_output(cfg: dict, dataset: str, model: str, run_id: int | N
     return Path(configured) if configured else sample_path(dataset, model, run_id=None)
 
 
-def generate_msvae_samples(
+def generate_dhvae_samples(
     *,
     dataset: str,
     model_config: dict,
@@ -52,13 +52,13 @@ def generate_msvae_samples(
     """Generate degree sequences from the size-conditioned DH-VAE prior."""
 
     set_seed(seed, include_torch=True)
-    cfg = make_model_run_config(model_config, dataset=dataset, model="msvae", run_id=run_id, seed=seed, use_run_paths=run_id is not None)
-    checkpoint = Path(cfg.get("checkpoint_path") or f"outputs/checkpoints/{dataset}/msvae/msvae.pt")
+    cfg = make_model_run_config(model_config, dataset=dataset, model="dhvae", run_id=run_id, seed=seed, use_run_paths=run_id is not None)
+    checkpoint = Path(cfg.get("checkpoint_path") or f"outputs/checkpoints/{dataset}/dhvae/dhvae.pt")
     if not checkpoint.exists():
-        raise FileNotFoundError(f"DH-VAE checkpoint not found: {checkpoint}. Run scripts/train_msvae_model.py first.")
-    model, checkpoint_payload = load_msvae_checkpoint(checkpoint, device=device)
-    out = _resolved_sample_output(cfg, dataset, "msvae", run_id)
-    metadata_out = sample_metadata_path(dataset, "msvae", run_id=run_id)
+        raise FileNotFoundError(f"DH-VAE checkpoint not found: {checkpoint}. Run scripts/train_dhvae_model.py first.")
+    model, checkpoint_payload = load_dhvae_checkpoint(checkpoint, device=device)
+    out = _resolved_sample_output(cfg, dataset, "dhvae", run_id)
+    metadata_out = sample_metadata_path(dataset, "dhvae", run_id=run_id)
     if out.exists() and not force:
         raise FileExistsError(f"Sample file already exists: {out}. Use --force to overwrite.")
 
@@ -98,7 +98,6 @@ def generate_msvae_samples(
     metadata = {
         "dataset": dataset,
         "model": "dhvae",
-        "model_alias": "msvae",
         "seed": seed,
         "run_id": run_id,
         "checkpoint_path": str(checkpoint),
@@ -122,7 +121,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate degree sequences from a trained size-conditioned DH-VAE.")
     parser.add_argument("--dataset", required=True, choices=available_datasets())
     parser.add_argument("--num-samples", type=int, default=1024)
-    parser.add_argument("--model-config", type=str, default="configs/models/msvae.yaml")
+    parser.add_argument("--model-config", type=str, default="configs/models/dhvae.yaml")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-id", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
@@ -131,7 +130,7 @@ def main() -> None:
     parser.add_argument("--max-attempts", type=int, default=None)
     parser.add_argument("--temperature", type=float, default=None, help="Override sample_temperature from the config.")
     args = parser.parse_args()
-    generate_msvae_samples(
+    generate_dhvae_samples(
         dataset=args.dataset,
         model_config=load_yaml(args.model_config),
         num_samples=args.num_samples,

@@ -1,6 +1,6 @@
 # GraphES / Graph-ER codebase
 
-This revision aligns the degree-prior implementation with the paper's size-conditioned DH-VAE while keeping the existing MS-VAE script names for compatibility. The code layout supports the full experiment pipeline:
+This revision aligns the degree-prior implementation with the paper's size-conditioned DH-VAE. The code layout supports the full experiment pipeline:
 
 1. prepare dataset splits;
 2. train the size-conditioned DH-VAE degree-sequence prior;
@@ -112,22 +112,22 @@ PYTHONPATH=src python scripts/print_dataset_statistics.py \
   --skip-planarity
 
 PYTHONPATH=src python scripts/print_dataset_statistics.py \
-  --input-pkl outputs/samples/ego_citeseer/msvae/run_000.pkl
+  --input-pkl outputs/samples/ego_citeseer/dhvae/run_000.pkl
 ```
 
 ## Training and sampling
 
-Train the degree prior. The script name remains `train_msvae_model.py`, but the model class now implements the paper-aligned size-conditioned DH-VAE:
+Train the paper-aligned size-conditioned DH-VAE degree prior:
 
 ```bash
-PYTHONPATH=src python scripts/train_msvae_model.py --dataset sbm --seed 42 --run-id 0
+PYTHONPATH=src python scripts/train_dhvae_model.py --dataset sbm --seed 42 --run-id 0
 # use --dataset ego_citeseer for the CiteSeer ego-graph benchmark
 ```
 
 Generate degree sequences for diagnostics. The sampler first draws a graph size from the empirical training-size distribution, then samples a degree histogram with a multinomial decoder:
 
 ```bash
-PYTHONPATH=src python scripts/generate_msvae_samples.py --dataset sbm --num-samples 1024 --seed 42 --run-id 0 --temperature 1.0 --force
+PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset sbm --num-samples 1024 --seed 42 --run-id 0 --temperature 1.0 --force
 ```
 
 Train the rewiring scorer:
@@ -147,8 +147,8 @@ For repeated runs:
 ```bash
 for run_id in 0 1 2; do
   seed=$((42 + run_id))
-  PYTHONPATH=src python scripts/train_msvae_model.py --dataset sbm --seed "$seed" --run-id "$run_id"
-  PYTHONPATH=src python scripts/generate_msvae_samples.py --dataset sbm --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
+  PYTHONPATH=src python scripts/train_dhvae_model.py --dataset sbm --seed "$seed" --run-id "$run_id"
+  PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset sbm --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
   PYTHONPATH=src python scripts/train_grapher_model.py --dataset sbm --seed "$seed" --run-id "$run_id"
   PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset sbm --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
 done
@@ -168,12 +168,12 @@ PYTHONPATH=src python scripts/evaluate_grapher_metrics.py \
   --max-generated-graphs 1024
 ```
 
-Evaluate DH-VAE degree sequences through the historical `msvae` evaluator alias:
+Evaluate DH-VAE degree sequences:
 
 ```bash
 PYTHONPATH=src python scripts/evaluate_grapher_metrics.py \
   --dataset sbm \
-  --model msvae \
+  --model dhvae \
   --run-id 0 \
   --reference-split test \
   --max-reference-graphs 1024 \
@@ -193,11 +193,11 @@ Metric files are written to `outputs/metrics/<dataset>/<model>/`.
 ## Main output locations
 
 ```text
-outputs/checkpoints/<dataset>/msvae/msvae.pt                 # DH-VAE checkpoint, historical path
+outputs/checkpoints/<dataset>/dhvae/dhvae.pt                 # DH-VAE checkpoint
 outputs/checkpoints/<dataset>/grapher/grapher.pt
 outputs/runs/<dataset>/<model>/run_000/train_metadata.json
-outputs/samples/<dataset>/msvae_degree_sequences.pkl                 # DH-VAE degree sequences, single-run/no --run-id
-outputs/samples/<dataset>/msvae/run_000.pkl                    # with --run-id 0
+outputs/samples/<dataset>/dhvae_degree_sequences.pkl                 # DH-VAE degree sequences, single-run/no --run-id
+outputs/samples/<dataset>/dhvae/run_000.pkl                    # with --run-id 0
 outputs/samples/<dataset>/grapher.pkl                          # single-run/no --run-id
 outputs/samples/<dataset>/grapher/run_000.pkl                  # with --run-id 0
 outputs/metrics/<dataset>/<model>/run_000/grapher_metrics.json
@@ -205,7 +205,7 @@ outputs/metrics/<dataset>/<model>/run_000/grapher_metrics.json
 
 ## Notes on model scope
 
-The rewritten scripts implement the paper's topology-first pipeline: sampled degree sequence, connected Havel-Hakimi source, degree-preserving rewiring, and target-free candidate sets at generation time. GraphER remains structurally unchanged except for integration fixes. The old independent-count MS-VAE degree prior has been replaced by a size-conditioned DH-VAE under the same `MSVAE` compatibility name. Legacy MS-VAE checkpoints must be retrained because the encoder/decoder parameterization changed.
+The rewritten scripts implement the paper's topology-first pipeline: sampled degree sequence, connected Havel-Hakimi source, degree-preserving rewiring, and target-free candidate sets at generation time. GraphER remains structurally unchanged except for integration fixes. Legacy checkpoints from the previous independent-count degree prior must be retrained because the encoder/decoder parameterization changed.
 
 ### Degree-prior implementation
 

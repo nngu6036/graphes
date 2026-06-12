@@ -144,10 +144,6 @@ class SizeConditionedHistogramDecoder(nn.Module):
 class DHVAE(nn.Module):
     """Size-conditioned Degree-Histogram VAE.
 
-    This class replaces the previous independent-count MS-VAE implementation.
-    It keeps the public ``MSVAE`` alias and checkpoint directory names for script
-    compatibility, but its probabilistic model now matches the paper:
-
     * input: degree histogram h_D with bins 0..N-1 and graph size n;
     * encoder: q_phi(z | h_D, n);
     * decoder: categorical pi_theta(k | z, n) over valid degree values;
@@ -398,20 +394,12 @@ class DHVAE(nn.Module):
         self.eval()
 
 
-# Backwards-compatible public class name used by existing scripts.  The class is
-# now a paper-aligned size-conditioned DH-VAE rather than the older independent
-# count-bin MS-VAE.
 DegreeHistogramVAE = DHVAE
 SizeConditionedDHVAE = DHVAE
 
 
-class MSVAE(DHVAE):
-    pass
-
-
 __all__ = [
     "DHVAE",
-    "MSVAE",
     "DegreeHistogramVAE",
     "SizeConditionedDHVAE",
     "DegreeHistogramBatch",

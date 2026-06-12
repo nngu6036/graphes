@@ -375,7 +375,7 @@ class GraphER(nn.Module):
         self,
         num_samples: int,
         num_steps: int,
-        msvae_model,
+        dhvae_model,
         k_eigen: int,
         method: str = "havel_hakimi",
         ensure_connected: bool = True,
@@ -393,7 +393,7 @@ class GraphER(nn.Module):
         generated_seqs: list[list[int]] = []
         initial_graphs: list[tuple[nx.Graph, list[int]]] = []
         num_degree_attempts = max(int(num_samples) * int(max_degree_sequence_attempt_factor), int(num_samples))
-        degree_sequences = msvae_model.generate(num_degree_attempts, temperature=float(degree_temperature))
+        degree_sequences = dhvae_model.generate(num_degree_attempts, temperature=float(degree_temperature))
         for seq in degree_sequences:
             valid, _ = check_sequence_validity(seq)
             if not valid:

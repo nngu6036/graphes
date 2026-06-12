@@ -145,9 +145,9 @@ def make_model_run_config(
             cfg.get("checkpoint_path"), dataset=dataset, model=model, run_id=run_id, seed=seed, use_run_paths=use_run_paths
         )
 
-    if "msvae_checkpoint_path" in cfg:
-        cfg["msvae_checkpoint_path"] = checkpoint_path_for_run(
-            cfg.get("msvae_checkpoint_path"), dataset=dataset, model="msvae", run_id=run_id, seed=seed, use_run_paths=use_run_paths
+    if "dhvae_checkpoint_path" in cfg:
+        cfg["dhvae_checkpoint_path"] = checkpoint_path_for_run(
+            cfg.get("dhvae_checkpoint_path"), dataset=dataset, model="dhvae", run_id=run_id, seed=seed, use_run_paths=use_run_paths
         )
 
     # Common wrapper-owned directories.  They are redirected per run when needed

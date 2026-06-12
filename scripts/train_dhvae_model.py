@@ -18,7 +18,7 @@ if str(SRC) not in sys.path:
 from grapher.evaluation.data_io import load_dataset_splits
 from grapher.evaluation.run_utils import make_model_run_config, run_output_dir
 from grapher.generation.rewiring import connected_sequence_feasible, degree_sequence
-from grapher.models.model_msvae import DHVAE, encode_degree_sequence
+from grapher.models.model_dhvae import DHVAE, encode_degree_sequence
 from grapher.registry import available_datasets
 from grapher.utils.compute import PeakMemoryMonitor, compute_report
 from grapher.utils.io import load_yaml, save_json, save_yaml, stable_hash
@@ -45,8 +45,8 @@ def _collect_degree_sequences(graphs: Sequence, *, require_connected_feasible: b
             if not feasible:
                 skipped[reason] = skipped.get(reason, 0) + 1
                 continue
-        # DH-VAE explicitly represents degree 0 as histogram bin m_0, so unlike
-        # the previous MS-VAE path we do not drop zero-degree sequences here.
+        # DH-VAE explicitly represents degree 0 as histogram bin m_0, so we do
+        # not drop zero-degree sequences here.
         sequences.append(seq)
     return sequences, skipped
 
@@ -64,7 +64,7 @@ def _size_counts(sizes: Sequence[int], max_nodes: int) -> list[int]:
     return [int(v) for v in counts[: int(max_nodes) + 1]]
 
 
-def train_msvae(
+def train_dhvae(
     *,
     dataset: str,
     model_config: dict,
@@ -75,19 +75,13 @@ def train_msvae(
     device: str,
     require_connected_feasible: bool = True,
 ) -> dict:
-    """Train the paper-aligned size-conditioned DH-VAE degree prior.
-
-    The public function name remains ``train_msvae`` because the rest of the
-    codebase and existing experiment scripts use the historical MS-VAE naming.
-    Internally the model is now DH-VAE: q(z|h_D,n), p(h_D|z,n) with a
-    multinomial degree-histogram likelihood.
-    """
+    """Train the paper-aligned size-conditioned DH-VAE degree prior."""
 
     set_seed(seed, include_torch=True)
     cfg = make_model_run_config(
         model_config,
         dataset=dataset,
-        model="msvae",
+        model="dhvae",
         run_id=run_id,
         seed=seed,
         use_run_paths=run_id is not None,
@@ -176,7 +170,7 @@ def train_msvae(
         assert_model_tensors_finite(model, context=f"dhvae/{dataset}")
     elapsed = time.perf_counter() - start
 
-    checkpoint_path = Path(cfg.get("checkpoint_path") or f"outputs/checkpoints/{dataset}/msvae/msvae.pt")
+    checkpoint_path = Path(cfg.get("checkpoint_path") or f"outputs/checkpoints/{dataset}/dhvae/dhvae.pt")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     model_params = {
         "architecture": DHVAE.architecture,
@@ -193,7 +187,6 @@ def train_msvae(
     payload = {
         "model_state_dict": model.state_dict(),
         "model_name": "dhvae",
-        "model_alias": "msvae",
         "model_params": model_params,
         "dataset": dataset,
         "seed": seed,
@@ -220,14 +213,13 @@ def train_msvae(
     }
     torch.save(payload, checkpoint_path)
 
-    run_dir = run_output_dir(dataset, "msvae", run_id=run_id)
+    run_dir = run_output_dir(dataset, "dhvae", run_id=run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     save_yaml(cfg, run_dir / "resolved_model_config.yaml", force=True)
     compute = compute_report(operation="training", runtime_seconds=elapsed, num_graphs=len(train_sequences), memory=memory_monitor.to_dict())
     metadata = {
         "dataset": dataset,
         "model": "dhvae",
-        "model_alias": "msvae",
         "seed": seed,
         "run_id": run_id,
         "runtime_seconds": elapsed,
@@ -245,7 +237,7 @@ def train_msvae(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train the size-conditioned DH-VAE degree-sequence prior.")
     parser.add_argument("--dataset", required=True, choices=available_datasets())
-    parser.add_argument("--model-config", type=str, default="configs/models/msvae.yaml")
+    parser.add_argument("--model-config", type=str, default="configs/models/dhvae.yaml")
     parser.add_argument("--dataset-config", type=str, default=None)
     parser.add_argument("--dataset-root", type=str, default="outputs/datasets")
     parser.add_argument("--seed", type=int, default=42)
@@ -255,7 +247,7 @@ def main() -> None:
     args = parser.parse_args()
     model_cfg = load_yaml(args.model_config)
     dataset_cfg = Path(args.dataset_config) if args.dataset_config else Path("configs/datasets") / f"{args.dataset}.yaml"
-    train_msvae(
+    train_dhvae(
         dataset=args.dataset,
         model_config=model_cfg,
         dataset_config_path=dataset_cfg,

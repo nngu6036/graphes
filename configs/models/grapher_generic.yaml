@@ -39,5 +39,5 @@ action_temperature: 1.0
 sample_actions: true
 
 checkpoint_path: outputs/checkpoints/{dataset}/grapher/grapher.pt
-msvae_checkpoint_path: outputs/checkpoints/{dataset}/msvae/msvae.pt
+dhvae_checkpoint_path: outputs/checkpoints/{dataset}/dhvae/dhvae.pt
 samples_path: outputs/samples/{dataset}/grapher.pkl

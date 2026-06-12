@@ -88,8 +88,7 @@ DATASET_REGISTRY = LazyRegistry(
 
 MODEL_REGISTRY = LazyRegistry(
     {
-        "msvae": RegistrySpec("grapher.models.model_msvae", "MSVAE", "model"),
-        "dhvae": RegistrySpec("grapher.models.model_msvae", "DHVAE", "model"),
+        "dhvae": RegistrySpec("grapher.models.model_dhvae", "DHVAE", "model"),
         "grapher": RegistrySpec(
             "grapher.models.model_grapher",
             "GraphER",

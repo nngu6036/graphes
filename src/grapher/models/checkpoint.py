@@ -6,17 +6,11 @@ from typing import Any
 import torch
 
 from grapher.models.model_grapher import GraphER
-from grapher.models.model_msvae import DHVAE, MSVAE
+from grapher.models.model_dhvae import DHVAE
 
 
-def load_msvae_checkpoint(path: str | Path, device: str = "cpu") -> tuple[MSVAE, dict[str, Any]]:
-    """Load the degree prior checkpoint.
-
-    Historical scripts call this the MS-VAE checkpoint.  New checkpoints contain
-    the paper-aligned size-conditioned DH-VAE architecture.  Old independent
-    count-bin checkpoints are detected and reported with a clear retraining
-    message instead of being silently misloaded.
-    """
+def load_dhvae_checkpoint(path: str | Path, device: str = "cpu") -> tuple[DHVAE, dict[str, Any]]:
+    """Load a size-conditioned DH-VAE degree-prior checkpoint."""
 
     payload = torch.load(path, map_location=device, weights_only=False)
     params = dict(payload.get("model_params", {}))
@@ -26,9 +20,8 @@ def load_msvae_checkpoint(path: str | Path, device: str = "cpu") -> tuple[MSVAE,
     looks_legacy = any(str(k).startswith("decoder.logits_layer") for k in state_dict.keys())
     if looks_legacy and "dhvae" not in architecture and "size_conditioned" not in architecture:
         raise RuntimeError(
-            "The checkpoint appears to use the old independent-count MS-VAE architecture. "
-            "The code now uses the paper-aligned size-conditioned DH-VAE; please retrain with "
-            "scripts/train_msvae_model.py before generating samples."
+            "The checkpoint appears to use an old independent-count architecture. "
+            "Please retrain with scripts/train_dhvae_model.py before generating samples."
         )
 
     max_nodes = params.get("max_nodes")
@@ -42,7 +35,7 @@ def load_msvae_checkpoint(path: str | Path, device: str = "cpu") -> tuple[MSVAE,
     if max_nodes is None:
         raise KeyError("DH-VAE checkpoint is missing model_params['max_nodes'].")
 
-    model = MSVAE(
+    model = DHVAE(
         max_nodes=int(max_nodes),
         histogram_dim=int(params.get("histogram_dim", params.get("max_input_dim", max_nodes))),
         hidden_dim=int(params.get("hidden_dim", 128)),
@@ -55,7 +48,7 @@ def load_msvae_checkpoint(path: str | Path, device: str = "cpu") -> tuple[MSVAE,
         raise RuntimeError(
             "Could not load the degree-prior checkpoint into the size-conditioned DH-VAE. "
             "This usually means the checkpoint was trained before the DH-VAE revision; retrain "
-            "scripts/train_msvae_model.py."
+            "scripts/train_dhvae_model.py."
         ) from exc
     model.to(device)
     model.eval()

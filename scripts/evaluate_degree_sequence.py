@@ -6,5 +6,5 @@ if str(ROOT / 'src') not in sys.path:
     sys.path.insert(0, str(ROOT / 'src'))
 from evaluate_grapher_metrics import main
 if __name__ == '__main__':
-    sys.argv.extend(['--model', 'msvae']) if '--model' not in sys.argv else None
+    sys.argv.extend(['--model', 'dhvae']) if '--model' not in sys.argv else None
     main()

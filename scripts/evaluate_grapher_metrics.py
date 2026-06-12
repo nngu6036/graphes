@@ -61,8 +61,8 @@ def _subsample(items: Sequence[Any], max_items: int | None, seed: int) -> list[A
 
 
 def _default_model_config(model: str) -> Path:
-    if model == "msvae":
-        return Path("configs/models/msvae.yaml")
+    if model == "dhvae":
+        return Path("configs/models/dhvae.yaml")
     return Path("configs/models/grapher_generic.yaml")
 
 
@@ -77,8 +77,8 @@ def _load_generated_payload(dataset: str, model: str, cfg: dict, run_id: int | N
     configured = cfg.get("samples_path")
     if configured:
         candidates.append(Path(configured))
-    if model == "msvae":
-        candidates.append(Path("outputs/samples") / dataset / "msvae_degree_sequences.pkl")
+    if model == "dhvae":
+        candidates.append(Path("outputs/samples") / dataset / "dhvae_degree_sequences.pkl")
     for path in candidates:
         if path.exists():
             return load_pickle(path), path
@@ -198,9 +198,9 @@ def evaluate(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate generated GraphER graphs or MS-VAE degree sequences.")
+    parser = argparse.ArgumentParser(description="Evaluate generated GraphER graphs or DH-VAE degree sequences.")
     parser.add_argument("--dataset", required=True, choices=available_datasets())
-    parser.add_argument("--model", choices=["grapher", "msvae"], default="grapher")
+    parser.add_argument("--model", choices=["grapher", "dhvae"], default="grapher")
     parser.add_argument("--model-config", type=str, default=None)
     parser.add_argument("--dataset-root", type=str, default="outputs/datasets")
     parser.add_argument("--reference-split", choices=["train", "val", "test"], default="test")

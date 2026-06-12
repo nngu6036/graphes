@@ -16,7 +16,7 @@ if str(SRC) not in sys.path:
 from grapher.evaluation.data_io import load_dataset_splits
 from grapher.evaluation.run_utils import make_model_run_config, sample_config_path, sample_metadata_path, sample_path
 from grapher.generation.validity import quality_metrics
-from grapher.models.checkpoint import load_grapher_checkpoint, load_msvae_checkpoint
+from grapher.models.checkpoint import load_dhvae_checkpoint, load_grapher_checkpoint
 from grapher.registry import available_datasets
 from grapher.utils.compute import PeakMemoryMonitor, compute_report
 from grapher.utils.io import load_yaml, save_json, save_pickle, save_yaml, stable_hash
@@ -54,13 +54,13 @@ def generate_grapher_samples(
     set_seed(seed, include_torch=True)
     cfg = make_model_run_config(model_config, dataset=dataset, model="grapher", run_id=run_id, seed=seed, use_run_paths=run_id is not None)
     grapher_ckpt = Path(cfg.get("checkpoint_path") or f"outputs/checkpoints/{dataset}/grapher/grapher.pt")
-    msvae_ckpt = Path(cfg.get("msvae_checkpoint_path") or f"outputs/checkpoints/{dataset}/msvae/msvae.pt")
+    dhvae_ckpt = Path(cfg.get("dhvae_checkpoint_path") or f"outputs/checkpoints/{dataset}/dhvae/dhvae.pt")
     if not grapher_ckpt.exists():
         raise FileNotFoundError(f"GraphER checkpoint not found: {grapher_ckpt}. Run scripts/train_grapher_model.py first.")
-    if not msvae_ckpt.exists():
-        raise FileNotFoundError(f"MS-VAE checkpoint not found: {msvae_ckpt}. Run scripts/train_msvae_model.py first.")
+    if not dhvae_ckpt.exists():
+        raise FileNotFoundError(f"DH-VAE checkpoint not found: {dhvae_ckpt}. Run scripts/train_dhvae_model.py first.")
     grapher, grapher_payload = load_grapher_checkpoint(grapher_ckpt, device=device)
-    msvae, msvae_payload = load_msvae_checkpoint(msvae_ckpt, device=device)
+    dhvae, dhvae_payload = load_dhvae_checkpoint(dhvae_ckpt, device=device)
 
     out = _resolved_sample_output(cfg, dataset, "grapher", run_id)
     metadata_out = sample_metadata_path(dataset, "grapher", run_id=run_id)
@@ -79,13 +79,13 @@ def generate_grapher_samples(
             graphs, seqs = grapher.generate(
                 num_samples=remaining,
                 num_steps=int(cfg.get("num_steps", grapher_payload.get("model_params", {}).get("T", 32))),
-                msvae_model=msvae,
+                dhvae_model=dhvae,
                 k_eigen=int(cfg.get("k_eigen", grapher_payload.get("model_params", {}).get("k_eigen", 4))),
                 method=str(cfg.get("init_method", "havel_hakimi")),
                 ensure_connected=bool(cfg.get("ensure_connected", True)),
                 k_hop=int(cfg.get("k_hop", 2)),
                 max_candidates=int(cfg.get("candidate_budget", 64)),
-                degree_temperature=float(cfg.get("degree_sample_temperature", cfg.get("msvae_temperature", 1.0))),
+                degree_temperature=float(cfg.get("degree_sample_temperature", cfg.get("dhvae_temperature", 1.0))),
                 action_temperature=float(cfg.get("action_temperature", cfg.get("temperature", 1.0))),
                 sample_actions=bool(cfg.get("sample_actions", True)),
             )
@@ -117,14 +117,14 @@ def generate_grapher_samples(
         "seconds_per_graph": elapsed / max(len(generated), 1),
         "sample_path": str(out),
         "checkpoint_path": str(grapher_ckpt),
-        "msvae_checkpoint_path": str(msvae_ckpt),
+        "dhvae_checkpoint_path": str(dhvae_ckpt),
         "model_config_hash": stable_hash(cfg),
         "compute": compute,
         "quality": quality,
         "degree_sequences": {
             "num_recorded": len(degree_sequences),
             "source": "sampled from size-conditioned DH-VAE and accepted by GraphER canonical-source construction",
-            "degree_sample_temperature": float(cfg.get("degree_sample_temperature", cfg.get("msvae_temperature", 1.0))),
+            "degree_sample_temperature": float(cfg.get("degree_sample_temperature", cfg.get("dhvae_temperature", 1.0))),
         },
         "rewiring_policy": {
             "action_type": "complete_double_edge_swap_(e1,e2,r)",
@@ -134,7 +134,7 @@ def generate_grapher_samples(
         },
         "training_stats": {
             "grapher": grapher_payload.get("training_graph_stats", {}),
-            "msvae": msvae_payload.get("degree_sequence_stats", {}),
+            "dhvae": dhvae_payload.get("degree_sequence_stats", {}),
         },
     }
     save_json(metadata, metadata_out, force=True)
