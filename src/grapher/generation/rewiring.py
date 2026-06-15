@@ -176,7 +176,7 @@ def laplacian_positional_encoding(graph: nx.Graph, node_order: list[int], k: int
     return pe
 
 
-def graph_to_data(graph: nx.Graph, k_eigen: int = 4):
+def graph_to_data(graph: nx.Graph, k_eigen: int = 4, *, include_edge_pairs: bool = True):
     """Convert a NetworkX graph to the data object consumed by GraphER.
 
     The model's original input is kept: degree feature plus optional Laplacian
@@ -203,14 +203,17 @@ def graph_to_data(graph: nx.Graph, k_eigen: int = 4):
     if pe.numel() > 0:
         x = torch.cat([x, pe], dim=-1)
 
-    edges = list(g.edges())
-    valid_pairs: list[list[int]] = []
-    for i, (u, v) in enumerate(edges):
-        for j in range(i + 1, len(edges)):
-            a, b = edges[j]
-            if len({u, v, a, b}) == 4:
-                valid_pairs.append([i, j])
-    edge_pairs = torch.tensor(valid_pairs, dtype=torch.long) if valid_pairs else torch.empty((0, 2), dtype=torch.long)
+    if include_edge_pairs:
+        edges = list(g.edges())
+        valid_pairs: list[list[int]] = []
+        for i, (u, v) in enumerate(edges):
+            for j in range(i + 1, len(edges)):
+                a, b = edges[j]
+                if len({u, v, a, b}) == 4:
+                    valid_pairs.append([i, j])
+        edge_pairs = torch.tensor(valid_pairs, dtype=torch.long) if valid_pairs else torch.empty((0, 2), dtype=torch.long)
+    else:
+        edge_pairs = torch.empty((0, 2), dtype=torch.long)
     edge_index = nx_to_undirected_edge_index(g)
     cls = PyGData or SimpleData
     data = cls(x=x, edge_index=edge_index, edge_pairs=edge_pairs, num_nodes=g.number_of_nodes(), num_edges=g.number_of_edges())
@@ -242,11 +245,14 @@ def rewire(
         return None
     if not graph.has_edge(u, v) or not graph.has_edge(x, y):
         return None
+    # The new edges cannot equal the removed edges when all four endpoints are
+    # distinct, so duplicate-edge checks can happen before copying the graph.
+    # This avoids many expensive graph copies during candidate enumeration.
+    if graph.has_edge(a, b) or graph.has_edge(c, d):
+        return None
     g = graph.copy()
     g.remove_edge(u, v)
     g.remove_edge(x, y)
-    if g.has_edge(a, b) or g.has_edge(c, d):
-        return None
     g.add_edge(a, b)
     g.add_edge(c, d)
     if ensure_connected and g.number_of_nodes() > 0 and not nx.is_connected(g):
@@ -262,6 +268,24 @@ def _within_k_hop(graph: nx.Graph, e1: tuple[int, int], e2: tuple[int, int], k_h
     dist_u = nx.single_source_shortest_path_length(graph, u, cutoff=int(k_hop))
     dist_v = nx.single_source_shortest_path_length(graph, v, cutoff=int(k_hop))
     return x in dist_u or y in dist_u or x in dist_v or y in dist_v
+
+def _k_hop_reachability_cache(graph: nx.Graph, k_hop: int | None) -> dict[int, set[int]] | None:
+    if k_hop is None:
+        return None
+    cutoff = int(k_hop)
+    return {int(node): {int(dst) for dst in nx.single_source_shortest_path_length(graph, node, cutoff=cutoff)} for node in graph.nodes()}
+
+
+def _within_k_hop_cached(
+    reachability: dict[int, set[int]] | None,
+    e1: tuple[int, int],
+    e2: tuple[int, int],
+) -> bool:
+    if reachability is None:
+        return True
+    u, v = e1
+    x, y = e2
+    return x in reachability.get(u, set()) or y in reachability.get(u, set()) or x in reachability.get(v, set()) or y in reachability.get(v, set())
 
 
 def rewire_action(
@@ -298,6 +322,7 @@ def enumerate_rewire_actions(
     if len(g_edges) < 2:
         return []
 
+    reachability = _k_hop_reachability_cache(graph, k_hop)
     edge_pairs: list[tuple[tuple[int, int], tuple[int, int]]] = []
     if anchor_edges is not None:
         seen_pairs: set[tuple[tuple[int, int], tuple[int, int]]] = set()
@@ -310,7 +335,7 @@ def enumerate_rewire_actions(
                     continue
                 if len(set(e1 + e2)) != 4:
                     continue
-                if not _within_k_hop(graph, e1, e2, k_hop):
+                if not _within_k_hop_cached(reachability, e1, e2):
                     continue
                 key = (e1, e2) if e1 <= e2 else (e2, e1)
                 if key in seen_pairs:
@@ -324,7 +349,7 @@ def enumerate_rewire_actions(
             for e2 in g_edges[i + 1 :]:
                 if len(set(e1 + e2)) != 4:
                     continue
-                if not _within_k_hop(graph, e1, e2, k_hop):
+                if not _within_k_hop_cached(reachability, e1, e2):
                     continue
                 edge_pairs.append((e1, e2))
 
@@ -377,12 +402,13 @@ def build_candidates(
 
     candidates: list[tuple[int, int]] = []
     edges = [tuple(e) for e in graph.edges()]
+    reachability = _k_hop_reachability_cache(graph, k_hop)
     for e2 in edges:
         if e2 == anchor_edge or set(e2) == set(anchor_edge):
             continue
         if len(set(anchor_edge + e2)) != 4:
             continue
-        if not _within_k_hop(graph, anchor_edge, e2, k_hop):
+        if not _within_k_hop_cached(reachability, anchor_edge, e2):
             continue
         if any(rewire(graph, anchor_edge, e2, orient, ensure_connected=ensure_connected) is not None for orient in (0, 1)):
             candidates.append(e2)

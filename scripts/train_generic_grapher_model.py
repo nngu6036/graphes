@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import random
 import sys
 import time
@@ -43,6 +44,28 @@ from grapher.utils.seed import set_seed
 logger = get_logger(__name__)
 
 
+@dataclass
+class CachedTeacherExample:
+    """One cached hard-label rewiring flow-matching example.
+
+    Candidate construction and NetworkX local-feature extraction are CPU-heavy,
+    so the training script builds these examples once, then reuses them across
+    epochs.  The neural forward pass still runs on the requested CUDA device.
+    """
+
+    x: torch.Tensor
+    edge_index: torch.Tensor
+    actions: list[RewireAction]
+    label_idx: int
+    t: float
+    degree_sequence: list[int]
+    action_local_features: torch.Tensor
+    train_candidate_size: int
+    offline_candidate_size: int
+    improvement: float
+
+
+
 def _edge_set(graph: nx.Graph) -> set[tuple[int, int]]:
     return {tuple(sorted((int(u), int(v)))) for u, v in graph.edges()}
 
@@ -65,6 +88,34 @@ def _teacher_discrepancy(current: nx.Graph, target: nx.Graph, *, mode: str = "ed
     if mode not in {"edge", "edge_symmetric_difference", "symmetric_difference"}:
         raise ValueError(f"Unsupported teacher_discrepancy={mode!r}. Currently supported: edge_symmetric_difference.")
     return float(edge_symmetric_difference_size(current, target))
+
+
+
+
+def _edge_discrepancy_improvement(
+    action: RewireAction,
+    *,
+    current_edges: set[tuple[int, int]],
+    target_edges: set[tuple[int, int]],
+) -> int:
+    """Fast delta for |E(G) symmetric_difference E(target)|.
+
+    Candidate actions have already passed validity checks, so the created edges
+    are not present in ``current_edges``.  This avoids copying a graph and
+    rebuilding two edge sets for every candidate during teacher selection.
+    """
+
+    improvement = 0
+    for edge in action_removed_edges(action):
+        edge = tuple(sorted((int(edge[0]), int(edge[1]))))
+        improvement += 1 if edge not in target_edges else -1
+    for edge in action_new_edges(action):
+        edge = tuple(sorted((int(edge[0]), int(edge[1]))))
+        # Valid candidates should create missing edges, but be defensive.
+        if edge in current_edges:
+            continue
+        improvement += 1 if edge in target_edges else -1
+    return int(improvement)
 
 
 def _offline_candidate_actions(
@@ -166,20 +217,33 @@ def _candidate_teacher_step(
     )
     if not offline_actions:
         return None
-    current_score = _teacher_discrepancy(current, target, mode=discrepancy)
-    best: tuple[float, RewireAction, nx.Graph] | None = None
-    for action in offline_actions:
-        out = rewire_action(current, action, ensure_connected=ensure_connected)
-        if out is None:
-            continue
-        candidate_graph = out[0]
-        next_score = _teacher_discrepancy(candidate_graph, target, mode=discrepancy)
-        improvement = current_score - next_score
-        if best is None or improvement > best[0]:
-            best = (float(improvement), action, candidate_graph)
+    mode = str(discrepancy or "edge_symmetric_difference").lower()
+    best: tuple[float, RewireAction] | None = None
+    if mode in {"edge", "edge_symmetric_difference", "symmetric_difference"}:
+        current_edges = _edge_set(current)
+        target_edges = _edge_set(target)
+        for action in offline_actions:
+            improvement = float(_edge_discrepancy_improvement(action, current_edges=current_edges, target_edges=target_edges))
+            if best is None or improvement > best[0]:
+                best = (improvement, action)
+    else:
+        current_score = _teacher_discrepancy(current, target, mode=discrepancy)
+        for action in offline_actions:
+            out = rewire_action(current, action, ensure_connected=ensure_connected)
+            if out is None:
+                continue
+            candidate_graph = out[0]
+            next_score = _teacher_discrepancy(candidate_graph, target, mode=discrepancy)
+            improvement = current_score - next_score
+            if best is None or improvement > best[0]:
+                best = (float(improvement), action)
     if best is None:
         return None
-    improvement, teacher_action, next_graph = best
+    improvement, teacher_action = best
+    out = rewire_action(current, teacher_action, ensure_connected=ensure_connected)
+    if out is None:
+        return None
+    next_graph = out[0]
     if require_positive_improvement and improvement <= 0.0:
         return None
     train_actions, label_idx = _training_candidate_actions(
@@ -214,6 +278,135 @@ def _usable_training_graphs(graphs: Sequence[nx.Graph], max_graphs: int | None) 
         if max_graphs is not None and len(usable) >= int(max_graphs):
             break
     return usable, skipped
+
+
+
+
+def _build_teacher_cache(
+    *,
+    train_graphs: Sequence[nx.Graph],
+    model: GraphER,
+    k_eigen: int,
+    max_steps: int,
+    candidate_budget: int,
+    offline_candidate_budget: int,
+    k_hop: int | None,
+    ensure_connected: bool,
+    discrepancy: str,
+    require_positive_improvement: bool,
+    rng: random.Random,
+) -> tuple[list[CachedTeacherExample], dict[str, float | int]]:
+    """Construct offline teacher examples once before neural optimization.
+
+    This follows the paper's offline trajectory cache.  It removes the largest
+    training bottleneck in the original script, which rebuilt the same
+    Havel-Hakimi-to-data teacher paths in every epoch.
+    """
+
+    cache: list[CachedTeacherExample] = []
+    num_exact = 0
+    num_positive = 0
+    num_hh_failures = 0
+    num_no_teacher_step = 0
+    num_graphs_with_examples = 0
+    train_candidate_sizes: list[int] = []
+    offline_candidate_sizes: list[int] = []
+    improvements: list[float] = []
+    cpu_device = torch.device("cpu")
+
+    for graph_idx, target_raw in enumerate(train_graphs, start=1):
+        target = nx.convert_node_labels_to_integers(nx.Graph(target_raw), ordering="sorted")
+        try:
+            current = deterministic_connected_havel_hakimi(G=target)
+        except Exception:
+            num_hh_failures += 1
+            logger.debug(
+                "GraphER cache graph=%d HH construction failed nodes=%d edges=%d",
+                graph_idx,
+                target.number_of_nodes(),
+                target.number_of_edges(),
+            )
+            continue
+
+        if edge_symmetric_difference_size(current, target) == 0:
+            num_exact += 1
+            logger.debug("GraphER cache graph=%d HH source already exact", graph_idx)
+            continue
+
+        target_degree_sequence = degree_sequence(target)
+        examples_before = len(cache)
+        for step in range(max_steps):
+            current_distance = edge_symmetric_difference_size(current, target)
+            example = _candidate_teacher_step(
+                current,
+                target,
+                candidate_budget=candidate_budget,
+                offline_candidate_budget=offline_candidate_budget,
+                k_hop=k_hop,
+                ensure_connected=ensure_connected,
+                discrepancy=discrepancy,
+                require_positive_improvement=require_positive_improvement,
+                rng=rng,
+            )
+            if example is None:
+                num_no_teacher_step += 1
+                logger.debug(
+                    "GraphER cache graph=%d step=%d no teacher action current_distance=%d",
+                    graph_idx,
+                    step,
+                    current_distance,
+                )
+                break
+
+            train_actions, label_idx, _teacher_action, improvement, next_graph, offline_size = example
+            data = graph_to_data(current, k_eigen=k_eigen, include_edge_pairs=False)
+            with torch.no_grad():
+                local_features = model.action_local_feature_matrix(current, train_actions, device=cpu_device).cpu()
+            cache.append(
+                CachedTeacherExample(
+                    x=data.x.detach().cpu(),
+                    edge_index=data.edge_index.detach().cpu(),
+                    actions=list(train_actions),
+                    label_idx=int(label_idx),
+                    t=float(step) / max(float(max_steps), 1.0),
+                    degree_sequence=list(map(int, target_degree_sequence)),
+                    action_local_features=local_features,
+                    train_candidate_size=len(train_actions),
+                    offline_candidate_size=int(offline_size),
+                    improvement=float(improvement),
+                )
+            )
+            num_positive += int(improvement > 0.0)
+            train_candidate_sizes.append(len(train_actions))
+            offline_candidate_sizes.append(int(offline_size))
+            improvements.append(float(improvement))
+            current = nx.convert_node_labels_to_integers(next_graph, ordering="sorted")
+            if edge_symmetric_difference_size(current, target) == 0:
+                break
+
+        if len(cache) > examples_before:
+            num_graphs_with_examples += 1
+        if graph_idx == 1 or graph_idx % 10 == 0 or graph_idx == len(train_graphs):
+            logger.info(
+                "GraphER teacher cache progress graph=%d/%d examples=%d graphs_with_examples=%d",
+                graph_idx,
+                len(train_graphs),
+                len(cache),
+                num_graphs_with_examples,
+            )
+
+    stats: dict[str, float | int] = {
+        "num_teacher_examples": len(cache),
+        "num_hh_already_exact": num_exact,
+        "num_positive_teacher_steps": num_positive,
+        "num_hh_failures": num_hh_failures,
+        "num_no_teacher_step": num_no_teacher_step,
+        "num_graphs_with_examples": num_graphs_with_examples,
+        "avg_train_candidate_size": sum(train_candidate_sizes) / max(len(train_candidate_sizes), 1),
+        "avg_offline_candidate_size": sum(offline_candidate_sizes) / max(len(offline_candidate_sizes), 1),
+        "avg_teacher_improvement": sum(improvements) / max(len(improvements), 1),
+    }
+    return cache, stats
 
 
 def _num_trainable_parameters(model: torch.nn.Module) -> int:
@@ -322,143 +515,127 @@ def train_grapher(
         require_positive_improvement,
     )
 
+    grad_accum_steps = max(int(cfg.get("grad_accum_steps", cfg.get("batch_size", 16))), 1)
+    use_amp = bool(cfg.get("use_amp", True)) and str(device).startswith("cuda") and torch.cuda.is_available()
+    examples_per_epoch_raw = cfg.get("examples_per_epoch")
+    examples_per_epoch = None if examples_per_epoch_raw in (None, "") else int(examples_per_epoch_raw)
+    logger.info(
+        "GraphER training runtime grad_accum_steps=%d use_amp=%s examples_per_epoch=%s",
+        grad_accum_steps,
+        use_amp,
+        examples_per_epoch,
+    )
+
     history: list[dict] = []
     start = time.perf_counter()
     with PeakMemoryMonitor() as memory_monitor:
+        cache_start = time.perf_counter()
+        teacher_cache, cache_stats = _build_teacher_cache(
+            train_graphs=train_graphs,
+            model=model,
+            k_eigen=k_eigen,
+            max_steps=max_steps,
+            candidate_budget=candidate_budget,
+            offline_candidate_budget=offline_candidate_budget,
+            k_hop=k_hop,
+            ensure_connected=ensure_connected,
+            discrepancy=discrepancy,
+            require_positive_improvement=require_positive_improvement,
+            rng=rng,
+        )
+        cache_seconds = time.perf_counter() - cache_start
+        if not teacher_cache:
+            raise ValueError(f"No GraphER teacher examples were constructed. Cache stats: {cache_stats}")
+        logger.info(
+            "GraphER teacher cache built examples=%d graphs_with_examples=%d exact=%d hh_fail=%d no_teacher=%d avgC=%.1f avgCoff=%.1f avg_delta=%.3f seconds=%.2f",
+            len(teacher_cache),
+            int(cache_stats["num_graphs_with_examples"]),
+            int(cache_stats["num_hh_already_exact"]),
+            int(cache_stats["num_hh_failures"]),
+            int(cache_stats["num_no_teacher_step"]),
+            float(cache_stats["avg_train_candidate_size"]),
+            float(cache_stats["avg_offline_candidate_size"]),
+            float(cache_stats["avg_teacher_improvement"]),
+            cache_seconds,
+        )
+
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
         for epoch in range(1, epochs + 1):
             epoch_start = time.perf_counter()
-            logger.info("GraphER epoch %d/%d starting graphs=%d", epoch, epochs, len(train_graphs))
             model.train()
+            epoch_examples = list(teacher_cache)
+            rng.shuffle(epoch_examples)
+            if examples_per_epoch is not None:
+                epoch_examples = epoch_examples[: max(1, int(examples_per_epoch))]
+            logger.info("GraphER epoch %d/%d starting cached_examples=%d", epoch, epochs, len(epoch_examples))
+
             total_loss = 0.0
             num_examples = 0
-            num_exact = 0
-            num_positive = 0
-            num_hh_failures = 0
-            num_no_teacher_step = 0
             num_zero_logits = 0
-            num_graphs_with_examples = 0
-            train_candidate_sizes: list[int] = []
-            offline_candidate_sizes: list[int] = []
-            improvements: list[float] = []
-            epoch_graphs = list(train_graphs)
-            rng.shuffle(epoch_graphs)
-            for graph_idx, target in enumerate(epoch_graphs, start=1):
-                target = nx.convert_node_labels_to_integers(nx.Graph(target), ordering="sorted")
-                try:
-                    current = deterministic_connected_havel_hakimi(G=target)
-                except Exception:
-                    num_hh_failures += 1
-                    logger.debug(
-                        "GraphER epoch=%d graph=%d HH construction failed nodes=%d edges=%d",
-                        epoch,
-                        graph_idx,
-                        target.number_of_nodes(),
-                        target.number_of_edges(),
-                    )
-                    continue
-                if edge_symmetric_difference_size(current, target) == 0:
-                    num_exact += 1
-                    logger.debug("GraphER epoch=%d graph=%d HH source already exact", epoch, graph_idx)
-                    continue
-                target_degree_sequence = degree_sequence(target)
-                graph_examples_before = num_examples
-                for step in range(max_steps):
-                    current_distance = edge_symmetric_difference_size(current, target)
-                    example = _candidate_teacher_step(
-                        current,
-                        target,
-                        candidate_budget=candidate_budget,
-                        offline_candidate_budget=offline_candidate_budget,
-                        k_hop=k_hop,
-                        ensure_connected=ensure_connected,
-                        discrepancy=discrepancy,
-                        require_positive_improvement=require_positive_improvement,
-                        rng=rng,
-                    )
-                    if example is None:
-                        num_no_teacher_step += 1
-                        logger.debug(
-                            "GraphER epoch=%d graph=%d step=%d no teacher action current_distance=%d",
-                            epoch,
-                            graph_idx,
-                            step,
-                            current_distance,
-                        )
-                        break
-                    train_actions, label_idx, _teacher_action, improvement, next_graph, offline_size = example
-                    data = graph_to_data(current, k_eigen=k_eigen).to(device)
-                    optimizer.zero_grad(set_to_none=True)
-                    t_norm = float(step) / max(float(max_steps), 1.0)
+            optimizer.zero_grad(set_to_none=True)
+            pending_grads = 0
+            for example_idx, example in enumerate(epoch_examples, start=1):
+                x = example.x.to(device, non_blocking=True)
+                edge_index = example.edge_index.to(device, non_blocking=True)
+                local_features = example.action_local_features.to(device, non_blocking=True)
+                target_idx = torch.tensor([int(example.label_idx)], dtype=torch.long, device=device)
+
+                with torch.cuda.amp.autocast(enabled=use_amp):
                     logits = model.score_actions(
-                        data.x,
-                        data.edge_index,
-                        train_actions,
-                        t=t_norm,
-                        degree_sequence=target_degree_sequence,
-                        graph=current,
+                        x,
+                        edge_index,
+                        example.actions,
+                        t=example.t,
+                        degree_sequence=example.degree_sequence,
+                        graph=None,
+                        action_local_features=local_features,
                     )
                     if logits.numel() == 0:
                         num_zero_logits += 1
-                        logger.debug("GraphER epoch=%d graph=%d step=%d zero logits", epoch, graph_idx, step)
-                        break
-                    target_idx = torch.tensor([int(label_idx)], dtype=torch.long, device=device)
-                    loss = F.cross_entropy(logits.view(1, -1), target_idx)
-                    if not torch.isfinite(loss):
-                        raise FloatingPointError(f"Non-finite GraphER loss at epoch {epoch} step {step}.")
-                    loss.backward()
+                        continue
+                    raw_loss = F.cross_entropy(logits.view(1, -1), target_idx)
+                    loss = raw_loss / float(grad_accum_steps)
+                if not torch.isfinite(raw_loss.detach()):
+                    raise FloatingPointError(f"Non-finite GraphER loss at epoch {epoch} example {example_idx}.")
+
+                scaler.scale(loss).backward()
+                total_loss += float(raw_loss.detach().item())
+                num_examples += 1
+                pending_grads += 1
+                should_step = pending_grads >= grad_accum_steps or example_idx == len(epoch_examples)
+                if should_step and pending_grads > 0:
+                    scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(cfg.get("grad_clip", 5.0)))
-                    optimizer.step()
-                    total_loss += float(loss.item())
-                    num_examples += 1
-                    num_positive += int(improvement > 0.0)
-                    train_candidate_sizes.append(len(train_actions))
-                    offline_candidate_sizes.append(int(offline_size))
-                    improvements.append(float(improvement))
-                    if logger.isEnabledFor(10) and (step == 0 or step == max_steps - 1):
-                        logger.debug(
-                            "GraphER epoch=%d graph=%d/%d step=%d distance=%d train_candidates=%d offline_candidates=%d label_idx=%d improvement=%.3f loss=%.6f",
-                            epoch,
-                            graph_idx,
-                            len(epoch_graphs),
-                            step,
-                            current_distance,
-                            len(train_actions),
-                            int(offline_size),
-                            int(label_idx),
-                            float(improvement),
-                            float(loss.item()),
-                        )
-                    current = nx.convert_node_labels_to_integers(next_graph, ordering="sorted")
-                    if edge_symmetric_difference_size(current, target) == 0:
-                        break
-                if num_examples > graph_examples_before:
-                    num_graphs_with_examples += 1
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
+                    pending_grads = 0
+
             row = {
                 "epoch": epoch,
                 "loss": total_loss / max(num_examples, 1),
                 "num_teacher_examples": num_examples,
-                "num_hh_already_exact": num_exact,
-                "num_positive_teacher_steps": num_positive,
-                "num_hh_failures": num_hh_failures,
-                "num_no_teacher_step": num_no_teacher_step,
+                "num_cached_teacher_examples": len(teacher_cache),
+                "num_hh_already_exact": int(cache_stats["num_hh_already_exact"]),
+                "num_positive_teacher_steps": int(cache_stats["num_positive_teacher_steps"]),
+                "num_hh_failures": int(cache_stats["num_hh_failures"]),
+                "num_no_teacher_step": int(cache_stats["num_no_teacher_step"]),
                 "num_zero_logits": num_zero_logits,
-                "num_graphs_with_examples": num_graphs_with_examples,
-                "avg_train_candidate_size": sum(train_candidate_sizes) / max(len(train_candidate_sizes), 1),
-                "avg_offline_candidate_size": sum(offline_candidate_sizes) / max(len(offline_candidate_sizes), 1),
-                "avg_teacher_improvement": sum(improvements) / max(len(improvements), 1),
+                "num_graphs_with_examples": int(cache_stats["num_graphs_with_examples"]),
+                "avg_train_candidate_size": float(cache_stats["avg_train_candidate_size"]),
+                "avg_offline_candidate_size": float(cache_stats["avg_offline_candidate_size"]),
+                "avg_teacher_improvement": float(cache_stats["avg_teacher_improvement"]),
+                "cache_seconds": cache_seconds,
                 "epoch_seconds": time.perf_counter() - epoch_start,
             }
             history.append(row)
             logger.info(
-                "GraphER epoch %d/%d loss=%.4f examples=%d graphs_with_examples=%d exact=%d hh_fail=%d no_teacher=%d zero_logits=%d avgC=%.1f avgCoff=%.1f avg_delta=%.3f seconds=%.2f",
+                "GraphER epoch %d/%d loss=%.4f examples=%d cached=%d zero_logits=%d avgC=%.1f avgCoff=%.1f avg_delta=%.3f seconds=%.2f",
                 epoch,
                 epochs,
                 row["loss"],
                 num_examples,
-                num_graphs_with_examples,
-                num_exact,
-                num_hh_failures,
-                num_no_teacher_step,
+                len(teacher_cache),
                 num_zero_logits,
                 row["avg_train_candidate_size"],
                 row["avg_offline_candidate_size"],
@@ -502,6 +679,12 @@ def train_grapher(
             "candidate_action_type": "complete_double_edge_swap_(e1,e2,r)",
             "teacher_candidate_set": "target-aware offline candidates plus target-free local/random candidates",
             "training_candidate_set": "teacher action plus target-free local/random negatives",
+            "num_cached_teacher_examples": len(teacher_cache),
+            "teacher_cache_seconds": cache_seconds,
+            "teacher_cache_stats": cache_stats,
+            "gradient_accumulation_steps": grad_accum_steps,
+            "mixed_precision_amp": use_amp,
+            "gpu_required_by_training_script": True,
         },
     }
     torch.save(payload, checkpoint_path)

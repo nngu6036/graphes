@@ -256,40 +256,70 @@ class GraphER(nn.Module):
         t_tensor = torch.tensor([t_norm], dtype=torch.float32, device=device)
         return self.time_encoder(get_sinusoidal_embedding(t_tensor, self.time_embedding_dim)).squeeze(0)
 
-    def _action_local_features(self, graph: nx.Graph | None, action: RewireAction, *, device: torch.device) -> torch.Tensor:
+    def action_local_feature_matrix(
+        self,
+        graph: nx.Graph | None,
+        actions: Sequence[RewireAction],
+        *,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Compute action-local features for an entire candidate set.
+
+        The previous implementation recomputed NetworkX bridges and shortest
+        paths once per candidate action.  Training calls this for every teacher
+        example, so those repeated graph traversals dominated runtime and left
+        the GPU mostly idle.  This batched version caches degrees, neighbours,
+        bridges, and shortest-path maps once per graph/candidate set.
+        """
+
+        if not actions:
+            return torch.empty((0, self.local_feature_dim), dtype=torch.float32, device=device)
         if graph is None:
-            return torch.zeros(self.local_feature_dim, dtype=torch.float32, device=device)
+            return torch.zeros((len(actions), self.local_feature_dim), dtype=torch.float32, device=device)
+
         n = max(int(graph.number_of_nodes()), 1)
         max_degree = max(n - 1, 1)
-        (u, v), (x, y) = action.e1, action.e2
-        new1, new2 = action_new_edges(action)
-        values: list[float] = []
-        for node in (u, v, x, y):
-            values.append(float(graph.degree(int(node))) / float(max_degree))
-        for a, b in (new1, new2):
-            try:
-                common = len(list(nx.common_neighbors(graph, int(a), int(b))))
-            except Exception:
-                common = 0
-            values.append(float(common) / float(max(n, 1)))
-        # Locality signal: minimum endpoint distance between removed edges,
-        # normalized by graph size.  Missing paths are encoded as 1.0.
-        distances: list[int] = []
-        for a in action.e1:
-            for b in action.e2:
-                try:
-                    distances.append(int(nx.shortest_path_length(graph, int(a), int(b))))
-                except nx.NetworkXNoPath:
-                    pass
-        values.append(float(min(distances)) / float(max(n - 1, 1)) if distances else 1.0)
+        degrees = {int(node): int(deg) for node, deg in graph.degree()}
+        neighbours = {int(node): {int(v) for v in graph.neighbors(node)} for node in graph.nodes()}
         try:
-            bridges = {tuple(sorted(e)) for e in nx.bridges(graph)}
-            values.append(1.0 if tuple(sorted(action.e1)) in bridges or tuple(sorted(action.e2)) in bridges else 0.0)
+            bridges = {tuple(sorted((int(u), int(v)))) for u, v in nx.bridges(graph)}
         except Exception:
-            values.append(0.0)
-        if len(values) < self.local_feature_dim:
-            values.extend([0.0] * (self.local_feature_dim - len(values)))
-        return torch.tensor(values[: self.local_feature_dim], dtype=torch.float32, device=device)
+            bridges = set()
+
+        endpoint_sources = sorted({int(node) for action in actions for edge in (action.e1, action.e2) for node in edge})
+        distance_cache: dict[int, dict[int, int]] = {}
+        for node in endpoint_sources:
+            try:
+                distance_cache[node] = {int(dst): int(dist) for dst, dist in nx.single_source_shortest_path_length(graph, node).items()}
+            except Exception:
+                distance_cache[node] = {}
+
+        rows: list[list[float]] = []
+        for action in actions:
+            (u, v), (x_node, y_node) = action.e1, action.e2
+            new1, new2 = action_new_edges(action)
+            values: list[float] = []
+            for node in (u, v, x_node, y_node):
+                values.append(float(degrees.get(int(node), 0)) / float(max_degree))
+            for a, b in (new1, new2):
+                common = len(neighbours.get(int(a), set()) & neighbours.get(int(b), set()))
+                values.append(float(common) / float(max(n, 1)))
+
+            distances: list[int] = []
+            for a in action.e1:
+                dist_map = distance_cache.get(int(a), {})
+                for b in action.e2:
+                    if int(b) in dist_map:
+                        distances.append(int(dist_map[int(b)]))
+            values.append(float(min(distances)) / float(max(n - 1, 1)) if distances else 1.0)
+            values.append(1.0 if tuple(sorted(action.e1)) in bridges or tuple(sorted(action.e2)) in bridges else 0.0)
+            if len(values) < self.local_feature_dim:
+                values.extend([0.0] * (self.local_feature_dim - len(values)))
+            rows.append(values[: self.local_feature_dim])
+        return torch.tensor(rows, dtype=torch.float32, device=device)
+
+    def _action_local_features(self, graph: nx.Graph | None, action: RewireAction, *, device: torch.device) -> torch.Tensor:
+        return self.action_local_feature_matrix(graph, [action], device=device).view(-1)
 
     def score_actions(
         self,
@@ -300,8 +330,15 @@ class GraphER(nn.Module):
         t: int | float | torch.Tensor,
         degree_sequence: Sequence[int] | None = None,
         graph: nx.Graph | None = None,
+        action_local_features: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Score a finite candidate set C of complete rewiring actions."""
+        """Score a finite candidate set C of complete rewiring actions.
+
+        Candidate scoring is vectorized across actions so one GPU kernel batch is
+        used for the MLP instead of one tiny MLP call per candidate.  Optional
+        precomputed ``action_local_features`` lets the training script cache the
+        NetworkX-derived local features together with offline teacher examples.
+        """
 
         if not actions:
             return x.new_empty((0,))
@@ -313,31 +350,59 @@ class GraphER(nn.Module):
             if graph is not None:
                 degree_sequence = graph_degree_sequence(graph)
             else:
-                # Fallback for ad hoc calls: infer a degree sequence from the
-                # undirected edge_index.  Edge_index usually stores both
-                # directions, so divide counts by two only when appropriate.
                 deg = torch.bincount(edge_index[0].long(), minlength=node_h.size(0)).detach().cpu().tolist()
                 degree_sequence = sorted([int(d) for d in deg], reverse=True)
         degree_h = self.encode_degree_sequence(degree_sequence, device=device)
         time_h = self.encode_time(t, device=device)
 
-        scores: list[torch.Tensor] = []
-        for action in actions:
-            (u, v), (x_idx, y_idx) = action.e1, action.e2
-            max_node = node_h.size(0) - 1
-            if min(u, v, x_idx, y_idx) < 0 or max(u, v, x_idx, y_idx) > max_node:
-                raise IndexError(f"Action {action} references nodes outside encoded graph with {node_h.size(0)} nodes.")
-            huv = node_h[int(u)] + node_h[int(v)]
-            hxy = node_h[int(x_idx)] + node_h[int(y_idx)]
-            edge_sum = huv + hxy
-            edge_absdiff = torch.abs(huv - hxy)
-            edge_product = huv * hxy
-            orient_idx = torch.tensor(int(action.orientation), dtype=torch.long, device=device)
-            orient_h = self.orientation_embedding(orient_idx)
-            local_h = self.local_encoder(self._action_local_features(graph, action, device=device).view(1, -1)).squeeze(0)
-            feat = torch.cat([graph_h, degree_h, time_h, edge_sum, edge_absdiff, edge_product, orient_h, local_h], dim=-1)
-            scores.append(self.action_scorer(feat).view(()))
-        return torch.stack(scores, dim=0)
+        endpoints = torch.tensor(
+            [[int(action.e1[0]), int(action.e1[1]), int(action.e2[0]), int(action.e2[1])] for action in actions],
+            dtype=torch.long,
+            device=device,
+        )
+        if endpoints.numel() and (int(endpoints.min().item()) < 0 or int(endpoints.max().item()) >= node_h.size(0)):
+            raise IndexError(f"At least one action references nodes outside encoded graph with {node_h.size(0)} nodes.")
+        orientations = torch.tensor([int(action.orientation) for action in actions], dtype=torch.long, device=device)
+
+        huv = node_h[endpoints[:, 0]] + node_h[endpoints[:, 1]]
+        hxy = node_h[endpoints[:, 2]] + node_h[endpoints[:, 3]]
+        edge_sum = huv + hxy
+        edge_absdiff = torch.abs(huv - hxy)
+        edge_product = huv * hxy
+        orient_h = self.orientation_embedding(orientations)
+
+        if action_local_features is None:
+            local_features = self.action_local_feature_matrix(graph, actions, device=device)
+        else:
+            local_features = action_local_features.to(device=device, dtype=torch.float32, non_blocking=True)
+            if local_features.ndim != 2 or local_features.size(0) != len(actions):
+                raise ValueError(
+                    f"action_local_features must have shape ({len(actions)}, {self.local_feature_dim}); "
+                    f"got {tuple(local_features.shape)}"
+                )
+            if local_features.size(1) != self.local_feature_dim:
+                if local_features.size(1) < self.local_feature_dim:
+                    pad = local_features.new_zeros((local_features.size(0), self.local_feature_dim - local_features.size(1)))
+                    local_features = torch.cat([local_features, pad], dim=1)
+                else:
+                    local_features = local_features[:, : self.local_feature_dim]
+        local_h = self.local_encoder(local_features)
+
+        num_actions = len(actions)
+        feat = torch.cat(
+            [
+                graph_h.view(1, -1).expand(num_actions, -1),
+                degree_h.view(1, -1).expand(num_actions, -1),
+                time_h.view(1, -1).expand(num_actions, -1),
+                edge_sum,
+                edge_absdiff,
+                edge_product,
+                orient_h,
+                local_h,
+            ],
+            dim=-1,
+        )
+        return self.action_scorer(feat).squeeze(-1)
 
     def forward(
         self,
@@ -350,6 +415,7 @@ class GraphER(nn.Module):
         actions: Sequence[RewireAction] | None = None,
         degree_sequence: Sequence[int] | None = None,
         graph: nx.Graph | None = None,
+        action_local_features: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -362,7 +428,15 @@ class GraphER(nn.Module):
             if first_edge is None or candidate_edges is None:
                 raise TypeError("GraphER.forward requires either actions=... or first_edge plus candidate_edges.")
             actions = [RewireAction(first_edge, edge, 0) for edge in candidate_edges]
-        return self.score_actions(x, edge_index, actions, t=t, degree_sequence=degree_sequence, graph=graph)
+        return self.score_actions(
+            x,
+            edge_index,
+            actions,
+            t=t,
+            degree_sequence=degree_sequence,
+            graph=graph,
+            action_local_features=action_local_features,
+        )
 
     def save_model(self, file_path: str) -> None:
         torch.save(self.state_dict(), file_path)
@@ -404,6 +478,11 @@ class GraphER(nn.Module):
                 g0 = initialize_graphs(method, seq)
             except Exception:
                 continue
+            g0 = nx.convert_node_labels_to_integers(nx.Graph(g0), ordering="sorted")
+            if ensure_connected and g0.number_of_nodes() > 1 and not nx.is_connected(g0):
+                continue
+            if sorted((int(d) for _, d in g0.degree()), reverse=True) != sorted((int(d) for d in seq), reverse=True):
+                continue
             initial_graphs.append((g0, list(map(int, seq))))
             if len(initial_graphs) >= int(num_samples):
                 break
@@ -422,7 +501,7 @@ class GraphER(nn.Module):
                         shuffle=True,
                     )
                     if not actions:
-                        continue
+                        break
                     data = graph_to_data(g, k_eigen).to(device)
                     data.x = _pad_or_truncate_node_features(data.x, self.node_in_dim)
                     t = float(step) / max(float(num_steps), 1.0)
