@@ -7,11 +7,11 @@ k_eigen: 4
 
 # Flow/sampling horizon. Training uses normalized time t=s/L; generation uses
 # t=s/S and samples complete double-edge-swap actions a=(e1,e2,r).
-num_steps: 16
-max_steps_per_graph: 8
+num_steps: 32
+max_steps_per_graph: 16
 
-candidate_budget: 32
-offline_candidate_budget: 128
+candidate_budget: 64
+offline_candidate_budget: 256
 k_hop: 2
 ensure_connected: true
 init_method: havel_hakimi
@@ -29,8 +29,8 @@ local_feature_dim: 8
 learning_rate: 0.001
 weight_decay: 0.0
 grad_clip: 5.0
-epochs: 20
-max_graphs: 2048
+epochs: 40
+max_graphs: 4096
 
 # Degree prior and rewiring sampling temperatures.
 degree_sample_temperature: 1.0
@@ -47,4 +47,4 @@ samples_path: outputs/samples/{dataset}/grapher.pkl
 # and avoids rebuilding NetworkX candidates every epoch.
 grad_accum_steps: 16
 use_amp: true
-examples_per_epoch: null
+examples_per_epoch: 16384
