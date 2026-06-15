@@ -15,7 +15,7 @@
 - `scripts/prepare_dataset.py`: keeps the existing dataset split workflow and now uses the repaired local registry.
 - `scripts/train_dhvae_model.py`: trains the size-conditioned DH-VAE degree prior on degree histograms and graph-size embeddings, saving a structured checkpoint.
 - `scripts/generate_dhvae_samples.py`: new/repaired degree-sequence sampler with graphicality and connected-realizability filtering.
-- `scripts/train_grapher_model.py`: trains the existing GraphER scorer from target-aware teacher labels but target-free candidate sets.
+- `scripts/train_generic_grapher_model.py`: trains the existing GraphER scorer from target-aware teacher labels but target-free candidate sets.
 - `scripts/generate_grapher_samples.py`: loads the DH-VAE checkpoint and GraphER checkpoint, constructs connected canonical sources, and samples graph rewiring trajectories.
 - `scripts/evaluate_grapher_metrics.py`: evaluates graph samples and degree-sequence samples with degree, clustering, spectral, motif-proxy, structural summary, validity, connectedness, uniqueness, and novelty metrics.
 - `scripts/evaluate_degree_sequence.py`, `scripts/evaluate_generic_metrics.py`, `scripts/evaluate_molecular_metrics.py`, and `scripts/eval.py`: compatibility aliases that dispatch to the unified evaluator.
@@ -91,6 +91,6 @@ The smoke checkpoint stores `model_name: dhvae` and `architecture: size_conditio
 - Updated `GraphER` from the old anchor-edge/second-edge scorer to a complete action scorer over `RewireAction(e1, e2, orientation)`.
 - Added graph, degree-sequence, normalized-time, orientation, and local structural conditioning to the generic action scorer.
 - Added target-free complete-action candidate enumeration utilities in `grapher.generation.rewiring`.
-- Updated `scripts/train_grapher_model.py` so target-aware candidates are used only for offline teacher selection, while neural training receives `{teacher action} + target-free negatives`.
+- Updated `scripts/train_generic_grapher_model.py` so target-aware candidates are used only for offline teacher selection, while neural training receives `{teacher action} + target-free negatives`.
 - Updated generation so GraphER samples target-free complete rewiring actions with `action_temperature`.
 - Old second-edge GraphER checkpoints now require retraining.

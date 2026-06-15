@@ -70,7 +70,7 @@ def load_grapher_checkpoint(path: str | Path, device: str = "cpu") -> tuple[Grap
         raise RuntimeError(
             "The GraphER checkpoint appears to use the old second-edge scorer. "
             "The code now uses the paper-aligned complete-action scorer over (e1,e2,r); "
-            "please retrain with scripts/train_grapher_model.py before generating samples."
+            "please retrain with scripts/train_generic_grapher_model.py before generating samples."
         )
 
     max_nodes = params.get("max_nodes") or params.get("degree_histogram_dim") or 64
@@ -92,7 +92,7 @@ def load_grapher_checkpoint(path: str | Path, device: str = "cpu") -> tuple[Grap
         raise RuntimeError(
             "Could not load the GraphER checkpoint into the complete-action scorer. "
             "This usually means the checkpoint was trained before the generic GraphER revision; "
-            "retrain scripts/train_grapher_model.py."
+            "retrain scripts/train_generic_grapher_model.py."
         ) from exc
     model.to(device)
     model.eval()

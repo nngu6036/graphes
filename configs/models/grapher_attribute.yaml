@@ -8,7 +8,7 @@ k_eigen: 4
 # Flow/sampling horizon. Training uses normalized time t=s/L; generation uses
 # t=s/S and samples complete double-edge-swap actions a=(e1,e2,r).
 num_steps: 32
-max_steps_per_graph: 100
+max_steps_per_graph: 8
 
 # Candidate construction.
 candidate_budget: 64
@@ -30,7 +30,7 @@ local_feature_dim: 8
 learning_rate: 0.001
 weight_decay: 0.0
 grad_clip: 5.0
-epochs: 100
+epochs: 5
 max_graphs: null
 
 # Degree prior and rewiring sampling temperatures.

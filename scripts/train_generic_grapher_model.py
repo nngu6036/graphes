@@ -34,9 +34,9 @@ from grapher.generation.rewiring import (
 )
 from grapher.models.model_grapher import GraphER
 from grapher.registry import available_datasets
-from grapher.utils.compute import PeakMemoryMonitor, compute_report
+from grapher.utils.compute import CudaTrainingDeviceError, PeakMemoryMonitor, compute_report, require_cuda_training_device
 from grapher.utils.io import load_yaml, save_json, save_yaml, stable_hash
-from grapher.utils.logging import get_logger
+from grapher.utils.logging import configure_logging, get_logger
 from grapher.utils.numerics import assert_model_tensors_finite
 from grapher.utils.seed import set_seed
 
@@ -78,11 +78,6 @@ def _offline_candidate_actions(
     rng: random.Random,
 ) -> list[RewireAction]:
     """Build C_off = C_target union C_local union C_rand for teacher search.
-
-    Target-aware actions are used only here, never as model input unless they are
-    the selected teacher action.  This mirrors the paper's separation between
-    target-aware offline path construction and target-free training/generation
-    candidates.
     """
 
     current_edges = _edge_set(current)
@@ -95,7 +90,7 @@ def _offline_candidate_actions(
         ensure_connected=ensure_connected,
         k_hop=k_hop,
         max_candidates=max(int(offline_candidate_budget), int(candidate_budget)),
-        anchor_edges=sorted(wrong_edges) if wrong_edges else None,
+        anchor_edges=sorted(wrong_edges),
         rng=rng,
         shuffle=True,
     )
@@ -221,6 +216,10 @@ def _usable_training_graphs(graphs: Sequence[nx.Graph], max_graphs: int | None) 
     return usable, skipped
 
 
+def _num_trainable_parameters(model: torch.nn.Module) -> int:
+    return int(sum(p.numel() for p in model.parameters() if p.requires_grad))
+
+
 def train_grapher(
     *,
     dataset: str,
@@ -231,21 +230,53 @@ def train_grapher(
     run_id: int | None,
     device: str,
 ) -> dict:
+    device = require_cuda_training_device(device)
+    logger.info(
+        "Starting GraphER training dataset=%s run_id=%s seed=%s device=%s dataset_root=%s dataset_config=%s",
+        dataset,
+        run_id,
+        seed,
+        device,
+        dataset_root,
+        dataset_config_path,
+    )
     set_seed(seed, include_torch=True)
     rng = random.Random(int(seed))
     cfg = make_model_run_config(model_config, dataset=dataset, model="grapher", run_id=run_id, seed=seed, use_run_paths=run_id is not None)
+    logger.debug("Resolved GraphER config: %s", cfg)
     splits = load_dataset_splits(dataset, output_root=dataset_root, build_if_missing=True, config_path=dataset_config_path)
+    logger.info("Loaded dataset splits: %s", {split: len(graphs) for split, graphs in splits.items()})
     max_graphs = cfg.get("max_graphs")
     max_graphs = None if max_graphs in (None, "") else int(max_graphs)
     train_graphs, skipped = _usable_training_graphs(splits["train"], max_graphs=max_graphs)
     if not train_graphs:
         raise ValueError(f"No usable connected training graphs for GraphER. Skipped counts: {skipped}")
+    node_counts = [g.number_of_nodes() for g in train_graphs]
+    edge_counts = [g.number_of_edges() for g in train_graphs]
+    logger.info(
+        "Usable GraphER train graphs used=%d skipped=%d skipped_by_reason=%s nodes=(%d,%d) edges=(%d,%d)",
+        len(train_graphs),
+        int(sum(skipped.values())),
+        skipped,
+        int(min(node_counts)),
+        int(max(node_counts)),
+        int(min(edge_counts)),
+        int(max(edge_counts)),
+    )
 
     k_eigen = int(cfg.get("k_eigen", 4))
     first_data = graph_to_data(train_graphs[0], k_eigen=k_eigen)
     node_in_dim = int(first_data.x.size(1))
     max_nodes = int(cfg.get("max_nodes") or max(g.number_of_nodes() for g in train_graphs))
-    degree_histogram_dim = int(cfg.get("degree_histogram_dim") or max_nodes)
+    degree_histogram_dim = max_nodes
+    logger.info(
+        "GraphER feature dimensions node_in_dim=%d k_eigen=%d max_nodes=%d degree_histogram_dim=%d first_edge_index=%s",
+        node_in_dim,
+        k_eigen,
+        max_nodes,
+        degree_histogram_dim,
+        tuple(first_data.edge_index.shape),
+    )
     model = GraphER(
         node_in_dim=node_in_dim,
         hidden_dim=int(cfg.get("hidden_dim", 128)),
@@ -258,43 +289,81 @@ def train_grapher(
         dropout=float(cfg.get("dropout", 0.0)),
     )
     model.to(device)
+    logger.info(
+        "GraphER model params=%d hidden_dim=%d layers=%d T=%d local_feature_dim=%d",
+        _num_trainable_parameters(model),
+        int(cfg.get("hidden_dim", 128)),
+        int(cfg.get("num_layers", cfg.get("num_layer", 3))),
+        int(cfg.get("num_steps", cfg.get("T", 32))),
+        int(cfg.get("local_feature_dim", 8)),
+    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg.get("learning_rate", 1e-3)), weight_decay=float(cfg.get("weight_decay", 0.0)))
     epochs = int(cfg.get("epochs", 5))
     max_steps = int(cfg.get("max_steps_per_graph", 8))
     candidate_budget = int(cfg.get("candidate_budget", 64))
     offline_candidate_budget = int(cfg.get("offline_candidate_budget", max(candidate_budget * 4, candidate_budget + 16)))
-    k_hop_value = cfg.get("k_hop", 2)
-    k_hop = None if k_hop_value in (None, "none", "None") else int(k_hop_value)
+    k_hop = int(cfg.get("k_hop", 2))
     ensure_connected = bool(cfg.get("ensure_connected", True))
     T = int(cfg.get("num_steps", cfg.get("T", 32)))
     discrepancy = str(cfg.get("teacher_discrepancy", "edge_symmetric_difference"))
     require_positive_improvement = bool(cfg.get("require_positive_teacher_improvement", False))
+    logger.info(
+        "GraphER optimization epochs=%d max_steps_per_graph=%d lr=%g weight_decay=%g grad_clip=%g candidate_budget=%d offline_candidate_budget=%d k_hop=%s ensure_connected=%s discrepancy=%s require_positive=%s",
+        epochs,
+        max_steps,
+        float(cfg.get("learning_rate", 1e-3)),
+        float(cfg.get("weight_decay", 0.0)),
+        float(cfg.get("grad_clip", 5.0)),
+        candidate_budget,
+        offline_candidate_budget,
+        k_hop,
+        ensure_connected,
+        discrepancy,
+        require_positive_improvement,
+    )
 
     history: list[dict] = []
     start = time.perf_counter()
     with PeakMemoryMonitor() as memory_monitor:
         for epoch in range(1, epochs + 1):
+            epoch_start = time.perf_counter()
+            logger.info("GraphER epoch %d/%d starting graphs=%d", epoch, epochs, len(train_graphs))
             model.train()
             total_loss = 0.0
             num_examples = 0
             num_exact = 0
             num_positive = 0
+            num_hh_failures = 0
+            num_no_teacher_step = 0
+            num_zero_logits = 0
+            num_graphs_with_examples = 0
             train_candidate_sizes: list[int] = []
             offline_candidate_sizes: list[int] = []
             improvements: list[float] = []
             epoch_graphs = list(train_graphs)
             rng.shuffle(epoch_graphs)
-            for target in epoch_graphs:
+            for graph_idx, target in enumerate(epoch_graphs, start=1):
                 target = nx.convert_node_labels_to_integers(nx.Graph(target), ordering="sorted")
                 try:
                     current = deterministic_connected_havel_hakimi(G=target)
                 except Exception:
+                    num_hh_failures += 1
+                    logger.debug(
+                        "GraphER epoch=%d graph=%d HH construction failed nodes=%d edges=%d",
+                        epoch,
+                        graph_idx,
+                        target.number_of_nodes(),
+                        target.number_of_edges(),
+                    )
                     continue
                 if edge_symmetric_difference_size(current, target) == 0:
                     num_exact += 1
+                    logger.debug("GraphER epoch=%d graph=%d HH source already exact", epoch, graph_idx)
                     continue
                 target_degree_sequence = degree_sequence(target)
+                graph_examples_before = num_examples
                 for step in range(max_steps):
+                    current_distance = edge_symmetric_difference_size(current, target)
                     example = _candidate_teacher_step(
                         current,
                         target,
@@ -307,6 +376,14 @@ def train_grapher(
                         rng=rng,
                     )
                     if example is None:
+                        num_no_teacher_step += 1
+                        logger.debug(
+                            "GraphER epoch=%d graph=%d step=%d no teacher action current_distance=%d",
+                            epoch,
+                            graph_idx,
+                            step,
+                            current_distance,
+                        )
                         break
                     train_actions, label_idx, _teacher_action, improvement, next_graph, offline_size = example
                     data = graph_to_data(current, k_eigen=k_eigen).to(device)
@@ -321,6 +398,8 @@ def train_grapher(
                         graph=current,
                     )
                     if logits.numel() == 0:
+                        num_zero_logits += 1
+                        logger.debug("GraphER epoch=%d graph=%d step=%d zero logits", epoch, graph_idx, step)
                         break
                     target_idx = torch.tensor([int(label_idx)], dtype=torch.long, device=device)
                     loss = F.cross_entropy(logits.view(1, -1), target_idx)
@@ -335,29 +414,56 @@ def train_grapher(
                     train_candidate_sizes.append(len(train_actions))
                     offline_candidate_sizes.append(int(offline_size))
                     improvements.append(float(improvement))
+                    if logger.isEnabledFor(10) and (step == 0 or step == max_steps - 1):
+                        logger.debug(
+                            "GraphER epoch=%d graph=%d/%d step=%d distance=%d train_candidates=%d offline_candidates=%d label_idx=%d improvement=%.3f loss=%.6f",
+                            epoch,
+                            graph_idx,
+                            len(epoch_graphs),
+                            step,
+                            current_distance,
+                            len(train_actions),
+                            int(offline_size),
+                            int(label_idx),
+                            float(improvement),
+                            float(loss.item()),
+                        )
                     current = nx.convert_node_labels_to_integers(next_graph, ordering="sorted")
                     if edge_symmetric_difference_size(current, target) == 0:
                         break
+                if num_examples > graph_examples_before:
+                    num_graphs_with_examples += 1
             row = {
                 "epoch": epoch,
                 "loss": total_loss / max(num_examples, 1),
                 "num_teacher_examples": num_examples,
                 "num_hh_already_exact": num_exact,
                 "num_positive_teacher_steps": num_positive,
+                "num_hh_failures": num_hh_failures,
+                "num_no_teacher_step": num_no_teacher_step,
+                "num_zero_logits": num_zero_logits,
+                "num_graphs_with_examples": num_graphs_with_examples,
                 "avg_train_candidate_size": sum(train_candidate_sizes) / max(len(train_candidate_sizes), 1),
                 "avg_offline_candidate_size": sum(offline_candidate_sizes) / max(len(offline_candidate_sizes), 1),
                 "avg_teacher_improvement": sum(improvements) / max(len(improvements), 1),
+                "epoch_seconds": time.perf_counter() - epoch_start,
             }
             history.append(row)
             logger.info(
-                "GraphER epoch %d/%d loss=%.4f examples=%d avgC=%.1f avgCoff=%.1f avgΔ=%.3f",
+                "GraphER epoch %d/%d loss=%.4f examples=%d graphs_with_examples=%d exact=%d hh_fail=%d no_teacher=%d zero_logits=%d avgC=%.1f avgCoff=%.1f avg_delta=%.3f seconds=%.2f",
                 epoch,
                 epochs,
                 row["loss"],
                 num_examples,
+                num_graphs_with_examples,
+                num_exact,
+                num_hh_failures,
+                num_no_teacher_step,
+                num_zero_logits,
                 row["avg_train_candidate_size"],
                 row["avg_offline_candidate_size"],
                 row["avg_teacher_improvement"],
+                row["epoch_seconds"],
             )
         assert_model_tensors_finite(model, context=f"grapher/{dataset}")
     elapsed = time.perf_counter() - start
@@ -399,6 +505,7 @@ def train_grapher(
         },
     }
     torch.save(payload, checkpoint_path)
+    logger.info("Wrote GraphER checkpoint payload keys=%s", sorted(payload.keys()))
 
     run_dir = run_output_dir(dataset, "grapher", run_id=run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -419,6 +526,7 @@ def train_grapher(
     }
     save_json(metadata, run_dir / "train_metadata.json", force=True)
     logger.info("Saved GraphER checkpoint to %s", checkpoint_path)
+    logger.info("Saved GraphER metadata to %s", run_dir / "train_metadata.json")
     return metadata
 
 
@@ -426,22 +534,27 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train the generic GraphER complete-action rewiring scorer from HH-to-data teacher steps.")
     parser.add_argument("--dataset", required=True, choices=available_datasets())
     parser.add_argument("--model-config", type=str, default="configs/models/grapher_generic.yaml")
-    parser.add_argument("--dataset-config", type=str, default=None)
-    parser.add_argument("--dataset-root", type=str, default="outputs/datasets")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-id", type=int, default=None)
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging.")
     args = parser.parse_args()
-    dataset_cfg = Path(args.dataset_config) if args.dataset_config else Path("configs/datasets") / f"{args.dataset}.yaml"
-    train_grapher(
-        dataset=args.dataset,
-        model_config=load_yaml(args.model_config),
-        dataset_config_path=dataset_cfg,
-        dataset_root=args.dataset_root,
-        seed=args.seed,
-        run_id=args.run_id,
-        device=args.device,
-    )
+    if args.debug:
+        configure_logging("DEBUG")
+    dataset_root = "outputs/datasets"
+    dataset_cfg = Path("configs/datasets") / f"{args.dataset}.yaml"
+    try:
+        train_grapher(
+            dataset=args.dataset,
+            model_config=load_yaml(args.model_config),
+            dataset_config_path=dataset_cfg,
+            dataset_root=dataset_root,
+            seed=args.seed,
+            run_id=args.run_id,
+            device=args.device,
+        )
+    except CudaTrainingDeviceError as exc:
+        parser.exit(status=2, message=f"error: {exc}\n")
 
 
 if __name__ == "__main__":

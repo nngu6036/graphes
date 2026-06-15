@@ -56,7 +56,7 @@ def generate_grapher_samples(
     grapher_ckpt = Path(cfg.get("checkpoint_path") or f"outputs/checkpoints/{dataset}/grapher/grapher.pt")
     dhvae_ckpt = Path(cfg.get("dhvae_checkpoint_path") or f"outputs/checkpoints/{dataset}/dhvae/dhvae.pt")
     if not grapher_ckpt.exists():
-        raise FileNotFoundError(f"GraphER checkpoint not found: {grapher_ckpt}. Run scripts/train_grapher_model.py first.")
+        raise FileNotFoundError(f"GraphER checkpoint not found: {grapher_ckpt}. Run scripts/train_generic_grapher_model.py first.")
     if not dhvae_ckpt.exists():
         raise FileNotFoundError(f"DH-VAE checkpoint not found: {dhvae_ckpt}. Run scripts/train_dhvae_model.py first.")
     grapher, grapher_payload = load_grapher_checkpoint(grapher_ckpt, device=device)

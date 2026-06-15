@@ -62,6 +62,45 @@ def hardware_label(summary: dict[str, Any] | None = None) -> str:
     return f"{cpu} ({count} logical CPUs)" if count else str(cpu)
 
 
+class CudaTrainingDeviceError(RuntimeError):
+    """Raised when a training entry point cannot use the requested CUDA GPU."""
+
+
+def require_cuda_training_device(device: str) -> str:
+    """Return a validated CUDA device string or raise before training starts."""
+
+    torch = _try_import_torch()
+    if torch is None:
+        raise CudaTrainingDeviceError("Training requires PyTorch with CUDA support, but PyTorch could not be imported.")
+
+    requested = str(device or "cuda").strip().lower()
+    if not requested.startswith("cuda"):
+        raise CudaTrainingDeviceError(
+            f"Training requires a CUDA GPU. Requested device={device!r}; use a CUDA device such as 'cuda' or 'cuda:0'."
+        )
+
+    if not torch.cuda.is_available():
+        raise CudaTrainingDeviceError(
+            "Training requires a CUDA GPU, but torch.cuda.is_available() is false. "
+            "Install a CUDA-enabled PyTorch build and NVIDIA driver, or run on a GPU machine."
+        )
+
+    try:
+        parsed = torch.device(requested)
+    except Exception as exc:
+        raise CudaTrainingDeviceError(f"Invalid CUDA device string: {device!r}.") from exc
+
+    if parsed.type != "cuda":
+        raise CudaTrainingDeviceError(f"Training requires a CUDA GPU. Requested device={device!r}.")
+
+    if parsed.index is not None and parsed.index >= torch.cuda.device_count():
+        raise CudaTrainingDeviceError(
+            f"Requested CUDA device index {parsed.index} but only {torch.cuda.device_count()} CUDA device(s) are available."
+        )
+
+    return str(parsed)
+
+
 @dataclass
 class PeakMemoryMonitor:
     interval_seconds: float = 0.2

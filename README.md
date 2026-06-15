@@ -133,7 +133,7 @@ PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset sbm --num-samp
 Train the rewiring scorer:
 
 ```bash
-PYTHONPATH=src python scripts/train_grapher_model.py --dataset sbm --seed 42 --run-id 0
+PYTHONPATH=src python scripts/train_generic_grapher_model.py --dataset sbm --seed 42 --run-id 0
 ```
 
 Generate graph samples:
@@ -149,7 +149,7 @@ for run_id in 0 1 2; do
   seed=$((42 + run_id))
   PYTHONPATH=src python scripts/train_dhvae_model.py --dataset sbm --seed "$seed" --run-id "$run_id"
   PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset sbm --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
-  PYTHONPATH=src python scripts/train_grapher_model.py --dataset sbm --seed "$seed" --run-id "$run_id"
+  PYTHONPATH=src python scripts/train_generic_grapher_model.py --dataset sbm --seed "$seed" --run-id "$run_id"
   PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset sbm --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
 done
 ```
@@ -234,7 +234,7 @@ configs/models/grapher_generic.yaml
 Train and sample:
 
 ```bash
-PYTHONPATH=src python scripts/train_grapher_model.py \
+PYTHONPATH=src python scripts/train_generic_grapher_model.py \
   --dataset ego_citeseer \
   --model-config configs/models/grapher_generic.yaml
 
