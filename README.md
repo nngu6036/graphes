@@ -125,6 +125,7 @@ Generate degree sequences for diagnostics. The sampler first draws a graph size 
 
 ```bash
 PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset sbm --num-samples 1024 --seed 42 --run-id 0 --temperature 1.0 --force
+PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset ego_citeseer --num-samples 1024 --seed 42 --run-id 0 --temperature 1.0 --force
 ```
 
 Train the rewiring scorer:
