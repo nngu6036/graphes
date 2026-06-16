@@ -1,9 +1,9 @@
 model: grapher
 architecture: generic_complete_action_grapher
-hidden_dim: 128
-num_layers: 3
-dropout: 0.0
-k_eigen: 4
+hidden_dim: 192
+num_layers: 4
+dropout: 0.05
+k_eigen: 8
 
 # Flow/sampling horizon. Training uses normalized time t=s/L; generation uses
 # t=s/S and samples complete double-edge-swap actions a=(e1,e2,r).
@@ -11,23 +11,23 @@ num_steps: 32
 max_steps_per_graph: 16
 
 candidate_budget: 64
-offline_candidate_budget: 256
+offline_candidate_budget: 128
 k_hop: 2
 ensure_connected: true
 init_method: havel_hakimi
 teacher_discrepancy: edge_symmetric_difference
-require_positive_teacher_improvement: false
+require_positive_teacher_improvement: true
 
 # Conditioning dimensions. max_nodes/degree_histogram_dim are inferred from the
 # training split if left null, then saved in the checkpoint.
 max_nodes: null
 degree_histogram_dim: null
-time_embedding_dim: 128
+time_embedding_dim: 192
 local_feature_dim: 8
 
 # Optimization.
-learning_rate: 0.001
-weight_decay: 0.0
+learning_rate: 0.0007
+weight_decay: 0.00001
 grad_clip: 5.0
 epochs: 40
 max_graphs: 4096
@@ -47,4 +47,4 @@ samples_path: outputs/samples/{dataset}/grapher.pkl
 # and avoids rebuilding NetworkX candidates every epoch.
 grad_accum_steps: 16
 use_amp: true
-examples_per_epoch: 16384
+examples_per_epoch: 32768
