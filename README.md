@@ -25,14 +25,10 @@ export PYTHONPATH=src
 ```bash
 PYTHONPATH=src python scripts/prepare_dataset.py --dataset sbm --force
 PYTHONPATH=src python scripts/prepare_dataset.py --dataset planar --force
-PYTHONPATH=src python scripts/prepare_dataset.py --dataset ego_citeseer --download-root outputs/raw_datasets/citeseer --force
+PYTHONPATH=src python scripts/prepare_dataset.py --dataset ego_citeseer --raw-graph-path dataset/EGO/ind.citeseer.graph --force
 ```
 
 `ego_citeseer` builds GraphRNN-style small ego graphs from CiteSeer. It first looks for a local `ind.citeseer.graph` pickle and otherwise uses PyG Planetoid CiteSeer. CiteSeer is a finite source graph: after radius and node-count filtering, the builder uses `min(num_graphs, available_candidates)` by default. This prevents failures when a large synthetic-dataset value such as `num_graphs: 10240` is accidentally reused. Add `--strict-num-graphs` or set `strict_num_graphs: true` to fail on shortfall instead. To use an existing local pickle:
-
-```bash
-PYTHONPATH=src python scripts/prepare_dataset.py --dataset ego_citeseer --raw-graph-path dataset/EGO/ind.citeseer.graph --force
-```
 
 Molecular datasets use different preparation paths. QM9 can use the generic dataset script through PyG:
 
@@ -121,6 +117,7 @@ Train the paper-aligned size-conditioned DH-VAE degree prior:
 
 ```bash
 PYTHONPATH=src python scripts/train_dhvae_model.py --dataset sbm --seed 42 --run-id 0
+PYTHONPATH=src python scripts/train_dhvae_model.py --dataset ego_citeseer --seed 42 --run-id 0
 # use --dataset ego_citeseer for the CiteSeer ego-graph benchmark
 ```
 

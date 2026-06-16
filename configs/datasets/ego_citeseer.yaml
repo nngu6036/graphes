@@ -8,7 +8,7 @@ pyg_root: outputs/raw_datasets/citeseer
 # ind.citeseer.graph, then falls back to torch_geometric.datasets.Planetoid.
 source: auto
 raw_graph_path: null
-num_graphs: 200
+num_graphs: null
 radius: 3
 min_nodes: 4
 max_nodes: 18
