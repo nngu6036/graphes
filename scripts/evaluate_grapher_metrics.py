@@ -98,6 +98,37 @@ def _payload_to_graphs_and_sequences(payload) -> tuple[list[nx.Graph], list[list
     raise TypeError("Generated sample list must contain either NetworkX graphs or degree sequences.")
 
 
+def _graph_summary(graphs: Sequence[nx.Graph]) -> dict[str, float | int]:
+    if not graphs:
+        return {
+            "connectedness_rate": 0.0,
+            "zero_degree_graph_count": 0,
+            "clustering_mean": 0.0,
+            "clustering_std": 0.0,
+        }
+    connected = [float(nx.is_connected(g)) if g.number_of_nodes() > 0 else 0.0 for g in graphs]
+    zero_degree_graph_count = sum(1 for g in graphs if any(int(degree) == 0 for _, degree in g.degree()))
+    clustering = np.asarray([nx.average_clustering(g) if g.number_of_nodes() > 0 else 0.0 for g in graphs], dtype=np.float64)
+    return {
+        "connectedness_rate": float(np.mean(connected)),
+        "zero_degree_graph_count": int(zero_degree_graph_count),
+        "clustering_mean": float(clustering.mean()),
+        "clustering_std": float(clustering.std(ddof=0)),
+    }
+
+
+def _print_graph_summary(reference_graphs: Sequence[nx.Graph], generated_graphs: Sequence[nx.Graph]) -> None:
+    reference = _graph_summary(reference_graphs)
+    print(f"reference connectedness rate: {reference['connectedness_rate']:.6f}")
+    print(f"reference zero-degree graph count: {reference['zero_degree_graph_count']}")
+    print(f"reference clustering mean/std: {reference['clustering_mean']:.6f} / {reference['clustering_std']:.6f}")
+    if generated_graphs:
+        generated = _graph_summary(generated_graphs)
+        print(f"generated clustering mean/std: {generated['clustering_mean']:.6f} / {generated['clustering_std']:.6f}")
+    else:
+        print("generated clustering mean/std: n/a")
+
+
 def evaluate(
     *,
     dataset: str,
@@ -130,6 +161,8 @@ def evaluate(
         generated_sequences = [degree_sequence(g) for g in generated_graphs]
     elif generated_sequences:
         generated_sequences = _subsample(generated_sequences, max_generated_graphs, seed + 17)
+
+    _print_graph_summary(reference_graphs, generated_graphs)
 
     reference_sequences = [degree_sequence(g) for g in reference_graphs]
     max_degree = max(
