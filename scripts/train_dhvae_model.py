@@ -122,9 +122,6 @@ def train_dhvae(
     min_nodes_observed = min(len(seq) for seq in train_sequences)
 
     configured_max_nodes = _as_int_or_none(cfg.get("max_nodes"), None)
-    if configured_max_nodes is None:
-        # Backward-compatible alias used by older degree-prior configs.
-        configured_max_nodes = _as_int_or_none(cfg.get("max_input_dim"), None)
 
     if configured_max_nodes is not None and int(configured_max_nodes) < int(max_nodes_observed):
         raise ValueError(
@@ -261,10 +258,6 @@ def train_dhvae(
         "hidden_dim": int(cfg.get("hidden_dim", 128)),
         "latent_dim": int(cfg.get("latent_dim", 32)),
         "size_embedding_dim": int(cfg.get("size_embedding_dim", 32)),
-        # Compatibility keys consumed by older metadata readers.
-        "max_input_dim": int(histogram_dim),
-        "max_frequency": int(max_nodes + 1),
-        "num_nodes": int(max_nodes_observed),
     }
     payload = {
         "model_state_dict": model.state_dict(),

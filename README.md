@@ -117,7 +117,7 @@ Train the paper-aligned size-conditioned DH-VAE degree prior:
 
 ```bash
 PYTHONPATH=src python scripts/train_dhvae_model.py --dataset sbm --seed 42 --run-id 0
-PYTHONPATH=src python scripts/train_dhvae_model.py --dataset ego_citeseer --seed 42 --run-id 0
+PYTHONPATH=src python scripts/train_dhvae_model.py --dataset ego_citeseer --seed 42 --run-id 1
 # use --dataset ego_citeseer for the CiteSeer ego-graph benchmark
 ```
 
@@ -125,7 +125,7 @@ Generate degree sequences for diagnostics. The sampler first draws a graph size 
 
 ```bash
 PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset sbm --num-samples 1024 --seed 42 --run-id 0 --temperature 1.0 --force
-PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset ego_citeseer --num-samples 1024 --seed 42 --run-id 0 --temperature 1.0 --force
+PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset ego_citeseer --num-samples 1024 --seed 42 --run-id 1 --temperature 1.0 --force
 ```
 
 Train the rewiring scorer:
@@ -136,13 +136,15 @@ PYTHONPATH=src python scripts/train_generic_grapher_model.py \
   --dataset ego_citeseer \
   --seed 42 \
   --run-id 1 \
-  --model-config /mnt/data/grapher_generic_ego_citeseer_next.yaml
+  --model-config configs/models/grapher_generic_ego_citeseer.yaml
 ```
 
 Generate graph samples:
 
 ```bash
 PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset sbm --num-samples 1024 --seed 42 --run-id 0 --force
+
+PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset ego_citeseer --num-samples 1024 --seed 42 --run-id 1 --force
 ```
 
 For repeated runs:
@@ -169,6 +171,14 @@ PYTHONPATH=src python scripts/evaluate_grapher_metrics.py \
   --reference-split test \
   --max-reference-graphs 1024 \
   --max-generated-graphs 1024
+
+PYTHONPATH=src python scripts/evaluate_grapher_metrics.py \
+  --dataset ego_citeseer \
+  --model grapher \
+  --run-id 1 \
+  --reference-split test \
+  --max-reference-graphs 1024 \
+  --max-generated-graphs 1024
 ```
 
 Evaluate DH-VAE degree sequences:
@@ -181,14 +191,8 @@ PYTHONPATH=src python scripts/evaluate_grapher_metrics.py \
   --reference-split test \
   --max-reference-graphs 1024 \
   --max-generated-graphs 1024
-```
 
-Compatibility aliases are available:
 
-```bash
-PYTHONPATH=src python scripts/evaluate_generic_metrics.py --dataset sbm --model grapher --run-id 0
-PYTHONPATH=src python scripts/evaluate_degree_sequence.py --dataset sbm --run-id 0
-PYTHONPATH=src python scripts/eval.py --dataset sbm --model grapher --run-id 0
 ```
 
 Metric files are written to `outputs/metrics/<dataset>/<model>/`.

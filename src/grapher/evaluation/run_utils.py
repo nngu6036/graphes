@@ -316,14 +316,3 @@ def evaluate_repeated_runs(
 def explicit_run_selection(run_id: int | None, run_ids: Sequence[int] | None) -> bool:
     return run_id is not None or bool(run_ids)
 
-
-def existing_sample_path(dataset: str, model: str, run_id: int | None = None) -> Path:
-    """Return the expected sample path, with legacy fallback for run 0."""
-    path = sample_path(dataset, model, run_id)
-    if path.exists():
-        return path
-    if run_id == 0:
-        legacy = sample_path(dataset, model, None)
-        if legacy.exists():
-            return legacy
-    return path

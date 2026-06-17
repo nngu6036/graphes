@@ -49,21 +49,6 @@ from grapher.generation.rewiring import (
 )
 
 
-def get_edge_representation(x: torch.Tensor, u: int, v: int, method: str = "sum_absdiff") -> torch.Tensor:
-    """Backwards-compatible helper used by older experiments."""
-
-    x_u, x_v = x[int(u)], x[int(v)]
-    if method == "mean":
-        return (x_u + x_v) / 2
-    if method == "sum":
-        return x_u + x_v
-    if method == "max":
-        return torch.max(x_u, x_v)
-    if method == "sum_absdiff":
-        return torch.cat([x_u + x_v, torch.abs(x_u - x_v)], dim=-1)
-    return torch.cat([x_u, x_v], dim=-1)
-
-
 def decode_degree_sequence(seq: Sequence[int]) -> list[int]:
     degrees: list[int] = []
     for degree, count in enumerate(seq):
@@ -83,7 +68,7 @@ def get_sinusoidal_embedding(t: torch.Tensor, dim: int, max_period: int = 10000)
 
 def initialize_graphs(method: str, seq: Sequence[int]) -> nx.Graph:
     method_key = method.lower().replace("-", "_")
-    if method_key in {"havel_hakimi", "hh", "havei_hakimi"}:  # keep typo as backwards-compatible alias
+    if method_key == "havel_hakimi":
         return deterministic_connected_havel_hakimi(seq=seq)
     if method_key == "configuration_model":
         return configuration_model_from_multiset(seq)
@@ -155,11 +140,8 @@ class GraphER(nn.Module):
         time_embedding_dim: int | None = None,
         local_feature_dim: int = 8,
         dropout: float = 0.0,
-        num_energy_targets: int = 2,  # accepted for backwards compatibility
-        energy_hidden_dim: int = 64,  # accepted for backwards compatibility
     ):
         super().__init__()
-        _ = (num_energy_targets, energy_hidden_dim)
         self.node_in_dim = int(node_in_dim)
         self.hidden_dim = int(hidden_dim)
         self.num_layer = int(num_layer)
@@ -408,26 +390,13 @@ class GraphER(nn.Module):
         self,
         x: torch.Tensor,
         edge_index: torch.Tensor,
-        first_edge: tuple[int, int] | None = None,
-        candidate_edges: Sequence[tuple[int, int]] | None = None,
         t: int | float | torch.Tensor = 0,
         *,
-        actions: Sequence[RewireAction] | None = None,
+        actions: Sequence[RewireAction],
         degree_sequence: Sequence[int] | None = None,
         graph: nx.Graph | None = None,
         action_local_features: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Forward pass.
-
-        New code should pass ``actions=[RewireAction(...), ...]``.  The older
-        ``first_edge`` + ``candidate_edges`` signature is retained as a thin
-        compatibility layer and scores orientation-0 actions only.
-        """
-
-        if actions is None:
-            if first_edge is None or candidate_edges is None:
-                raise TypeError("GraphER.forward requires either actions=... or first_edge plus candidate_edges.")
-            actions = [RewireAction(first_edge, edge, 0) for edge in candidate_edges]
         return self.score_actions(
             x,
             edge_index,

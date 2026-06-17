@@ -181,7 +181,7 @@ def graph_to_data(graph: nx.Graph, k_eigen: int = 4, *, include_edge_pairs: bool
 
     The model's original input is kept: degree feature plus optional Laplacian
     positional encodings.  When PyG is installed, a torch_geometric Data object
-    is returned; otherwise a compatible lightweight container is used.
+    is returned; otherwise a lightweight container is used.
     """
 
     g = nx.convert_node_labels_to_integers(nx.Graph(graph), ordering="sorted")

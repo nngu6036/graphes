@@ -5,7 +5,7 @@
 - Repaired package imports from the old `empirical_comparison` namespace to the local `grapher` package.
 - Added missing package initializers and a working lazy registry for datasets and models.
 - Centralized degree-sequence, connected Havel-Hakimi, candidate construction, graph-to-data, and double-edge-swap helpers in `src/grapher/generation/rewiring.py`.
-- Replaced script-local duplicate utilities with lightweight compatibility wrappers.
+- Replaced script-local duplicate utilities with shared package helpers.
 - Added checkpoint loaders in `src/grapher/models/checkpoint.py` so training, sampling, and evaluation scripts share the same model-loading path.
 - Filled empty model config files and renamed `grapher_generic_yaml` to `grapher_generic.yaml`.
 - Updated `requirements.txt` with missing runtime libraries and removed unused heavyweight dependencies.
@@ -18,22 +18,21 @@
 - `scripts/train_generic_grapher_model.py`: trains the existing GraphER scorer from target-aware teacher labels but target-free candidate sets.
 - `scripts/generate_grapher_samples.py`: loads the DH-VAE checkpoint and GraphER checkpoint, constructs connected canonical sources, and samples graph rewiring trajectories.
 - `scripts/evaluate_grapher_metrics.py`: evaluates graph samples and degree-sequence samples with degree, clustering, spectral, motif-proxy, structural summary, validity, connectedness, uniqueness, and novelty metrics.
-- `scripts/evaluate_degree_sequence.py`, `scripts/evaluate_generic_metrics.py`, `scripts/evaluate_molecular_metrics.py`, and `scripts/eval.py`: compatibility aliases that dispatch to the unified evaluator.
 
 ## Minimal model adaptations
 
 - `GraphER` now imports shared rewiring utilities from the package instead of from `scripts/utils.py`.
 - `GraphER` has a small fallback GIN layer when `torch_geometric` is unavailable, allowing generic smoke tests to run in minimal environments.
-- Legacy independent-count degree-prior checkpoints should be retrained with DH-VAE.
+- Independent-count degree-prior checkpoints should be retrained with DH-VAE.
 
 
 ## Size-conditioned DH-VAE degree prior update
 
-- Replaced the legacy independent-count degree-prior internals with the paper-aligned size-conditioned Degree-Histogram VAE.
+- Replaced the independent-count degree-prior internals with the paper-aligned size-conditioned Degree-Histogram VAE.
 - `src/grapher/models/model_dhvae.py` now provides `DHVAE`, explicit degree-zero histogram encoding, size embeddings, masked degree logits for `k < n`, multinomial histogram sampling, and a multinomial NLL reconstruction loss.
 - `scripts/train_dhvae_model.py` now trains on `(histogram, graph_size)` pairs, stores the empirical graph-size distribution in checkpoints, and records DH-VAE-specific metadata.
 - `scripts/generate_dhvae_samples.py` now samples graph sizes from the checkpoint's empirical size distribution and exposes `--temperature` for the DH-VAE categorical degree probabilities before multinomial sampling.
-- `src/grapher/models/checkpoint.py` now requires DH-VAE checkpoints and gives an explicit retraining message for legacy degree-prior checkpoints.
+- `src/grapher/models/checkpoint.py` now requires DH-VAE checkpoints.
 - Updated `configs/models/dhvae.yaml`, `README.md`, and the model registry to use DH-VAE naming.
 
 ## Smoke tests performed

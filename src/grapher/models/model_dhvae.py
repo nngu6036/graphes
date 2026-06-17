@@ -156,35 +156,18 @@ class DHVAE(nn.Module):
 
     def __init__(
         self,
-        max_nodes: int | None = None,
+        max_nodes: int,
         hidden_dim: int = 128,
         latent_dim: int = 32,
         size_embedding_dim: int = 32,
-        degree_embedding_dim: int | None = None,
         histogram_dim: int | None = None,
-        dropout: float = 0.0,
-        *,
-        # Backwards-compatible names used by older scripts/checkpoints.
-        max_input_dim: int | None = None,
-        max_frequency: int | None = None,
     ) -> None:
         super().__init__()
-        inferred_max_nodes = max_nodes if max_nodes is not None else max_input_dim
-        if inferred_max_nodes is None and max_frequency is not None:
-            # Old configs used max_frequency for count categories.  In the new
-            # model, max_nodes is the relevant count/size bound.
-            inferred_max_nodes = max(1, int(max_frequency) - 1)
-        if inferred_max_nodes is None:
-            raise ValueError("DHVAE requires max_nodes or max_input_dim.")
-        self.max_nodes = int(inferred_max_nodes)
+        self.max_nodes = int(max_nodes)
         self.histogram_dim = int(histogram_dim or self.max_nodes)
-        self.max_input_dim = self.histogram_dim  # compatibility attribute
-        self.max_frequency = self.max_nodes + 1  # compatibility attribute
         self.hidden_dim = int(hidden_dim)
         self.latent_dim = int(latent_dim)
         self.size_embedding_dim = int(size_embedding_dim)
-        self.degree_embedding_dim = int(degree_embedding_dim or 0)  # accepted for config/checkpoint compatibility
-        self.dropout = float(dropout)  # accepted for config/checkpoint compatibility
         if self.max_nodes <= 0:
             raise ValueError("max_nodes must be positive.")
         if self.histogram_dim < self.max_nodes:
@@ -210,18 +193,6 @@ class DHVAE(nn.Module):
         size_probs = torch.zeros(self.max_nodes + 1, dtype=torch.float32)
         size_probs[self.max_nodes] = 1.0
         self.register_buffer("size_probs", size_probs)
-
-    @property
-    def num_nodes(self) -> int:  # compatibility with old generation code
-        return self.max_nodes
-
-    @num_nodes.setter
-    def num_nodes(self, value: int) -> None:  # compatibility no-op
-        # Older scripts assigned a fixed generation size after construction.  In
-        # DH-VAE the size support is determined by max_nodes and the learned
-        # size embedding, so silently ignore compatible assignments instead of
-        # resizing model parameters after initialization.
-        _ = int(value)
 
     def set_size_distribution(self, sizes_or_counts: Mapping[int, int] | Iterable[int] | torch.Tensor, *, values_are_counts: bool = False) -> None:
         """Store the empirical graph-size prior p_data(n).
@@ -259,11 +230,6 @@ class DHVAE(nn.Module):
             counts[self.max_nodes] = 1.0
         probs = counts / counts.sum().clamp_min(_EPS)
         self.size_probs.detach().copy_(probs.to(device=self.size_probs.device, dtype=self.size_probs.dtype))
-
-    def register_empirical_size_distribution(self, sizes: Iterable[int]) -> None:
-        """Compatibility wrapper used by training scripts."""
-
-        self.set_size_distribution(sizes, values_are_counts=False)
 
     def empirical_size_distribution(self) -> dict[str, list[int] | list[float]]:
         """Return nonzero empirical size probabilities in checkpoint-friendly form."""
