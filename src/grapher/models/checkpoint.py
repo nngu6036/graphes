@@ -8,21 +8,6 @@ import torch
 from grapher.models.model_grapher import GraphER
 from grapher.models.model_dhvae import DHVAE
 
-def _add_missing_gin_eps(model: torch.nn.Module, state_dict: dict[str, Any]) -> dict[str, Any]:
-    """Fill missing GINConv eps buffers caused by PyG version differences.
-
-    Some PyG versions store GINConv.eps in the state_dict, while others do not.
-    If the checkpoint only misses gin_layers.*.eps, use the model's initialized
-    default eps values and keep strict loading for all real parameters.
-    """
-    model_state = model.state_dict()
-    state_dict = dict(state_dict)
-
-    for key, value in model_state.items():
-        if key.startswith("gin_layers.") and key.endswith(".eps") and key not in state_dict:
-            state_dict[key] = value.clone()
-
-    return state_dict
 
 def _torch_load_compat(*args: Any, **kwargs: Any) -> Any:
     """torch.load wrapper compatible with old and new PyTorch versions.
@@ -48,6 +33,34 @@ def _torch_load_compat(*args: Any, **kwargs: Any) -> Any:
         return torch.load(*args, **kwargs)
 
 
+def _prepare_grapher_state_dict_for_pyg_compat(
+    model: torch.nn.Module,
+    state_dict: dict[str, Any],
+) -> dict[str, Any]:
+    """Handle harmless GINConv eps differences across PyG versions.
+
+    Some PyG versions store GINConv.eps in the state_dict, while others do not.
+    This function:
+      1. Adds missing gin_layers.*.eps keys from the initialized model.
+      2. Removes unexpected gin_layers.*.eps keys if the current model does not use them.
+    It does not ignore any other parameter mismatch.
+    """
+    model_state = model.state_dict()
+    prepared = dict(state_dict)
+
+    # Drop checkpoint eps keys if the current PyG model does not have them.
+    for key in list(prepared.keys()):
+        if key.startswith("gin_layers.") and key.endswith(".eps") and key not in model_state:
+            prepared.pop(key)
+
+    # Add missing eps keys if the current PyG model expects them.
+    for key, value in model_state.items():
+        if key.startswith("gin_layers.") and key.endswith(".eps") and key not in prepared:
+            prepared[key] = value.detach().clone()
+
+    return prepared
+
+
 def load_dhvae_checkpoint(path: str | Path, device: str = "cpu") -> tuple[DHVAE, dict[str, Any]]:
     """Load a size-conditioned DH-VAE degree-prior checkpoint."""
 
@@ -67,13 +80,11 @@ def load_dhvae_checkpoint(path: str | Path, device: str = "cpu") -> tuple[DHVAE,
         size_embedding_dim=int(params.get("size_embedding_dim", 32)),
     )
 
-    state_dict = _add_missing_gin_eps(model, state_dict)
-
     try:
         model.load_state_dict(state_dict)
     except RuntimeError as exc:
         raise RuntimeError(
-            "Could not load the GraphER checkpoint into the complete-action scorer."
+            "Could not load the degree-prior checkpoint into the size-conditioned DH-VAE."
         ) from exc
 
     model.to(device)
@@ -113,8 +124,10 @@ def load_grapher_checkpoint(path: str | Path, device: str = "cpu") -> tuple[Grap
         dropout=float(params.get("dropout", 0.0)),
     )
 
+    state_dict = _prepare_grapher_state_dict_for_pyg_compat(model, state_dict)
+
     try:
-        model.load_state_dict(state_dict)
+        model.load_state_dict(state_dict, strict=True)
     except RuntimeError as exc:
         raise RuntimeError(
             "Could not load the GraphER checkpoint into the complete-action scorer."
