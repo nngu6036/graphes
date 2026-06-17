@@ -8,6 +8,21 @@ import torch
 from grapher.models.model_grapher import GraphER
 from grapher.models.model_dhvae import DHVAE
 
+def _add_missing_gin_eps(model: torch.nn.Module, state_dict: dict[str, Any]) -> dict[str, Any]:
+    """Fill missing GINConv eps buffers caused by PyG version differences.
+
+    Some PyG versions store GINConv.eps in the state_dict, while others do not.
+    If the checkpoint only misses gin_layers.*.eps, use the model's initialized
+    default eps values and keep strict loading for all real parameters.
+    """
+    model_state = model.state_dict()
+    state_dict = dict(state_dict)
+
+    for key, value in model_state.items():
+        if key.startswith("gin_layers.") and key.endswith(".eps") and key not in state_dict:
+            state_dict[key] = value.clone()
+
+    return state_dict
 
 def _torch_load_compat(*args: Any, **kwargs: Any) -> Any:
     """torch.load wrapper compatible with old and new PyTorch versions.
@@ -52,11 +67,13 @@ def load_dhvae_checkpoint(path: str | Path, device: str = "cpu") -> tuple[DHVAE,
         size_embedding_dim=int(params.get("size_embedding_dim", 32)),
     )
 
+    state_dict = _add_missing_gin_eps(model, state_dict)
+
     try:
         model.load_state_dict(state_dict)
     except RuntimeError as exc:
         raise RuntimeError(
-            "Could not load the degree-prior checkpoint into the size-conditioned DH-VAE."
+            "Could not load the GraphER checkpoint into the complete-action scorer."
         ) from exc
 
     model.to(device)
