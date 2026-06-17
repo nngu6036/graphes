@@ -132,6 +132,11 @@ Train the rewiring scorer:
 
 ```bash
 PYTHONPATH=src python scripts/train_generic_grapher_model.py --dataset sbm --seed 42 --run-id 0
+PYTHONPATH=src python scripts/train_generic_grapher_model.py \
+  --dataset ego_citeseer \
+  --seed 42 \
+  --run-id 1 \
+  --model-config /mnt/data/grapher_generic_ego_citeseer_next.yaml
 ```
 
 Generate graph samples:

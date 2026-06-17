@@ -1,0 +1,47 @@
+model: grapher
+architecture: generic_complete_action_grapher
+hidden_dim: 192
+num_layers: 4
+dropout: 0.08
+k_eigen: 8
+
+# Ego-Citeseer has short teacher paths in the observed run (~4.1 states/graph),
+# so use a moderate generation horizon rather than many extra rewires.
+num_steps: 24
+max_steps_per_graph: 24
+
+# k_hop=3 is affordable for Ego-Citeseer and may reduce no-improvement teacher
+# steps by allowing less-local source-to-target corrections.
+candidate_budget: 64
+offline_candidate_budget: 256
+k_hop: 3
+ensure_connected: true
+init_method: havel_hakimi
+teacher_discrepancy: edge_symmetric_difference
+require_positive_teacher_improvement: true
+
+# Inferred from training split if null.
+max_nodes: null
+degree_histogram_dim: null
+time_embedding_dim: 192
+local_feature_dim: 8
+
+# Longer training is affordable because teacher cache is small for Ego-Citeseer.
+learning_rate: 0.0005
+weight_decay: 0.00001
+grad_clip: 5.0
+epochs: 120
+max_graphs: null
+
+# Generation temperatures.
+degree_sample_temperature: 1.0
+action_temperature: 0.9
+sample_actions: true
+
+checkpoint_path: outputs/checkpoints/{dataset}/grapher/grapher.pt
+dhvae_checkpoint_path: outputs/checkpoints/{dataset}/dhvae/dhvae.pt
+samples_path: outputs/samples/{dataset}/grapher.pkl
+
+grad_accum_steps: 16
+use_amp: true
+examples_per_epoch: null
