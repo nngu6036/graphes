@@ -50,6 +50,10 @@ def main() -> None:
         cfg["raw_graph_path"] = args.raw_graph_path
     if args.max_graphs is not None:
         cfg["max_graphs"] = int(args.max_graphs)
+        # Synthetic and ego builders use `num_graphs`; molecular builders use `max_graphs`.
+        # Keep both in sync so the CLI flag actually affects all registered datasets.
+        if args.dataset in {"ego_citeseer", "planar", "sbm"}:
+            cfg["num_graphs"] = int(args.max_graphs)
     if args.strict_num_graphs:
         cfg["strict_num_graphs"] = True
     seed = int(cfg.get("seed", 42))

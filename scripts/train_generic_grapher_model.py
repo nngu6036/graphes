@@ -714,18 +714,29 @@ def train_grapher(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train the generic GraphER complete-action rewiring scorer from HH-to-data teacher steps.")
+    parser = argparse.ArgumentParser(
+        description="Train the generic GraphER complete-action rewiring scorer from HH-to-data teacher steps."
+    )
     parser.add_argument("--dataset", required=True, choices=available_datasets())
     parser.add_argument("--model-config", type=str, default="configs/models/grapher_generic.yaml")
+    parser.add_argument("--dataset-config", type=str, default=None)
+    parser.add_argument("--dataset-root", type=str, default="outputs/datasets")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-id", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging.")
     args = parser.parse_args()
+
     if args.debug:
         configure_logging("DEBUG")
-    dataset_root = "outputs/datasets"
-    dataset_cfg = Path("configs/datasets") / f"{args.dataset}.yaml"
+
+    dataset_root = args.dataset_root
+    dataset_cfg = (
+        Path(args.dataset_config)
+        if args.dataset_config
+        else Path("configs/datasets") / f"{args.dataset}.yaml"
+    )
+
     try:
         train_grapher(
             dataset=args.dataset,
@@ -742,3 +753,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
