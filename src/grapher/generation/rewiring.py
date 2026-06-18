@@ -65,6 +65,25 @@ class RewireAction:
         return self.e1, self.e2, self.orientation
 
 
+@dataclass(frozen=True)
+class ActionStructuralDelta:
+    """Exact local structural changes induced by one valid swap.
+
+    The graph degree sequence is unchanged by a double-edge swap, so the
+    denominators of all node clustering coefficients are fixed.  This makes it
+    possible to compute both the triangle-count delta and the average
+    clustering delta exactly from the four endpoints and their common
+    neighbours, without copying the graph.
+    """
+
+    removed_common_e1: int
+    removed_common_e2: int
+    added_common_e1: int
+    added_common_e2: int
+    triangle_delta: int
+    average_clustering_delta: float
+
+
 def action_new_edges(action: RewireAction) -> tuple[tuple[int, int], tuple[int, int]]:
     """Return the two edges created by a complete rewiring action."""
 
@@ -80,6 +99,88 @@ def action_removed_edges(action: RewireAction) -> tuple[tuple[int, int], tuple[i
 
 def action_signature(action: RewireAction) -> tuple[tuple[int, int], tuple[int, int], int]:
     return action.e1, action.e2, int(action.orientation)
+
+
+def action_structural_delta(
+    graph: nx.Graph,
+    action: RewireAction,
+    *,
+    neighbours: dict[int, set[int]] | None = None,
+    degrees: dict[int, int] | None = None,
+) -> ActionStructuralDelta:
+    """Return exact triangle and mean-clustering deltas for ``action``.
+
+    ``action`` is expected to be a valid simple double-edge swap.  Passing
+    precomputed neighbour and degree dictionaries avoids rebuilding them for
+    every action in a candidate set.
+    """
+
+    if neighbours is None:
+        neighbours = {int(node): {int(v) for v in graph.neighbors(node)} for node in graph.nodes()}
+    if degrees is None:
+        degrees = {int(node): int(degree) for node, degree in graph.degree()}
+
+    removed1, removed2 = action_removed_edges(action)
+    added1, added2 = action_new_edges(action)
+
+    def common(a: int, b: int, *, after_removals: bool) -> set[int]:
+        left = set(neighbours.get(int(a), set()))
+        right = set(neighbours.get(int(b), set()))
+        if after_removals:
+            for u, v in (removed1, removed2):
+                if int(a) == int(u):
+                    left.discard(int(v))
+                elif int(a) == int(v):
+                    left.discard(int(u))
+                if int(b) == int(u):
+                    right.discard(int(v))
+                elif int(b) == int(v):
+                    right.discard(int(u))
+        return left & right
+
+    removed_common_sets = [
+        common(int(removed1[0]), int(removed1[1]), after_removals=False),
+        common(int(removed2[0]), int(removed2[1]), after_removals=False),
+    ]
+    added_common_sets = [
+        common(int(added1[0]), int(added1[1]), after_removals=True),
+        common(int(added2[0]), int(added2[1]), after_removals=True),
+    ]
+
+    per_node_triangle_delta: dict[int, int] = {}
+
+    def add_triangle_incidence(a: int, b: int, common_nodes: set[int], sign: int) -> None:
+        count = int(len(common_nodes)) * int(sign)
+        per_node_triangle_delta[int(a)] = per_node_triangle_delta.get(int(a), 0) + count
+        per_node_triangle_delta[int(b)] = per_node_triangle_delta.get(int(b), 0) + count
+        for node in common_nodes:
+            per_node_triangle_delta[int(node)] = per_node_triangle_delta.get(int(node), 0) + int(sign)
+
+    add_triangle_incidence(int(removed1[0]), int(removed1[1]), removed_common_sets[0], -1)
+    add_triangle_incidence(int(removed2[0]), int(removed2[1]), removed_common_sets[1], -1)
+    add_triangle_incidence(int(added1[0]), int(added1[1]), added_common_sets[0], +1)
+    add_triangle_incidence(int(added2[0]), int(added2[1]), added_common_sets[1], +1)
+
+    n = max(int(graph.number_of_nodes()), 1)
+    clustering_delta = 0.0
+    for node, triangle_incidence_delta in per_node_triangle_delta.items():
+        degree = int(degrees.get(int(node), 0))
+        if degree >= 2:
+            clustering_delta += (
+                2.0 * float(triangle_incidence_delta) / float(degree * (degree - 1))
+            ) / float(n)
+
+    removed_counts = [len(nodes) for nodes in removed_common_sets]
+    added_counts = [len(nodes) for nodes in added_common_sets]
+    triangle_delta = int(sum(added_counts) - sum(removed_counts))
+    return ActionStructuralDelta(
+        removed_common_e1=int(removed_counts[0]),
+        removed_common_e2=int(removed_counts[1]),
+        added_common_e1=int(added_counts[0]),
+        added_common_e2=int(added_counts[1]),
+        triangle_delta=triangle_delta,
+        average_clustering_delta=float(clustering_delta),
+    )
 
 
 def degree_sequence(graph: nx.Graph) -> list[int]:

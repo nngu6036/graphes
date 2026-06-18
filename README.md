@@ -117,7 +117,7 @@ Train the paper-aligned size-conditioned DH-VAE degree prior:
 
 ```bash
 PYTHONPATH=src python scripts/train_dhvae_model.py --dataset sbm --seed 42 --run-id 0
-PYTHONPATH=src python scripts/train_dhvae_model.py --dataset ego_citeseer --seed 42 --run-id 1
+PYTHONPATH=src python scripts/train_dhvae_model.py --dataset ego_citeseer --seed 42 --run-id 0
 # use --dataset ego_citeseer for the CiteSeer ego-graph benchmark
 ```
 
@@ -125,7 +125,7 @@ Generate degree sequences for diagnostics. The sampler first draws a graph size 
 
 ```bash
 PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset sbm --num-samples 1024 --seed 42 --run-id 0 --temperature 1.0 --force
-PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset ego_citeseer --num-samples 1024 --seed 42 --run-id 1 --temperature 1.0 --force
+PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset ego_citeseer --num-samples 1024 --seed 42 --run-id 0 --temperature 1.0 --force
 ```
 
 Train the rewiring scorer:
@@ -135,7 +135,7 @@ PYTHONPATH=src python scripts/train_generic_grapher_model.py --dataset sbm --see
 PYTHONPATH=src python scripts/train_generic_grapher_model.py \
   --dataset ego_citeseer \
   --seed 42 \
-  --run-id 1 \
+  --run-id 0 \
   --model-config configs/models/grapher_generic_ego_citeseer.yaml
 ```
 
@@ -144,7 +144,7 @@ Generate graph samples:
 ```bash
 PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset sbm --num-samples 1024 --seed 42 --run-id 0 --force
 
-PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset ego_citeseer --num-samples 1024 --seed 42 --run-id 1 --force
+PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset ego_citeseer --num-samples 1024 --seed 42 --run-id 0 --force
 ```
 
 For repeated runs:
@@ -175,7 +175,7 @@ PYTHONPATH=src python scripts/evaluate_grapher_metrics.py \
 PYTHONPATH=src python scripts/evaluate_grapher_metrics.py \
   --dataset ego_citeseer \
   --model grapher \
-  --run-id 1 \
+  --run-id 0 \
   --reference-split test \
   --max-reference-graphs 1024 \
   --max-generated-graphs 1024

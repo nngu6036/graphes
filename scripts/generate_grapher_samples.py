@@ -88,6 +88,7 @@ def generate_grapher_samples(
                 degree_temperature=float(cfg.get("degree_sample_temperature", cfg.get("dhvae_temperature", 1.0))),
                 action_temperature=float(cfg.get("action_temperature", cfg.get("temperature", 1.0))),
                 sample_actions=bool(cfg.get("sample_actions", True)),
+                global_candidate_fraction=float(cfg.get("global_candidate_fraction", 0.0)),
             )
             if not graphs:
                 break
@@ -128,7 +129,8 @@ def generate_grapher_samples(
         },
         "rewiring_policy": {
             "action_type": "complete_double_edge_swap_(e1,e2,r)",
-            "candidate_set": "target-free local/random valid connected actions",
+            "candidate_set": "target-free local/global valid connected actions",
+            "global_candidate_fraction": float(cfg.get("global_candidate_fraction", 0.0)),
             "action_temperature": float(cfg.get("action_temperature", cfg.get("temperature", 1.0))),
             "sample_actions": bool(cfg.get("sample_actions", True)),
         },

@@ -39,12 +39,14 @@ except Exception:  # pragma: no cover
 from grapher.generation.rewiring import (
     RewireAction,
     action_new_edges,
+    action_structural_delta,
     check_sequence_validity,
     configuration_model_from_multiset,
     degree_sequence as graph_degree_sequence,
     deterministic_connected_havel_hakimi,
     enumerate_rewire_actions,
     graph_to_data,
+    merge_action_sets,
     rewire_action,
 )
 
@@ -279,13 +281,21 @@ class GraphER(nn.Module):
         rows: list[list[float]] = []
         for action in actions:
             (u, v), (x_node, y_node) = action.e1, action.e2
-            new1, new2 = action_new_edges(action)
+            structural = action_structural_delta(
+                graph,
+                action,
+                neighbours=neighbours,
+                degrees=degrees,
+            )
             values: list[float] = []
             for node in (u, v, x_node, y_node):
                 values.append(float(degrees.get(int(node), 0)) / float(max_degree))
-            for a, b in (new1, new2):
-                common = len(neighbours.get(int(a), set()) & neighbours.get(int(b), set()))
-                values.append(float(common) / float(max(n, 1)))
+            values.extend(
+                [
+                    float(structural.added_common_e1) / float(max(n, 1)),
+                    float(structural.added_common_e2) / float(max(n, 1)),
+                ]
+            )
 
             distances: list[int] = []
             for a in action.e1:
@@ -295,6 +305,19 @@ class GraphER(nn.Module):
                         distances.append(int(dist_map[int(b)]))
             values.append(float(min(distances)) / float(max(n - 1, 1)) if distances else 1.0)
             values.append(1.0 if tuple(sorted(action.e1)) in bridges or tuple(sorted(action.e2)) in bridges else 0.0)
+
+            # Optional structural-action features used by the stronger SBM
+            # configuration.  Older checkpoints with local_feature_dim=8 keep
+            # the original feature layout, while new checkpoints can set
+            # local_feature_dim=12 to expose exact triangle/clustering changes.
+            values.extend(
+                [
+                    float(structural.removed_common_e1) / float(max(n, 1)),
+                    float(structural.removed_common_e2) / float(max(n, 1)),
+                    float(structural.triangle_delta) / float(max(n, 1)),
+                    float(structural.average_clustering_delta),
+                ]
+            )
             if len(values) < self.local_feature_dim:
                 values.extend([0.0] * (self.local_feature_dim - len(values)))
             rows.append(values[: self.local_feature_dim])
@@ -427,6 +450,7 @@ class GraphER(nn.Module):
         degree_temperature: float = 1.0,
         action_temperature: float = 1.0,
         sample_actions: bool = True,
+        global_candidate_fraction: float = 0.0,
         max_degree_sequence_attempt_factor: int = 8,
     ):
         """Generate graphs from DH-VAE degree samples plus learned rewiring flow."""
@@ -462,13 +486,52 @@ class GraphER(nn.Module):
             for g0, seq in initial_graphs:
                 g = nx.convert_node_labels_to_integers(nx.Graph(g0), ordering="sorted")
                 for step in range(int(num_steps)):
-                    actions = enumerate_rewire_actions(
-                        g,
-                        ensure_connected=ensure_connected,
-                        k_hop=k_hop,
-                        max_candidates=max_candidates,
-                        shuffle=True,
-                    )
+                    total_budget = None if max_candidates is None else max(int(max_candidates), 1)
+                    global_fraction = max(0.0, min(1.0, float(global_candidate_fraction)))
+                    if total_budget is None or global_fraction <= 0.0:
+                        actions = enumerate_rewire_actions(
+                            g,
+                            ensure_connected=ensure_connected,
+                            k_hop=k_hop,
+                            max_candidates=total_budget,
+                            shuffle=True,
+                        )
+                    else:
+                        global_budget = int(round(total_budget * global_fraction))
+                        global_budget = min(max(global_budget, 0), total_budget)
+                        local_budget = max(total_budget - global_budget, 0)
+                        local_actions = enumerate_rewire_actions(
+                            g,
+                            ensure_connected=ensure_connected,
+                            k_hop=k_hop,
+                            max_candidates=local_budget,
+                            shuffle=True,
+                        ) if local_budget > 0 else []
+                        global_actions = enumerate_rewire_actions(
+                            g,
+                            ensure_connected=ensure_connected,
+                            k_hop=None,
+                            max_candidates=global_budget,
+                            shuffle=True,
+                        ) if global_budget > 0 else []
+                        actions = merge_action_sets(
+                            local_actions,
+                            global_actions,
+                            max_candidates=total_budget,
+                        )
+                        if len(actions) < total_budget:
+                            fallback = enumerate_rewire_actions(
+                                g,
+                                ensure_connected=ensure_connected,
+                                k_hop=None,
+                                max_candidates=max((total_budget - len(actions)) * 2, total_budget - len(actions)),
+                                shuffle=True,
+                            )
+                            actions = merge_action_sets(
+                                actions,
+                                fallback,
+                                max_candidates=total_budget,
+                            )
                     if not actions:
                         break
                     data = graph_to_data(g, k_eigen).to(device)
