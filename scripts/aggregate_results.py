@@ -14,7 +14,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from grapher.registry import available_datasets, available_models
+from grapher.registry import available_datasets
 from grapher.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -35,6 +35,8 @@ METRIC_FAMILY_PRIORITY = {
     "polygraphscore_official": 30,
     "polygraphscore_classifier": 20,
 }
+
+METRIC_MODELS = ("grapher", "dhvae")
 
 
 def _flatten_results(obj: dict[str, Any]) -> dict[str, Any]:
@@ -302,7 +304,7 @@ def main() -> None:
     parser.add_argument("--metric-dir", type=str, default="outputs/metrics")
     parser.add_argument("--output-dir", type=str, default="outputs/tables")
     parser.add_argument("--datasets", nargs="+", choices=available_datasets(), default=None, help="Datasets to include. Defaults to all discovered datasets.")
-    parser.add_argument("--models", nargs="+", choices=available_models(), default=None, help="Models to include. Defaults to all discovered models.")
+    parser.add_argument("--models", nargs="+", choices=METRIC_MODELS, default=None, help="Metric model names to include. Defaults to all models found in metric files.")
     parser.add_argument("--run-ids", type=int, nargs="+", default=None, help="Only average these run ids. Existing aggregate JSONs are ignored when this is set.")
     parser.add_argument("--debug", action="store_true", help="Print individual per-run statistics used for aggregation.")
     args = parser.parse_args()

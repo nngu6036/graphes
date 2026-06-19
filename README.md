@@ -150,12 +150,12 @@ PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset ego_citeseer
 For repeated runs:
 
 ```bash
-for run_id in 0 1 2; do
+for run_id in 0 1 2 3 4; do
   seed=$((42 + run_id))
-  PYTHONPATH=src python scripts/train_dhvae_model.py --dataset sbm --seed "$seed" --run-id "$run_id"
-  PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset sbm --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
-  PYTHONPATH=src python scripts/train_generic_grapher_model.py --dataset sbm --seed "$seed" --run-id "$run_id"
-  PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset sbm --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
+  PYTHONPATH=src python scripts/train_dhvae_model.py --dataset ego_citeseer --seed "$seed" --run-id "$run_id"
+  PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset ego_citeseer --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
+  PYTHONPATH=src python scripts/train_generic_grapher_model.py --dataset ego_citeseer --seed "$seed" --run-id "$run_id"
+  PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset ego_citeseer --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
 done
 ```
 
