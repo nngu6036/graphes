@@ -299,6 +299,33 @@ def _print_debug_run_statistics(long_df: pd.DataFrame, selected_df: pd.DataFrame
                     print(f"    {part}")
 
 
+def _print_aggregate_results(selected_df: pd.DataFrame) -> None:
+    if selected_df.empty:
+        return
+    print("Aggregate results:")
+    for _, row in selected_df.sort_values(["dataset", "model", "metric_family"], kind="stable").iterrows():
+        prefix = f"{row.get('dataset')}/{row.get('model')}/{row.get('metric_family')}"
+        metric_names = []
+        for col in selected_df.columns:
+            if col in EXCLUDE_FROM_METRIC_AGG or col.endswith("_std") or col.endswith("_mean"):
+                continue
+            std_col = f"{col}_std"
+            if std_col not in selected_df.columns:
+                continue
+            value = row.get(col)
+            std = row.get(std_col)
+            try:
+                value = float(value)
+                std = float(std)
+            except (TypeError, ValueError):
+                continue
+            if np.isnan(value) or np.isnan(std):
+                continue
+            metric_names.append((col, value, std))
+        for name, value, std in metric_names:
+            print(f"{prefix} {name}: {_format_debug_value(value)} +- {_format_debug_value(std)}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Aggregate metric JSON outputs into long, metric-family, and wide CSV tables.")
     parser.add_argument("--metric-dir", type=str, default="outputs/metrics")
@@ -360,6 +387,7 @@ def main() -> None:
     wide_df = _make_wide(selected_df)
     wide_out = output_dir / "aggregated_results.csv"
     wide_df.to_csv(wide_out, index=False)
+    _print_aggregate_results(selected_df)
     logger.info("Saved long results to %s", long_out)
     logger.info("Saved metric-family aggregate results to %s", selected_out)
     logger.info("Saved wide results to %s", wide_out)
