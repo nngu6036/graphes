@@ -24,6 +24,8 @@ from grapher.evaluation.metrics import (
     mmd_gaussian_emd,
     mmd_rbf,
     motif_proxy_vector,
+    orbit_count_mmd,
+    resolve_orca_executable,
     spectral_histogram,
     structural_summary,
 )
@@ -146,6 +148,8 @@ def evaluate(
     clustering_bins: int,
     spectral_bins: int,
     sigma: float,
+    orca_exec: str | None,
+    orbit_size: int,
 ) -> dict:
     start = time.perf_counter()
     cfg = make_model_run_config(model_config, dataset=dataset, model=model, run_id=run_id, seed=seed, use_run_paths=run_id is not None)
@@ -198,6 +202,19 @@ def evaluate(
             gen_desc = descriptor_matrix(generated_graphs, fn)
             results[name] = mmd_gaussian_emd(ref_desc, gen_desc, sigma=sigma) if kind == "emd" else mmd_rbf(ref_desc, gen_desc, sigma=None)
             debug[name] = {"reference_shape": list(ref_desc.shape), "generated_shape": list(gen_desc.shape)}
+        resolved_orca = resolve_orca_executable(orca_exec)
+        debug["orbit_count_mmd"] = {"orca_exec": resolved_orca, "orbit_size": int(orbit_size)}
+        if resolved_orca:
+            results["orbit_count_mmd"] = orbit_count_mmd(
+                reference_graphs,
+                generated_graphs,
+                orca_exec=resolved_orca,
+                orbit_size=int(orbit_size),
+                sigma=sigma,
+            )
+        else:
+            results["orbit_count_mmd"] = None
+            debug["orbit_count_mmd"]["skipped_reason"] = "ORCA executable not provided and not found via ORCA_EXEC or PATH."
         results.update(quality_metrics(generated_graphs, reference_graphs=train_graphs, dataset=dataset))
 
     elapsed = time.perf_counter() - start
@@ -220,7 +237,9 @@ def evaluate(
             "clustering_bins": clustering_bins,
             "spectral_bins": spectral_bins,
             "sigma": sigma,
-            "motif_note": "motif_proxy_mmd is a lightweight higher-order structural proxy; use ORCA externally for exact orbit-count MMD if needed.",
+            "orca_exec": orca_exec,
+            "orbit_size": orbit_size,
+            "motif_note": "motif_proxy_mmd is a lightweight higher-order structural proxy; orbit_count_mmd uses ORCA node orbit counts when ORCA is available.",
         },
         "debug": debug,
         "results": results,
@@ -247,6 +266,8 @@ def main() -> None:
     parser.add_argument("--clustering-bins", type=int, default=20)
     parser.add_argument("--spectral-bins", type=int, default=20)
     parser.add_argument("--sigma", type=float, default=1.0)
+    parser.add_argument("--orca-exec", type=str, default=None, help="Path to the ORCA executable. Defaults to ORCA_EXEC or an 'orca' executable on PATH.")
+    parser.add_argument("--orbit-size", type=int, default=4, help="ORCA graphlet size for orbit counting. Only 4 is currently supported.")
     args = parser.parse_args()
     cfg_path = Path(args.model_config) if args.model_config else _default_model_config(args.model)
     evaluate(
@@ -265,6 +286,8 @@ def main() -> None:
         clustering_bins=args.clustering_bins,
         spectral_bins=args.spectral_bins,
         sigma=args.sigma,
+        orca_exec=args.orca_exec,
+        orbit_size=args.orbit_size,
     )
 
 

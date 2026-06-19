@@ -302,6 +302,24 @@ def _print_debug_run_statistics(long_df: pd.DataFrame, selected_df: pd.DataFrame
 def _print_aggregate_results(selected_df: pd.DataFrame) -> None:
     if selected_df.empty:
         return
+    measurements: list[str] = []
+    seen_measurements: set[str] = set()
+    for col in selected_df.columns:
+        if col in EXCLUDE_FROM_METRIC_AGG or col.endswith("_std") or col.endswith("_mean"):
+            continue
+        if f"{col}_std" not in selected_df.columns:
+            continue
+        values = pd.to_numeric(selected_df[col], errors="coerce")
+        std_values = pd.to_numeric(selected_df[f"{col}_std"], errors="coerce")
+        if values.notna().any() and std_values.notna().any() and col not in seen_measurements:
+            seen_measurements.add(col)
+            measurements.append(col)
+
+    if measurements:
+        print("Measurements:")
+        for name in measurements:
+            print(f"  {name}")
+
     print("Aggregate results:")
     for _, row in selected_df.sort_values(["dataset", "model", "metric_family"], kind="stable").iterrows():
         prefix = f"{row.get('dataset')}/{row.get('model')}/{row.get('metric_family')}"
