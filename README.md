@@ -121,6 +121,42 @@ PYTHONPATH=src python scripts/train_dhvae_model.py --dataset ego_citeseer --seed
 # use --dataset ego_citeseer for the CiteSeer ego-graph benchmark
 ```
 
+For molecular datasets, DH-VAE still models the **topological degree sequence** only.
+Node and edge attributes are handled later by the attributed GraphER rewiring model.
+The DH-VAE trainer now checks that the input molecular graphs are connected and that
+their degree sequences are connected-feasible before fitting the empirical graph-size
+prior and degree-histogram decoder.  QM9 can be prepared by the generic dataset
+script, while ZINC must first be prepared from SMILES/RDKit as described above.
+
+```bash
+# QM9 degree prior
+PYTHONPATH=src python scripts/train_dhvae_model.py \
+  --dataset qm9 \
+  --seed 42 \
+  --run-id 0 \
+  --model-config configs/models/dhvae_qm9.yaml
+
+# ZINC degree prior, after scripts/prepare_zinc_from_smiles.py
+PYTHONPATH=src python scripts/train_dhvae_model.py \
+  --dataset zinc \
+  --seed 42 \
+  --run-id 0 \
+  --model-config configs/models/dhvae_zinc.yaml
+
+# Optional quick smoke test on a subset of a large molecular train split
+PYTHONPATH=src python scripts/train_dhvae_model.py \
+  --dataset zinc \
+  --seed 42 \
+  --run-id 99 \
+  --model-config configs/models/dhvae_zinc.yaml \
+  --max-train-graphs 1024
+```
+
+If you are diagnosing a dataset with disconnected graphs, use
+`--allow-disconnected-graphs` or `--allow-disconnected-degree-sequences` only for
+inspection.  The default connected checks match the connected-source GraphER
+generation protocol.
+
 Generate degree sequences for diagnostics. The sampler first draws a graph size from the empirical training-size distribution, then samples a degree histogram with a multinomial decoder:
 
 ```bash
@@ -150,12 +186,12 @@ PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset ego_citeseer
 For repeated runs:
 
 ```bash
-for run_id in 0 1 2 3 4; do
+for run_id in 0 1 2; do
   seed=$((42 + run_id))
-  PYTHONPATH=src python scripts/train_dhvae_model.py --dataset ego_citeseer --seed "$seed" --run-id "$run_id"
-  PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset ego_citeseer --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
-  PYTHONPATH=src python scripts/train_generic_grapher_model.py --dataset ego_citeseer --seed "$seed" --run-id "$run_id"
-  PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset ego_citeseer --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
+  PYTHONPATH=src python scripts/train_dhvae_model.py --dataset sbm --seed "$seed" --run-id "$run_id"
+  PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset sbm --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
+  PYTHONPATH=src python scripts/train_generic_grapher_model.py --dataset sbm --seed "$seed" --run-id "$run_id"
+  PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset sbm --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
 done
 ```
 

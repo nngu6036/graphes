@@ -24,20 +24,10 @@ from grapher.evaluation.metrics import (
     mmd_gaussian_emd,
     mmd_rbf,
     motif_proxy_vector,
-    orbit_count_mmd,
-    resolve_orca_executable,
     spectral_histogram,
     structural_summary,
 )
-from grapher.evaluation.run_utils import (
-    aggregate_metric_path,
-    aggregate_numeric_results,
-    make_model_run_config,
-    metric_path,
-    parse_run_ids,
-    run_seed,
-    sample_path,
-)
+from grapher.evaluation.run_utils import make_model_run_config, metric_path, sample_path
 from grapher.generation.rewiring import check_sequence_validity, connected_sequence_feasible, degree_sequence
 from grapher.generation.validity import quality_metrics
 from grapher.registry import available_datasets
@@ -156,8 +146,6 @@ def evaluate(
     clustering_bins: int,
     spectral_bins: int,
     sigma: float,
-    orca_exec: str | None,
-    orbit_size: int,
 ) -> dict:
     start = time.perf_counter()
     cfg = make_model_run_config(model_config, dataset=dataset, model=model, run_id=run_id, seed=seed, use_run_paths=run_id is not None)
@@ -210,19 +198,6 @@ def evaluate(
             gen_desc = descriptor_matrix(generated_graphs, fn)
             results[name] = mmd_gaussian_emd(ref_desc, gen_desc, sigma=sigma) if kind == "emd" else mmd_rbf(ref_desc, gen_desc, sigma=None)
             debug[name] = {"reference_shape": list(ref_desc.shape), "generated_shape": list(gen_desc.shape)}
-        resolved_orca = resolve_orca_executable(orca_exec)
-        debug["orbit_count_mmd"] = {"orca_exec": resolved_orca, "orbit_size": int(orbit_size)}
-        if resolved_orca:
-            results["orbit_count_mmd"] = orbit_count_mmd(
-                reference_graphs,
-                generated_graphs,
-                orca_exec=resolved_orca,
-                orbit_size=int(orbit_size),
-                sigma=sigma,
-            )
-        else:
-            results["orbit_count_mmd"] = None
-            debug["orbit_count_mmd"]["skipped_reason"] = "ORCA executable not provided and not found via ORCA_EXEC or PATH."
         results.update(quality_metrics(generated_graphs, reference_graphs=train_graphs, dataset=dataset))
 
     elapsed = time.perf_counter() - start
@@ -245,94 +220,13 @@ def evaluate(
             "clustering_bins": clustering_bins,
             "spectral_bins": spectral_bins,
             "sigma": sigma,
-            "orca_exec": orca_exec,
-            "orbit_size": orbit_size,
-            "motif_note": "motif_proxy_mmd is a lightweight higher-order structural proxy; orbit_count_mmd uses ORCA node orbit counts when ORCA is available.",
+            "motif_note": "motif_proxy_mmd is a lightweight higher-order structural proxy; use ORCA externally for exact orbit-count MMD if needed.",
         },
         "debug": debug,
         "results": results,
     }
     save_json(payload_out, output_path, force=True)
     logger.info("Saved metrics to %s", output_path)
-    return payload_out
-
-
-def evaluate_run_ids(
-    *,
-    dataset: str,
-    model: str,
-    model_config: dict,
-    dataset_root: str,
-    reference_split: str,
-    max_reference_graphs: int | None,
-    max_generated_graphs: int | None,
-    seed: int,
-    run_ids: Sequence[int],
-    sample_file: str | None,
-    output: str | None,
-    degree_bins: int,
-    clustering_bins: int,
-    spectral_bins: int,
-    sigma: float,
-    orca_exec: str | None,
-    orbit_size: int,
-) -> dict:
-    run_payloads = []
-    for run_id in run_ids:
-        run_payloads.append(
-            evaluate(
-                dataset=dataset,
-                model=model,
-                model_config=model_config,
-                dataset_root=dataset_root,
-                reference_split=reference_split,
-                max_reference_graphs=max_reference_graphs,
-                max_generated_graphs=max_generated_graphs,
-                seed=run_seed(seed, int(run_id)),
-                run_id=int(run_id),
-                sample_file=sample_file,
-                output=None,
-                degree_bins=degree_bins,
-                clustering_bins=clustering_bins,
-                spectral_bins=spectral_bins,
-                sigma=sigma,
-                orca_exec=orca_exec,
-                orbit_size=orbit_size,
-            )
-        )
-
-    numeric = aggregate_numeric_results(run_payloads)
-    total_runtime = sum(float(payload.get("runtime_seconds", 0.0) or 0.0) for payload in run_payloads)
-    payload_out = {
-        "dataset": dataset,
-        "model": model,
-        "metric_family": "grapher_metrics",
-        "runtime_seconds": total_runtime,
-        "is_aggregate": True,
-        "run_ids": [int(run_id) for run_id in run_ids],
-        "num_runs": len(run_ids),
-        "protocol": {
-            "base_seed": seed,
-            "run_ids": [int(run_id) for run_id in run_ids],
-            "seed_stride": 1000,
-            "reference_split": reference_split,
-            "max_reference_graphs": max_reference_graphs,
-            "max_generated_graphs": max_generated_graphs,
-            "degree_bins": degree_bins,
-            "clustering_bins": clustering_bins,
-            "spectral_bins": spectral_bins,
-            "sigma": sigma,
-            "orca_exec": orca_exec,
-            "orbit_size": orbit_size,
-            "aggregation": "numeric results are averaged across run_ids; *_std values are population standard deviations across run_ids",
-            "source_metric_files": [str(metric_path(dataset, model, METRIC_FILENAME, run_id=int(run_id))) for run_id in run_ids],
-        },
-        "results": numeric["flat"],
-        "run_result_summary": numeric["nested"],
-    }
-    output_path = Path(output) if output else aggregate_metric_path(dataset, model, METRIC_FILENAME)
-    save_json(payload_out, output_path, force=True)
-    logger.info("Saved aggregate metrics to %s", output_path)
     return payload_out
 
 
@@ -347,64 +241,31 @@ def main() -> None:
     parser.add_argument("--max-generated-graphs", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-id", type=int, default=None)
-    parser.add_argument("--run-ids", type=int, nargs="+", default=None, help="Evaluate and aggregate this list of run ids. Use either --run-id or --run-ids.")
     parser.add_argument("--sample-path", type=str, default=None)
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--degree-bins", type=int, default=20)
     parser.add_argument("--clustering-bins", type=int, default=20)
     parser.add_argument("--spectral-bins", type=int, default=20)
     parser.add_argument("--sigma", type=float, default=1.0)
-    parser.add_argument("--orca-exec", type=str, default=None, help="Path to the ORCA executable. Defaults to ORCA_EXEC or an 'orca' executable on PATH.")
-    parser.add_argument("--orbit-size", type=int, default=4, help="ORCA graphlet size for orbit counting. Only 4 is currently supported.")
     args = parser.parse_args()
-    if args.run_ids and args.sample_path:
-        parser.error("--sample-path cannot be used with --run-ids because each run must resolve its own sample file.")
     cfg_path = Path(args.model_config) if args.model_config else _default_model_config(args.model)
-    model_config = load_yaml(cfg_path)
-    try:
-        run_ids = parse_run_ids(run_id=args.run_id, run_ids=args.run_ids) if (args.run_id is not None or args.run_ids) else None
-    except ValueError as exc:
-        parser.error(str(exc))
-    if run_ids is not None and (args.run_ids or len(run_ids) > 1):
-        evaluate_run_ids(
-            dataset=args.dataset,
-            model=args.model,
-            model_config=model_config,
-            dataset_root=args.dataset_root,
-            reference_split=args.reference_split,
-            max_reference_graphs=args.max_reference_graphs,
-            max_generated_graphs=args.max_generated_graphs,
-            seed=args.seed,
-            run_ids=run_ids,
-            sample_file=args.sample_path,
-            output=args.output,
-            degree_bins=args.degree_bins,
-            clustering_bins=args.clustering_bins,
-            spectral_bins=args.spectral_bins,
-            sigma=args.sigma,
-            orca_exec=args.orca_exec,
-            orbit_size=args.orbit_size,
-        )
-    else:
-        evaluate(
-            dataset=args.dataset,
-            model=args.model,
-            model_config=model_config,
-            dataset_root=args.dataset_root,
-            reference_split=args.reference_split,
-            max_reference_graphs=args.max_reference_graphs,
-            max_generated_graphs=args.max_generated_graphs,
-            seed=args.seed,
-            run_id=args.run_id,
-            sample_file=args.sample_path,
-            output=args.output,
-            degree_bins=args.degree_bins,
-            clustering_bins=args.clustering_bins,
-            spectral_bins=args.spectral_bins,
-            sigma=args.sigma,
-            orca_exec=args.orca_exec,
-            orbit_size=args.orbit_size,
-        )
+    evaluate(
+        dataset=args.dataset,
+        model=args.model,
+        model_config=load_yaml(cfg_path),
+        dataset_root=args.dataset_root,
+        reference_split=args.reference_split,
+        max_reference_graphs=args.max_reference_graphs,
+        max_generated_graphs=args.max_generated_graphs,
+        seed=args.seed,
+        run_id=args.run_id,
+        sample_file=args.sample_path,
+        output=args.output,
+        degree_bins=args.degree_bins,
+        clustering_bins=args.clustering_bins,
+        spectral_bins=args.spectral_bins,
+        sigma=args.sigma,
+    )
 
 
 if __name__ == "__main__":

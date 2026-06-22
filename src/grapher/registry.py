@@ -96,7 +96,8 @@ MODEL_REGISTRY = LazyRegistry(
             "GraphER uses torch; torch-geometric is optional in this revised code because a small fallback layer is provided.",
         ),
         "grapher_generic": RegistrySpec("grapher.models.model_grapher", "GraphER", "model"),
-        "grapher_attributed": RegistrySpec("grapher.models.model_grapher", "GraphER", "model"),
+        "grapher_attributed": RegistrySpec("grapher.models.model_molecular_grapher", "MolecularGraphER", "model"),
+        "grapher_molecular": RegistrySpec("grapher.models.model_molecular_grapher", "MolecularGraphER", "model"),
     }
 )
 

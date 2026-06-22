@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import sys
 import time
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
+import networkx as nx
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
@@ -17,7 +19,7 @@ if str(SRC) not in sys.path:
 
 from grapher.evaluation.data_io import load_dataset_splits
 from grapher.evaluation.run_utils import make_model_run_config, run_output_dir
-from grapher.generation.rewiring import connected_sequence_feasible, degree_sequence
+from grapher.generation.rewiring import check_sequence_validity, connected_sequence_feasible, degree_sequence
 from grapher.models.model_dhvae import DHVAE, encode_degree_sequence
 from grapher.registry import available_datasets
 from grapher.utils.compute import CudaTrainingDeviceError, PeakMemoryMonitor, compute_report, require_cuda_training_device
@@ -29,26 +31,129 @@ from grapher.utils.seed import set_seed
 logger = get_logger(__name__)
 
 
+MOLECULAR_DATASETS = {"qm9", "zinc"}
+
+
+@dataclass(frozen=True)
+class DegreeSequenceCollection:
+    """Degree sequences extracted from a graph split with diagnostics."""
+
+    sequences: list[list[int]]
+    skipped_by_reason: dict[str, int]
+    graph_stats: dict[str, Any]
+
+
 def _as_int_or_none(value, default: int | None = None) -> int | None:
     if value is None or value == "":
         return default
     return int(value)
 
 
-def _collect_degree_sequences(graphs: Sequence, *, require_connected_feasible: bool) -> tuple[list[list[int]], dict]:
+def _increment_counter(counter: dict[str, int], key: str) -> None:
+    counter[str(key)] = int(counter.get(str(key), 0)) + 1
+
+
+def _is_connected_graph(graph) -> bool:
+    if graph.number_of_nodes() == 0:
+        return False
+    if graph.number_of_nodes() == 1:
+        return True
+    try:
+        return bool(nx.is_connected(nx.Graph(graph)))
+    except Exception:
+        return False
+
+
+def _collect_degree_sequences(
+    graphs: Sequence,
+    *,
+    require_connected_feasible: bool,
+    require_connected_graph: bool,
+) -> DegreeSequenceCollection:
+    """Collect degree sequences from NetworkX graphs.
+
+    DH-VAE itself only models degree histograms.  For GraphER, however, the
+    sampled degree prior is later used to construct a connected Havel-Hakimi
+    source and to run connectivity-preserving rewiring.  Therefore the default
+    collection mode filters graphs whose current topology is disconnected or
+    whose degree sequence cannot realize a connected graph.  This is especially
+    important for molecular datasets, where QM9/ZINC molecules should be single
+    connected molecular graphs and every multi-atom molecule should have no
+    zero-degree atom.
+    """
+
     sequences: list[list[int]] = []
     skipped: dict[str, int] = {}
+
+    node_counts: list[int] = []
+    edge_counts: list[int] = []
+    max_degrees: list[int] = []
+    connected_flags: list[float] = []
+    zero_degree_graphs = 0
+    single_node_graphs = 0
+
     for graph in graphs:
+        n = int(graph.number_of_nodes())
+        m = int(graph.number_of_edges())
+        node_counts.append(n)
+        edge_counts.append(m)
+
+        if n == 0:
+            _increment_counter(skipped, "empty_graph")
+            connected_flags.append(0.0)
+            max_degrees.append(0)
+            continue
+
         seq = degree_sequence(graph)
+        max_degrees.append(max(seq) if seq else 0)
+        if n == 1:
+            single_node_graphs += 1
+        if n > 1 and any(int(d) == 0 for d in seq):
+            zero_degree_graphs += 1
+
+        is_connected = _is_connected_graph(graph)
+        connected_flags.append(float(is_connected))
+        if require_connected_graph and not is_connected:
+            _increment_counter(skipped, "target_graph_disconnected")
+            continue
+
         if require_connected_feasible:
             feasible, reason = connected_sequence_feasible(seq)
             if not feasible:
-                skipped[reason] = skipped.get(reason, 0) + 1
+                _increment_counter(skipped, reason)
                 continue
-        # DH-VAE explicitly represents degree 0 as histogram bin m_0, so we do
-        # not drop zero-degree sequences here.
+
+        # DH-VAE explicitly represents degree 0 as histogram bin m_0.  We keep
+        # degree-zero single-node molecules/graphs; connected-feasibility
+        # filtering rejects degree-zero multi-node graphs when requested.
         sequences.append(seq)
-    return sequences, skipped
+
+    def _summary(values: Sequence[int | float]) -> dict[str, float]:
+        arr = np.asarray(list(values), dtype=float)
+        if arr.size == 0:
+            return {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0}
+        return {
+            "min": float(arr.min()),
+            "max": float(arr.max()),
+            "mean": float(arr.mean()),
+            "std": float(arr.std(ddof=0)),
+        }
+
+    graph_stats = {
+        "num_input_graphs": int(len(graphs)),
+        "num_used_sequences": int(len(sequences)),
+        "num_skipped": int(sum(skipped.values())),
+        "skipped_by_reason": dict(skipped),
+        "node_count": _summary(node_counts),
+        "edge_count": _summary(edge_counts),
+        "max_degree": _summary(max_degrees),
+        "connected_rate": float(np.mean(connected_flags)) if connected_flags else 0.0,
+        "zero_degree_graph_count": int(zero_degree_graphs),
+        "single_node_graph_count": int(single_node_graphs),
+        "require_connected_graph": bool(require_connected_graph),
+        "require_connected_feasible": bool(require_connected_feasible),
+    }
+    return DegreeSequenceCollection(sequences=sequences, skipped_by_reason=skipped, graph_stats=graph_stats)
 
 
 def _histogram_tensor(sequences: Sequence[Sequence[int]], histogram_dim: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -68,6 +173,63 @@ def _num_trainable_parameters(model: torch.nn.Module) -> int:
     return int(sum(p.numel() for p in model.parameters() if p.requires_grad))
 
 
+def _degree_sample_diagnostics(
+    model: DHVAE,
+    *,
+    num_samples: int,
+    temperature: float,
+) -> dict[str, Any]:
+    """Sample degree sequences and report feasibility diagnostics."""
+
+    num_samples = int(num_samples)
+    if num_samples <= 0:
+        return {"num_samples": 0}
+    sequences = model.generate(num_samples, temperature=float(temperature))
+    graphical = 0
+    connected_feasible = 0
+    sizes: list[int] = []
+    max_degrees: list[int] = []
+    edge_counts: list[float] = []
+    invalid_reasons: dict[str, int] = {}
+    for seq in sequences:
+        seq = [int(d) for d in seq]
+        sizes.append(len(seq))
+        max_degrees.append(max(seq) if seq else 0)
+        edge_counts.append(float(sum(seq)) / 2.0)
+        ok, code = check_sequence_validity(seq)
+        if ok:
+            graphical += 1
+            feasible, reason = connected_sequence_feasible(seq)
+        else:
+            feasible, reason = False, f"not_graphical:{code}"
+        if feasible:
+            connected_feasible += 1
+        else:
+            _increment_counter(invalid_reasons, reason)
+
+    def _summary(values: Sequence[int | float]) -> dict[str, float]:
+        arr = np.asarray(list(values), dtype=float)
+        if arr.size == 0:
+            return {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0}
+        return {
+            "min": float(arr.min()),
+            "max": float(arr.max()),
+            "mean": float(arr.mean()),
+            "std": float(arr.std(ddof=0)),
+        }
+
+    return {
+        "num_samples": int(num_samples),
+        "temperature": float(temperature),
+        "graphicality_rate": float(graphical) / float(num_samples),
+        "connected_feasible_rate": float(connected_feasible) / float(num_samples),
+        "invalid_reasons": invalid_reasons,
+        "sampled_size": _summary(sizes),
+        "sampled_edge_count": _summary(edge_counts),
+        "sampled_max_degree": _summary(max_degrees),
+    }
+
+
 def train_dhvae(
     *,
     dataset: str,
@@ -78,6 +240,8 @@ def train_dhvae(
     run_id: int | None,
     device: str,
     require_connected_feasible: bool = True,
+    require_connected_graph: bool = True,
+    max_train_graphs: int | None = None,
 ) -> dict:
     """Train the paper-aligned size-conditioned DH-VAE degree prior."""
 
@@ -92,6 +256,9 @@ def train_dhvae(
         dataset_config_path,
     )
     set_seed(seed, include_torch=True)
+    dataset_key = dataset.lower()
+    dataset_kind = "molecular" if dataset_key in MOLECULAR_DATASETS else "generic"
+    dataset_cfg_raw = load_yaml(dataset_config_path) if Path(dataset_config_path).exists() else {}
     cfg = make_model_run_config(
         model_config,
         dataset=dataset,
@@ -103,7 +270,25 @@ def train_dhvae(
     logger.debug("Resolved DH-VAE config: %s", cfg)
     splits = load_dataset_splits(dataset, output_root=dataset_root, build_if_missing=True, config_path=dataset_config_path)
     logger.info("Loaded dataset splits: %s", {split: len(graphs) for split, graphs in splits.items()})
-    train_sequences, skipped = _collect_degree_sequences(splits["train"], require_connected_feasible=require_connected_feasible)
+    train_graphs = list(splits["train"])
+    configured_max_train_graphs = max_train_graphs
+    if configured_max_train_graphs is None:
+        configured_max_train_graphs = cfg.get("max_train_graphs", None)
+    if configured_max_train_graphs is None and dataset_key == "zinc":
+        configured_max_train_graphs = dataset_cfg_raw.get("max_train_graphs", None)
+    if configured_max_train_graphs is not None:
+        limit = int(configured_max_train_graphs)
+        if limit > 0 and len(train_graphs) > limit:
+            logger.info("Capping DH-VAE training graphs from %d to %d", len(train_graphs), limit)
+            train_graphs = train_graphs[:limit]
+
+    collection = _collect_degree_sequences(
+        train_graphs,
+        require_connected_feasible=require_connected_feasible,
+        require_connected_graph=require_connected_graph,
+    )
+    train_sequences = collection.sequences
+    skipped = collection.skipped_by_reason
     if not train_sequences:
         raise ValueError(
             "DH-VAE training has no usable degree sequences. "
@@ -115,6 +300,14 @@ def train_dhvae(
         int(sum(skipped.values())),
         skipped,
         require_connected_feasible,
+    )
+    logger.info(
+        "DH-VAE graph compatibility stats dataset_kind=%s require_connected_graph=%s connected_rate=%.4f zero_degree_graphs=%d single_node_graphs=%d",
+        dataset_kind,
+        require_connected_graph,
+        float(collection.graph_stats.get("connected_rate", 0.0)),
+        int(collection.graph_stats.get("zero_degree_graph_count", 0)),
+        int(collection.graph_stats.get("single_node_graph_count", 0)),
     )
 
     max_degree = max(max(seq) if seq else 0 for seq in train_sequences)
@@ -259,6 +452,18 @@ def train_dhvae(
         "latent_dim": int(cfg.get("latent_dim", 32)),
         "size_embedding_dim": int(cfg.get("size_embedding_dim", 32)),
     }
+    sample_diagnostics = _degree_sample_diagnostics(
+        model,
+        num_samples=int(cfg.get("validation_num_samples", 1024)),
+        temperature=float(cfg.get("sample_temperature", 1.0)),
+    )
+    logger.info(
+        "DH-VAE sample diagnostics samples=%d graphicality=%.4f connected_feasible=%.4f",
+        int(sample_diagnostics.get("num_samples", 0)),
+        float(sample_diagnostics.get("graphicality_rate", 0.0)),
+        float(sample_diagnostics.get("connected_feasible_rate", 0.0)),
+    )
+
     payload = {
         "model_state_dict": model.state_dict(),
         "model_name": "dhvae",
@@ -270,9 +475,12 @@ def train_dhvae(
         "training_history": history,
         "degree_sequence_stats": {
             "num_train_graphs": len(splits["train"]),
+            "num_training_graphs_after_cap": len(train_graphs),
             "num_used_sequences": len(train_sequences),
             "num_skipped": int(sum(skipped.values())),
             "skipped_by_reason": skipped,
+            "dataset_kind": dataset_kind,
+            "graph_compatibility_stats": collection.graph_stats,
             "min_nodes": int(min(len(seq) for seq in train_sequences)),
             "max_nodes_observed": int(max_nodes_observed),
             "max_nodes_model": int(max_nodes),
@@ -284,6 +492,7 @@ def train_dhvae(
             },
             "histogram_bins": "degree values 0..histogram_dim-1, padded above n-1",
             "likelihood": "Multinomial(n, pi_theta(k | z, n))",
+            "sample_diagnostics": sample_diagnostics,
         },
     }
     torch.save(payload, checkpoint_path)
@@ -304,6 +513,7 @@ def train_dhvae(
         "compute": compute,
         "history_tail": history[-5:],
         "degree_sequence_stats": payload["degree_sequence_stats"],
+        "sample_diagnostics": sample_diagnostics,
     }
     save_json(metadata, run_dir / "train_metadata.json", force=True)
     logger.info("Saved DH-VAE checkpoint to %s", checkpoint_path)
@@ -322,6 +532,8 @@ def main() -> None:
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging.")
     parser.add_argument("--allow-disconnected-degree-sequences", action="store_true", help="Do not require connected-realizable sequences before training.")
+    parser.add_argument("--allow-disconnected-graphs", action="store_true", help="Do not require input graphs themselves to be connected before DH-VAE training.")
+    parser.add_argument("--max-train-graphs", type=int, default=None, help="Optional cap on training graphs after loading the train split; useful for QM9/ZINC smoke tests.")
     args = parser.parse_args()
     if args.debug:
         configure_logging("DEBUG")
@@ -337,6 +549,8 @@ def main() -> None:
             run_id=args.run_id,
             device=args.device,
             require_connected_feasible=not args.allow_disconnected_degree_sequences,
+            require_connected_graph=not args.allow_disconnected_graphs,
+            max_train_graphs=args.max_train_graphs,
         )
     except CudaTrainingDeviceError as exc:
         parser.exit(status=2, message=f"error: {exc}\n")

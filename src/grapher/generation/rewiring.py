@@ -67,14 +67,7 @@ class RewireAction:
 
 @dataclass(frozen=True)
 class ActionStructuralDelta:
-    """Exact local structural changes induced by one valid swap.
-
-    The graph degree sequence is unchanged by a double-edge swap, so the
-    denominators of all node clustering coefficients are fixed.  This makes it
-    possible to compute both the triangle-count delta and the average
-    clustering delta exactly from the four endpoints and their common
-    neighbours, without copying the graph.
-    """
+    """Exact local triangle and average-clustering changes for a valid swap."""
 
     removed_common_e1: int
     removed_common_e2: int
@@ -108,12 +101,7 @@ def action_structural_delta(
     neighbours: dict[int, set[int]] | None = None,
     degrees: dict[int, int] | None = None,
 ) -> ActionStructuralDelta:
-    """Return exact triangle and mean-clustering deltas for ``action``.
-
-    ``action`` is expected to be a valid simple double-edge swap.  Passing
-    precomputed neighbour and degree dictionaries avoids rebuilding them for
-    every action in a candidate set.
-    """
+    """Compute exact triangle and mean-clustering deltas without copying the graph."""
 
     if neighbours is None:
         neighbours = {int(node): {int(v) for v in graph.neighbors(node)} for node in graph.nodes()}
@@ -138,47 +126,44 @@ def action_structural_delta(
                     right.discard(int(u))
         return left & right
 
-    removed_common_sets = [
-        common(int(removed1[0]), int(removed1[1]), after_removals=False),
-        common(int(removed2[0]), int(removed2[1]), after_removals=False),
+    removed_sets = [
+        common(removed1[0], removed1[1], after_removals=False),
+        common(removed2[0], removed2[1], after_removals=False),
     ]
-    added_common_sets = [
-        common(int(added1[0]), int(added1[1]), after_removals=True),
-        common(int(added2[0]), int(added2[1]), after_removals=True),
+    added_sets = [
+        common(added1[0], added1[1], after_removals=True),
+        common(added2[0], added2[1], after_removals=True),
     ]
+    per_node_delta: dict[int, int] = {}
 
-    per_node_triangle_delta: dict[int, int] = {}
-
-    def add_triangle_incidence(a: int, b: int, common_nodes: set[int], sign: int) -> None:
-        count = int(len(common_nodes)) * int(sign)
-        per_node_triangle_delta[int(a)] = per_node_triangle_delta.get(int(a), 0) + count
-        per_node_triangle_delta[int(b)] = per_node_triangle_delta.get(int(b), 0) + count
+    def add_incidence(a: int, b: int, common_nodes: set[int], sign: int) -> None:
+        endpoint_delta = int(sign) * len(common_nodes)
+        per_node_delta[int(a)] = per_node_delta.get(int(a), 0) + endpoint_delta
+        per_node_delta[int(b)] = per_node_delta.get(int(b), 0) + endpoint_delta
         for node in common_nodes:
-            per_node_triangle_delta[int(node)] = per_node_triangle_delta.get(int(node), 0) + int(sign)
+            per_node_delta[int(node)] = per_node_delta.get(int(node), 0) + int(sign)
 
-    add_triangle_incidence(int(removed1[0]), int(removed1[1]), removed_common_sets[0], -1)
-    add_triangle_incidence(int(removed2[0]), int(removed2[1]), removed_common_sets[1], -1)
-    add_triangle_incidence(int(added1[0]), int(added1[1]), added_common_sets[0], +1)
-    add_triangle_incidence(int(added2[0]), int(added2[1]), added_common_sets[1], +1)
+    add_incidence(*removed1, removed_sets[0], -1)
+    add_incidence(*removed2, removed_sets[1], -1)
+    add_incidence(*added1, added_sets[0], +1)
+    add_incidence(*added2, added_sets[1], +1)
 
     n = max(int(graph.number_of_nodes()), 1)
     clustering_delta = 0.0
-    for node, triangle_incidence_delta in per_node_triangle_delta.items():
+    for node, incidence_delta in per_node_delta.items():
         degree = int(degrees.get(int(node), 0))
         if degree >= 2:
             clustering_delta += (
-                2.0 * float(triangle_incidence_delta) / float(degree * (degree - 1))
+                2.0 * float(incidence_delta) / float(degree * (degree - 1))
             ) / float(n)
-
-    removed_counts = [len(nodes) for nodes in removed_common_sets]
-    added_counts = [len(nodes) for nodes in added_common_sets]
-    triangle_delta = int(sum(added_counts) - sum(removed_counts))
+    removed_counts = [len(value) for value in removed_sets]
+    added_counts = [len(value) for value in added_sets]
     return ActionStructuralDelta(
         removed_common_e1=int(removed_counts[0]),
         removed_common_e2=int(removed_counts[1]),
         added_common_e1=int(added_counts[0]),
         added_common_e2=int(added_counts[1]),
-        triangle_delta=triangle_delta,
+        triangle_delta=int(sum(added_counts) - sum(removed_counts)),
         average_clustering_delta=float(clustering_delta),
     )
 

@@ -7,6 +7,7 @@ import torch
 
 from grapher.models.model_grapher import GraphER
 from grapher.models.model_dhvae import DHVAE
+from grapher.models.model_molecular_grapher import MolecularGraphER
 
 
 def _torch_load_compat(*args: Any, **kwargs: Any) -> Any:
@@ -133,6 +134,50 @@ def load_grapher_checkpoint(path: str | Path, device: str = "cpu") -> tuple[Grap
             "Could not load the GraphER checkpoint into the complete-action scorer."
         ) from exc
 
+    model.to(device)
+    model.eval()
+    return model, payload
+
+def load_molecular_grapher_checkpoint(
+    path: str | Path,
+    device: str = "cpu",
+) -> tuple[MolecularGraphER, dict[str, Any]]:
+    """Load an attributed molecular GraphER checkpoint."""
+
+    payload = _torch_load_compat(path, map_location=device, weights_only=False)
+    params = dict(payload.get("model_params", {}))
+    state_dict = payload.get("model_state_dict", payload)
+    required = {
+        "node_type_values",
+        "edge_type_values",
+        "hidden_dim",
+        "num_layer",
+        "T",
+        "max_nodes",
+    }
+    missing = sorted(required - set(params))
+    if missing:
+        raise KeyError(f"Molecular GraphER checkpoint is missing model_params keys: {missing}")
+
+    model = MolecularGraphER(
+        node_type_values=[int(value) for value in params["node_type_values"]],
+        edge_type_values=[int(value) for value in params["edge_type_values"]],
+        hidden_dim=int(params["hidden_dim"]),
+        num_layer=int(params["num_layer"]),
+        T=int(params["T"]),
+        max_nodes=int(params["max_nodes"]),
+        degree_histogram_dim=int(params.get("degree_histogram_dim", params["max_nodes"])),
+        k_eigen=int(params.get("k_eigen", 4)),
+        time_embedding_dim=int(params.get("time_embedding_dim", params["hidden_dim"])),
+        local_feature_dim=int(params.get("local_feature_dim", 24)),
+        dropout=float(params.get("dropout", 0.0)),
+    )
+    try:
+        model.load_state_dict(state_dict, strict=True)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "Could not load the attributed MolecularGraphER checkpoint."
+        ) from exc
     model.to(device)
     model.eval()
     return model, payload

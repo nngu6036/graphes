@@ -14,7 +14,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from grapher.registry import available_datasets
+from grapher.registry import available_datasets, available_models
 from grapher.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -35,8 +35,6 @@ METRIC_FAMILY_PRIORITY = {
     "polygraphscore_official": 30,
     "polygraphscore_classifier": 20,
 }
-
-METRIC_MODELS = ("grapher", "dhvae")
 
 
 def _flatten_results(obj: dict[str, Any]) -> dict[str, Any]:
@@ -299,57 +297,12 @@ def _print_debug_run_statistics(long_df: pd.DataFrame, selected_df: pd.DataFrame
                     print(f"    {part}")
 
 
-def _print_aggregate_results(selected_df: pd.DataFrame) -> None:
-    if selected_df.empty:
-        return
-    measurements: list[str] = []
-    seen_measurements: set[str] = set()
-    for col in selected_df.columns:
-        if col in EXCLUDE_FROM_METRIC_AGG or col.endswith("_std") or col.endswith("_mean"):
-            continue
-        if f"{col}_std" not in selected_df.columns:
-            continue
-        values = pd.to_numeric(selected_df[col], errors="coerce")
-        std_values = pd.to_numeric(selected_df[f"{col}_std"], errors="coerce")
-        if values.notna().any() and std_values.notna().any() and col not in seen_measurements:
-            seen_measurements.add(col)
-            measurements.append(col)
-
-    if measurements:
-        print("Measurements:")
-        for name in measurements:
-            print(f"  {name}")
-
-    print("Aggregate results:")
-    for _, row in selected_df.sort_values(["dataset", "model", "metric_family"], kind="stable").iterrows():
-        prefix = f"{row.get('dataset')}/{row.get('model')}/{row.get('metric_family')}"
-        metric_names = []
-        for col in selected_df.columns:
-            if col in EXCLUDE_FROM_METRIC_AGG or col.endswith("_std") or col.endswith("_mean"):
-                continue
-            std_col = f"{col}_std"
-            if std_col not in selected_df.columns:
-                continue
-            value = row.get(col)
-            std = row.get(std_col)
-            try:
-                value = float(value)
-                std = float(std)
-            except (TypeError, ValueError):
-                continue
-            if np.isnan(value) or np.isnan(std):
-                continue
-            metric_names.append((col, value, std))
-        for name, value, std in metric_names:
-            print(f"{prefix} {name}: {_format_debug_value(value)} +- {_format_debug_value(std)}")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Aggregate metric JSON outputs into long, metric-family, and wide CSV tables.")
     parser.add_argument("--metric-dir", type=str, default="outputs/metrics")
     parser.add_argument("--output-dir", type=str, default="outputs/tables")
     parser.add_argument("--datasets", nargs="+", choices=available_datasets(), default=None, help="Datasets to include. Defaults to all discovered datasets.")
-    parser.add_argument("--models", nargs="+", choices=METRIC_MODELS, default=None, help="Metric model names to include. Defaults to all models found in metric files.")
+    parser.add_argument("--models", nargs="+", choices=available_models(), default=None, help="Models to include. Defaults to all discovered models.")
     parser.add_argument("--run-ids", type=int, nargs="+", default=None, help="Only average these run ids. Existing aggregate JSONs are ignored when this is set.")
     parser.add_argument("--debug", action="store_true", help="Print individual per-run statistics used for aggregation.")
     args = parser.parse_args()
@@ -405,7 +358,6 @@ def main() -> None:
     wide_df = _make_wide(selected_df)
     wide_out = output_dir / "aggregated_results.csv"
     wide_df.to_csv(wide_out, index=False)
-    _print_aggregate_results(selected_df)
     logger.info("Saved long results to %s", long_out)
     logger.info("Saved metric-family aggregate results to %s", selected_out)
     logger.info("Saved wide results to %s", wide_out)

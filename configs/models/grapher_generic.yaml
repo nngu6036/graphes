@@ -1,65 +1,50 @@
 model: grapher
 architecture: generic_complete_action_grapher
 
-# SBM-64 structural teacher configuration.  The model remains degree- and
-# connectivity-preserving, but the offline teacher now prioritizes the
-# permutation-invariant clustering/triangle structure that the evaluator uses.
+# Larger scorer/encoder than the smoke-test config, but still practical for SBM-64.
 hidden_dim: 192
 num_layers: 4
 dropout: 0.05
 k_eigen: 8
 
-# A 16-step teacher path is much shorter than the empirical lower bound from the
-# HH source to SBM targets.  Use a longer diagnostic horizon and log the actual
-# lower-bound/path statistics in train_metadata.json.
-num_steps: 48
-max_steps_per_graph: 48
+# Keep the path horizon at the already-tested SBM-64 value. Increase only after
+# measuring remaining teacher discrepancy after 16 steps.
+num_steps: 32
+max_steps_per_graph: 16
 
+# Strong teacher search, same train candidate size as the better previous run.
 candidate_budget: 64
 offline_candidate_budget: 256
-k_hop: 3
+k_hop: 2
 ensure_connected: true
 init_method: havel_hakimi
-
-# C_off = target-aware + local + genuinely global random candidates.  The
-# global component helps escape the dense-core bias of the HH source.
-target_candidate_fraction: 0.25
-global_candidate_fraction: 0.25
-
-# Normalized structural teacher discrepancy.  Spectral scoring is optional and
-# disabled by default because eigendecomposition inside teacher construction is
-# expensive; enable it only after the triangle/clustering run is measured.
-teacher_discrepancy: structural
-teacher_edge_weight: 0.10
-teacher_clustering_weight: 1.00
-teacher_triangle_weight: 0.50
-teacher_spectral_weight: 0.00
-teacher_spectral_shortlist: 8
+teacher_discrepancy: edge_symmetric_difference
 require_positive_teacher_improvement: true
 
+# Conditioning dimensions. Explicit values keep checkpoints comparable for SBM-64.
 max_nodes: 64
 degree_histogram_dim: 64
 time_embedding_dim: 192
+local_feature_dim: 8
 
-# Adds removed-edge common-neighbour counts, exact triangle delta, and exact
-# average-clustering delta to the original 8 action-local features.
-local_feature_dim: 12
-
+# Optimization. Lower LR/WD for the larger model; reuse the expensive teacher cache
+# more, but do not double examples_per_epoch yet.
 learning_rate: 0.0007
 weight_decay: 0.00001
 grad_clip: 5.0
-epochs: 50
-max_graphs: 2048
+epochs: 60
+max_graphs: 4096
 
 # Sampling temperatures.
 degree_sample_temperature: 1.0
-action_temperature: 0.9
+action_temperature: 1.0
 sample_actions: true
 
 checkpoint_path: outputs/checkpoints/{dataset}/grapher/grapher.pt
 dhvae_checkpoint_path: outputs/checkpoints/{dataset}/dhvae/dhvae.pt
 samples_path: outputs/samples/{dataset}/grapher.pkl
 
+# Training implementation controls.
 grad_accum_steps: 16
 use_amp: true
 examples_per_epoch: 16384

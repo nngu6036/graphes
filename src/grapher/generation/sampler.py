@@ -31,7 +31,7 @@ def sample_graphs(
         model, _ = load_dhvae_checkpoint(checkpoint, device=device)
         sequences = model.generate(int(num_graphs), temperature=float(model_cfg.get("sample_temperature", 1.0)))
         return sequences
-    if model_key in {"grapher", "grapher_generic", "grapher_attributed"}:
+    if model_key in {"grapher", "grapher_generic"}:
         grapher_checkpoint = Path(model_cfg.get("checkpoint_path") or "outputs/checkpoints/grapher.pt")
         dhvae_checkpoint = Path(model_cfg.get("dhvae_checkpoint_path") or "outputs/checkpoints/dhvae.pt")
         grapher, payload = load_grapher_checkpoint(grapher_checkpoint, device=device)
@@ -62,7 +62,15 @@ def sample_graphs(
                 update_progress(update, min(len(batch), need))
         assert_finite_graphs(graphs, context=f"{model_name}.sample output")
         return graphs
-    raise KeyError(f"Unknown model_name={model_name!r}; expected 'dhvae' or 'grapher'.")
+    if model_key in {"grapher_attributed", "grapher_molecular"}:
+        raise NotImplementedError(
+            "Molecular GraphER checkpoint training is implemented, but molecular generation also "
+            "requires a node-type prior. Use scripts/train_molecular_grapher_model.py for training; "
+            "a molecular sampler must provide node types before typed rewiring."
+        )
+    raise KeyError(
+        f"Unknown model_name={model_name!r}; expected 'dhvae', 'grapher', or 'grapher_molecular'."
+    )
 
 
 def model_capabilities(model_name: str) -> dict[str, bool]:
@@ -77,6 +85,21 @@ def model_capabilities(model_name: str) -> dict[str, bool]:
             "supports_edge_features": False,
             "supports_constraints": True,
             "supports_variable_size": True,
+        }
+    if model_key in {"grapher_attributed", "grapher_molecular"}:
+        return {
+            "supports_training": True,
+            "supports_sampling": False,
+            "supports_degree_sequences": False,
+            "supports_graph_sampling": False,
+            "supports_node_features": True,
+            "supports_edge_features": True,
+            "supports_node_labels": True,
+            "supports_edge_labels": True,
+            "supports_graph_labels": False,
+            "supports_constraints": True,
+            "supports_variable_size": True,
+            "supports_featureless_graphs": False,
         }
     return {
         "supports_training": True,

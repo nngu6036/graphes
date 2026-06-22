@@ -1,20 +1,13 @@
 from __future__ import annotations
 
 import math
-import os
-import shutil
-import subprocess
-import tempfile
-from pathlib import Path
+from collections import Counter
 from typing import Sequence
 
 import networkx as nx
 import numpy as np
 from scipy.stats import wasserstein_distance
 from sklearn.metrics.pairwise import rbf_kernel
-
-
-ORBIT_4_MULTIPLICITY = np.asarray([2, 2, 1, 6, 2, 1, 2, 4, 2, 1, 1, 2, 2, 4, 1], dtype=np.int64)
 
 
 def _safe_normalize(x: np.ndarray) -> np.ndarray:
@@ -78,76 +71,6 @@ def motif_proxy_vector(graph: nx.Graph) -> np.ndarray:
         squares = 0.0
     wedges = sum(d * (d - 1) / 2 for _, d in graph.degree())
     return np.asarray([n, m, wedges, triangles, squares, nx.transitivity(graph) if m else 0.0], dtype=np.float64)
-
-
-def resolve_orca_executable(orca_exec: str | None = None) -> str | None:
-    if orca_exec:
-        return str(Path(orca_exec))
-    env_path = os.environ.get("ORCA_EXEC")
-    if env_path:
-        return env_path
-    return shutil.which("orca")
-
-
-def graphlet_orbit_counts(graph: nx.Graph, *, orca_exec: str, orbit_size: int = 4) -> np.ndarray:
-    if int(orbit_size) != 4:
-        raise ValueError("Only orbit_size=4 is supported because ORCA node-4 output has 15 known orbit multiplicities.")
-    if graph.number_of_nodes() == 0:
-        return np.zeros(len(ORBIT_4_MULTIPLICITY), dtype=np.float64)
-
-    graph = nx.convert_node_labels_to_integers(nx.Graph(graph), ordering="sorted")
-    with tempfile.TemporaryDirectory() as temp_dir:
-        input_path = Path(temp_dir) / "graph.txt"
-        output_path = Path(temp_dir) / "orbits.txt"
-        with open(input_path, "w", encoding="utf-8") as f:
-            f.write(f"{graph.number_of_nodes()} {graph.number_of_edges()}\n")
-            for u, v in graph.edges():
-                f.write(f"{int(u)} {int(v)}\n")
-        try:
-            subprocess.run(
-                [orca_exec, "node", str(int(orbit_size)), str(input_path), str(output_path)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError as exc:
-            raise FileNotFoundError(f"ORCA executable not found: {orca_exec}") from exc
-        except subprocess.CalledProcessError as exc:
-            stderr = exc.stderr.strip() if exc.stderr else ""
-            raise RuntimeError(f"ORCA execution failed for graph with n={graph.number_of_nodes()} m={graph.number_of_edges()}: {stderr}") from exc
-
-        rows: list[list[int]] = []
-        with open(output_path, "r", encoding="utf-8") as f:
-            for line in f:
-                values = line.strip().split()
-                if values:
-                    rows.append([int(value) for value in values])
-
-    if not rows:
-        return np.zeros(len(ORBIT_4_MULTIPLICITY), dtype=np.float64)
-    counts = np.asarray(rows, dtype=np.int64).sum(axis=0)
-    multiplicity = ORBIT_4_MULTIPLICITY[: counts.shape[0]]
-    return (counts // multiplicity).astype(np.float64)
-
-
-def orbit_histogram(graphs: Sequence[nx.Graph], *, orca_exec: str, orbit_size: int = 4, eps: float = 1e-8) -> np.ndarray:
-    histograms = []
-    for graph in graphs:
-        counts = graphlet_orbit_counts(graph, orca_exec=orca_exec, orbit_size=orbit_size)
-        histograms.append(counts / (float(counts.sum()) + float(eps)))
-    if not histograms:
-        return np.zeros((0, len(ORBIT_4_MULTIPLICITY)), dtype=np.float64)
-    width = max(hist.size for hist in histograms)
-    out = np.zeros((len(histograms), width), dtype=np.float64)
-    for idx, hist in enumerate(histograms):
-        out[idx, : hist.size] = hist
-    return out
-
-
-def orbit_count_mmd(reference: Sequence[nx.Graph], generated: Sequence[nx.Graph], *, orca_exec: str, orbit_size: int = 4, sigma: float = 1.0) -> float:
-    ref_hist = orbit_histogram(reference, orca_exec=orca_exec, orbit_size=orbit_size)
-    gen_hist = orbit_histogram(generated, orca_exec=orca_exec, orbit_size=orbit_size)
-    return mmd_gaussian_emd(ref_hist, gen_hist, sigma=sigma)
 
 
 def structural_summary(graph: nx.Graph) -> np.ndarray:
