@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import csv
 import random
 import sys
@@ -118,33 +119,41 @@ def _smiles_to_graph(
 
 def _read_graphs(args: argparse.Namespace) -> list[tuple[str | None, nx.Graph]]:
     out: list[tuple[str | None, nx.Graph]] = []
-    skipped = 0
+    skipped: Counter[str] = Counter()
 
     with open(args.csv, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames or []
 
-        if args.smiles_col not in (reader.fieldnames or []):
+        if args.smiles_col not in fieldnames:
             raise KeyError(
                 f"SMILES column {args.smiles_col!r} not found. "
-                f"Available columns: {reader.fieldnames}"
+                f"Available columns: {fieldnames}"
             )
+        for label, column in (("split", args.split_col), ("target", args.target_col), ("id", args.id_col)):
+            if column and column not in fieldnames:
+                raise KeyError(f"{label} column {column!r} not found. Available columns: {fieldnames}")
 
         for i, row in enumerate(reader):
             smiles = str(row.get(args.smiles_col, "")).strip()
             if not smiles:
-                skipped += 1
+                skipped["empty_smiles"] += 1
                 continue
 
             split = _normalise_split(row.get(args.split_col)) if args.split_col else None
             if args.split_col and split is None:
-                skipped += 1
+                skipped["invalid_split"] += 1
                 continue
 
             target = None
             if args.target_col:
                 raw_target = row.get(args.target_col)
                 if raw_target not in (None, ""):
-                    target = float(raw_target)
+                    try:
+                        target = float(raw_target)
+                    except ValueError:
+                        skipped["invalid_target"] += 1
+                        continue
 
             row_id = row.get(args.id_col) if args.id_col else str(i)
             graph = _smiles_to_graph(
@@ -154,12 +163,19 @@ def _read_graphs(args: argparse.Namespace) -> list[tuple[str | None, nx.Graph]]:
                 row_id=row_id,
             )
             if graph is None or graph.number_of_nodes() == 0:
-                skipped += 1
+                skipped["invalid_rdkit_graph"] += 1
                 continue
 
             out.append((split, graph))
 
-    print(f"Loaded {len(out)} valid RDKit graphs; skipped {skipped} rows.")
+    print(f"Loaded {len(out)} valid RDKit graphs; skipped {sum(skipped.values())} rows.")
+    if skipped:
+        print("Skipped rows by reason:", dict(sorted(skipped.items())))
+    if not out:
+        raise ValueError(
+            "No valid RDKit graphs were loaded. Check --smiles-col/--split-col/--target-col. "
+            "For data/zinc250k.csv, omit --split-col because the file has no split column."
+        )
     return out
 
 

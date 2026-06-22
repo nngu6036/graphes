@@ -40,9 +40,8 @@ ZINC must be prepared from a SMILES table with RDKit so every node keeps `atomic
 
 ```bash
 PYTHONPATH=src python scripts/prepare_zinc_from_smiles.py \
-  --csv data/zinc_smiles.csv \
+  --csv data/zinc250k.csv \
   --smiles-col smiles \
-  --split-col split \
   --output-root outputs/datasets \
   --force
 ```
