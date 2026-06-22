@@ -1,0 +1,6 @@
+-r requirements.txt
+# Paper metric: raw Fréchet ChemNet Distance.
+fcd-torch>=1.0.7
+# NSPDK: the evaluator includes a deterministic fallback. For reference runs,
+# install a Python-compatible EDeN package separately and use
+# --nspdk-backend eden; backend provenance is saved in the metric JSON.
