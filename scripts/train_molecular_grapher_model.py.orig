@@ -597,43 +597,6 @@ def _load_incremental_teacher_cache(
     return payload
 
 
-def _cache_stats_from_builder_state(
-    cache: Sequence[CachedMolecularTeacherExample],
-    state: Mapping[str, Any],
-) -> dict[str, float | int]:
-    """Summarize an incremental molecular teacher-cache builder state.
-
-    The incremental cache stores the raw diagnostic lists so cache construction
-    can resume exactly.  Convert those lists to the same aggregate statistics
-    produced by the original non-resumable cache builder.
-    """
-
-    def mean_from_state(key: str) -> float:
-        values = state.get(key, ())
-        if values is None:
-            return 0.0
-        values = list(values)
-        return float(np.mean(values)) if values else 0.0
-
-    avg_initial = mean_from_state("initial_discrepancies")
-    avg_final = mean_from_state("final_discrepancies")
-
-    return {
-        "num_teacher_examples": int(len(cache)),
-        "num_graphs_with_examples": int(state.get("num_graphs_with_examples", 0)),
-        "num_source_failures": int(state.get("num_source_failures", 0)),
-        "num_no_teacher_step": int(state.get("num_no_teacher_step", 0)),
-        "num_source_already_exact": int(state.get("num_source_already_exact", 0)),
-        "avg_teacher_path_length": mean_from_state("path_lengths"),
-        "avg_initial_attributed_discrepancy": avg_initial,
-        "avg_final_attributed_discrepancy": avg_final,
-        "avg_attributed_discrepancy_reduction": avg_initial - avg_final,
-        "avg_teacher_improvement": mean_from_state("improvements"),
-        "avg_train_candidate_size": mean_from_state("train_candidate_sizes"),
-        "avg_offline_candidate_size": mean_from_state("offline_candidate_sizes"),
-    }
-
-
 def _build_teacher_cache(
     *,
     train_graphs: Sequence[nx.Graph],
