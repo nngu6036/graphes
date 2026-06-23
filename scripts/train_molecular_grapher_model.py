@@ -545,6 +545,14 @@ def _build_teacher_cache(
     valence_tolerance: float,
     require_positive_improvement: bool,
     rng: random.Random,
+    cache_checkpoint_path: Path | None = None,
+    cache_key: str = "",
+    dataset: str = "",
+    seed: int = 0,
+    run_id: int | None = None,
+    training_config_hash: str = "",
+    resume_payload: Mapping[str, Any] | None = None,
+    checkpoint_interval: int = 25,
 ) -> tuple[list[CachedMolecularTeacherExample], dict[str, float | int]]:
     cache: list[CachedMolecularTeacherExample] = []
     path_lengths: list[int] = []
@@ -557,156 +565,239 @@ def _build_teacher_cache(
     num_no_teacher_step = 0
     num_exact = 0
     num_graphs_with_examples = 0
+    start_index = 0
+    checkpoint_interval = max(int(checkpoint_interval), 1)
+    build_start = time.perf_counter()
+    last_completed_graph_index = start_index
 
-    for graph_index, raw_target in enumerate(train_graphs, start=1):
-        target = nx.convert_node_labels_to_integers(nx.Graph(raw_target), ordering="sorted")
-        source_rng = random.Random(rng.randrange(0, 2**31 - 1))
-        try:
-            current = initialize_molecular_havel_hakimi(
-                target,
-                prior,
-                rng=source_rng,
-                proposal_mode=source_proposal_mode,
-                allow_global_backoff=allow_global_backoff,
-                valence_tolerance=valence_tolerance,
+    if resume_payload is not None:
+        saved_key = str(resume_payload.get("cache_key", ""))
+        if saved_key and cache_key and saved_key != cache_key:
+            logger.warning(
+                "Ignoring partial molecular teacher cache because cache key does not match saved=%s current=%s",
+                saved_key,
+                cache_key,
             )
-        except Exception as exc:
-            num_source_failures += 1
-            logger.debug("Molecular GraphER source failed graph=%d error=%s", graph_index, exc)
-            continue
-
-        initial_score = attributed_edge_discrepancy(
-            current,
-            target,
-            topology_weight=topology_weight,
-            bond_type_weight=bond_type_weight,
-            clustering_weight=clustering_weight,
-        )
-        initial_discrepancies.append(float(initial_score))
-        examples_before = len(cache)
-        target_degree_sequence = degree_sequence(target)
-        if initial_score <= 1e-12:
-            num_exact += 1
-            path_lengths.append(0)
-            final_discrepancies.append(0.0)
-            continue
-
-        for _step in range(max(int(max_steps), 0)):
-            result = _candidate_teacher_step(
-                current,
-                target,
-                prior,
-                candidate_budget=candidate_budget,
-                offline_candidate_budget=offline_candidate_budget,
-                k_hop=k_hop,
-                ensure_connected=ensure_connected,
-                topology_weight=topology_weight,
-                bond_type_weight=bond_type_weight,
-                clustering_weight=clustering_weight,
-                target_candidate_fraction=target_candidate_fraction,
-                global_candidate_fraction=global_candidate_fraction,
-                proposals_per_edge=proposals_per_edge,
-                proposal_mode=proposal_mode,
-                allow_global_backoff=allow_global_backoff,
-                reject_unseen_endpoint_pairs=reject_unseen_endpoint_pairs,
-                valence_tolerance=valence_tolerance,
-                require_positive_improvement=require_positive_improvement,
-                rng=rng,
-            )
-            if result is None:
-                num_no_teacher_step += 1
-                break
-            (
-                train_actions,
-                label_idx,
-                _teacher_action,
-                improvement,
-                next_graph,
-                offline_size,
-            ) = result
-            data = molecular_graph_to_data(
-                current,
-                node_type_to_index=model.node_type_to_index,
-                edge_type_to_index=model.edge_type_to_index,
-                k_eigen=k_eigen,
-            )
-            local_features = molecular_local_feature_matrix(
-                current,
-                train_actions,
-                prior,
-                local_feature_dim=model.local_feature_dim,
-            )
-            cache.append(
-                CachedMolecularTeacherExample(
-                    node_types=data.node_types.cpu(),
-                    degree_features=data.degree_features.cpu(),
-                    pe=data.pe.cpu(),
-                    edge_index=data.edge_index.cpu(),
-                    edge_types=data.edge_types.cpu(),
-                    actions=list(train_actions),
-                    label_idx=int(label_idx),
-                    t=0.0,
-                    degree_sequence=list(map(int, target_degree_sequence)),
-                    action_local_features=local_features.cpu(),
-                    train_candidate_size=len(train_actions),
-                    offline_candidate_size=int(offline_size),
-                    improvement=float(improvement),
-                )
-            )
-            improvements.append(float(improvement))
-            train_candidate_sizes.append(len(train_actions))
-            offline_candidate_sizes.append(int(offline_size))
-            current = nx.convert_node_labels_to_integers(next_graph, ordering="sorted")
-            if attributed_edge_discrepancy(
-                current,
-                target,
-                topology_weight=topology_weight,
-                bond_type_weight=bond_type_weight,
-                clustering_weight=clustering_weight,
-            ) <= 1e-12:
-                break
-
-        path_length = len(cache) - examples_before
-        path_lengths.append(int(path_length))
-        final_score = attributed_edge_discrepancy(
-            current,
-            target,
-            topology_weight=topology_weight,
-            bond_type_weight=bond_type_weight,
-            clustering_weight=clustering_weight,
-        )
-        final_discrepancies.append(float(final_score))
-        if path_length > 0:
-            for local_step in range(path_length):
-                cache[examples_before + local_step].t = float(local_step) / float(path_length)
-            num_graphs_with_examples += 1
-
-        if graph_index == 1 or graph_index % 25 == 0 or graph_index == len(train_graphs):
+        else:
+            cache = list(resume_payload.get("teacher_cache", []))
+            state = dict(resume_payload.get("builder_state", {}))
+            start_index = int(state.get("next_graph_index", resume_payload.get("next_graph_index", 0)))
+            start_index = max(0, min(start_index, len(train_graphs)))
+            last_completed_graph_index = start_index
+            path_lengths = list(map(int, state.get("path_lengths", [])))
+            initial_discrepancies = list(map(float, state.get("initial_discrepancies", [])))
+            final_discrepancies = list(map(float, state.get("final_discrepancies", [])))
+            improvements = list(map(float, state.get("improvements", [])))
+            train_candidate_sizes = list(map(int, state.get("train_candidate_sizes", [])))
+            offline_candidate_sizes = list(map(int, state.get("offline_candidate_sizes", [])))
+            num_source_failures = int(state.get("num_source_failures", 0))
+            num_no_teacher_step = int(state.get("num_no_teacher_step", 0))
+            num_exact = int(state.get("num_source_already_exact", 0))
+            num_graphs_with_examples = int(state.get("num_graphs_with_examples", 0))
+            rng_state = state.get("rng_state")
+            if rng_state is not None:
+                try:
+                    rng.setstate(rng_state)
+                except Exception as exc:
+                    logger.warning("Could not restore molecular teacher-cache RNG state: %s", exc)
             logger.info(
-                "Molecular GraphER cache graph=%d/%d examples=%d graphs_with_examples=%d",
-                graph_index,
+                "Resuming molecular teacher cache from graph=%d/%d examples=%d graphs_with_examples=%d",
+                start_index + 1 if start_index < len(train_graphs) else len(train_graphs),
                 len(train_graphs),
                 len(cache),
                 num_graphs_with_examples,
             )
 
-    def mean(values: Sequence[float | int]) -> float:
-        return float(np.mean(values)) if values else 0.0
+    def builder_state(next_graph_index: int) -> dict[str, Any]:
+        return {
+            "next_graph_index": int(next_graph_index),
+            "rng_state": rng.getstate(),
+            "path_lengths": list(path_lengths),
+            "initial_discrepancies": list(initial_discrepancies),
+            "final_discrepancies": list(final_discrepancies),
+            "improvements": list(improvements),
+            "train_candidate_sizes": list(train_candidate_sizes),
+            "offline_candidate_sizes": list(offline_candidate_sizes),
+            "num_source_failures": int(num_source_failures),
+            "num_no_teacher_step": int(num_no_teacher_step),
+            "num_source_already_exact": int(num_exact),
+            "num_graphs_with_examples": int(num_graphs_with_examples),
+        }
 
-    stats: dict[str, float | int] = {
-        "num_teacher_examples": len(cache),
-        "num_graphs_with_examples": num_graphs_with_examples,
-        "num_source_failures": num_source_failures,
-        "num_no_teacher_step": num_no_teacher_step,
-        "num_source_already_exact": num_exact,
-        "avg_teacher_path_length": mean(path_lengths),
-        "avg_initial_attributed_discrepancy": mean(initial_discrepancies),
-        "avg_final_attributed_discrepancy": mean(final_discrepancies),
-        "avg_attributed_discrepancy_reduction": mean(initial_discrepancies) - mean(final_discrepancies),
-        "avg_teacher_improvement": mean(improvements),
-        "avg_train_candidate_size": mean(train_candidate_sizes),
-        "avg_offline_candidate_size": mean(offline_candidate_sizes),
-    }
+    def save_progress(next_graph_index: int, *, complete: bool = False) -> None:
+        if cache_checkpoint_path is None:
+            return
+        _save_incremental_teacher_cache(
+            path=cache_checkpoint_path,
+            teacher_cache=cache,
+            builder_state=builder_state(next_graph_index),
+            cache_key=cache_key,
+            dataset=dataset,
+            seed=seed,
+            run_id=run_id,
+            training_config_hash=training_config_hash,
+            complete=complete,
+            cache_seconds=time.perf_counter() - build_start,
+        )
+
+    try:
+        for raw_index in range(start_index, len(train_graphs)):
+            graph_index = raw_index + 1
+            raw_target = train_graphs[raw_index]
+            target = nx.convert_node_labels_to_integers(nx.Graph(raw_target), ordering="sorted")
+            source_rng = random.Random(rng.randrange(0, 2**31 - 1))
+            try:
+                current = initialize_molecular_havel_hakimi(
+                    target,
+                    prior,
+                    rng=source_rng,
+                    proposal_mode=source_proposal_mode,
+                    allow_global_backoff=allow_global_backoff,
+                    valence_tolerance=valence_tolerance,
+                )
+            except Exception as exc:
+                num_source_failures += 1
+                logger.debug("Molecular GraphER source failed graph=%d error=%s", graph_index, exc)
+                last_completed_graph_index = graph_index
+                if graph_index % checkpoint_interval == 0:
+                    save_progress(graph_index, complete=False)
+                continue
+
+            initial_score = attributed_edge_discrepancy(
+                current,
+                target,
+                topology_weight=topology_weight,
+                bond_type_weight=bond_type_weight,
+                clustering_weight=clustering_weight,
+            )
+            initial_discrepancies.append(float(initial_score))
+            examples_before = len(cache)
+            target_degree_sequence = degree_sequence(target)
+            if initial_score <= 1e-12:
+                num_exact += 1
+                path_lengths.append(0)
+                final_discrepancies.append(0.0)
+                last_completed_graph_index = graph_index
+                if graph_index % checkpoint_interval == 0:
+                    save_progress(graph_index, complete=False)
+                continue
+
+            for _step in range(max(int(max_steps), 0)):
+                result = _candidate_teacher_step(
+                    current,
+                    target,
+                    prior,
+                    candidate_budget=candidate_budget,
+                    offline_candidate_budget=offline_candidate_budget,
+                    k_hop=k_hop,
+                    ensure_connected=ensure_connected,
+                    topology_weight=topology_weight,
+                    bond_type_weight=bond_type_weight,
+                    clustering_weight=clustering_weight,
+                    target_candidate_fraction=target_candidate_fraction,
+                    global_candidate_fraction=global_candidate_fraction,
+                    proposals_per_edge=proposals_per_edge,
+                    proposal_mode=proposal_mode,
+                    allow_global_backoff=allow_global_backoff,
+                    reject_unseen_endpoint_pairs=reject_unseen_endpoint_pairs,
+                    valence_tolerance=valence_tolerance,
+                    require_positive_improvement=require_positive_improvement,
+                    rng=rng,
+                )
+                if result is None:
+                    num_no_teacher_step += 1
+                    break
+                (
+                    train_actions,
+                    label_idx,
+                    _teacher_action,
+                    improvement,
+                    next_graph,
+                    offline_size,
+                ) = result
+                data = molecular_graph_to_data(
+                    current,
+                    node_type_to_index=model.node_type_to_index,
+                    edge_type_to_index=model.edge_type_to_index,
+                    k_eigen=k_eigen,
+                )
+                local_features = molecular_local_feature_matrix(
+                    current,
+                    train_actions,
+                    prior,
+                    local_feature_dim=model.local_feature_dim,
+                )
+                cache.append(
+                    CachedMolecularTeacherExample(
+                        node_types=data.node_types.cpu(),
+                        degree_features=data.degree_features.cpu(),
+                        pe=data.pe.cpu(),
+                        edge_index=data.edge_index.cpu(),
+                        edge_types=data.edge_types.cpu(),
+                        actions=list(train_actions),
+                        label_idx=int(label_idx),
+                        t=0.0,
+                        degree_sequence=list(map(int, target_degree_sequence)),
+                        action_local_features=local_features.cpu(),
+                        train_candidate_size=len(train_actions),
+                        offline_candidate_size=int(offline_size),
+                        improvement=float(improvement),
+                    )
+                )
+                improvements.append(float(improvement))
+                train_candidate_sizes.append(len(train_actions))
+                offline_candidate_sizes.append(int(offline_size))
+                current = nx.convert_node_labels_to_integers(next_graph, ordering="sorted")
+                if attributed_edge_discrepancy(
+                    current,
+                    target,
+                    topology_weight=topology_weight,
+                    bond_type_weight=bond_type_weight,
+                    clustering_weight=clustering_weight,
+                ) <= 1e-12:
+                    break
+
+            path_length = len(cache) - examples_before
+            path_lengths.append(int(path_length))
+            final_score = attributed_edge_discrepancy(
+                current,
+                target,
+                topology_weight=topology_weight,
+                bond_type_weight=bond_type_weight,
+                clustering_weight=clustering_weight,
+            )
+            final_discrepancies.append(float(final_score))
+            if path_length > 0:
+                for local_step in range(path_length):
+                    cache[examples_before + local_step].t = float(local_step) / float(path_length)
+                num_graphs_with_examples += 1
+
+            last_completed_graph_index = graph_index
+            if graph_index == 1 or graph_index % 25 == 0 or graph_index == len(train_graphs):
+                logger.info(
+                    "Molecular GraphER cache graph=%d/%d examples=%d graphs_with_examples=%d",
+                    graph_index,
+                    len(train_graphs),
+                    len(cache),
+                    num_graphs_with_examples,
+                )
+            if graph_index % checkpoint_interval == 0 or graph_index == len(train_graphs):
+                save_progress(graph_index, complete=False)
+    except KeyboardInterrupt:
+        logger.warning(
+            "Interrupted while building molecular teacher cache; saving partial cache at graph=%d/%d examples=%d",
+            int(last_completed_graph_index),
+            len(train_graphs),
+            len(cache),
+        )
+        # Save through the last fully completed graph. On resume the current graph, if interrupted mid-graph,
+        # is retried rather than partially used.
+        save_progress(last_completed_graph_index, complete=False)
+        raise
+
+    state = builder_state(len(train_graphs))
+    stats = _cache_stats_from_builder_state(cache, state)
+    save_progress(len(train_graphs), complete=True)
     return cache, stats
 
 
@@ -890,6 +981,7 @@ def train_molecular_grapher(
     with PeakMemoryMonitor() as memory_monitor:
         teacher_cache: list[CachedMolecularTeacherExample] | None = None
         cache_stats: dict[str, float | int] | None = None
+        partial_cache_payload: Mapping[str, Any] | None = None
 
         if resume and teacher_cache_path.exists() and not force_rebuild_cache:
             logger.info("Loading molecular teacher cache from %s", teacher_cache_path)
@@ -897,14 +989,23 @@ def train_molecular_grapher(
             if isinstance(cache_payload, dict) and "teacher_cache" in cache_payload:
                 saved_key = str(cache_payload.get("cache_key", ""))
                 if saved_key == cache_key:
-                    teacher_cache = list(cache_payload["teacher_cache"])
-                    cache_stats = dict(cache_payload.get("cache_stats", {}))
                     cache_seconds = float(cache_payload.get("cache_seconds", 0.0))
-                    logger.info(
-                        "Loaded molecular teacher cache examples=%d cache_seconds=%.2f",
-                        len(teacher_cache),
-                        cache_seconds,
-                    )
+                    if bool(cache_payload.get("complete", True)):
+                        teacher_cache = list(cache_payload["teacher_cache"])
+                        cache_stats = dict(cache_payload.get("cache_stats", {}))
+                        logger.info(
+                            "Loaded complete molecular teacher cache examples=%d cache_seconds=%.2f",
+                            len(teacher_cache),
+                            cache_seconds,
+                        )
+                    else:
+                        partial_cache_payload = cache_payload
+                        logger.info(
+                            "Loaded partial molecular teacher cache examples=%d next_graph=%s cache_seconds=%.2f; resuming cache build",
+                            len(cache_payload.get("teacher_cache", [])),
+                            cache_payload.get("next_graph_index", cache_payload.get("builder_state", {}).get("next_graph_index", "?")),
+                            cache_seconds,
+                        )
                 else:
                     logger.warning(
                         "Ignoring stale molecular teacher cache at %s: cache key mismatch saved=%s current=%s",
@@ -949,8 +1050,16 @@ def train_molecular_grapher(
                 valence_tolerance=valence_tolerance,
                 require_positive_improvement=require_positive,
                 rng=rng,
+                cache_checkpoint_path=teacher_cache_path if bool(cfg.get("save_teacher_cache", True)) else None,
+                cache_key=cache_key,
+                dataset=dataset,
+                seed=seed,
+                run_id=run_id,
+                training_config_hash=stable_hash(cfg),
+                resume_payload=partial_cache_payload,
+                checkpoint_interval=int(cfg.get("teacher_cache_checkpoint_interval", 25)),
             )
-            cache_seconds = time.perf_counter() - cache_start
+            cache_seconds = cache_seconds + (time.perf_counter() - cache_start)
             if not teacher_cache:
                 raise ValueError(f"No molecular GraphER teacher examples were built: {cache_stats}")
             if bool(cfg.get("save_teacher_cache", True)):
@@ -964,6 +1073,8 @@ def train_molecular_grapher(
                         "seed": seed,
                         "run_id": run_id,
                         "training_config_hash": stable_hash(cfg),
+                        "complete": True,
+                        "next_graph_index": len(train_graphs),
                     },
                     teacher_cache_path,
                 )
