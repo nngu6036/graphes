@@ -6,7 +6,7 @@ import random
 import sys
 import time
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 import networkx as nx
 import torch
@@ -42,6 +42,97 @@ from grapher.utils.numerics import assert_model_tensors_finite
 from grapher.utils.seed import set_seed
 
 logger = get_logger(__name__)
+
+
+def _torch_load_compat(path: str | Path, *, map_location: str | torch.device = "cpu") -> Any:
+    """Load torch payloads across old/new PyTorch versions."""
+
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError as exc:
+        message = str(exc).lower()
+        if "weights_only" not in message and "unexpected keyword" not in message and "invalid keyword" not in message:
+            raise
+        return torch.load(path, map_location=map_location)
+
+
+def _atomic_torch_save(payload: Any, path: str | Path) -> None:
+    """Write a torch payload atomically to avoid corrupt resume files."""
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    torch.save(payload, tmp)
+    tmp.replace(target)
+
+
+def _teacher_cache_key(*, dataset: str, seed: int, cfg: Mapping[str, Any], model: GraphER, train_graph_count: int) -> str:
+    """Hash the settings that determine generic GraphER teacher-cache contents."""
+
+    relevant_keys = [
+        "max_graphs",
+        "max_steps_per_graph",
+        "candidate_budget",
+        "offline_candidate_budget",
+        "k_hop",
+        "ensure_connected",
+        "teacher_discrepancy",
+        "require_positive_teacher_improvement",
+        "k_eigen",
+        "local_feature_dim",
+        "max_nodes",
+        "degree_histogram_dim",
+    ]
+    payload = {key: cfg.get(key) for key in relevant_keys}
+    payload.update(
+        {
+            "dataset": dataset,
+            "seed": int(seed),
+            "train_graph_count": int(train_graph_count),
+            "architecture": GraphER.architecture,
+            "node_in_dim": int(model.node_in_dim),
+            "hidden_dim": int(model.hidden_dim),
+            "num_layer": int(model.num_layer),
+            "T": int(model.T),
+            "max_nodes_model": int(model.max_nodes),
+            "degree_histogram_dim_model": int(model.degree_histogram_dim),
+            "local_feature_dim_model": int(model.local_feature_dim),
+        }
+    )
+    return stable_hash(payload)
+
+
+def _save_incremental_teacher_cache(
+    *,
+    path: str | Path,
+    teacher_cache: Sequence[CachedTeacherExample],
+    builder_state: Mapping[str, Any],
+    cache_key: str,
+    dataset: str,
+    seed: int,
+    run_id: int | None,
+    training_config_hash: str,
+    complete: bool,
+    cache_seconds: float,
+    cache_stats: Mapping[str, float | int] | None = None,
+) -> None:
+    """Persist a complete or partial generic GraphER teacher cache."""
+
+    payload: dict[str, Any] = {
+        "teacher_cache": list(teacher_cache),
+        "builder_state": dict(builder_state),
+        "next_graph_index": int(builder_state.get("next_graph_index", 0)),
+        "cache_key": str(cache_key),
+        "dataset": dataset,
+        "seed": int(seed),
+        "run_id": run_id,
+        "training_config_hash": str(training_config_hash),
+        "complete": bool(complete),
+        "cache_seconds": float(cache_seconds),
+    }
+    if cache_stats is not None:
+        payload["cache_stats"] = dict(cache_stats)
+    _atomic_torch_save(payload, path)
 
 
 @dataclass
@@ -295,6 +386,14 @@ def _build_teacher_cache(
     discrepancy: str,
     require_positive_improvement: bool,
     rng: random.Random,
+    cache_checkpoint_path: Path | None = None,
+    cache_key: str = "",
+    dataset: str = "",
+    seed: int = 0,
+    run_id: int | None = None,
+    training_config_hash: str = "",
+    resume_payload: Mapping[str, Any] | None = None,
+    checkpoint_interval: int = 25,
 ) -> tuple[list[CachedTeacherExample], dict[str, float | int]]:
     """Construct offline teacher examples once before neural optimization.
 
@@ -313,8 +412,92 @@ def _build_teacher_cache(
     offline_candidate_sizes: list[int] = []
     improvements: list[float] = []
     cpu_device = torch.device("cpu")
+    start_index = 0
+    checkpoint_interval = max(int(checkpoint_interval), 1)
+    build_start = time.perf_counter()
 
-    for graph_idx, target_raw in enumerate(train_graphs, start=1):
+    if resume_payload is not None:
+        saved_key = str(resume_payload.get("cache_key", ""))
+        if saved_key and cache_key and saved_key != cache_key:
+            logger.warning(
+                "Ignoring partial GraphER teacher cache because cache key does not match saved=%s current=%s",
+                saved_key,
+                cache_key,
+            )
+        else:
+            cache = list(resume_payload.get("teacher_cache", []))
+            state = dict(resume_payload.get("builder_state", {}))
+            start_index = int(state.get("next_graph_index", resume_payload.get("next_graph_index", 0)))
+            start_index = max(0, min(start_index, len(train_graphs)))
+            num_exact = int(state.get("num_hh_already_exact", 0))
+            num_positive = int(state.get("num_positive_teacher_steps", 0))
+            num_hh_failures = int(state.get("num_hh_failures", 0))
+            num_no_teacher_step = int(state.get("num_no_teacher_step", 0))
+            num_graphs_with_examples = int(state.get("num_graphs_with_examples", 0))
+            train_candidate_sizes = list(map(int, state.get("train_candidate_sizes", [])))
+            offline_candidate_sizes = list(map(int, state.get("offline_candidate_sizes", [])))
+            improvements = list(map(float, state.get("improvements", [])))
+            rng_state = state.get("rng_state")
+            if rng_state is not None:
+                try:
+                    rng.setstate(rng_state)
+                except Exception as exc:  # pragma: no cover - defensive across Python versions
+                    logger.warning("Could not restore GraphER teacher-cache RNG state: %s", exc)
+            logger.info(
+                "Resuming GraphER teacher cache from graph=%d/%d examples=%d graphs_with_examples=%d",
+                start_index + 1 if start_index < len(train_graphs) else len(train_graphs),
+                len(train_graphs),
+                len(cache),
+                num_graphs_with_examples,
+            )
+
+    def builder_state(next_graph_index: int) -> dict[str, Any]:
+        return {
+            "next_graph_index": int(next_graph_index),
+            "rng_state": rng.getstate(),
+            "num_hh_already_exact": int(num_exact),
+            "num_positive_teacher_steps": int(num_positive),
+            "num_hh_failures": int(num_hh_failures),
+            "num_no_teacher_step": int(num_no_teacher_step),
+            "num_graphs_with_examples": int(num_graphs_with_examples),
+            "train_candidate_sizes": list(train_candidate_sizes),
+            "offline_candidate_sizes": list(offline_candidate_sizes),
+            "improvements": list(improvements),
+        }
+
+    def stats() -> dict[str, float | int]:
+        return {
+            "num_teacher_examples": len(cache),
+            "num_hh_already_exact": num_exact,
+            "num_positive_teacher_steps": num_positive,
+            "num_hh_failures": num_hh_failures,
+            "num_no_teacher_step": num_no_teacher_step,
+            "num_graphs_with_examples": num_graphs_with_examples,
+            "avg_train_candidate_size": sum(train_candidate_sizes) / max(len(train_candidate_sizes), 1),
+            "avg_offline_candidate_size": sum(offline_candidate_sizes) / max(len(offline_candidate_sizes), 1),
+            "avg_teacher_improvement": sum(improvements) / max(len(improvements), 1),
+        }
+
+    def save_progress(next_graph_index: int, *, complete: bool = False) -> None:
+        if cache_checkpoint_path is None:
+            return
+        _save_incremental_teacher_cache(
+            path=cache_checkpoint_path,
+            teacher_cache=cache,
+            builder_state=builder_state(next_graph_index),
+            cache_key=cache_key,
+            dataset=dataset,
+            seed=seed,
+            run_id=run_id,
+            training_config_hash=training_config_hash,
+            complete=complete,
+            cache_seconds=time.perf_counter() - build_start,
+            cache_stats=stats() if complete else None,
+        )
+
+    for raw_index in range(start_index, len(train_graphs)):
+        graph_idx = raw_index + 1
+        target_raw = train_graphs[raw_index]
         target = nx.convert_node_labels_to_integers(nx.Graph(target_raw), ordering="sorted")
         try:
             current = deterministic_connected_havel_hakimi(G=target)
@@ -326,11 +509,15 @@ def _build_teacher_cache(
                 target.number_of_nodes(),
                 target.number_of_edges(),
             )
+            if graph_idx % checkpoint_interval == 0:
+                save_progress(graph_idx, complete=False)
             continue
 
         if edge_symmetric_difference_size(current, target) == 0:
             num_exact += 1
             logger.debug("GraphER cache graph=%d HH source already exact", graph_idx)
+            if graph_idx % checkpoint_interval == 0:
+                save_progress(graph_idx, complete=False)
             continue
 
         target_degree_sequence = degree_sequence(target)
@@ -386,6 +573,8 @@ def _build_teacher_cache(
 
         if len(cache) > examples_before:
             num_graphs_with_examples += 1
+        if graph_idx % checkpoint_interval == 0:
+            save_progress(graph_idx, complete=False)
         if graph_idx == 1 or graph_idx % 10 == 0 or graph_idx == len(train_graphs):
             logger.info(
                 "GraphER teacher cache progress graph=%d/%d examples=%d graphs_with_examples=%d",
@@ -395,18 +584,9 @@ def _build_teacher_cache(
                 num_graphs_with_examples,
             )
 
-    stats: dict[str, float | int] = {
-        "num_teacher_examples": len(cache),
-        "num_hh_already_exact": num_exact,
-        "num_positive_teacher_steps": num_positive,
-        "num_hh_failures": num_hh_failures,
-        "num_no_teacher_step": num_no_teacher_step,
-        "num_graphs_with_examples": num_graphs_with_examples,
-        "avg_train_candidate_size": sum(train_candidate_sizes) / max(len(train_candidate_sizes), 1),
-        "avg_offline_candidate_size": sum(offline_candidate_sizes) / max(len(offline_candidate_sizes), 1),
-        "avg_teacher_improvement": sum(improvements) / max(len(improvements), 1),
-    }
-    return cache, stats
+    final_stats = stats()
+    save_progress(len(train_graphs), complete=True)
+    return cache, final_stats
 
 
 def _num_trainable_parameters(model: torch.nn.Module) -> int:
@@ -422,14 +602,16 @@ def train_grapher(
     seed: int,
     run_id: int | None,
     device: str,
+    resume: bool = True,
 ) -> dict:
     device = require_cuda_training_device(device)
     logger.info(
-        "Starting GraphER training dataset=%s run_id=%s seed=%s device=%s dataset_root=%s dataset_config=%s",
+        "Starting GraphER training dataset=%s run_id=%s seed=%s device=%s resume=%s dataset_root=%s dataset_config=%s",
         dataset,
         run_id,
         seed,
         device,
+        resume,
         dataset_root,
         dataset_config_path,
     )
@@ -528,24 +710,113 @@ def train_grapher(
 
     history: list[dict] = []
     start = time.perf_counter()
+    run_dir = run_output_dir(dataset, "grapher", run_id=run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    teacher_cache_path = Path(cfg.get("teacher_cache_path") or (run_dir / "teacher_cache.pt"))
+    training_state_path = Path(cfg.get("training_state_path") or (run_dir / "training_state.pt"))
+    force_rebuild_cache = bool(cfg.get("force_rebuild_teacher_cache", False))
     with PeakMemoryMonitor() as memory_monitor:
-        cache_start = time.perf_counter()
-        teacher_cache, cache_stats = _build_teacher_cache(
-            train_graphs=train_graphs,
+        cache_seconds = 0.0
+        cache_key = _teacher_cache_key(
+            dataset=dataset,
+            seed=seed,
+            cfg=cfg,
             model=model,
-            k_eigen=k_eigen,
-            max_steps=max_steps,
-            candidate_budget=candidate_budget,
-            offline_candidate_budget=offline_candidate_budget,
-            k_hop=k_hop,
-            ensure_connected=ensure_connected,
-            discrepancy=discrepancy,
-            require_positive_improvement=require_positive_improvement,
-            rng=rng,
+            train_graph_count=len(train_graphs),
         )
-        cache_seconds = time.perf_counter() - cache_start
+        teacher_cache: list[CachedTeacherExample] | None = None
+        cache_stats: dict[str, float | int] | None = None
+        partial_cache_payload: Mapping[str, Any] | None = None
+
+        if resume and teacher_cache_path.exists() and not force_rebuild_cache:
+            logger.info("Loading GraphER teacher cache from %s", teacher_cache_path)
+            cache_payload = _torch_load_compat(teacher_cache_path, map_location="cpu")
+            if isinstance(cache_payload, dict) and "teacher_cache" in cache_payload:
+                saved_key = str(cache_payload.get("cache_key", ""))
+                if saved_key == cache_key:
+                    cache_seconds = float(cache_payload.get("cache_seconds", 0.0))
+                    if bool(cache_payload.get("complete", True)):
+                        teacher_cache = list(cache_payload["teacher_cache"])
+                        cache_stats = dict(cache_payload.get("cache_stats", {}))
+                        logger.info(
+                            "Loaded complete GraphER teacher cache examples=%d cache_seconds=%.2f",
+                            len(teacher_cache),
+                            cache_seconds,
+                        )
+                    else:
+                        partial_cache_payload = cache_payload
+                        logger.info(
+                            "Loaded partial GraphER teacher cache examples=%d next_graph=%s cache_seconds=%.2f; resuming cache build",
+                            len(cache_payload.get("teacher_cache", [])),
+                            cache_payload.get("next_graph_index", cache_payload.get("builder_state", {}).get("next_graph_index", "?")),
+                            cache_seconds,
+                        )
+                else:
+                    logger.warning(
+                        "Ignoring stale GraphER teacher cache at %s: cache key mismatch saved=%s current=%s",
+                        teacher_cache_path,
+                        saved_key,
+                        cache_key,
+                    )
+            elif isinstance(cache_payload, list):
+                teacher_cache = list(cache_payload)
+                cache_stats = {"num_teacher_examples": len(teacher_cache)}
+                cache_seconds = 0.0
+                logger.warning("Loaded legacy GraphER teacher cache list without a cache key from %s.", teacher_cache_path)
+            else:
+                logger.warning("Ignoring unrecognized GraphER teacher cache payload at %s", teacher_cache_path)
+
+        if teacher_cache is None or cache_stats is None:
+            cache_start = time.perf_counter()
+            teacher_cache, cache_stats = _build_teacher_cache(
+                train_graphs=train_graphs,
+                model=model,
+                k_eigen=k_eigen,
+                max_steps=max_steps,
+                candidate_budget=candidate_budget,
+                offline_candidate_budget=offline_candidate_budget,
+                k_hop=k_hop,
+                ensure_connected=ensure_connected,
+                discrepancy=discrepancy,
+                require_positive_improvement=require_positive_improvement,
+                rng=rng,
+                cache_checkpoint_path=teacher_cache_path if bool(cfg.get("save_teacher_cache", True)) else None,
+                cache_key=cache_key,
+                dataset=dataset,
+                seed=seed,
+                run_id=run_id,
+                training_config_hash=stable_hash(cfg),
+                resume_payload=partial_cache_payload,
+                checkpoint_interval=int(cfg.get("teacher_cache_checkpoint_interval", 25)),
+            )
+            cache_seconds = cache_seconds + (time.perf_counter() - cache_start)
+            if bool(cfg.get("save_teacher_cache", True)):
+                _save_incremental_teacher_cache(
+                    path=teacher_cache_path,
+                    teacher_cache=teacher_cache,
+                    builder_state={"next_graph_index": len(train_graphs), "rng_state": rng.getstate()},
+                    cache_key=cache_key,
+                    dataset=dataset,
+                    seed=seed,
+                    run_id=run_id,
+                    training_config_hash=stable_hash(cfg),
+                    complete=True,
+                    cache_seconds=cache_seconds,
+                    cache_stats=cache_stats,
+                )
+                logger.info("Saved GraphER teacher cache examples=%d to %s", len(teacher_cache), teacher_cache_path)
         if not teacher_cache:
             raise ValueError(f"No GraphER teacher examples were constructed. Cache stats: {cache_stats}")
+        cache_stats = dict(cache_stats)
+        cache_stats.setdefault("num_teacher_examples", len(teacher_cache))
+        cache_stats.setdefault("num_hh_already_exact", 0)
+        cache_stats.setdefault("num_positive_teacher_steps", 0)
+        cache_stats.setdefault("num_hh_failures", 0)
+        cache_stats.setdefault("num_no_teacher_step", 0)
+        cache_stats.setdefault("num_graphs_with_examples", 0)
+        cache_stats.setdefault("avg_train_candidate_size", 0.0)
+        cache_stats.setdefault("avg_offline_candidate_size", 0.0)
+        cache_stats.setdefault("avg_teacher_improvement", 0.0)
         logger.info(
             "GraphER teacher cache built examples=%d graphs_with_examples=%d exact=%d hh_fail=%d no_teacher=%d avgC=%.1f avgCoff=%.1f avg_delta=%.3f seconds=%.2f",
             len(teacher_cache),
@@ -560,7 +831,37 @@ def train_grapher(
         )
 
         scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
-        for epoch in range(1, epochs + 1):
+        start_epoch = 1
+        if resume and training_state_path.exists():
+            logger.info("Loading GraphER training state from %s", training_state_path)
+            state = _torch_load_compat(training_state_path, map_location=device)
+            if str(state.get("model_architecture", GraphER.architecture)) != GraphER.architecture:
+                logger.warning("Ignoring GraphER training state with incompatible architecture at %s", training_state_path)
+            elif str(state.get("model_config_hash", stable_hash(cfg))) != stable_hash(cfg):
+                logger.warning("Ignoring GraphER training state with incompatible config hash at %s", training_state_path)
+            else:
+                model.load_state_dict(state["model_state_dict"])
+                optimizer.load_state_dict(state["optimizer_state_dict"])
+                if "scaler_state_dict" in state:
+                    try:
+                        scaler.load_state_dict(state["scaler_state_dict"])
+                    except Exception as exc:  # pragma: no cover - defensive across torch versions
+                        logger.warning("Could not restore GraphER AMP scaler state: %s", exc)
+                history = list(state.get("history", []))
+                start_epoch = int(state.get("epoch", 0)) + 1
+                if state.get("rng_state") is not None:
+                    try:
+                        rng.setstate(state["rng_state"])
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.warning("Could not restore GraphER Python RNG state: %s", exc)
+                logger.info(
+                    "Resuming GraphER from epoch %d/%d with %d prior history rows.",
+                    start_epoch,
+                    epochs,
+                    len(history),
+                )
+
+        for epoch in range(start_epoch, epochs + 1):
             epoch_start = time.perf_counter()
             model.train()
             epoch_examples = list(teacher_cache)
@@ -629,8 +930,25 @@ def train_grapher(
                 "epoch_seconds": time.perf_counter() - epoch_start,
             }
             history.append(row)
+            _atomic_torch_save(
+                {
+                    "epoch": epoch,
+                    "model_architecture": GraphER.architecture,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scaler_state_dict": scaler.state_dict(),
+                    "history": history,
+                    "rng_state": rng.getstate(),
+                    "dataset": dataset,
+                    "seed": seed,
+                    "run_id": run_id,
+                    "model_config_hash": stable_hash(cfg),
+                    "teacher_cache_path": str(teacher_cache_path),
+                },
+                training_state_path,
+            )
             logger.info(
-                "GraphER epoch %d/%d loss=%.4f examples=%d cached=%d zero_logits=%d avgC=%.1f avgCoff=%.1f avg_delta=%.3f seconds=%.2f",
+                "GraphER epoch %d/%d loss=%.4f examples=%d cached=%d zero_logits=%d avgC=%.1f avgCoff=%.1f avg_delta=%.3f seconds=%.2f saved_state=%s",
                 epoch,
                 epochs,
                 row["loss"],
@@ -641,6 +959,7 @@ def train_grapher(
                 row["avg_offline_candidate_size"],
                 row["avg_teacher_improvement"],
                 row["epoch_seconds"],
+                training_state_path,
             )
         assert_model_tensors_finite(model, context=f"grapher/{dataset}")
     elapsed = time.perf_counter() - start
@@ -682,6 +1001,8 @@ def train_grapher(
             "num_cached_teacher_examples": len(teacher_cache),
             "teacher_cache_seconds": cache_seconds,
             "teacher_cache_stats": cache_stats,
+            "teacher_cache_path": str(teacher_cache_path),
+            "training_state_path": str(training_state_path),
             "gradient_accumulation_steps": grad_accum_steps,
             "mixed_precision_amp": use_amp,
             "gpu_required_by_training_script": True,
@@ -690,8 +1011,6 @@ def train_grapher(
     torch.save(payload, checkpoint_path)
     logger.info("Wrote GraphER checkpoint payload keys=%s", sorted(payload.keys()))
 
-    run_dir = run_output_dir(dataset, "grapher", run_id=run_id)
-    run_dir.mkdir(parents=True, exist_ok=True)
     save_yaml(cfg, run_dir / "resolved_model_config.yaml", force=True)
     compute = compute_report(operation="training", runtime_seconds=elapsed, num_graphs=len(train_graphs), memory=memory_monitor.to_dict())
     metadata = {
@@ -724,6 +1043,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-id", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--no-resume", action="store_true", help="Disable automatic cache/training-state resume.")
+    parser.add_argument("--force-rebuild-cache", action="store_true", help="Ignore any saved GraphER teacher cache and rebuild it.")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging.")
     args = parser.parse_args()
 
@@ -736,16 +1057,20 @@ def main() -> None:
         if args.dataset_config
         else Path("configs/datasets") / f"{args.dataset}.yaml"
     )
+    model_config = load_yaml(args.model_config)
+    if args.force_rebuild_cache:
+        model_config["force_rebuild_teacher_cache"] = True
 
     try:
         train_grapher(
             dataset=args.dataset,
-            model_config=load_yaml(args.model_config),
+            model_config=model_config,
             dataset_config_path=dataset_cfg,
             dataset_root=dataset_root,
             seed=args.seed,
             run_id=args.run_id,
             device=args.device,
+            resume=not args.no_resume,
         )
     except CudaTrainingDeviceError as exc:
         parser.exit(status=2, message=f"error: {exc}\n")

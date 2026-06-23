@@ -48,3 +48,10 @@ samples_path: outputs/samples/{dataset}/grapher.pkl
 grad_accum_steps: 16
 use_amp: true
 examples_per_epoch: 16384
+
+# Resume/cache controls.  The generic teacher cache is CPU/NetworkX-heavy, so
+# it is persisted incrementally during construction and reused automatically
+# when the same run-id/config is launched again.
+save_teacher_cache: true
+teacher_cache_checkpoint_interval: 25
+force_rebuild_teacher_cache: false

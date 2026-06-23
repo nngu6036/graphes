@@ -287,6 +287,47 @@ a = (e1, e2, r)
 
 Offline teacher construction may use target-aware candidates. Neural training and generation use target-free valid local/random candidates.
 
+### Resume generic training after an interruption
+
+Generic teacher-cache construction can also be expensive, especially for SBM-64. The generic training script saves:
+
+```text
+outputs/runs/<dataset>/grapher/run_000/teacher_cache.pt
+outputs/runs/<dataset>/grapher/run_000/training_state.pt
+```
+
+By default, rerunning the same command with the same `--run-id` reuses a complete teacher cache, resumes a partial teacher-cache build from the last checkpointed graph, and resumes neural optimization from the last completed epoch.
+
+To force cache reconstruction from the command line:
+
+```bash
+PYTHONPATH=src python scripts/train_generic_grapher_model.py \
+  --dataset sbm \
+  --seed 42 \
+  --run-id 0 \
+  --model-config configs/models/grapher_generic.yaml \
+  --force-rebuild-cache
+```
+
+To disable all resume behavior:
+
+```bash
+PYTHONPATH=src python scripts/train_generic_grapher_model.py \
+  --dataset sbm \
+  --seed 42 \
+  --run-id 0 \
+  --model-config configs/models/grapher_generic.yaml \
+  --no-resume
+```
+
+The cache checkpoint interval is controlled by:
+
+```yaml
+teacher_cache_checkpoint_interval: 25
+```
+
+Use a smaller value such as `1` or `5` if interruptions are frequent. Smaller values reduce lost cache work but write the large cache file more often.
+
 ### Generate
 
 ```bash

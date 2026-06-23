@@ -521,6 +521,82 @@ def _candidate_teacher_step(
     )
 
 
+
+def _torch_load_incremental_cache_compat(path: str | Path, *, map_location: str | torch.device = "cpu") -> dict[str, Any]:
+    """Load incremental cache across old/new PyTorch versions."""
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError as exc:
+        msg = str(exc).lower()
+        if (
+            "weights_only" not in msg
+            and "invalid keyword" not in msg
+            and "unexpected keyword" not in msg
+        ):
+            raise
+        return torch.load(path, map_location=map_location)
+
+
+def _save_incremental_teacher_cache(*args: Any, **kwargs: Any) -> None:
+    """Atomically save a partial molecular teacher-cache payload.
+
+    Accepts flexible call patterns:
+      _save_incremental_teacher_cache(path, payload)
+      _save_incremental_teacher_cache(path, teacher_cache=..., builder_state=...)
+      _save_incremental_teacher_cache(path=..., teacher_cache=...)
+      _save_incremental_teacher_cache(cache_path=..., teacher_cache=...)
+    """
+    import os as _os
+    from pathlib import Path as _Path
+
+    path = None
+    payload: dict[str, Any]
+
+    if args:
+        path = args[0]
+        if len(args) == 2 and isinstance(args[1], dict) and not kwargs:
+            payload = dict(args[1])
+        else:
+            payload = dict(kwargs)
+            if len(args) > 1:
+                payload["_positional_args"] = list(args[1:])
+    else:
+        payload = dict(kwargs)
+        for key in ("path", "cache_path", "teacher_cache_path", "output_path"):
+            if key in payload:
+                path = payload.pop(key)
+                break
+
+    if path is None:
+        raise TypeError("_save_incremental_teacher_cache requires a path/cache_path argument.")
+
+    # Support _save_incremental_teacher_cache(path=..., payload={...})
+    if set(payload.keys()) == {"payload"} and isinstance(payload["payload"], dict):
+        payload = dict(payload["payload"])
+
+    path = _Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    tmp_path = path.with_name(path.name + ".tmp")
+    torch.save(payload, tmp_path)
+    _os.replace(tmp_path, path)
+
+
+def _load_incremental_teacher_cache(
+    path: str | Path,
+    *,
+    map_location: str | torch.device = "cpu",
+) -> dict[str, Any] | None:
+    """Load a partial or complete molecular teacher cache if it exists."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    payload = _torch_load_incremental_cache_compat(path, map_location=map_location)
+    if not isinstance(payload, dict):
+        raise TypeError(f"Incremental teacher cache at {path} is not a dict payload.")
+    return payload
+
+
 def _build_teacher_cache(
     *,
     train_graphs: Sequence[nx.Graph],
