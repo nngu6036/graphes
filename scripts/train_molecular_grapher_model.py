@@ -56,6 +56,71 @@ from grapher.utils.seed import set_seed
 logger = get_logger(__name__)
 
 
+def _torch_load_compat(path: str | Path, *, map_location: str | torch.device = "cpu") -> Any:
+    """Load torch payloads across old/new PyTorch versions."""
+
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError as exc:
+        message = str(exc).lower()
+        if "weights_only" not in message and "unexpected keyword" not in message and "invalid keyword" not in message:
+            raise
+        return torch.load(path, map_location=map_location)
+
+
+def _atomic_torch_save(payload: Any, path: str | Path) -> None:
+    """Write a torch payload atomically to avoid corrupt resume files."""
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    torch.save(payload, tmp)
+    tmp.replace(target)
+
+
+def _teacher_cache_key(*, dataset: str, seed: int, cfg: Mapping[str, Any], model: MolecularGraphER, train_graph_count: int) -> str:
+    """Hash the settings that determine molecular teacher-cache contents."""
+
+    relevant_keys = [
+        "max_graphs",
+        "max_steps_per_graph",
+        "candidate_budget",
+        "offline_candidate_budget",
+        "k_hop",
+        "ensure_connected",
+        "teacher_topology_weight",
+        "teacher_bond_type_weight",
+        "teacher_clustering_weight",
+        "target_candidate_fraction",
+        "global_candidate_fraction",
+        "bond_type_proposals_per_edge",
+        "bond_type_proposal_mode",
+        "source_edge_type_strategy",
+        "allow_global_bond_backoff",
+        "reject_unseen_endpoint_pairs",
+        "valence_tolerance",
+        "require_positive_teacher_improvement",
+        "empirical_bond_smoothing",
+        "bond_order_by_type",
+        "max_valence_by_node_type",
+        "k_eigen",
+        "local_feature_dim",
+    ]
+    payload = {key: cfg.get(key) for key in relevant_keys}
+    payload.update(
+        {
+            "dataset": dataset,
+            "seed": int(seed),
+            "train_graph_count": int(train_graph_count),
+            "node_type_values": list(map(int, model.node_type_values)),
+            "edge_type_values": list(map(int, model.edge_type_values)),
+            "max_nodes": int(model.max_nodes),
+            "degree_histogram_dim": int(model.degree_histogram_dim),
+        }
+    )
+    return stable_hash(payload)
+
+
 @dataclass
 class CachedMolecularTeacherExample:
     node_types: torch.Tensor
@@ -672,12 +737,23 @@ def train_molecular_grapher(
         seed=seed,
         use_run_paths=run_id is not None,
     )
+    run_dir = run_output_dir(dataset, "grapher_molecular", run_id=run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    resume = bool(cfg.get("resume", True))
+    force_rebuild_cache = bool(cfg.get("force_rebuild_teacher_cache", False))
+    teacher_cache_path = Path(cfg.get("teacher_cache_path") or (run_dir / "teacher_cache.pt"))
+    training_state_path = Path(cfg.get("training_state_path") or (run_dir / "training_state.pt"))
+    checkpoint_path = Path(
+        cfg.get("checkpoint_path")
+        or f"outputs/checkpoints/{dataset}/grapher_molecular/grapher_molecular.pt"
+    )
     logger.info(
-        "Starting molecular GraphER training dataset=%s run_id=%s seed=%s device=%s",
+        "Starting molecular GraphER training dataset=%s run_id=%s seed=%s device=%s resume=%s",
         dataset,
         run_id,
         seed,
         device,
+        resume,
     )
     splits = load_dataset_splits(
         dataset,
@@ -803,49 +879,146 @@ def train_molecular_grapher(
     )
     history: list[dict[str, Any]] = []
     start = time.perf_counter()
+    cache_seconds = 0.0
+    cache_key = _teacher_cache_key(
+        dataset=dataset,
+        seed=seed,
+        cfg=cfg,
+        model=model,
+        train_graph_count=len(train_graphs),
+    )
     with PeakMemoryMonitor() as memory_monitor:
-        cache_start = time.perf_counter()
-        teacher_cache, cache_stats = _build_teacher_cache(
-            train_graphs=train_graphs,
-            model=model,
-            prior=prior,
-            k_eigen=k_eigen,
-            max_steps=max_steps,
-            candidate_budget=candidate_budget,
-            offline_candidate_budget=offline_candidate_budget,
-            k_hop=k_hop,
-            ensure_connected=ensure_connected,
-            topology_weight=topology_weight,
-            bond_type_weight=bond_type_weight,
-            clustering_weight=clustering_weight,
-            target_candidate_fraction=target_candidate_fraction,
-            global_candidate_fraction=global_candidate_fraction,
-            proposals_per_edge=proposals_per_edge,
-            proposal_mode=proposal_mode,
-            source_proposal_mode=source_proposal_mode,
-            allow_global_backoff=allow_global_backoff,
-            reject_unseen_endpoint_pairs=reject_unseen_endpoint_pairs,
-            valence_tolerance=valence_tolerance,
-            require_positive_improvement=require_positive,
-            rng=rng,
-        )
-        cache_seconds = time.perf_counter() - cache_start
+        teacher_cache: list[CachedMolecularTeacherExample] | None = None
+        cache_stats: dict[str, float | int] | None = None
+
+        if resume and teacher_cache_path.exists() and not force_rebuild_cache:
+            logger.info("Loading molecular teacher cache from %s", teacher_cache_path)
+            cache_payload = _torch_load_compat(teacher_cache_path, map_location="cpu")
+            if isinstance(cache_payload, dict) and "teacher_cache" in cache_payload:
+                saved_key = str(cache_payload.get("cache_key", ""))
+                if saved_key == cache_key:
+                    teacher_cache = list(cache_payload["teacher_cache"])
+                    cache_stats = dict(cache_payload.get("cache_stats", {}))
+                    cache_seconds = float(cache_payload.get("cache_seconds", 0.0))
+                    logger.info(
+                        "Loaded molecular teacher cache examples=%d cache_seconds=%.2f",
+                        len(teacher_cache),
+                        cache_seconds,
+                    )
+                else:
+                    logger.warning(
+                        "Ignoring stale molecular teacher cache at %s: cache key mismatch saved=%s current=%s",
+                        teacher_cache_path,
+                        saved_key,
+                        cache_key,
+                    )
+            elif isinstance(cache_payload, list):
+                # Backward-compatible fallback for manually saved cache lists.
+                teacher_cache = list(cache_payload)
+                cache_stats = {"num_teacher_examples": len(teacher_cache)}
+                cache_seconds = 0.0
+                logger.warning(
+                    "Loaded legacy molecular teacher cache list without a cache key from %s.",
+                    teacher_cache_path,
+                )
+            else:
+                logger.warning("Ignoring unrecognized teacher cache payload at %s", teacher_cache_path)
+
+        if teacher_cache is None or cache_stats is None:
+            cache_start = time.perf_counter()
+            teacher_cache, cache_stats = _build_teacher_cache(
+                train_graphs=train_graphs,
+                model=model,
+                prior=prior,
+                k_eigen=k_eigen,
+                max_steps=max_steps,
+                candidate_budget=candidate_budget,
+                offline_candidate_budget=offline_candidate_budget,
+                k_hop=k_hop,
+                ensure_connected=ensure_connected,
+                topology_weight=topology_weight,
+                bond_type_weight=bond_type_weight,
+                clustering_weight=clustering_weight,
+                target_candidate_fraction=target_candidate_fraction,
+                global_candidate_fraction=global_candidate_fraction,
+                proposals_per_edge=proposals_per_edge,
+                proposal_mode=proposal_mode,
+                source_proposal_mode=source_proposal_mode,
+                allow_global_backoff=allow_global_backoff,
+                reject_unseen_endpoint_pairs=reject_unseen_endpoint_pairs,
+                valence_tolerance=valence_tolerance,
+                require_positive_improvement=require_positive,
+                rng=rng,
+            )
+            cache_seconds = time.perf_counter() - cache_start
+            if not teacher_cache:
+                raise ValueError(f"No molecular GraphER teacher examples were built: {cache_stats}")
+            if bool(cfg.get("save_teacher_cache", True)):
+                _atomic_torch_save(
+                    {
+                        "teacher_cache": teacher_cache,
+                        "cache_stats": cache_stats,
+                        "cache_seconds": cache_seconds,
+                        "cache_key": cache_key,
+                        "dataset": dataset,
+                        "seed": seed,
+                        "run_id": run_id,
+                        "training_config_hash": stable_hash(cfg),
+                    },
+                    teacher_cache_path,
+                )
+                logger.info(
+                    "Saved molecular teacher cache examples=%d to %s",
+                    len(teacher_cache),
+                    teacher_cache_path,
+                )
+
         if not teacher_cache:
-            raise ValueError(f"No molecular GraphER teacher examples were built: {cache_stats}")
+            raise ValueError(f"No molecular GraphER teacher examples were available: {cache_stats}")
+        cache_stats = dict(cache_stats)
+        cache_stats.setdefault("num_teacher_examples", len(teacher_cache))
         logger.info(
             "Molecular teacher cache examples=%d graphs=%d source_failures=%d no_teacher=%d avg_path=%.2f discrepancy=%.4f->%.4f seconds=%.2f",
             len(teacher_cache),
-            int(cache_stats["num_graphs_with_examples"]),
-            int(cache_stats["num_source_failures"]),
-            int(cache_stats["num_no_teacher_step"]),
-            float(cache_stats["avg_teacher_path_length"]),
-            float(cache_stats["avg_initial_attributed_discrepancy"]),
-            float(cache_stats["avg_final_attributed_discrepancy"]),
+            int(cache_stats.get("num_graphs_with_examples", 0)),
+            int(cache_stats.get("num_source_failures", 0)),
+            int(cache_stats.get("num_no_teacher_step", 0)),
+            float(cache_stats.get("avg_teacher_path_length", 0.0)),
+            float(cache_stats.get("avg_initial_attributed_discrepancy", 0.0)),
+            float(cache_stats.get("avg_final_attributed_discrepancy", 0.0)),
             cache_seconds,
         )
 
         scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
-        for epoch in range(1, epochs + 1):
+        start_epoch = 1
+        if resume and training_state_path.exists():
+            logger.info("Loading molecular GraphER training state from %s", training_state_path)
+            state = _torch_load_compat(training_state_path, map_location=device)
+            if str(state.get("model_architecture", MolecularGraphER.architecture)) != MolecularGraphER.architecture:
+                logger.warning("Ignoring training state with incompatible architecture at %s", training_state_path)
+            else:
+                model.load_state_dict(state["model_state_dict"])
+                optimizer.load_state_dict(state["optimizer_state_dict"])
+                if "scaler_state_dict" in state:
+                    try:
+                        scaler.load_state_dict(state["scaler_state_dict"])
+                    except Exception as exc:  # pragma: no cover - defensive across torch versions
+                        logger.warning("Could not restore AMP scaler state: %s", exc)
+                history = list(state.get("history", []))
+                start_epoch = int(state.get("epoch", 0)) + 1
+                if state.get("rng_state") is not None:
+                    try:
+                        rng.setstate(state["rng_state"])
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.warning("Could not restore Python RNG state: %s", exc)
+                logger.info(
+                    "Resuming molecular GraphER from epoch %d/%d with %d prior history rows.",
+                    start_epoch,
+                    epochs,
+                    len(history),
+                )
+
+        for epoch in range(start_epoch, epochs + 1):
             epoch_start = time.perf_counter()
             model.train()
             epoch_examples = list(teacher_cache)
@@ -923,8 +1096,25 @@ def train_molecular_grapher(
                 "epoch_seconds": time.perf_counter() - epoch_start,
             }
             history.append(row)
+            _atomic_torch_save(
+                {
+                    "epoch": epoch,
+                    "model_architecture": MolecularGraphER.architecture,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scaler_state_dict": scaler.state_dict(),
+                    "history": history,
+                    "rng_state": rng.getstate(),
+                    "dataset": dataset,
+                    "seed": seed,
+                    "run_id": run_id,
+                    "model_config_hash": stable_hash(cfg),
+                    "teacher_cache_path": str(teacher_cache_path),
+                },
+                training_state_path,
+            )
             logger.info(
-                "Molecular GraphER epoch %d/%d loss=%.4f top1=%.3f top5=%.3f mrr=%.3f entropy=%.3f examples=%d seconds=%.2f",
+                "Molecular GraphER epoch %d/%d loss=%.4f top1=%.3f top5=%.3f mrr=%.3f entropy=%.3f examples=%d seconds=%.2f saved_state=%s",
                 epoch,
                 epochs,
                 row["loss"],
@@ -934,6 +1124,7 @@ def train_molecular_grapher(
                 row["avg_action_entropy"],
                 num_examples,
                 row["epoch_seconds"],
+                training_state_path,
             )
         assert_model_tensors_finite(model, context=f"grapher_molecular/{dataset}")
     elapsed = time.perf_counter() - start
@@ -978,6 +1169,9 @@ def train_molecular_grapher(
             "valence_filter": "empirical_max_bond_order_sum_by_node_type",
             "teacher_cache_seconds": cache_seconds,
             "teacher_cache_stats": cache_stats,
+            "teacher_cache_path": str(teacher_cache_path),
+            "training_state_path": str(training_state_path),
+            "resume_enabled": resume,
             "bond_prior": prior.to_dict(),
             "gpu_required_by_training_script": True,
             "mixed_precision_amp": use_amp,
@@ -1029,6 +1223,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-id", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--no-resume", action="store_true", help="Do not resume from saved teacher cache or training state.")
+    parser.add_argument("--force-rebuild-cache", action="store_true", help="Ignore any saved molecular teacher cache and rebuild it.")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
@@ -1045,10 +1241,16 @@ def main() -> None:
     dataset_config_path = Path(
         args.dataset_config or f"configs/datasets/{args.dataset}.yaml"
     )
+    model_config = load_yaml(model_config_path)
+    if args.no_resume:
+        model_config["resume"] = False
+    if args.force_rebuild_cache:
+        model_config["force_rebuild_teacher_cache"] = True
+
     try:
         train_molecular_grapher(
             dataset=args.dataset,
-            model_config=load_yaml(model_config_path),
+            model_config=model_config,
             dataset_config_path=dataset_config_path,
             dataset_root=args.dataset_root,
             seed=args.seed,

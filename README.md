@@ -350,6 +350,27 @@ PYTHONPATH=src python scripts/train_molecular_grapher_model.py \
   --model-config configs/models/grapher_molecular_zinc.yaml
 ```
 
+### Resume molecular training after an interruption
+
+Molecular teacher-cache construction can be expensive. The training script now saves:
+
+```text
+outputs/runs/<dataset>/grapher_molecular/run_000/teacher_cache.pt
+outputs/runs/<dataset>/grapher_molecular/run_000/training_state.pt
+```
+
+By default, rerunning the same command with the same `--run-id` resumes from the last completed epoch and reuses the saved teacher cache. To force cache reconstruction, add the following setting to the model config:
+
+```yaml
+force_rebuild_teacher_cache: true
+```
+
+To disable resume behavior:
+
+```yaml
+resume: false
+```
+
 ### Generate molecules
 
 ```bash
