@@ -59,6 +59,7 @@ max_graphs: 10000
 examples_per_epoch: 20000
 grad_accum_steps: 16
 use_amp: true
+teacher_cache_checkpoint_interval: 25
 
 max_nodes: null
 degree_histogram_dim: null

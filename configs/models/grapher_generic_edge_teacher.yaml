@@ -49,5 +49,5 @@ grad_accum_steps: 16
 use_amp: true
 examples_per_epoch: 16384
 save_teacher_cache: true
-teacher_cache_checkpoint_interval: 25
+teacher_cache_checkpoint_interval: 50
 force_rebuild_teacher_cache: false
