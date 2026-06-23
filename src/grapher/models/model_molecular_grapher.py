@@ -45,16 +45,26 @@ class EdgeAwareGINLayer(nn.Module):
         self.eps = nn.Parameter(torch.zeros(()))
 
     def forward(
-        self,
-        node_h: torch.Tensor,
-        edge_index: torch.Tensor,
-        edge_h: torch.Tensor,
-    ) -> torch.Tensor:
+    self,
+    node_h: torch.Tensor,
+    edge_index: torch.Tensor,
+    edge_h: torch.Tensor,
+) -> torch.Tensor:
         aggregate = torch.zeros_like(node_h)
+
         if edge_index.numel() > 0:
             target, source = edge_index[0].long(), edge_index[1].long()
-            messages = self.message(node_h[source] + edge_h)
+
+            # Under AMP/autocast, Linear layers may produce float16 messages even
+            # when node_h/aggregate are float32. index_add_ requires matching dtype.
+            message_input = node_h[source] + edge_h.to(dtype=node_h.dtype)
+            messages = self.message(message_input)
+
+            if messages.dtype != aggregate.dtype:
+                messages = messages.to(dtype=aggregate.dtype)
+
             aggregate.index_add_(0, target, messages)
+
         return self.update((1.0 + self.eps) * node_h + aggregate)
 
 
