@@ -58,6 +58,7 @@ from grapher.utils.compute import PeakMemoryMonitor, compute_report
 from grapher.utils.io import load_yaml, save_json, save_pickle, save_yaml, stable_hash
 from grapher.utils.logging import get_logger
 from grapher.utils.numerics import assert_model_tensors_finite
+from grapher.utils.progress import progress_bar
 from grapher.utils.seed import set_seed
 
 logger = get_logger(__name__)
@@ -336,6 +337,7 @@ def generate_molecular_grapher_samples(
     max_rounds: int,
     write_sdf: bool,
     isomeric_smiles: bool,
+    show_progress: bool = True,
 ) -> dict[str, Any]:
     if dataset not in {"qm9", "zinc"}:
         raise ValueError("Molecular generation supports only qm9 and zinc.")
@@ -349,6 +351,15 @@ def generate_molecular_grapher_samples(
         run_id=run_id,
         seed=seed,
         use_run_paths=run_id is not None,
+    )
+    logger.info(
+        "Starting molecular GraphER sampling dataset=%s run_id=%s requested=%d seed=%d device=%s max_rounds=%d",
+        dataset,
+        "none" if run_id is None else int(run_id),
+        int(num_samples),
+        int(seed),
+        str(torch_device),
+        int(max_rounds),
     )
 
     molecular_checkpoint = Path(
@@ -379,6 +390,8 @@ def generate_molecular_grapher_samples(
             f"DH-VAE checkpoint not found: {dhvae_checkpoint}. "
             "Run scripts/train_dhvae_model.py first."
         )
+    logger.info("Loading molecular GraphER checkpoint: %s", molecular_checkpoint)
+    logger.info("Loading DH-VAE checkpoint: %s", dhvae_checkpoint)
 
     model, molecular_payload = load_molecular_grapher_checkpoint(
         molecular_checkpoint,
@@ -389,7 +402,15 @@ def generate_molecular_grapher_samples(
         device=str(torch_device),
     )
     assert_model_tensors_finite(model, context=f"molecular_generation/{dataset}")
+    logger.info(
+        "Loaded models molecular_params=%d dhvae_max_nodes=%d num_steps=%d candidate_budget=%d",
+        int(sum(parameter.numel() for parameter in model.parameters())),
+        int(getattr(dhvae, "max_nodes", -1)),
+        int(cfg.get("num_steps", model.T)),
+        int(cfg.get("candidate_budget", 48)),
+    )
 
+    logger.info("Loading prepared dataset splits from %s", dataset_root)
     splits = load_dataset_splits(
         dataset,
         output_root=dataset_root,
@@ -398,6 +419,7 @@ def generate_molecular_grapher_samples(
     train_graphs = list(splits.get("train", []))
     if not train_graphs:
         raise ValueError(f"No training graphs are available for fitting the atom prior for {dataset}.")
+    logger.info("Loaded dataset splits: %s", {split: len(graphs) for split, graphs in splits.items()})
     bond_prior_payload = molecular_payload.get("empirical_bond_prior")
     if not isinstance(bond_prior_payload, dict):
         raise KeyError("Molecular GraphER checkpoint is missing empirical_bond_prior.")
@@ -407,12 +429,19 @@ def generate_molecular_grapher_samples(
         allowed_node_types=model.node_type_values,
         smoothing=float(cfg.get("empirical_atom_smoothing", 0.1)),
     )
+    logger.info(
+        "Fitted empirical priors node_types=%s edge_types=%s atom_smoothing=%g",
+        list(model.node_type_values),
+        list(model.edge_type_values),
+        float(cfg.get("empirical_atom_smoothing", 0.1)),
+    )
 
     output_path = _resolved_sample_output(cfg, dataset, run_id)
     metadata_path = sample_metadata_path(dataset, MODEL_NAME, run_id=run_id)
     resolved_config_path = sample_config_path(dataset, MODEL_NAME, run_id=run_id)
     if output_path.exists() and not force:
         raise FileExistsError(f"Sample file already exists: {output_path}. Use --force to overwrite.")
+    logger.info("Resolved outputs sample=%s metadata=%s config=%s", output_path, metadata_path, resolved_config_path)
 
     generated: list[nx.Graph] = []
     records: list[dict[str, Any]] = []
@@ -425,67 +454,96 @@ def generate_molecular_grapher_samples(
     attempt_factor = max(int(cfg.get("degree_attempt_factor", 8)), 1)
 
     with PeakMemoryMonitor() as memory_monitor:
-        for round_index in range(max(int(max_rounds), 1)):
-            if len(generated) >= int(num_samples):
-                break
-            remaining = int(num_samples) - len(generated)
-            request = max(remaining * attempt_factor, remaining)
-            sequences = dhvae.generate(request, temperature=degree_temperature)
-            for sequence in sequences:
+        with progress_bar(
+            total=int(num_samples),
+            desc=f"Generating {dataset} molecules",
+            unit="mol",
+            enabled=show_progress,
+        ) as update_generated:
+            for round_index in range(max(int(max_rounds), 1)):
                 if len(generated) >= int(num_samples):
                     break
-                degree_attempts += 1
-                sequence = [int(value) for value in sequence]
-                graphical, code = check_sequence_validity(sequence)
-                if not graphical:
-                    reject_counts[f"degree_not_graphical:{code}"] += 1
-                    continue
-                feasible, reason = connected_sequence_feasible(sequence)
-                if not feasible:
-                    reject_counts[f"degree_not_connected_feasible:{reason}"] += 1
-                    continue
-                if len(sequence) > model.max_nodes:
-                    reject_counts["degree_sequence_exceeds_model_max_nodes"] += 1
-                    continue
-                if sequence and max(sequence) >= model.degree_histogram_dim:
-                    reject_counts["degree_exceeds_model_histogram_dim"] += 1
-                    continue
-                try:
-                    graph, record = _source_and_flow(
-                        sequence,
-                        model=model,
-                        atom_prior=atom_prior,
-                        bond_prior=bond_prior,
-                        cfg=cfg,
-                        rng=rng,
-                        device=torch_device,
-                    )
-                except Exception as exc:
-                    reject_counts[f"source_or_flow_failure:{type(exc).__name__}"] += 1
-                    logger.debug("Rejected molecular source: %s", exc)
-                    continue
-                graph.graph["source_dataset"] = dataset
-                graph.graph["generator"] = "GraphER_molecular"
-                graph.graph["sample_index"] = len(generated)
-                generated.append(graph)
-                records.append(record)
-            logger.info(
-                "Molecular generation round=%d/%d saved=%d/%d degree_attempts=%d",
-                round_index + 1,
-                max(int(max_rounds), 1),
-                len(generated),
-                int(num_samples),
-                degree_attempts,
-            )
+                remaining = int(num_samples) - len(generated)
+                request = max(remaining * attempt_factor, remaining)
+                round_start_saved = len(generated)
+                round_start_attempts = degree_attempts
+                logger.info(
+                    "Generation round %d/%d starting saved=%d/%d requesting_degree_sequences=%d",
+                    round_index + 1,
+                    max(int(max_rounds), 1),
+                    len(generated),
+                    int(num_samples),
+                    int(request),
+                )
+                sequences = dhvae.generate(request, temperature=degree_temperature)
+                logger.info("Generation round %d sampled %d degree sequences", round_index + 1, len(sequences))
+                for sequence in sequences:
+                    if len(generated) >= int(num_samples):
+                        break
+                    degree_attempts += 1
+                    sequence = [int(value) for value in sequence]
+                    graphical, code = check_sequence_validity(sequence)
+                    if not graphical:
+                        reject_counts[f"degree_not_graphical:{code}"] += 1
+                        continue
+                    feasible, reason = connected_sequence_feasible(sequence)
+                    if not feasible:
+                        reject_counts[f"degree_not_connected_feasible:{reason}"] += 1
+                        continue
+                    if len(sequence) > model.max_nodes:
+                        reject_counts["degree_sequence_exceeds_model_max_nodes"] += 1
+                        continue
+                    if sequence and max(sequence) >= model.degree_histogram_dim:
+                        reject_counts["degree_exceeds_model_histogram_dim"] += 1
+                        continue
+                    try:
+                        graph, record = _source_and_flow(
+                            sequence,
+                            model=model,
+                            atom_prior=atom_prior,
+                            bond_prior=bond_prior,
+                            cfg=cfg,
+                            rng=rng,
+                            device=torch_device,
+                        )
+                    except Exception as exc:
+                        reject_counts[f"source_or_flow_failure:{type(exc).__name__}"] += 1
+                        logger.debug("Rejected molecular source: %s", exc)
+                        continue
+                    graph.graph["source_dataset"] = dataset
+                    graph.graph["generator"] = "GraphER_molecular"
+                    graph.graph["sample_index"] = len(generated)
+                    generated.append(graph)
+                    records.append(record)
+                    update_generated(1)
+                logger.info(
+                    "Generation round %d/%d finished new=%d saved=%d/%d attempts=%d rejections=%s",
+                    round_index + 1,
+                    max(int(max_rounds), 1),
+                    len(generated) - round_start_saved,
+                    len(generated),
+                    int(num_samples),
+                    degree_attempts - round_start_attempts,
+                    dict(reject_counts.most_common(5)),
+                )
 
-        conversions = [
-            molecular_graph_to_rdkit(
-                graph,
-                sanitize=True,
-                isomeric_smiles=isomeric_smiles,
-            )
-            for graph in generated
-        ]
+        conversions = []
+        logger.info("Converting %d generated graphs to RDKit/SMILES", len(generated))
+        with progress_bar(
+            total=len(generated),
+            desc=f"Converting {dataset} molecules",
+            unit="mol",
+            enabled=show_progress,
+        ) as update_converted:
+            for graph in generated:
+                conversions.append(
+                    molecular_graph_to_rdkit(
+                        graph,
+                        sanitize=True,
+                        isomeric_smiles=isomeric_smiles,
+                    )
+                )
+                update_converted(1)
     elapsed = time.perf_counter() - start
 
     smiles = [item.smiles for item in conversions]
@@ -509,10 +567,13 @@ def generate_molecular_grapher_samples(
         "degree_sequences": [degree_sequence(graph) for graph in generated],
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("Writing sample pickle to %s", output_path)
     save_pickle(sample_bundle, output_path, force=force)
     smiles_path = output_path.with_suffix(".smi")
     jsonl_path = output_path.with_suffix(".jsonl")
+    logger.info("Writing SMILES to %s", smiles_path)
     write_smiles_file(smiles, smiles_path)
+    logger.info("Writing molecular JSONL to %s", jsonl_path)
     write_molecular_jsonl(
         generated,
         jsonl_path,
@@ -522,10 +583,12 @@ def generate_molecular_grapher_samples(
     sdf_path: Path | None = None
     sdf_count = 0
     if write_sdf:
+        logger.info("Writing SDF to %s", output_path.with_suffix(".sdf"))
         sdf_path, sdf_count = write_molecular_sdf(
             conversions,
             output_path.with_suffix(".sdf"),
         )
+        logger.info("Wrote %d valid molecules to SDF", int(sdf_count))
     save_yaml(cfg, resolved_config_path, force=True)
 
     compute = compute_report(
@@ -590,10 +653,15 @@ def generate_molecular_grapher_samples(
         },
     }
     save_json(metadata, metadata_path, force=True)
+    logger.info("Saved metadata to %s", metadata_path)
     logger.info(
-        "Saved %d molecular GraphER samples (%d directly valid) to %s",
+        "Finished molecular GraphER sampling saved=%d/%d valid_without_correction=%d validity=%.4f attempts=%d elapsed=%.2fs output=%s",
         len(generated),
+        int(num_samples),
         int(sum(valid_mask)),
+        validity_rate,
+        int(degree_attempts),
+        elapsed,
         output_path,
     )
     return metadata
@@ -617,6 +685,7 @@ def main() -> None:
     parser.add_argument("--max-rounds", type=int, default=50)
     parser.add_argument("--write-sdf", action="store_true")
     parser.add_argument("--isomeric-smiles", action="store_true")
+    parser.add_argument("--no-progress", action="store_true", help="Disable tqdm/fallback progress bars.")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     config_path = Path(args.model_config) if args.model_config else _default_model_config(args.dataset)
@@ -632,6 +701,7 @@ def main() -> None:
         max_rounds=args.max_rounds,
         write_sdf=args.write_sdf,
         isomeric_smiles=args.isomeric_smiles,
+        show_progress=not args.no_progress,
     )
 
 
