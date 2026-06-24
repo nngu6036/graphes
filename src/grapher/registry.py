@@ -65,6 +65,7 @@ DATASET_REGISTRY = LazyRegistry(
     {
         "sbm": RegistrySpec("grapher.datasets.sbm", "SBMDatasetBuilder", "dataset"),
         "planar": RegistrySpec("grapher.datasets.planar", "PlanarDatasetBuilder", "dataset"),
+        "grid": RegistrySpec("grapher.datasets.grid", "GridDatasetBuilder", "dataset"),
         "ego_citeseer": RegistrySpec(
             "grapher.datasets.ego_citeseer",
             "EgoCiteseerDatasetBuilder",

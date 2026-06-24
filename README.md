@@ -43,6 +43,7 @@ Notes:
 ```bash
 PYTHONPATH=src python scripts/prepare_dataset.py --dataset sbm --force
 PYTHONPATH=src python scripts/prepare_dataset.py --dataset planar --force
+PYTHONPATH=src python scripts/prepare_dataset.py --dataset grid --force
 PYTHONPATH=src python scripts/prepare_dataset.py \
   --dataset ego_citeseer \
   --raw-graph-path dataset/EGO/ind.citeseer.graph \

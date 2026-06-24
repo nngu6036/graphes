@@ -1,0 +1,30 @@
+name: grid
+seed: 42
+root: outputs/datasets
+num_graphs: 10240
+
+# Rectangular grid dimensions are sampled uniformly from these inclusive ranges.
+# Set rows/cols to fixed integers for a single grid size.
+rows: null
+cols: null
+min_rows: 100
+max_rows: 400
+min_cols: 100
+max_cols: 400
+require_square: false
+
+remove_self_loops: true
+preprocessing:
+  make_undirected: true
+  relabel_nodes: true
+  graph_size_filter:
+    min_nodes: 1
+    max_nodes: null
+hard_constraints:
+  connected: true
+  planar: true
+  grid: true
+split:
+  train: 0.8
+  val: 0.1
+  test: 0.1
