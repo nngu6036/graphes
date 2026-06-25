@@ -253,16 +253,31 @@ Useful flags:
 --skip-reference-diagnostics            skip loading dataset splits during degree sampling
 ```
 
-You can evaluate DH-VAE degree samples with the generic metric script:
+Evaluate DH-VAE degree samples against the prepared train/test degree-sequence distributions with:
 
 ```bash
-PYTHONPATH=src python scripts/evaluate_grapher_metrics.py \
-  --dataset qm9 \
-  --model dhvae \
+PYTHONPATH=src python scripts/evaluate_dhvae_metrics.py \
+  --dataset sbm \
   --run-id 0 \
-  --reference-split test \
-  --max-reference-graphs 1024 \
-  --max-generated-graphs 1024
+  --max-train-sequences 1024 \
+  --max-test-sequences 1024 \
+  --max-generated-sequences 1024
+```
+
+The DH-VAE evaluator reports KL and Gaussian-EMD MMD between test degree sequences and both train/generated degree sequences. It writes:
+
+```text
+outputs/metrics/<dataset>/dhvae/run_000/dhvae_metrics.json
+```
+
+Useful evaluation flags:
+
+```text
+--sample-path PATH              evaluate an explicit generated degree-sequence pickle
+--run-ids 0 1 2                 evaluate several run ids and write an aggregate JSON
+--degree-bins N                 minimum number of degree histogram bins
+--sigma S                       Gaussian kernel width for MMD
+--max-*-sequences N             subsample train, test, or generated sequences
 ```
 
 ---
@@ -509,6 +524,7 @@ for run_id in 0 1 2; do
   seed=$((42 + run_id))
   PYTHONPATH=src python scripts/train_dhvae_model.py --dataset sbm --seed "$seed" --run-id "$run_id"
   PYTHONPATH=src python scripts/generate_dhvae_samples.py --dataset sbm --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
+  PYTHONPATH=src python scripts/evaluate_dhvae_metrics.py --dataset sbm --seed "$seed" --run-id "$run_id"
   PYTHONPATH=src python scripts/train_generic_grapher_model.py --dataset sbm --seed "$seed" --run-id "$run_id"
   PYTHONPATH=src python scripts/generate_grapher_samples.py --dataset sbm --num-samples 1024 --seed "$seed" --run-id "$run_id" --force
   PYTHONPATH=src python scripts/evaluate_grapher_metrics.py --dataset sbm --model grapher --seed "$seed" --run-id "$run_id"
@@ -518,7 +534,19 @@ done
 Aggregate results with:
 
 ```bash
-PYTHONPATH=src python scripts/aggregate_results.py --dataset sbm --model grapher
+PYTHONPATH=src python scripts/aggregate_results.py --datasets sbm --models grapher
+```
+
+Average DH-VAE degree-prior metrics from existing per-run metric JSONs with:
+
+```bash
+PYTHONPATH=src python scripts/aggregate_dhvae_results.py --dataset sbm --run-ids 0 1 2
+```
+
+If `--run-ids` is omitted, `aggregate_dhvae_results.py` discovers all `outputs/metrics/<dataset>/dhvae/run_*/dhvae_metrics.json` files and writes:
+
+```text
+outputs/metrics/<dataset>/dhvae/dhvae_metrics.aggregate.json
 ```
 
 ---
@@ -540,6 +568,8 @@ outputs/samples/<dataset>/grapher_molecular/run_000.jsonl
 outputs/samples/<dataset>/grapher_molecular/run_000.smi
 outputs/samples/<dataset>/grapher_molecular/run_000.sdf
 
+outputs/metrics/<dataset>/dhvae/run_000/dhvae_metrics.json
+outputs/metrics/<dataset>/dhvae/dhvae_metrics.aggregate.json
 outputs/metrics/<dataset>/grapher/run_000/grapher_metrics.json
 outputs/metrics/<dataset>/grapher_molecular/run_000/molecular_grapher_metrics.json
 ```
