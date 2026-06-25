@@ -141,6 +141,11 @@ PYTHONPATH=src python scripts/train_dhvae_model.py \
   --run-id 0
 
 PYTHONPATH=src python scripts/train_dhvae_model.py \
+  --dataset grid \
+  --seed 42 \
+  --run-id 0
+
+PYTHONPATH=src python scripts/train_dhvae_model.py \
   --dataset ego_citeseer \
   --seed 42 \
   --run-id 0
