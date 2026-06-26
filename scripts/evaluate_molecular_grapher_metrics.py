@@ -335,6 +335,18 @@ def evaluate_molecular_grapher(
             raise RuntimeError(
                 "FCD was required but could not be computed: " + str(fcd_status)
             )
+    results["fcd_validity_without_correction"] = results["validity_without_correction"]
+    results["fcd_num_valid_generated_molecules"] = len(generated_valid_smiles)
+    results["fcd_num_generated_molecules"] = len(generated_graphs)
+    fcd_status.update(
+        {
+            "population": "valid generated and valid reference molecular representations only",
+            "paired_validity_metric": "validity_without_correction",
+            "validity_without_correction": results["validity_without_correction"],
+            "num_total_generated_molecules": len(generated_graphs),
+            "num_valid_generated_molecules": len(generated_valid_smiles),
+        }
+    )
 
     elapsed = time.perf_counter() - start
     output_path = (

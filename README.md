@@ -510,7 +510,7 @@ Evaluation details:
 
 - `validity_without_correction` directly converts each hard attributed graph to RDKit and sanitizes it without repair, valence correction, bond resampling, or fragment selection.
 - `nspdk_mmd` uses EDeN when available. Otherwise the evaluator records a fallback to a deterministic attributed neighborhood-pair feature map.
-- `fcd` uses canonical SMILES from directly valid molecules through `fcd_torch`.
+- `fcd` uses canonical SMILES from directly valid molecules through `fcd_torch`; report it together with `validity_without_correction` because invalid generated molecules are excluded from the FCD population. The evaluator also records `fcd_validity_without_correction`, `fcd_num_valid_generated_molecules`, and `fcd_num_generated_molecules`.
 - `nspdk_mmd_valid_only`, uniqueness, novelty, connectedness, and self-loop rates are also reported as diagnostics.
 
 Use `--skip-fcd` for dependency-light smoke tests and `--nspdk-backend eden` to require the reference EDeN backend.
