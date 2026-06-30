@@ -582,3 +582,23 @@ outputs/metrics/<dataset>/grapher_molecular/run_000/molecular_grapher_metrics.js
 - Retrain GraphER checkpoints when model config changes `hidden_dim`, `num_layer`, `local_feature_dim`, or action representation.
 - For connected GraphER benchmarks, use connected-feasible degree sequences and connected reference datasets.
 - For molecular paper runs, report the prepared split statistics, molecular attribute schema, valence settings, FCD backend, NSPDK backend, random seeds, and the number of generated samples.
+
+
+
+PYTHONPATH=src python scripts/run_digress_grapher_optimizer.py \
+  --dataset qm9 \
+  --mode molecular \
+  --digress-sample-path baselines/DiGress/generated_samples/samples_qm9_no_h.txt \
+  --num-graphs 256 \
+  --steps 1 \
+  --candidate-budget 256 \
+  --k-hop -1 \
+  --min-nodes 2 \
+  --target-mode nearest \
+  --molecular-bond-proposal-mode topk \
+  --molecular-proposals-per-edge 1 \
+  --reject-unseen-endpoint-pairs \
+  --molecular-require-valid-candidates \
+  --nspdk-backend builtin \
+  --skip-fcd \
+  --output-dir outputs/experiments/digress_grapher_optimizer_qm9_safe
