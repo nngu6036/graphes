@@ -749,6 +749,8 @@ def refine_graph_energy(
     current_energy = energy_model.energy(g, target)
     accepted = 0
     evaluated = 0
+    rejected_invalid = 0
+    initial_rdkit_valid = _rdkit_valid_molecular_graph(g, isomeric_smiles=isomeric_smiles)
     history = [current_energy]
 
     for _step in range(int(steps)):
@@ -835,6 +837,22 @@ def random_rewire_graph(
 
 
 
+
+
+def _rdkit_valid_molecular_graph(graph: nx.Graph, *, isomeric_smiles: bool = False) -> bool:
+    """Return True when the hard molecular graph sanitizes in RDKit.
+
+    Valence checks alone are not enough for QM9 because arbitrary rewiring can
+    create aromaticity/kekulization failures. This helper is intentionally used
+    only in conservative molecular-refinement mode because it is slower than the
+    structural validators.
+    """
+
+    try:
+        return bool(direct_molecular_conversions([graph], isomeric_smiles=bool(isomeric_smiles))[0].valid)
+    except Exception:
+        return False
+
 def refine_molecular_graph_energy(
     graph: nx.Graph,
     *,
@@ -852,6 +870,8 @@ def refine_molecular_graph_energy(
     allow_global_backoff: bool,
     reject_unseen_endpoint_pairs: bool,
     valence_tolerance: float,
+    require_valid_candidates: bool = False,
+    isomeric_smiles: bool = False,
 ) -> tuple[nx.Graph, dict[str, Any]]:
     rng_np = _rng(seed)
     rng_py = __import__("random").Random(int(seed))
@@ -859,6 +879,8 @@ def refine_molecular_graph_energy(
     initial_degree_sequence = degree_sequence(g)
     initial_atom_types = [node_type_value(g, int(node)) for node in sorted(g.nodes())]
     current_energy = energy_model.energy(g, target)
+    initial_rdkit_valid = _rdkit_valid_molecular_graph(g, isomeric_smiles=isomeric_smiles)
+    rejected_invalid = 0
     accepted = 0
     evaluated = 0
     history = [current_energy]
@@ -896,6 +918,11 @@ def refine_molecular_graph_energy(
                 continue
             evaluated += 1
             candidate_graph = canonicalize_molecular_graph(candidate_graph)
+            if require_valid_candidates and not _rdkit_valid_molecular_graph(
+                candidate_graph, isomeric_smiles=isomeric_smiles
+            ):
+                rejected_invalid += 1
+                continue
             candidate_energy = energy_model.energy(candidate_graph, target)
             if candidate_energy < best_energy:
                 best_energy = candidate_energy
@@ -917,6 +944,9 @@ def refine_molecular_graph_energy(
         "energy_delta": float(history[0] - history[-1]),
         "degree_preserved": degree_sequence(g) == initial_degree_sequence,
         "node_types_preserved": final_atom_types == initial_atom_types,
+        "rdkit_valid_initial": bool(initial_rdkit_valid),
+        "rdkit_valid_final": bool(_rdkit_valid_molecular_graph(g, isomeric_smiles=isomeric_smiles)),
+        "rejected_invalid_candidates": int(rejected_invalid),
         "history": [float(v) for v in history],
     }
 
@@ -935,11 +965,15 @@ def random_molecular_rewire_graph(
     allow_global_backoff: bool,
     reject_unseen_endpoint_pairs: bool,
     valence_tolerance: float,
+    require_valid_candidates: bool = False,
+    isomeric_smiles: bool = False,
 ) -> tuple[nx.Graph, dict[str, Any]]:
     rng_py = __import__("random").Random(int(seed))
     g = canonicalize_molecular_graph(graph)
     initial_degree_sequence = degree_sequence(g)
     initial_atom_types = [node_type_value(g, int(node)) for node in sorted(g.nodes())]
+    initial_rdkit_valid = _rdkit_valid_molecular_graph(g, isomeric_smiles=isomeric_smiles)
+    rejected_invalid = 0
     accepted = 0
     for _step in range(int(steps)):
         actions = enumerate_molecular_rewire_actions(
@@ -968,13 +1002,22 @@ def random_molecular_rewire_graph(
         )
         if candidate is None:
             break
-        g = canonicalize_molecular_graph(candidate)
+        candidate = canonicalize_molecular_graph(candidate)
+        if require_valid_candidates and not _rdkit_valid_molecular_graph(
+            candidate, isomeric_smiles=isomeric_smiles
+        ):
+            rejected_invalid += 1
+            continue
+        g = candidate
         accepted += 1
     final_atom_types = [node_type_value(g, int(node)) for node in sorted(g.nodes())]
     return g, {
         "accepted_steps": int(accepted),
         "degree_preserved": degree_sequence(g) == initial_degree_sequence,
         "node_types_preserved": final_atom_types == initial_atom_types,
+        "rdkit_valid_initial": bool(initial_rdkit_valid),
+        "rdkit_valid_final": bool(_rdkit_valid_molecular_graph(g, isomeric_smiles=isomeric_smiles)),
+        "rejected_invalid_candidates": int(rejected_invalid),
     }
 
 # -----------------------------------------------------------------------------
@@ -1437,6 +1480,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 allow_global_backoff=bool(args.allow_global_bond_backoff),
                 reject_unseen_endpoint_pairs=bool(args.reject_unseen_endpoint_pairs),
                 valence_tolerance=float(args.valence_tolerance),
+                require_valid_candidates=bool(args.molecular_require_valid_candidates),
+                isomeric_smiles=bool(args.isomeric_smiles),
             )
             refined_graph, refine_trace = refine_molecular_graph_energy(
                 graph,
@@ -1454,6 +1499,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 allow_global_backoff=bool(args.allow_global_bond_backoff),
                 reject_unseen_endpoint_pairs=bool(args.reject_unseen_endpoint_pairs),
                 valence_tolerance=float(args.valence_tolerance),
+                require_valid_candidates=bool(args.molecular_require_valid_candidates),
+                isomeric_smiles=bool(args.isomeric_smiles),
             )
             random_graphs.append(random_graph)
             refined_graphs.append(refined_graph)
@@ -1551,6 +1598,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if is_molecular:
         diagnostics["refiner_node_type_preservation_rate"] = float(np.mean([bool(t.get("node_types_preserved", False)) for t in refine_traces])) if refine_traces else 0.0
         diagnostics["random_node_type_preservation_rate"] = float(np.mean([bool(t.get("node_types_preserved", False)) for t in random_traces])) if random_traces else 0.0
+        diagnostics["molecular_require_valid_candidates"] = bool(args.molecular_require_valid_candidates)
+        diagnostics["refiner_rdkit_valid_final_rate"] = float(np.mean([bool(t.get("rdkit_valid_final", False)) for t in refine_traces])) if refine_traces else 0.0
+        diagnostics["random_rdkit_valid_final_rate"] = float(np.mean([bool(t.get("rdkit_valid_final", False)) for t in random_traces])) if random_traces else 0.0
+        diagnostics["refiner_rejected_invalid_candidates_mean"] = float(np.mean([int(t.get("rejected_invalid_candidates", 0)) for t in refine_traces])) if refine_traces else 0.0
+        diagnostics["random_rejected_invalid_candidates_mean"] = float(np.mean([int(t.get("rejected_invalid_candidates", 0)) for t in random_traces])) if random_traces else 0.0
 
     output_dir = Path(args.output_dir) / args.dataset
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1680,6 +1732,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-global-bond-backoff", action="store_true", help="Allow global bond-type proposal backoff for unseen endpoint atom pairs.")
     parser.add_argument("--reject-unseen-endpoint-pairs", action="store_true", help="Reject typed rewires whose new atom-pair type was unseen in training.")
     parser.add_argument("--valence-tolerance", type=float, default=1e-6, help="Tolerance for valence-filtered molecular rewiring.")
+    parser.add_argument("--molecular-require-valid-candidates", action="store_true", help="Conservative QM9 mode: reject every candidate rewiring that does not sanitize in RDKit. This prevents valid DiGress molecules from being refined into chemically invalid molecules, at the cost of slower candidate evaluation and fewer accepted moves.")
     parser.add_argument("--nspdk-backend", default="auto", choices=["auto", "eden", "builtin"], help="NSPDK backend for molecular metrics.")
     parser.add_argument("--nspdk-complexity", type=int, default=4, help="NSPDK neighborhood complexity.")
     parser.add_argument("--skip-nspdk", action="store_true", help="Skip molecular NSPDK MMD.")
