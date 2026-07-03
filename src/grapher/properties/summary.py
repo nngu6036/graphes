@@ -223,15 +223,9 @@ def orca_orbit_count_vector(graph: nx.Graph, orbit_size: int = 4) -> np.ndarray:
                 os.remove(path)
 
 
-def orbit_count_vector(graph: nx.Graph, backend: str = "python") -> np.ndarray:
+def orbit_count_vector(graph: nx.Graph) -> np.ndarray:
     """Orbit-count descriptor, using ORCA when requested or available."""
 
-    if backend == "orca":
-        return orca_orbit_count_vector(graph)
-    if backend == "python":
-        return python_orbit_count_vector(graph)
-    if backend != "auto":
-        raise ValueError(f"Unknown orbit backend: {backend}")
     if ORCA_EXEC:
         return orca_orbit_count_vector(graph)
     return python_orbit_count_vector(graph)
@@ -253,7 +247,7 @@ def extract_summary(graph: nx.Graph, config: SummaryConfig | dict[str, Any] | No
         "clustering_hist": clustering_histogram(graph, cfg.clustering_bins),
         "spectral_hist": spectral_histogram(graph, cfg.spectral_bins),
         "motif_proxy": motif_proxy_vector(graph) if cfg.motif_proxy else np.zeros(0, dtype=np.float64),
-        "orbit_count": orbit_count_vector(graph, cfg.orbit_backend),
+        "orbit_count": orbit_count_vector(graph),
     }
 
 
