@@ -1,0 +1,19 @@
+name: sbm_spectre
+seed: 0
+num_graphs: 200
+split:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+communities:
+  min_blocks: 2
+  max_blocks: 5
+  min_nodes_per_block: 20
+  max_nodes_per_block: 40
+edge_probs:
+  p_in: 0.30
+  p_out: 0.005
+filters:
+  require_connected: true
+  reject_zero_degree: true
+  max_attempts_per_graph: 300

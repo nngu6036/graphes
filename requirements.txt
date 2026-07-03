@@ -1,13 +1,7 @@
 networkx>=3.1
 numpy>=1.24
 scipy>=1.10
-pandas>=2.0
 PyYAML>=6.0
-matplotlib>=3.7
-scikit-learn>=1.3
 tqdm>=4.66
-torch>=2.0
-torch-geometric>=2.4  # PyG Planetoid CiteSeer and QM9 dataset loaders; ZINC uses RDKit/SMILES.
-# Required for scripts/prepare_zinc_from_smiles.py and optional molecular preprocessing.
-# Install from conda-forge if pip wheels are unavailable on your platform.
-rdkit>=2023.9; python_version >= "3.10"
+matplotlib>=3.7
+pytest>=7.0
