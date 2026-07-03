@@ -35,6 +35,15 @@ pip install -r requirements.txt
 export PYTHONPATH=src
 ```
 
+## Prepare dataset
+```bash
+export PYTHONPATH=src
+
+PYTHONPATH=src python scripts/prepare_sbm_spectre_dataset.py \
+  --config configs/datasets/sbm_spectre.yaml \
+  --root outputs/datasets
+```
+
 ## Run a smoke experiment
 
 ```bash
