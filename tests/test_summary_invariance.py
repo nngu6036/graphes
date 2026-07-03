@@ -14,5 +14,24 @@ def test_summary_is_permutation_invariant():
     cfg = SummaryConfig(degree_hist_max_degree=4, clustering_bins=10, spectral_bins=10)
     s1 = extract_summary(g, cfg)
     s2 = extract_summary(gp, cfg)
-    for key in ["degree_hist", "clustering_hist", "spectral_hist", "motif_proxy"]:
+    for key in ["degree_hist", "clustering_hist", "spectral_hist", "motif_proxy", "orbit_count"]:
         assert np.allclose(s1[key], s2[key])
+
+
+def test_orbit_count_for_triangle():
+    summary = extract_summary(nx.complete_graph(3))
+    expected = np.zeros(15, dtype=np.float64)
+    expected[0] = 2.0
+    expected[3] = 1.0
+    assert np.allclose(summary["orbit_count"], expected)
+
+
+def test_orbit_count_for_path_four():
+    summary = extract_summary(nx.path_graph(4))
+    expected = np.zeros(15, dtype=np.float64)
+    expected[0] = 1.5
+    expected[1] = 1.0
+    expected[2] = 0.5
+    expected[6] = 0.5
+    expected[7] = 0.5
+    assert np.allclose(summary["orbit_count"], expected)

@@ -5,7 +5,7 @@ from typing import Callable, Sequence
 import networkx as nx
 import numpy as np
 
-from grapher.properties.summary import clustering_histogram, degree_histogram, motif_proxy_vector, spectral_histogram
+from grapher.properties.summary import clustering_histogram, degree_histogram, motif_proxy_vector, orbit_count_vector, spectral_histogram
 
 
 def descriptor_matrix(graphs: Sequence[nx.Graph], fn: Callable[[nx.Graph], np.ndarray]) -> np.ndarray:
@@ -42,6 +42,42 @@ def mmd_rbf(x: np.ndarray, y: np.ndarray, sigma: float | None = None) -> float:
     kyy = np.exp(-gamma * np.sum((y[:, None, :] - y[None, :, :]) ** 2, axis=-1))
     kxy = np.exp(-gamma * np.sum((x[:, None, :] - y[None, :, :]) ** 2, axis=-1))
     return float(np.mean(kxx) + np.mean(kyy) - 2.0 * np.mean(kxy))
+
+
+def gaussian_emd_kernel(x: np.ndarray, y: np.ndarray, sigma: float = 1.0) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    if x.ndim == 1:
+        x = x.reshape(1, -1)
+    if y.ndim == 1:
+        y = y.reshape(1, -1)
+    width = max(x.shape[1], y.shape[1])
+    xp = np.zeros((x.shape[0], width), dtype=np.float64)
+    yp = np.zeros((y.shape[0], width), dtype=np.float64)
+    xp[:, : x.shape[1]] = x
+    yp[:, : y.shape[1]] = y
+    emd = np.sum(np.abs(np.cumsum(xp[:, None, :] - yp[None, :, :], axis=-1)), axis=-1)
+    return np.exp(-(emd * emd) / (2.0 * float(sigma) * float(sigma)))
+
+
+def orbit_histogram_matrix(graphs: Sequence[nx.Graph], backend: str = "auto") -> np.ndarray:
+    def histogram(g: nx.Graph) -> np.ndarray:
+        counts = np.asarray(orbit_count_vector(g, backend=backend), dtype=np.float64).reshape(-1)
+        total = float(np.sum(counts))
+        return counts / (total + 1e-8)
+
+    return descriptor_matrix(graphs, histogram)
+
+
+def mmd_orbit(reference: Sequence[nx.Graph], generated: Sequence[nx.Graph], sigma: float = 1.0, backend: str = "auto") -> float:
+    h_ref = orbit_histogram_matrix(reference, backend=backend)
+    h_gen = orbit_histogram_matrix(generated, backend=backend)
+    if h_ref.size == 0 or h_gen.size == 0:
+        return float("nan")
+    k_xx = gaussian_emd_kernel(h_ref, h_ref, sigma)
+    k_yy = gaussian_emd_kernel(h_gen, h_gen, sigma)
+    k_xy = gaussian_emd_kernel(h_ref, h_gen, sigma)
+    return float(k_xx.mean() + k_yy.mean() - 2.0 * k_xy.mean())
 
 
 def connectedness_rate(graphs: Sequence[nx.Graph]) -> float:
@@ -104,6 +140,7 @@ def evaluate_graph_sets(reference: Sequence[nx.Graph], generated: Sequence[nx.Gr
         "clustering_mmd": mmd_rbf(clus_ref, clus_gen),
         "spectral_mmd": mmd_rbf(spec_ref, spec_gen),
         "motif_proxy_mmd": mmd_rbf(motif_ref, motif_gen),
+        "orbit_mmd": mmd_orbit(reference, generated),
         "connectedness_rate": connectedness_rate(generated),
         "validity_rate": simple_graph_validity_rate(generated),
         "uniqueness_rate": wl_uniqueness_rate(generated),

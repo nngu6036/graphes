@@ -21,7 +21,7 @@ def main() -> None:
 
     print("\nMetric summary")
     for method, metrics in result["metrics"].items():
-        print(f"{method:>16s} | degree={metrics['degree_mmd']:.6f} | clustering={metrics['clustering_mmd']:.6f} | spectral={metrics['spectral_mmd']:.6f} | motif={metrics['motif_proxy_mmd']:.6f} | conn={metrics['connectedness_rate']:.3f}")
+        print(f"{method:>16s} | degree={metrics['degree_mmd']:.6f} | clustering={metrics['clustering_mmd']:.6f} | spectral={metrics['spectral_mmd']:.6f} | motif={metrics['motif_proxy_mmd']:.6f} | orbit={metrics['orbit_mmd']:.6f} | conn={metrics['connectedness_rate']:.3f}")
     print(f"\nSaved outputs to: {output_dir}")
 
 

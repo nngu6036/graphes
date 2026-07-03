@@ -50,7 +50,7 @@ def verify_summary(config) -> None:
         for key in ["degree_hist", "clustering_hist", "spectral_hist", "motif_proxy"]:
             if not np.allclose(s1[key], s2[key], atol=1e-6):
                 raise AssertionError(f"Summary invariance failed for {key}")
-        for key in ["num_nodes", "num_edges", "density", "triangle_count_norm"]:
+        for key in ["num_nodes", "num_edges", "density", "triangle_count_norm", "orbit_count"]:
             if not math.isclose(float(s1[key]), float(s2[key]), rel_tol=1e-8, abs_tol=1e-8):
                 raise AssertionError(f"Summary invariance failed for {key}")
     print("PASS summary invariance")
