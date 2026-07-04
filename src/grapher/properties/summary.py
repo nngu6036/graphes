@@ -21,7 +21,6 @@ class SummaryConfig:
     clustering_bins: int = 20
     spectral_bins: int = 20
     motif_proxy: bool = True
-    orbit_backend: str = "python"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], graphs: list[nx.Graph] | None = None) -> "SummaryConfig":
@@ -37,7 +36,6 @@ class SummaryConfig:
             clustering_bins=int(data.get("clustering_bins", 20)),
             spectral_bins=int(data.get("spectral_bins", 20)),
             motif_proxy=bool(data.get("motif_proxy", True)),
-            orbit_backend=str(data.get("orbit_backend", "python")),
         )
 
 

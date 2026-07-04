@@ -3,7 +3,7 @@ from __future__ import annotations
 import networkx as nx
 import numpy as np
 
-from grapher.properties.summary import SummaryConfig, extract_summary
+from grapher.properties.summary import SummaryConfig, extract_summary, python_orbit_count_vector
 
 
 def test_summary_is_permutation_invariant():
@@ -19,19 +19,19 @@ def test_summary_is_permutation_invariant():
 
 
 def test_orbit_count_for_triangle():
-    summary = extract_summary(nx.complete_graph(3))
+    counts = python_orbit_count_vector(nx.complete_graph(3))
     expected = np.zeros(15, dtype=np.float64)
     expected[0] = 2.0
     expected[3] = 1.0
-    assert np.allclose(summary["orbit_count"], expected)
+    assert np.allclose(counts, expected)
 
 
 def test_orbit_count_for_path_four():
-    summary = extract_summary(nx.path_graph(4))
+    counts = python_orbit_count_vector(nx.path_graph(4))
     expected = np.zeros(15, dtype=np.float64)
     expected[0] = 1.5
     expected[1] = 1.0
     expected[2] = 0.5
     expected[6] = 0.5
     expected[7] = 0.5
-    assert np.allclose(summary["orbit_count"], expected)
+    assert np.allclose(counts, expected)

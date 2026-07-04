@@ -60,18 +60,18 @@ def gaussian_emd_kernel(x: np.ndarray, y: np.ndarray, sigma: float = 1.0) -> np.
     return np.exp(-(emd * emd) / (2.0 * float(sigma) * float(sigma)))
 
 
-def orbit_histogram_matrix(graphs: Sequence[nx.Graph], backend: str = "auto") -> np.ndarray:
+def orbit_histogram_matrix(graphs: Sequence[nx.Graph]) -> np.ndarray:
     def histogram(g: nx.Graph) -> np.ndarray:
-        counts = np.asarray(orbit_count_vector(g, backend=backend), dtype=np.float64).reshape(-1)
+        counts = np.asarray(orbit_count_vector(g), dtype=np.float64).reshape(-1)
         total = float(np.sum(counts))
         return counts / (total + 1e-8)
 
     return descriptor_matrix(graphs, histogram)
 
 
-def mmd_orbit(reference: Sequence[nx.Graph], generated: Sequence[nx.Graph], sigma: float = 1.0, backend: str = "auto") -> float:
-    h_ref = orbit_histogram_matrix(reference, backend=backend)
-    h_gen = orbit_histogram_matrix(generated, backend=backend)
+def mmd_orbit(reference: Sequence[nx.Graph], generated: Sequence[nx.Graph], sigma: float = 1.0) -> float:
+    h_ref = orbit_histogram_matrix(reference)
+    h_gen = orbit_histogram_matrix(generated)
     if h_ref.size == 0 or h_gen.size == 0:
         return float("nan")
     k_xx = gaussian_emd_kernel(h_ref, h_ref, sigma)
