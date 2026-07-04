@@ -14,6 +14,7 @@ summary:
   clustering_bins: 20
   spectral_bins: 20
   motif_proxy: true
+  orbit_count: false
 
 summary_generator:
   type: empirical

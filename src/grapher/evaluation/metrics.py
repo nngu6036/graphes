@@ -121,7 +121,7 @@ def degree_preservation_rate(before: Sequence[nx.Graph], after: Sequence[nx.Grap
     return float(np.mean(vals))
 
 
-def evaluate_graph_sets(reference: Sequence[nx.Graph], generated: Sequence[nx.Graph], train: Sequence[nx.Graph] | None = None) -> dict[str, float]:
+def evaluate_graph_sets(reference: Sequence[nx.Graph], generated: Sequence[nx.Graph], train: Sequence[nx.Graph] | None = None, *, compute_orbit: bool = True) -> dict[str, float]:
     max_degree = 0
     for g in list(reference) + list(generated):
         if g.number_of_nodes():
@@ -140,7 +140,7 @@ def evaluate_graph_sets(reference: Sequence[nx.Graph], generated: Sequence[nx.Gr
         "clustering_mmd": mmd_rbf(clus_ref, clus_gen),
         "spectral_mmd": mmd_rbf(spec_ref, spec_gen),
         "motif_proxy_mmd": mmd_rbf(motif_ref, motif_gen),
-        "orbit_mmd": mmd_orbit(reference, generated),
+        "orbit_mmd": mmd_orbit(reference, generated) if compute_orbit else float("nan"),
         "connectedness_rate": connectedness_rate(generated),
         "validity_rate": simple_graph_validity_rate(generated),
         "uniqueness_rate": wl_uniqueness_rate(generated),

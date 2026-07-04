@@ -21,6 +21,7 @@ class SummaryConfig:
     clustering_bins: int = 20
     spectral_bins: int = 20
     motif_proxy: bool = True
+    orbit_count: bool = False
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], graphs: list[nx.Graph] | None = None) -> "SummaryConfig":
@@ -36,6 +37,7 @@ class SummaryConfig:
             clustering_bins=int(data.get("clustering_bins", 20)),
             spectral_bins=int(data.get("spectral_bins", 20)),
             motif_proxy=bool(data.get("motif_proxy", True)),
+            orbit_count=bool(data.get("orbit_count", data.get("use_orbit", False))),
         )
 
 
@@ -245,7 +247,7 @@ def extract_summary(graph: nx.Graph, config: SummaryConfig | dict[str, Any] | No
         "clustering_hist": clustering_histogram(graph, cfg.clustering_bins),
         "spectral_hist": spectral_histogram(graph, cfg.spectral_bins),
         "motif_proxy": motif_proxy_vector(graph) if cfg.motif_proxy else np.zeros(0, dtype=np.float64),
-        "orbit_count": orbit_count_vector(graph),
+        "orbit_count": orbit_count_vector(graph) if cfg.orbit_count else np.zeros(0, dtype=np.float64),
     }
 
 
@@ -260,20 +262,92 @@ def _l2(a: Any, b: Any) -> float:
     return float(np.linalg.norm(ap - bp))
 
 
-def distance_to_summary(graph: nx.Graph, target: dict[str, Any], config: SummaryConfig | dict[str, Any] | None = None, weights: dict[str, float] | None = None) -> float:
-    """Permutation-invariant energy between a graph and a target summary."""
+def _weighted_vector_distance(current: Any, target: Any, *, normalize: bool) -> float:
+    """L2 distance with optional dimension normalization.
+
+    The optional normalization keeps high-dimensional descriptors such as
+    spectral or orbit histograms from dominating low-dimensional terms purely
+    because they have more coordinates.
+    """
+
+    av = np.asarray(current, dtype=np.float64).reshape(-1)
+    bv = np.asarray(target, dtype=np.float64).reshape(-1)
+    width = max(av.size, bv.size, 1)
+    value = _l2(av, bv)
+    return float(value / np.sqrt(width)) if normalize else float(value)
+
+
+def _weight(weights: dict[str, Any], key: str, default: float = 0.0) -> float:
+    return float(weights.get(key, default) or 0.0)
+
+
+def distance_to_summary(graph: nx.Graph, target: dict[str, Any], config: SummaryConfig | dict[str, Any] | None = None, weights: dict[str, Any] | None = None) -> float:
+    """Permutation-invariant energy between a graph and a target summary.
+
+    This function intentionally computes only the descriptors whose weights are
+    non-zero. Earlier versions called ``extract_summary`` first, which computed
+    expensive orbit counts and spectral histograms for every candidate swap even
+    when those terms were not used. Candidate scoring calls this function many
+    times, so unused descriptors must be skipped.
+    """
 
     cfg = config if isinstance(config, SummaryConfig) else SummaryConfig.from_dict(config or {})
-    current = extract_summary(graph, cfg)
     w = weights or {}
+    normalize = bool(w.get("normalize_terms", False))
     energy = 0.0
-    energy += float(w.get("degree_weight", 0.0)) * _l2(current["degree_hist"], target.get("degree_hist", []))
-    energy += float(w.get("clustering_weight", 1.0)) * _l2(current["clustering_hist"], target.get("clustering_hist", []))
-    energy += float(w.get("spectral_weight", 0.0)) * _l2(current["spectral_hist"], target.get("spectral_hist", []))
-    energy += float(w.get("motif_weight", 0.0)) * _l2(current["motif_proxy"], target.get("motif_proxy", []))
-    energy += float(w.get("orbit_weight", 0.0)) * _l2(current["orbit_count"], target.get("orbit_count", []))
-    energy += float(w.get("density_weight", 0.0)) * abs(float(current["density"]) - float(target.get("density", 0.0)))
-    energy += float(w.get("triangle_weight", 0.0)) * abs(float(current["triangle_count_norm"]) - float(target.get("triangle_count_norm", 0.0)))
+
+    degree_w = _weight(w, "degree_weight", 0.0)
+    if degree_w != 0.0:
+        energy += degree_w * _weighted_vector_distance(
+            degree_histogram(graph, cfg.degree_hist_max_degree),
+            target.get("degree_hist", []),
+            normalize=normalize,
+        )
+
+    clustering_w = _weight(w, "clustering_weight", 1.0)
+    if clustering_w != 0.0:
+        energy += clustering_w * _weighted_vector_distance(
+            clustering_histogram(graph, cfg.clustering_bins),
+            target.get("clustering_hist", []),
+            normalize=normalize,
+        )
+
+    spectral_w = _weight(w, "spectral_weight", 0.0)
+    if spectral_w != 0.0:
+        energy += spectral_w * _weighted_vector_distance(
+            spectral_histogram(graph, cfg.spectral_bins),
+            target.get("spectral_hist", []),
+            normalize=normalize,
+        )
+
+    motif_w = _weight(w, "motif_weight", 0.0)
+    if motif_w != 0.0 and cfg.motif_proxy:
+        energy += motif_w * _weighted_vector_distance(
+            motif_proxy_vector(graph),
+            target.get("motif_proxy", []),
+            normalize=normalize,
+        )
+
+    orbit_w = _weight(w, "orbit_weight", 0.0)
+    if orbit_w != 0.0:
+        energy += orbit_w * _weighted_vector_distance(
+            orbit_count_vector(graph),
+            target.get("orbit_count", []),
+            normalize=normalize,
+        )
+
+    density_w = _weight(w, "density_weight", 0.0)
+    if density_w != 0.0:
+        n = graph.number_of_nodes()
+        density = float(nx.density(graph)) if n > 1 else 0.0
+        energy += density_w * abs(density - float(target.get("density", 0.0)))
+
+    triangle_w = _weight(w, "triangle_weight", 0.0)
+    if triangle_w != 0.0:
+        n = graph.number_of_nodes()
+        triangles = float(sum(nx.triangles(graph).values()) / 3.0) if n else 0.0
+        energy += triangle_w * abs((triangles / max(n, 1)) - float(target.get("triangle_count_norm", 0.0)))
+
     return float(energy)
 
 
