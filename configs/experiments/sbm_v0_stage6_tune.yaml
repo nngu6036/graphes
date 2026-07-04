@@ -14,7 +14,7 @@ summary:
   clustering_bins: 20
   spectral_bins: 20
   motif_proxy: true
-  orbit_count: false
+  orbit_count: true
 
 summary_generator:
   type: empirical
@@ -26,21 +26,20 @@ constructor:
   random_relabel: true
   max_repair_trials: 10000
 
-refiner:
-  type: grapher_opt
-  steps: 40
-  candidate_budget: 128
-  preserve_connectivity: true
-  selection: greedy
-  accept_only_improving: true
-
 energy:
   clustering_weight: 1.0
-  spectral_weight: 0.0
-  motif_weight: 1.0
-  orbit_weight: 0.0
+  motif_weight: 0.5
+  spectral_weight: 0.5
+  orbit_weight: 0.2
   degree_weight: 0.0
+  density_weight: 0.0
   normalize_terms: true
+
+refiner:
+  steps: 20
+  candidate_budget: 32
+  selection: greedy
+  accept_only_improving: true
 
 evaluation:
   num_generate: 20
