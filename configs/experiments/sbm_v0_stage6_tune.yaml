@@ -1,0 +1,47 @@
+experiment: coarse_to_fine_sbm_v0
+seed: 42
+
+dataset:
+  name: sbm_spectre
+  config_path: configs/datasets/sbm_spectre.yaml
+  root: outputs/datasets
+  build_if_missing: true
+  max_train_graphs: 64
+  max_reference_graphs: 20
+
+summary:
+  degree_hist_max_degree: auto
+  clustering_bins: 20
+  spectral_bins: 20
+  motif_proxy: true
+
+summary_generator:
+  type: empirical
+  split: train
+
+constructor:
+  type: havel_hakimi
+  ensure_connected: true
+  random_relabel: true
+  max_repair_trials: 10000
+
+refiner:
+  type: grapher_opt
+  steps: 80
+  candidate_budget: 512
+  preserve_connectivity: true
+  selection: greedy
+  accept_only_improving: true
+
+energy:
+  clustering_weight: 1.0
+  spectral_weight: 1.0
+  motif_weight: 1.0
+  orbit_weight: 1.0
+  degree_weight: 0.0
+  normalize_terms: true
+
+evaluation:
+  num_generate: 20
+  random_rewire_baseline: true
+  save_graphs: true
