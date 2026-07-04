@@ -46,4 +46,4 @@ evaluation:
   num_generate: 20
   random_rewire_baseline: true
   save_graphs: true
-  compute_orbit: false
+  compute_orbit: true
