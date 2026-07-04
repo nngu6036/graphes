@@ -1,4 +1,4 @@
-experiment: coarse_to_fine_sbm_v0
+experiment: coarse_to_fine_sbm_v0_orca_energy
 seed: 42
 
 dataset:
@@ -27,19 +27,23 @@ constructor:
   max_repair_trials: 10000
 
 energy:
-  clustering_weight: 1.0
-  motif_weight: 0.5
-  spectral_weight: 0.5
-  orbit_weight: 0.2
   degree_weight: 0.0
+  clustering_weight: 1.0
+  spectral_weight: 0.5
+  motif_weight: 0.5
+  orbit_weight: 0.2
+  triangle_weight: 0.2
   density_weight: 0.0
   normalize_terms: true
 
 refiner:
+  type: grapher_opt
   steps: 20
-  candidate_budget: 32
+  candidate_budget: 128
+  preserve_connectivity: true
   selection: greedy
   accept_only_improving: true
+  min_improvement: 1.0e-12
 
 evaluation:
   num_generate: 20
