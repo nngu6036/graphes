@@ -1,0 +1,97 @@
+experiment: sbm_report_coarse_to_fine
+seed: 42
+
+dataset:
+  name: sbm_spectre
+  config_path: configs/datasets/sbm_spectre.yaml
+  root: outputs/datasets
+  build_if_missing: true
+  max_train_graphs: null
+  max_reference_graphs: null
+
+summary:
+  degree_hist_max_degree: auto
+  clustering_bins: 20
+  spectral_bins: 20
+  motif_proxy: true
+  orbit_count: false   # keep false for training; use ORCA only in final eval
+
+summary_generator:
+  type: learned
+  checkpoint_path: outputs/summary_generators/sbm_report/checkpoint.pt
+  device: cpu
+  deterministic: false
+
+constructor:
+  type: havel_hakimi
+  ensure_connected: true
+  random_relabel: true
+  max_repair_trials: 10000
+
+energy:
+  degree_weight: 0.0
+  density_weight: 0.0
+  clustering_weight: 1.0
+  spectral_weight: 0.5
+  motif_weight: 0.5
+  triangle_weight: 0.2
+  orbit_weight: 0.0
+  normalize_terms: true
+
+teacher:
+  type: energy_guided
+  output_dir: outputs/teachers/sbm_report
+  num_trajectories: 512
+  steps: 20
+  candidate_budget: 64
+  preserve_connectivity: true
+  selection: soft
+  temperature: 0.05
+  accept_only_improving: true
+  min_improvement: 1.0e-12
+  target_source: mixed
+  empirical_target_prob: 0.5
+  learned_target_prob: 0.5
+
+selector:
+  type: graph_action_selector
+  checkpoint_path: outputs/selectors/sbm_report/checkpoint.pt
+  hidden_dim: 256
+  num_layers: 3
+  dropout: 0.1
+  use_graph_summary_residual: true
+  use_action_local_features: true
+  use_candidate_delta_features: true
+  loss: soft_cross_entropy
+  learning_rate: 0.0003
+  batch_size: 64
+  epochs: 100
+  weight_decay: 0.00001
+  device: cpu
+
+refiner:
+  type: learned_selector
+  steps: 20
+  candidate_budget: 64
+  preserve_connectivity: true
+  selection: greedy
+  accept_only_improving: false
+  temperature: 0.1
+
+oracle_refiner:
+  type: grapher_opt
+  steps: 20
+  candidate_budget: 64
+  preserve_connectivity: true
+  selection: greedy
+  accept_only_improving: true
+  min_improvement: 1.0e-12
+
+evaluation:
+  num_generate: 40
+  random_rewire_baseline: true
+  oracle_grapher_opt_baseline: true
+  learned_selector: true
+  save_graphs: true
+  compute_orbit: true
+  orca_exec: ${ORCA_EXEC}
