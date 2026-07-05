@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,10 @@ from grapher.refinement.rewiring import (
     sample_valid_double_edge_swaps,
 )
 from grapher.utils.io import ensure_dir, load_yaml, save_json
+
+
+def _log(message: str) -> None:
+    print(f"[progress] {message}", flush=True)
 
 
 def _json_edge(edge: tuple[int, int]) -> list[int]:
@@ -295,14 +300,19 @@ def build_teacher_cache(
     num_trajectories: int | None = None,
     seed: int | None = None,
     debug: bool = False,
+    progress_interval: int | None = None,
 ) -> dict[str, Any]:
+    started_at = time.perf_counter()
     seed = int(config.get("seed", 0) if seed is None else seed)
     rng = np.random.default_rng(seed)
 
     output_dir = ensure_dir(output_dir)
+    _log(f"starting teacher cache build seed={seed} output_dir={output_dir}")
 
+    _log("loading dataset splits")
     splits = _load_graphs(config)
     train_graphs = list(splits["train"])
+    _log(f"loaded train graphs={len(train_graphs)}")
 
     summary_config = SummaryConfig.from_dict(
         config.get("summary", {}) or {},
@@ -315,19 +325,32 @@ def build_teacher_cache(
 
     n_trajectories = int(teacher_cfg.get("num_trajectories", 512))
     val_fraction = float(teacher_cfg.get("val_fraction", 0.1))
+    if progress_interval is None:
+        progress_interval = int(teacher_cfg.get("progress_interval", 25))
+    progress_interval = max(int(progress_interval), 0)
 
     constructor_cfg = config.get("constructor", {}) or {}
     energy_cfg = config.get("energy", {}) or {}
 
+    _log("fitting empirical summary sampler")
     empirical_sampler = _build_empirical_sampler(
         train_graphs,
         summary_config,
         seed=seed,
     )
+    _log("checking learned summary sampler")
     learned_sampler = _maybe_build_learned_sampler(config, seed=seed)
+    if learned_sampler is None:
+        _log("learned summary sampler unavailable; using empirical targets when needed")
+    else:
+        _log("learned summary sampler loaded")
 
     train_path = output_dir / "train.jsonl"
     val_path = output_dir / "val.jsonl"
+    _log(
+        f"writing trajectories requested={n_trajectories} val_fraction={val_fraction:.3f} "
+        f"train_path={train_path} val_path={val_path}"
+    )
 
     stats = {
         "seed": seed,
@@ -351,6 +374,14 @@ def build_teacher_cache(
 
     with train_path.open("w", encoding="utf-8") as f_train, val_path.open("w", encoding="utf-8") as f_val:
         for trajectory_id in range(n_trajectories):
+            if progress_interval and trajectory_id % progress_interval == 0:
+                elapsed = time.perf_counter() - started_at
+                _log(
+                    f"trajectory {trajectory_id + 1}/{n_trajectories} starting "
+                    f"records={stats['num_records']} empty={stats['num_empty_trajectories']} "
+                    f"elapsed={elapsed:.1f}s"
+                )
+
             target_summary, target_source = _sample_target_summary(
                 empirical_sampler=empirical_sampler,
                 learned_sampler=learned_sampler,
@@ -377,12 +408,15 @@ def build_teacher_cache(
                 )
             except Exception as exc:
                 stats["num_empty_trajectories"] += 1
+                _log(f"trajectory {trajectory_id + 1}/{n_trajectories} failed: {exc}")
                 if debug:
                     print(f"[WARN] trajectory={trajectory_id} failed: {exc}")
                 continue
 
             if not records:
                 stats["num_empty_trajectories"] += 1
+                if debug:
+                    _log(f"trajectory {trajectory_id + 1}/{n_trajectories} produced no records")
                 continue
 
             out = f_val if is_val else f_train
@@ -401,11 +435,14 @@ def build_teacher_cache(
             else:
                 stats["num_train_records"] += len(records)
 
-            if debug and (trajectory_id + 1) % 25 == 0:
-                print(
-                    f"[INFO] trajectory={trajectory_id + 1}/{n_trajectories} "
-                    f"records={stats['num_records']} "
-                    f"empty={stats['num_empty_trajectories']}"
+            if progress_interval and (trajectory_id + 1) % progress_interval == 0:
+                elapsed = time.perf_counter() - started_at
+                rate = (trajectory_id + 1) / max(elapsed, 1.0e-12)
+                _log(
+                    f"trajectory {trajectory_id + 1}/{n_trajectories} done "
+                    f"records={stats['num_records']} train={stats['num_train_records']} "
+                    f"val={stats['num_val_records']} empty={stats['num_empty_trajectories']} "
+                    f"rate={rate:.2f}/s"
                 )
 
     if all_best_deltas:
@@ -413,6 +450,8 @@ def build_teacher_cache(
         stats["mean_chosen_delta"] = float(np.mean(all_chosen_deltas))
         stats["mean_num_candidates"] = float(np.mean(all_num_candidates))
 
+    elapsed_total = time.perf_counter() - started_at
+    _log(f"saving teacher report elapsed={elapsed_total:.1f}s records={stats['num_records']}")
     save_json(stats, output_dir / "teacher_report.json")
 
     print("Teacher cache built")
@@ -438,6 +477,12 @@ def main() -> None:
     parser.add_argument("--num-trajectories", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=None,
+        help="Print progress every N trajectories. Use 0 to disable periodic trajectory logs.",
+    )
     args = parser.parse_args()
 
     config = load_yaml(args.config)
@@ -455,6 +500,7 @@ def main() -> None:
         num_trajectories=args.num_trajectories,
         seed=args.seed,
         debug=args.debug,
+        progress_interval=args.progress_interval,
     )
 
 
