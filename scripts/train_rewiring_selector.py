@@ -42,15 +42,34 @@ class RewiringTeacherDataset(Dataset):
         return self.examples[idx]
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+def _read_jsonl(path: Path, max_records: int | None = None, progress_interval: int = 5000) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     if not path.exists():
         return out
+    started_at = time.perf_counter()
+    file_size = path.stat().st_size
+    file_size_mb = file_size / (1024.0 * 1024.0)
     with path.open("r", encoding="utf-8") as f:
-        for line in f:
+        while True:
+            line = f.readline()
+            if not line:
+                break
             line = line.strip()
             if line:
                 out.append(json.loads(line))
+            if max_records is not None and len(out) >= int(max_records):
+                break
+            if progress_interval and len(out) > 0 and len(out) % int(progress_interval) == 0:
+                elapsed = time.perf_counter() - started_at
+                bytes_read = f.tell()
+                percent = 100.0 * bytes_read / max(file_size, 1)
+                _log(
+                    f"read {path.name}: records={len(out)} "
+                    f"bytes={bytes_read / (1024.0 * 1024.0):.1f}/{file_size_mb:.1f}MB "
+                    f"({percent:.1f}%) elapsed={elapsed:.1f}s"
+                )
+    elapsed = time.perf_counter() - started_at
+    _log(f"read {path.name}: complete records={len(out)} size={file_size_mb:.1f}MB elapsed={elapsed:.1f}s")
     return out
 
 
@@ -268,24 +287,35 @@ def load_teacher_examples(
     path: Path,
     feature_cfg: dict[str, int],
     max_records: int | None = None,
+    progress_interval: int = 5000,
 ) -> list[SelectorExample]:
-    records = _read_jsonl(path)
-    if max_records is not None:
-        records = records[: int(max_records)]
+    records = _read_jsonl(path, max_records=max_records, progress_interval=progress_interval)
 
     examples: list[SelectorExample] = []
     skipped = 0
+    started_at = time.perf_counter()
 
-    for rec in records:
+    for idx, rec in enumerate(records, start=1):
         ex = _record_to_example(rec, feature_cfg)
         if ex is None:
             skipped += 1
             continue
         examples.append(ex)
+        if progress_interval and idx % int(progress_interval) == 0:
+            elapsed = time.perf_counter() - started_at
+            _log(
+                f"converted {path.name}: records={idx}/{len(records)} "
+                f"examples={len(examples)} skipped={skipped} elapsed={elapsed:.1f}s"
+            )
 
     if not examples:
         raise RuntimeError(f"No valid teacher examples loaded from {path}; skipped={skipped}")
 
+    elapsed = time.perf_counter() - started_at
+    _log(
+        f"converted {path.name}: complete records={len(records)} "
+        f"examples={len(examples)} skipped={skipped} elapsed={elapsed:.1f}s"
+    )
     return examples
 
 
@@ -408,6 +438,7 @@ def train_selector(
     device: str | None = None,
     progress_interval: int | None = None,
     batch_log_interval: int | None = None,
+    load_log_interval: int | None = None,
 ) -> dict[str, Any]:
     started_at = time.perf_counter()
     ensure_dir(output_dir)
@@ -428,6 +459,9 @@ def train_selector(
         "motif_width": int(selector_cfg.get("motif_width", 5)),
         "orbit_width": int(selector_cfg.get("orbit_width", 15)),
     }
+    if load_log_interval is None:
+        load_log_interval = int(selector_cfg.get("load_log_interval", 5000))
+    load_log_interval = max(int(load_log_interval), 0)
 
     train_path = teacher_dir / "train.jsonl"
     val_path = teacher_dir / "val.jsonl"
@@ -436,12 +470,12 @@ def train_selector(
         raise FileNotFoundError(f"Missing teacher train file: {train_path}")
 
     _log(f"loading train examples from {train_path}")
-    train_examples = load_teacher_examples(train_path, feature_cfg, max_train_records)
+    train_examples = load_teacher_examples(train_path, feature_cfg, max_train_records, progress_interval=load_log_interval)
     _log(f"loaded train examples={len(train_examples)}")
 
     if val_path.exists() and val_path.stat().st_size > 0:
         _log(f"loading val examples from {val_path}")
-        val_examples = load_teacher_examples(val_path, feature_cfg, max_val_records)
+        val_examples = load_teacher_examples(val_path, feature_cfg, max_val_records, progress_interval=load_log_interval)
         _log(f"loaded val examples={len(val_examples)}")
     else:
         split = max(1, int(0.1 * len(train_examples)))
@@ -610,6 +644,12 @@ def main() -> None:
         default=None,
         help="Print batch progress every N batches. Use 0 to disable batch logs.",
     )
+    parser.add_argument(
+        "--load-log-interval",
+        type=int,
+        default=None,
+        help="Print teacher JSONL read/convert progress every N records. Use 0 to disable load progress logs.",
+    )
 
     args = parser.parse_args()
 
@@ -628,6 +668,7 @@ def main() -> None:
         device=args.device,
         progress_interval=args.progress_interval,
         batch_log_interval=args.batch_log_interval,
+        load_log_interval=args.load_log_interval,
     )
 
 
