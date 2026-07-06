@@ -12,6 +12,7 @@ from torch import nn
 
 from grapher.properties.summary import SummaryConfig, distance_to_summary
 from grapher.refinement.rewiring import Action, apply_action, sample_valid_double_edge_swaps
+from grapher.utils.device import resolve_torch_device
 
 
 def _as_float_array(value: Any) -> np.ndarray:
@@ -255,7 +256,7 @@ def load_learned_selector(selector_cfg: dict[str, Any]) -> LoadedSelector:
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Missing learned selector checkpoint: {checkpoint_path}")
 
-    device = torch.device(selector_cfg.get("device", "cpu"))
+    device = resolve_torch_device(selector_cfg.get("device", "auto"))
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
     input_dim = int(checkpoint["input_dim"])

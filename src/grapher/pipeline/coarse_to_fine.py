@@ -347,6 +347,7 @@ def run_coarse_to_fine(
             f"loading learned selector checkpoint={selector_cfg.get('checkpoint_path')}",
         )
         selector = load_learned_selector(selector_cfg)
+        _debug_print(debug, f"learned selector device={selector.device}")
 
     # ------------------------------------------------------------------
     # Storage
