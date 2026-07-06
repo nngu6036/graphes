@@ -42,7 +42,7 @@ class RewiringTeacherDataset(Dataset):
         return self.examples[idx]
 
 
-def _read_jsonl(path: Path, max_records: int | None = None, progress_interval: int = 5000) -> list[dict[str, Any]]:
+def _read_jsonl(path: Path, max_records: int | None = None, progress_interval: int = 1000) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     if not path.exists():
         return out
@@ -287,25 +287,27 @@ def load_teacher_examples(
     path: Path,
     feature_cfg: dict[str, int],
     max_records: int | None = None,
-    progress_interval: int = 5000,
+    progress_interval: int = 1000,
 ) -> list[SelectorExample]:
     records = _read_jsonl(path, max_records=max_records, progress_interval=progress_interval)
 
     examples: list[SelectorExample] = []
     skipped = 0
     started_at = time.perf_counter()
+    _log(f"converting {path.name}: total_records={len(records)}")
 
     for idx, rec in enumerate(records, start=1):
         ex = _record_to_example(rec, feature_cfg)
         if ex is None:
             skipped += 1
-            continue
-        examples.append(ex)
-        if progress_interval and idx % int(progress_interval) == 0:
+        else:
+            examples.append(ex)
+        if progress_interval and (idx == 1 or idx % int(progress_interval) == 0 or idx == len(records)):
             elapsed = time.perf_counter() - started_at
+            rate = idx / max(elapsed, 1.0e-12)
             _log(
                 f"converted {path.name}: records={idx}/{len(records)} "
-                f"examples={len(examples)} skipped={skipped} elapsed={elapsed:.1f}s"
+                f"examples={len(examples)} skipped={skipped} rate={rate:.1f}/s elapsed={elapsed:.1f}s"
             )
 
     if not examples:
@@ -460,7 +462,7 @@ def train_selector(
         "orbit_width": int(selector_cfg.get("orbit_width", 15)),
     }
     if load_log_interval is None:
-        load_log_interval = int(selector_cfg.get("load_log_interval", 5000))
+        load_log_interval = int(selector_cfg.get("load_log_interval", 1000))
     load_log_interval = max(int(load_log_interval), 0)
 
     train_path = teacher_dir / "train.jsonl"
@@ -648,7 +650,7 @@ def main() -> None:
         "--load-log-interval",
         type=int,
         default=None,
-        help="Print teacher JSONL read/convert progress every N records. Use 0 to disable load progress logs.",
+        help="Print teacher JSONL read/convert progress every N records. Defaults to 1000. Use 0 to disable load progress logs.",
     )
 
     args = parser.parse_args()
