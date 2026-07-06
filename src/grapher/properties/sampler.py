@@ -7,6 +7,7 @@ from typing import Any
 import networkx as nx
 import numpy as np
 
+from grapher.generators.degree_sampler import DegreeVAESampler, EmpiricalDegreeSampler
 from grapher.properties.summary import SummaryConfig, extract_summary
 
 
@@ -25,7 +26,8 @@ class EmpiricalSummarySampler:
             raise ValueError("Cannot sample from an empty summary list.")
         generator = rng if rng is not None else np.random.default_rng(self.seed)
         idx = int(generator.integers(0, len(self.summaries)))
-        return self.summaries[idx]
+        # Return a shallow copy so downstream hybrid samplers can safely modify fields.
+        return dict(self.summaries[idx])
 
 
 class LearnedSummarySampler:
@@ -51,7 +53,7 @@ class LearnedSummarySampler:
 
     @classmethod
     def from_config(cls, data: dict[str, Any], *, seed: int = 0) -> "LearnedSummarySampler":
-        checkpoint_path = data.get("checkpoint_path") or data.get("path")
+        checkpoint_path = data.get("checkpoint_path") or data.get("path") or data.get("checkpoint")
         if not checkpoint_path:
             raise ValueError("Learned summary sampler requires summary_generator.checkpoint_path.")
         return cls(
@@ -70,3 +72,57 @@ class LearnedSummarySampler:
         with torch.no_grad():
             outputs = self._model.sample_outputs(1, device=self.device)
         return self._vectorizer.outputs_to_summaries(outputs, rng=generator, deterministic=self.deterministic)[0]
+
+
+class HybridSummarySampler:
+    """Merge a structure-summary sampler with an explicit degree sampler.
+
+    The structure sampler supplies clustering/spectral/motif/orbit targets.
+    The degree sampler supplies num_nodes, num_edges, degree_sequence,
+    degree_hist, and density. This avoids asking the generic SummaryVAE to
+    learn the degree sequence distribution, which is a hard invariant for
+    degree-preserving rewiring.
+    """
+
+    def __init__(self, structure_sampler: Any, degree_sampler: Any):
+        self.structure_sampler = structure_sampler
+        self.degree_sampler = degree_sampler
+
+    def sample(self, rng: np.random.Generator | None = None) -> dict[str, Any]:
+        generator = rng if rng is not None else np.random.default_rng(0)
+        summary = dict(self.structure_sampler.sample(generator))
+        degree_summary = self.degree_sampler.sample(generator)
+        n = int(degree_summary["num_nodes"])
+        sequence = sorted([int(d) for d in degree_summary["degree_sequence"]], reverse=True)
+        m = int(sum(sequence) // 2)
+        summary["num_nodes"] = n
+        summary["num_edges"] = m
+        summary["degree_sequence"] = sequence
+        summary["degree_hist"] = np.asarray(degree_summary["degree_hist"], dtype=np.float64)
+        summary["density"] = float((2.0 * m / (n * (n - 1))) if n > 1 else 0.0)
+        return summary
+
+
+def build_degree_sampler_from_config(data: dict[str, Any], train_graphs: list[nx.Graph], *, seed: int = 0):
+    data = data or {}
+    if not bool(data.get("enabled", False)):
+        return None
+    degree_type = str(data.get("type", "degree_histogram_vae")).lower()
+    if degree_type in {"degree_histogram_vae", "degree_vae", "vae", "learned"}:
+        return DegreeVAESampler.from_config(data, seed=seed)
+    if degree_type in {"empirical", "empirical_degree"}:
+        return EmpiricalDegreeSampler.fit_from_graphs(train_graphs, seed=seed)
+    raise ValueError(f"Unknown degree_generator.type: {degree_type!r}")
+
+
+def maybe_wrap_with_degree_sampler(
+    structure_sampler: Any,
+    config: dict[str, Any],
+    train_graphs: list[nx.Graph],
+    *,
+    seed: int = 0,
+):
+    degree_sampler = build_degree_sampler_from_config(config.get("degree_generator", {}) or {}, train_graphs, seed=seed)
+    if degree_sampler is None:
+        return structure_sampler
+    return HybridSummarySampler(structure_sampler, degree_sampler)

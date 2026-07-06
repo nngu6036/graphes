@@ -12,7 +12,7 @@ from grapher.construction.coarse import (
 )
 from grapher.data.io import load_dataset_splits
 from grapher.evaluation.metrics import degree_preservation_rate, evaluate_graph_sets
-from grapher.properties.sampler import EmpiricalSummarySampler, LearnedSummarySampler
+from grapher.properties.sampler import EmpiricalSummarySampler, LearnedSummarySampler, maybe_wrap_with_degree_sampler
 from grapher.properties.summary import (
     SummaryConfig,
     distance_to_summary,
@@ -68,9 +68,8 @@ def _build_summary_sampler(
 
     if generator_type in {"empirical", "empirical_sampler"}:
         _debug_print(debug, "summary_generator.type=empirical")
-        return EmpiricalSummarySampler.fit(train_graphs, summary_cfg, seed=seed)
-
-    if generator_type in {"learned", "summary_vae", "vae"}:
+        structure_sampler = EmpiricalSummarySampler.fit(train_graphs, summary_cfg, seed=seed)
+    elif generator_type in {"learned", "summary_vae", "vae"}:
         checkpoint_path = generator_cfg.get("checkpoint_path") or generator_cfg.get("checkpoint")
         _debug_print(debug, f"summary_generator.type=learned checkpoint_path={checkpoint_path}")
 
@@ -80,9 +79,19 @@ def _build_summary_sampler(
                 "summary_generator.checkpoint_path"
             )
 
-        return LearnedSummarySampler.from_config(generator_cfg, seed=seed)
+        structure_sampler = LearnedSummarySampler.from_config(generator_cfg, seed=seed)
+    else:
+        raise ValueError(f"Unknown summary_generator.type: {generator_type!r}")
 
-    raise ValueError(f"Unknown summary_generator.type: {generator_type!r}")
+    degree_cfg = config.get("degree_generator", {}) or {}
+    if bool(degree_cfg.get("enabled", False)):
+        _debug_print(
+            debug,
+            "degree_generator.enabled=true "
+            f"type={degree_cfg.get('type', 'degree_histogram_vae')} "
+            f"checkpoint_path={degree_cfg.get('checkpoint_path')}",
+        )
+    return maybe_wrap_with_degree_sampler(structure_sampler, config, train_graphs, seed=seed)
 
 
 def _main_refiner_method_name(refiner_cfg: dict[str, Any]) -> str:

@@ -85,3 +85,44 @@ src/grapher/generators/summary_vae.py          learned summary generator placeho
 src/grapher/attributes/conditional_generator.py attributed graph extension placeholder
 ```
 
+
+## Degree generator workflow
+
+To improve degree MMD, train a dedicated degree-histogram VAE and use the hybrid summary sampler:
+
+```bash
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/sbm_report_degreevae.yaml \
+  --output-dir outputs/degree_generators/sbm_report \
+  --epochs 300 \
+  --batch-size 32 \
+  --beta 0.005 \
+  --degree-weight 5.0 \
+  --edge-moment-weight 0.1 \
+  --seed 42
+
+PYTHONPATH=src python scripts/verify_degree_generator.py \
+  --config configs/experiments/sbm_report_degreevae.yaml \
+  --num-samples 1000
+
+PYTHONPATH=src python scripts/build_rewiring_teacher.py \
+  --config configs/experiments/sbm_report_degreevae.yaml \
+  --output-dir outputs/teachers/sbm_report_degreevae \
+  --num-trajectories 512 \
+  --seed 42 \
+  --debug
+
+PYTHONPATH=src python scripts/train_rewiring_selector.py \
+  --config configs/experiments/sbm_report_degreevae.yaml \
+  --teacher-dir outputs/teachers/sbm_report_degreevae \
+  --output-dir outputs/selectors/sbm_report_degreevae \
+  --epochs 100 \
+  --batch-size 64 \
+  --seed 42
+
+ORCA_EXEC=/path/to/orca PYTHONPATH=src python scripts/run_coarse_to_fine.py \
+  --config configs/experiments/sbm_report_degreevae.yaml \
+  --num-generate 40 \
+  --output-dir outputs/coarse_to_fine/sbm_report_degreevae_seed42 \
+  --debug
+```

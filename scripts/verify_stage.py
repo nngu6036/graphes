@@ -12,7 +12,7 @@ from grapher.construction.coarse import (
     construct_coarse_graph,
 )
 from grapher.data.io import load_dataset_splits
-from grapher.properties.sampler import EmpiricalSummarySampler, LearnedSummarySampler
+from grapher.properties.sampler import EmpiricalSummarySampler, LearnedSummarySampler, maybe_wrap_with_degree_sampler
 from grapher.properties.summary import SummaryConfig, distance_to_summary, extract_summary
 from grapher.refinement.grapher_opt import refine_graph
 from grapher.refinement.rewiring import (
@@ -273,6 +273,7 @@ def verify_summary_generator(config) -> None:
         raise AssertionError(
             f"Unknown summary_generator.type: {generator_type!r}"
         )
+    sampler = maybe_wrap_with_degree_sampler(sampler, config, graphs, seed=int(config.get("seed", 0)))
 
     constructor_cfg = config.get("constructor", {}) or {}
     require_connected = bool(constructor_cfg.get("ensure_connected", True))
@@ -314,6 +315,54 @@ def verify_summary_generator(config) -> None:
     )
 
 
+def verify_degree_generator(config) -> None:
+    """Verify sampled degree sequences from an optional DegreeVAE."""
+    from grapher.generators.degree_sampler import DegreeVAESampler
+    from grapher.generators.degree_vectorizer import connected_feasible_degree_sequence
+
+    rng = np.random.default_rng(int(config.get("seed", 0)))
+    graphs = _load_graphs(config)
+    degree_cfg = config.get("degree_generator", {}) or {}
+    if not bool(degree_cfg.get("enabled", False)):
+        raise AssertionError("degree_generator.enabled is false; nothing to verify.")
+
+    sampler = DegreeVAESampler.from_config(degree_cfg, seed=int(config.get("seed", 0)))
+    constructor_cfg = config.get("constructor", {}) or {}
+    require_connected = bool(constructor_cfg.get("ensure_connected", True))
+
+    graphical = []
+    feasible = []
+    valid = []
+    for _ in range(25):
+        s = sampler.sample(rng)
+        degree_sequence = [int(d) for d in s["degree_sequence"]]
+        graphical.append(nx.is_graphical(degree_sequence, method="eg"))
+        feasible.append(connected_feasible_degree_sequence(degree_sequence))
+        try:
+            g = construct_coarse_graph(s, constructor_cfg, rng)
+            assert_constructor_validity(g, s, require_connected=require_connected)
+            valid.append(True)
+        except Exception:
+            valid.append(False)
+
+    graphical_rate = float(np.mean(graphical))
+    feasible_rate = float(np.mean(feasible))
+    valid_rate = float(np.mean(valid))
+    if graphical_rate < 0.9 or feasible_rate < 0.9 or valid_rate < 0.9:
+        raise AssertionError(
+            "Degree generator compatibility failed: "
+            f"graphical_rate={graphical_rate:.3f}, "
+            f"feasible_rate={feasible_rate:.3f}, "
+            f"valid_rate={valid_rate:.3f}"
+        )
+    print(
+        "PASS degree generator compatibility "
+        f"graphical_rate={graphical_rate:.3f} "
+        f"feasible_rate={feasible_rate:.3f} "
+        f"valid_rate={valid_rate:.3f}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run verification gates for the fresh proposal branch."
@@ -327,6 +376,7 @@ def main() -> None:
             "refiner",
             "equivariance",
             "summary_generator",
+            "degree_generator",
         ],
         required=True,
     )
@@ -346,6 +396,8 @@ def main() -> None:
         verify_equivariance(config)
     elif args.stage == "summary_generator":
         verify_summary_generator(config)
+    elif args.stage == "degree_generator":
+        verify_degree_generator(config)
     else:
         raise ValueError(f"Unknown stage: {args.stage}")
 

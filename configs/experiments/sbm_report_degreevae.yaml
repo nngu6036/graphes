@@ -23,7 +23,7 @@ summary_generator:
   deterministic: false
 
 degree_generator:
-  enabled: false
+  enabled: true
   type: degree_histogram_vae
   checkpoint_path: outputs/degree_generators/sbm_report/checkpoint.pt
   device: auto
@@ -52,7 +52,7 @@ energy:
 
 teacher:
   type: energy_guided
-  output_dir: outputs/teachers/sbm_report
+  output_dir: outputs/teachers/sbm_report_degreevae
   num_trajectories: 512
   steps: 20
   candidate_budget: 64
@@ -67,7 +67,7 @@ teacher:
 
 selector:
   type: graph_action_selector
-  checkpoint_path: outputs/selectors/sbm_report/checkpoint.pt
+  checkpoint_path: outputs/selectors/sbm_report_degreevae/checkpoint.pt
   hidden_dim: 256
   num_layers: 3
   dropout: 0.1

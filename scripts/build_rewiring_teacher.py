@@ -12,7 +12,7 @@ import numpy as np
 
 from grapher.construction.coarse import construct_coarse_graph
 from grapher.data.io import load_dataset_splits
-from grapher.properties.sampler import EmpiricalSummarySampler, LearnedSummarySampler
+from grapher.properties.sampler import EmpiricalSummarySampler, LearnedSummarySampler, maybe_wrap_with_degree_sampler
 from grapher.properties.summary import (
     SummaryConfig,
     distance_to_summary,
@@ -131,6 +131,7 @@ def _build_empirical_sampler(
 
 def _maybe_build_learned_sampler(
     config: dict[str, Any],
+    train_graphs: list[nx.Graph],
     *,
     seed: int,
 ) -> LearnedSummarySampler | None:
@@ -147,7 +148,8 @@ def _maybe_build_learned_sampler(
     if not Path(checkpoint_path).exists():
         return None
 
-    return LearnedSummarySampler.from_config(generator_cfg, seed=seed)
+    sampler = LearnedSummarySampler.from_config(generator_cfg, seed=seed)
+    return maybe_wrap_with_degree_sampler(sampler, config, train_graphs, seed=seed)
 
 
 def _sample_target_summary(
@@ -339,7 +341,7 @@ def build_teacher_cache(
         seed=seed,
     )
     _log("checking learned summary sampler")
-    learned_sampler = _maybe_build_learned_sampler(config, seed=seed)
+    learned_sampler = _maybe_build_learned_sampler(config, train_graphs, seed=seed)
     if learned_sampler is None:
         _log("learned summary sampler unavailable; using empirical targets when needed")
     else:
