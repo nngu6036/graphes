@@ -16,6 +16,7 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset
 
+from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir, load_yaml, save_json
 
 
@@ -404,6 +405,7 @@ def train_selector(
     seed: int,
     max_train_records: int | None,
     max_val_records: int | None,
+    device: str | None = None,
     progress_interval: int | None = None,
     batch_log_interval: int | None = None,
 ) -> dict[str, Any]:
@@ -416,8 +418,8 @@ def train_selector(
     torch.manual_seed(seed)
 
     selector_cfg = config.get("selector", {}) or {}
-    device = torch.device(selector_cfg.get("device", "cpu"))
-    _log(f"using device={device}")
+    torch_device = resolve_torch_device(device if device is not None else selector_cfg.get("device", "auto"))
+    _log(f"using device={torch_device}")
 
     feature_cfg = {
         "degree_width": int(selector_cfg.get("degree_width", 64)),
@@ -475,7 +477,7 @@ def train_selector(
         hidden_dim=hidden_dim,
         num_layers=num_layers,
         dropout=dropout,
-    ).to(device)
+    ).to(torch_device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
@@ -496,7 +498,7 @@ def train_selector(
         for batch_idx, batch in enumerate(_iter_batches(train_examples, batch_size, rng, shuffle=True), start=1):
             optimizer.zero_grad(set_to_none=True)
 
-            loss, stats = _batch_loss(model, batch, device)
+            loss, stats = _batch_loss(model, batch, torch_device)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimizer.step()
@@ -512,7 +514,7 @@ def train_selector(
                 )
 
         _log(f"epoch {epoch}/{epochs} evaluating validation set")
-        val = evaluate(model, val_examples, batch_size, device)
+        val = evaluate(model, val_examples, batch_size, torch_device)
 
         row = {
             "epoch": epoch,
@@ -593,6 +595,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--device", default=None, help="Torch device. Defaults to CUDA when available, otherwise CPU.")
     parser.add_argument("--max-train-records", type=int, default=None)
     parser.add_argument("--max-val-records", type=int, default=None)
     parser.add_argument(
@@ -622,6 +625,7 @@ def main() -> None:
         seed=seed,
         max_train_records=args.max_train_records,
         max_val_records=args.max_val_records,
+        device=args.device,
         progress_interval=args.progress_interval,
         batch_log_interval=args.batch_log_interval,
     )

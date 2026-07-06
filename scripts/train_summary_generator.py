@@ -13,6 +13,7 @@ from grapher.data.io import load_dataset_splits
 from grapher.generators.summary_vae import build_summary_vae, save_summary_vae_checkpoint, summary_vae_loss
 from grapher.generators.summary_vectorizer import SummaryVectorizer
 from grapher.properties.summary import SummaryConfig, extract_summary, summary_to_jsonable
+from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir, load_yaml, save_json
 
 
@@ -46,7 +47,7 @@ def main() -> None:
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--lr", type=float, default=2e-3)
     parser.add_argument("--beta", type=float, default=1e-3, help="KL weight.")
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="auto", help="Torch device. Defaults to CUDA when available, otherwise CPU.")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--max-train-graphs", type=int, default=None)
     args = parser.parse_args()
@@ -55,8 +56,9 @@ def main() -> None:
     seed = int(args.seed if args.seed is not None else config.get("seed", 0))
     np.random.seed(seed)
     torch.manual_seed(seed)
-    device = torch.device(args.device)
+    device = resolve_torch_device(args.device)
     out_dir = ensure_dir(args.output_dir)
+    print(f"Using device: {device}", flush=True)
 
     dataset_cfg = config.get("dataset", {}) or {}
     splits = load_dataset_splits(

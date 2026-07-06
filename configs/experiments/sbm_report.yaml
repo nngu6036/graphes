@@ -19,7 +19,7 @@ summary:
 summary_generator:
   type: learned
   checkpoint_path: outputs/summary_generators/sbm_report/checkpoint.pt
-  device: cpu
+  device: auto
   deterministic: false
 
 constructor:
@@ -67,7 +67,7 @@ selector:
   batch_size: 64
   epochs: 100
   weight_decay: 0.00001
-  device: cpu
+  device: auto
 
 refiner:
   type: learned_selector

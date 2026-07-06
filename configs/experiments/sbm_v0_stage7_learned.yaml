@@ -19,7 +19,7 @@ summary:
 summary_generator:
   type: learned
   checkpoint_path: outputs/summary_generators/sbm_v0/checkpoint.pt
-  device: cpu
+  device: auto
   deterministic: false
 
 constructor:

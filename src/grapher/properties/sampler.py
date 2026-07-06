@@ -31,9 +31,11 @@ class EmpiricalSummarySampler:
 class LearnedSummarySampler:
     """Sampler backed by a trained SummaryVAE checkpoint."""
 
-    def __init__(self, checkpoint_path: str | Path, *, device: str = "cpu", deterministic: bool = False, seed: int = 0):
+    def __init__(self, checkpoint_path: str | Path, *, device: str = "auto", deterministic: bool = False, seed: int = 0):
+        from grapher.utils.device import resolve_torch_device
+
         self.checkpoint_path = str(checkpoint_path)
-        self.device = device
+        self.device = resolve_torch_device(device)
         self.deterministic = bool(deterministic)
         self.seed = int(seed)
         self._model = None
@@ -54,7 +56,7 @@ class LearnedSummarySampler:
             raise ValueError("Learned summary sampler requires summary_generator.checkpoint_path.")
         return cls(
             checkpoint_path,
-            device=str(data.get("device", "cpu")),
+            device=str(data.get("device", "auto")),
             deterministic=bool(data.get("deterministic", False)),
             seed=int(data.get("seed", seed)),
         )

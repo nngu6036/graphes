@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from grapher.generators.summary_vectorizer import SummaryVectorizer
+from grapher.utils.device import resolve_torch_device
 
 
 class MLP(nn.Module):
@@ -199,11 +200,12 @@ def save_summary_vae_checkpoint(
     )
 
 
-def load_summary_vae_checkpoint(path: str | Path, *, device: torch.device | str = "cpu") -> tuple[SummaryVAE, SummaryVectorizer, dict[str, Any]]:
-    checkpoint = torch.load(path, map_location=device)
+def load_summary_vae_checkpoint(path: str | Path, *, device: torch.device | str = "auto") -> tuple[SummaryVAE, SummaryVectorizer, dict[str, Any]]:
+    resolved_device = resolve_torch_device(device)
+    checkpoint = torch.load(path, map_location=resolved_device)
     vectorizer = SummaryVectorizer(**checkpoint["vectorizer"])
     model = SummaryVAE(**checkpoint["model_config"])
     model.load_state_dict(checkpoint["model_state_dict"])
-    model.to(device)
+    model.to(resolved_device)
     model.eval()
     return model, vectorizer, checkpoint
