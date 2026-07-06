@@ -5,6 +5,7 @@ import argparse
 import json
 import math
 import random
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,10 @@ from torch import nn
 from torch.utils.data import Dataset
 
 from grapher.utils.io import ensure_dir, load_yaml, save_json
+
+
+def _log(message: str) -> None:
+    print(f"[progress] {message}", flush=True)
 
 
 @dataclass
@@ -399,8 +404,12 @@ def train_selector(
     seed: int,
     max_train_records: int | None,
     max_val_records: int | None,
+    progress_interval: int | None = None,
+    batch_log_interval: int | None = None,
 ) -> dict[str, Any]:
+    started_at = time.perf_counter()
     ensure_dir(output_dir)
+    _log(f"starting selector training seed={seed} teacher_dir={teacher_dir} output_dir={output_dir}")
 
     random.seed(seed)
     np.random.seed(seed)
@@ -408,6 +417,7 @@ def train_selector(
 
     selector_cfg = config.get("selector", {}) or {}
     device = torch.device(selector_cfg.get("device", "cpu"))
+    _log(f"using device={device}")
 
     feature_cfg = {
         "degree_width": int(selector_cfg.get("degree_width", 64)),
@@ -423,14 +433,19 @@ def train_selector(
     if not train_path.exists():
         raise FileNotFoundError(f"Missing teacher train file: {train_path}")
 
+    _log(f"loading train examples from {train_path}")
     train_examples = load_teacher_examples(train_path, feature_cfg, max_train_records)
+    _log(f"loaded train examples={len(train_examples)}")
 
     if val_path.exists() and val_path.stat().st_size > 0:
+        _log(f"loading val examples from {val_path}")
         val_examples = load_teacher_examples(val_path, feature_cfg, max_val_records)
+        _log(f"loaded val examples={len(val_examples)}")
     else:
         split = max(1, int(0.1 * len(train_examples)))
         val_examples = train_examples[:split]
         train_examples = train_examples[split:]
+        _log(f"no val file found; split train examples into train={len(train_examples)} val={len(val_examples)}")
 
     input_dim = int(train_examples[0].features.shape[-1])
 
@@ -442,6 +457,18 @@ def train_selector(
 
     epochs = int(epochs if epochs is not None else selector_cfg.get("epochs", 100))
     batch_size = int(batch_size if batch_size is not None else selector_cfg.get("batch_size", 64))
+    if progress_interval is None:
+        progress_interval = int(selector_cfg.get("progress_interval", 10))
+    if batch_log_interval is None:
+        batch_log_interval = int(selector_cfg.get("batch_log_interval", 0))
+    progress_interval = max(int(progress_interval), 0)
+    batch_log_interval = max(int(batch_log_interval), 0)
+    batches_per_epoch = math.ceil(len(train_examples) / max(batch_size, 1))
+    _log(
+        f"model input_dim={input_dim} hidden_dim={hidden_dim} layers={num_layers} dropout={dropout} "
+        f"epochs={epochs} batch_size={batch_size} batches_per_epoch={batches_per_epoch}"
+    )
+    _log(f"optimizer AdamW lr={lr} weight_decay={weight_decay}")
 
     model = CandidateMLP(
         input_dim,
@@ -458,13 +485,15 @@ def train_selector(
     history = []
 
     for epoch in range(1, epochs + 1):
+        epoch_started_at = time.perf_counter()
+        _log(f"epoch {epoch}/{epochs} starting")
         model.train()
 
         train_losses = []
         train_top1 = []
         train_delta = []
 
-        for batch in _iter_batches(train_examples, batch_size, rng, shuffle=True):
+        for batch_idx, batch in enumerate(_iter_batches(train_examples, batch_size, rng, shuffle=True), start=1):
             optimizer.zero_grad(set_to_none=True)
 
             loss, stats = _batch_loss(model, batch, device)
@@ -476,6 +505,13 @@ def train_selector(
             train_top1.append(stats["top1"])
             train_delta.append(stats["mean_predicted_delta"])
 
+            if batch_log_interval and (batch_idx == 1 or batch_idx % batch_log_interval == 0 or batch_idx == batches_per_epoch):
+                _log(
+                    f"epoch {epoch}/{epochs} batch {batch_idx}/{batches_per_epoch} "
+                    f"loss={float(loss.detach().cpu().item()):.4f} top1={stats['top1']:.3f}"
+                )
+
+        _log(f"epoch {epoch}/{epochs} evaluating validation set")
         val = evaluate(model, val_examples, batch_size, device)
 
         row = {
@@ -508,14 +544,18 @@ def train_selector(
                 },
                 output_dir / "checkpoint.pt",
             )
+            _log(f"epoch {epoch}/{epochs} saved new best checkpoint val_loss={best_val:.4f}")
 
-        if epoch == 1 or epoch % 10 == 0 or epoch == epochs:
-            print(
-                f"epoch={epoch:04d} "
-                f"train_loss={row['train_loss']:.4f} "
-                f"val_loss={val['loss']:.4f} "
-                f"val_top1={val['top1']:.3f} "
-                f"val_delta={val['mean_predicted_delta']:.6f}"
+        epoch_elapsed = time.perf_counter() - epoch_started_at
+        should_log_epoch = epoch == 1 or (progress_interval and epoch % progress_interval == 0) or epoch == epochs
+        if should_log_epoch:
+            elapsed_total = time.perf_counter() - started_at
+            _log(
+                f"epoch={epoch:04d}/{epochs:04d} "
+                f"train_loss={row['train_loss']:.4f} train_top1={row['train_top1']:.3f} "
+                f"val_loss={val['loss']:.4f} val_top1={val['top1']:.3f} "
+                f"val_delta={val['mean_predicted_delta']:.6f} "
+                f"epoch_time={epoch_elapsed:.1f}s elapsed={elapsed_total:.1f}s"
             )
 
     report = {
@@ -533,6 +573,7 @@ def train_selector(
         "history": history,
     }
 
+    _log(f"saving training report best_val_loss={best_val:.4f}")
     save_json(report, output_dir / "training_report.json")
 
     print(f"Saved selector checkpoint to: {output_dir / 'checkpoint.pt'}")
@@ -554,6 +595,18 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--max-train-records", type=int, default=None)
     parser.add_argument("--max-val-records", type=int, default=None)
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=None,
+        help="Print epoch summary every N epochs. Use 0 to keep only stage/checkpoint logs.",
+    )
+    parser.add_argument(
+        "--batch-log-interval",
+        type=int,
+        default=None,
+        help="Print batch progress every N batches. Use 0 to disable batch logs.",
+    )
 
     args = parser.parse_args()
 
@@ -569,6 +622,8 @@ def main() -> None:
         seed=seed,
         max_train_records=args.max_train_records,
         max_val_records=args.max_val_records,
+        progress_interval=args.progress_interval,
+        batch_log_interval=args.batch_log_interval,
     )
 
 
