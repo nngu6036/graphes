@@ -129,6 +129,39 @@ ORCA_EXEC=/path/to/orca PYTHONPATH=src python scripts/run_coarse_to_fine.py \
 
 ## QM9 topology-first mixture CatFlow
 
+Prepare QM9 topology-only and attributed molecular graph splits. By default this uses `torch_geometric.datasets.QM9`, so a separate SMILES file is not required if PyTorch Geometric is installed:
+
+```bash
+PYTHONPATH=src python scripts/prepare_qm9_topology_dataset.py \
+  --source pyg \
+  --pyg-root data/pyg_qm9 \
+  --root outputs/datasets \
+  --topology-name qm9_topology \
+  --attributed-name qm9_attributed \
+  --seed 42
+```
+
+For custom SMILES files, use `--source smiles`:
+
+```bash
+PYTHONPATH=src python scripts/prepare_qm9_topology_dataset.py \
+  --source smiles \
+  --smiles-file data/qm9/qm9.smi \
+  --root outputs/datasets
+```
+
+For custom CSV/TSV inputs, pass the SMILES column name:
+
+```bash
+PYTHONPATH=src python scripts/prepare_qm9_topology_dataset.py \
+  --source smiles \
+  --smiles-file data/qm9/qm9.csv \
+  --smiles-column smiles \
+  --root outputs/datasets
+```
+
+Useful options include `--max-molecules` for a small subset, `--keep-hydrogens` to keep explicit hydrogens, and `--no-kekulize` to skip kekulization for SMILES/RDKit input.
+
 Train a topology-conditioned mixture CatFlow model for atom and bond labels:
 
 ```bash
