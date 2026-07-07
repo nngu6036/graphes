@@ -65,14 +65,29 @@ def _pyg_data_to_nx(data, *, remove_h: bool = True) -> nx.Graph:
 
 def _graphs_from_pyg_qm9(root: str | Path, *, max_molecules: int | None = None, remove_h: bool = True) -> tuple[list[nx.Graph], dict[str, int]]:
     try:
-        from torch_geometric.datasets import QM9  # type: ignore
-    except Exception as exc:
+        from torch_geometric.datasets.qm9 import QM9  # type: ignore
+    except ModuleNotFoundError as exc:
         raise ImportError(
             "PyTorch Geometric is required for --source pyg. Install torch-geometric "
             "or pass --source smiles --smiles-file PATH."
         ) from exc
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not import torch_geometric.datasets.qm9.QM9. This usually means "
+            "the installed PyTorch/PyG versions are incompatible or PyG was installed "
+            "without source files needed by TorchScript. Try reinstalling a PyG build "
+            "matching your PyTorch/CUDA version, or use --source smiles --smiles-file PATH."
+        ) from exc
 
-    dataset = QM9(str(root))
+    try:
+        dataset = QM9(str(root))
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not initialize torch_geometric.datasets.QM9. If the failure mentions "
+            "TorchScript source access, it is an environment/package issue in the installed "
+            "PyG stack rather than a missing SMILES file. Reinstall PyG for your PyTorch/CUDA "
+            "version, or use --source smiles --smiles-file PATH."
+        ) from exc
     limit = len(dataset) if max_molecules is None else min(int(max_molecules), len(dataset))
     graphs: list[nx.Graph] = []
     errors: dict[str, int] = {}
