@@ -1,0 +1,4 @@
+name: qm9_attributed
+kind: prepared_molecular_attributed
+root: outputs/datasets
+# Build this dataset with scripts/prepare_qm9_topology_dataset.py.

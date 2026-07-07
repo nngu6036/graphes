@@ -126,3 +126,39 @@ ORCA_EXEC=/path/to/orca PYTHONPATH=src python scripts/run_coarse_to_fine.py \
   --output-dir outputs/coarse_to_fine/sbm_report_degreevae_seed42 \
   --debug
 ```
+
+## QM9 topology-first mixture CatFlow
+
+Train a topology-conditioned mixture CatFlow model for atom and bond labels:
+
+```bash
+PYTHONPATH=src python scripts/train_qm9_mixture_catflow.py \
+  --config configs/experiments/qm9_topology_mixture_catflow.yaml \
+  --output-dir outputs/attribute_flows/qm9_mixture_catflow \
+  --epochs 100 \
+  --batch-size 64 \
+  --seed 42
+```
+
+Sample molecular graphs from generated topologies:
+
+```bash
+PYTHONPATH=src python scripts/sample_qm9_mixture_catflow.py \
+  --checkpoint outputs/attribute_flows/qm9_mixture_catflow/checkpoint.pt \
+  --topology-graphs outputs/coarse_to_fine/qm9_topology_seed42/learned_selector_graphs.pkl \
+  --output-dir outputs/molecular/qm9_topology_first_mixture_catflow \
+  --steps 64 \
+  --temperature 1.0 \
+  --seed 42
+```
+
+A CatFlow-style Stage-2 ablation is obtained by setting `num_mixtures: 1` in `configs/experiments/qm9_topology_catflow_stage2_ablation.yaml`.
+
+Attribute-related topology summaries can be extracted with:
+
+```bash
+PYTHONPATH=src python scripts/extract_qm9_molecular_summaries.py \
+  --dataset qm9_attributed \
+  --root outputs/datasets \
+  --output-dir outputs/molecular_summaries/qm9
+```
