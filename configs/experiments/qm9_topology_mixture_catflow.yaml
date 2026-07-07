@@ -108,7 +108,7 @@ evaluation:
   oracle_grapher_opt_baseline: true
   learned_selector: true
   save_graphs: true
-  compute_orbit: false
+  compute_orbit: true
 
 # Stage 2: topology-conditioned attribute generation.
 mixture_catflow:

@@ -1,13 +1,30 @@
-# Placeholder for a no-topology-first baseline. This should model dense node and
-# edge categories jointly, including the no-edge category, like CatFlow/DiGress.
-# It is intentionally marked as not implemented in the current patch.
-experiment: qm9_joint_catflow_baseline
+experiment: qm9_joint_mixture_catflow_baseline
 seed: 42
-baseline:
-  type: joint_dense_catflow
-  status: not_implemented
-  missing_pieces:
-    - dense fully-connected graph transformer over no-edge + bond categories
-    - node-count sampler or padding/masking protocol
-    - ODE sampler over dense node/edge probability tensors
-    - RDKit validity/FCD/NSPDK evaluation script
+
+# Baseline without explicit topology generation. This follows the CatFlow-style
+# dense graph representation: node variables are atom types and edge variables
+# are categorical states over {no-edge, bond types}.
+attribute_dataset:
+  name: qm9_attributed
+  root: outputs/datasets
+
+joint_mixture_catflow:
+  dataset:
+    name: qm9_attributed
+    root: outputs/datasets
+    max_train_graphs: null
+    max_val_graphs: null
+  checkpoint_path: outputs/attribute_flows/qm9_joint_mixture_catflow/checkpoint.pt
+  device: cpu
+  hidden_dim: 128
+  edge_dim: 64
+  num_layers: 4
+  num_mixtures: 4
+  dropout: 0.0
+  noise_scale: 1.0
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  batch_size: 64
+  epochs: 100
+  sampling_steps: 64
+  temperature: 1.0

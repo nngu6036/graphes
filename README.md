@@ -132,32 +132,60 @@ ORCA_EXEC=/path/to/orca PYTHONPATH=src python scripts/run_coarse_to_fine.py \
 Prepare QM9 topology-only and attributed molecular graph splits. By default this uses `torch_geometric.datasets.QM9`, so a separate SMILES file is not required if PyTorch Geometric is installed:
 
 ```bash
+
+mkdir -p data/qm9_deepchem
+cd data/qm9_deepchem
+
+wget -O qm9.tar.gz \
+  https://deepchemdata.s3.us-west-1.amazonaws.com/datasets/qm9.tar.gz
+
+tar -xzf qm9.tar.gz
+
+find . -maxdepth 2 -type f | grep -E "qm9.sdf|sdf$"
+
+
 PYTHONPATH=src python scripts/prepare_qm9_topology_dataset.py \
   --source sdf \
-  --sdf-file data/pyg_qm9/raw/gdb9.sdf \
+  --sdf-file data/qm9_deepchem/qm9.sdf \
   --root outputs/datasets
 ```
 
-For custom SMILES files, use `--source smiles`:
-
+Train attributed summary generator
 ```bash
-PYTHONPATH=src python scripts/prepare_qm9_topology_dataset.py \
-  --source smiles \
-  --smiles-file data/qm9/qm9.smi \
-  --root outputs/datasets
+PYTHONPATH=src python scripts/train_summary_generator.py \
+  --config configs/experiments/qm9_topology_mixture_catflow.yaml \
+  --output-dir outputs/summary_generators/qm9_topology \
+  --epochs 300 \
+  --batch-size 64 \
+  --beta 0.005 \
+  --seed 42
+
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/qm9_topology_mixture_catflow.yaml \
+  --output-dir outputs/degree_generators/qm9_topology \
+  --epochs 300 \
+  --batch-size 64 \
+  --beta 0.005 \
+  --degree-weight 5.0 \
+  --edge-moment-weight 0.1 \
+  --seed 42
+
+PYTHONPATH=src python scripts/build_rewiring_teacher.py \
+  --config configs/experiments/qm9_topology_mixture_catflow.yaml \
+  --output-dir outputs/teachers/qm9_topology \
+  --num-trajectories 4096 \
+  --seed 42 \
+  --debug
+
+PYTHONPATH=src python scripts/train_rewiring_selector.py \
+  --config configs/experiments/qm9_topology_mixture_catflow.yaml \
+  --teacher-dir outputs/teachers/qm9_topology \
+  --output-dir outputs/selectors/qm9_topology \
+  --epochs 1000 \
+  --batch-size 64 \
+  --seed 42
 ```
 
-For custom CSV/TSV inputs, pass the SMILES column name:
-
-```bash
-PYTHONPATH=src python scripts/prepare_qm9_topology_dataset.py \
-  --source smiles \
-  --smiles-file data/qm9/qm9.csv \
-  --smiles-column smiles \
-  --root outputs/datasets
-```
-
-Useful options include `--max-molecules` for a small subset, `--keep-hydrogens` to keep explicit hydrogens, and `--no-kekulize` to skip kekulization for SMILES/RDKit input.
 
 Train a topology-conditioned mixture CatFlow model for atom and bond labels:
 
