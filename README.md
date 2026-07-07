@@ -133,12 +133,9 @@ Prepare QM9 topology-only and attributed molecular graph splits. By default this
 
 ```bash
 PYTHONPATH=src python scripts/prepare_qm9_topology_dataset.py \
-  --source pyg \
-  --pyg-root data/pyg_qm9 \
-  --root outputs/datasets \
-  --topology-name qm9_topology \
-  --attributed-name qm9_attributed \
-  --seed 42
+  --source sdf \
+  --sdf-file data/pyg_qm9/raw/gdb9.sdf \
+  --root outputs/datasets
 ```
 
 For custom SMILES files, use `--source smiles`:
