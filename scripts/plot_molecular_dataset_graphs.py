@@ -136,10 +136,10 @@ def _draw_graph(ax, graph: nx.Graph, title: str, *, use_color: bool = True) -> N
         node_colors = [_node_color(graph, node) for node in graph.nodes()]
         font_color = "#ffffff"
     else:
-        edge_colors = "#666666"
+        edge_colors = "black"
         edge_widths = 1.6
-        node_colors = "#f2f2f2"
-        font_color = "#222222"
+        node_colors = "white"
+        font_color = "black"
 
     nx.draw_networkx_edges(graph, pos, ax=ax, width=edge_widths, edge_color=edge_colors)
     nx.draw_networkx_nodes(
@@ -200,6 +200,14 @@ def _plot_grid(
     fig.tight_layout()
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
+    if not use_color:
+        try:
+            from PIL import Image
+
+            image = Image.open(output_path)
+            image.convert("L").save(output_path)
+        except Exception:
+            pass
 
 
 def main() -> None:
