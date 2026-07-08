@@ -148,6 +148,50 @@ def _draw_graph(ax, graph: nx.Graph, title: str) -> None:
     ax.set_title(title, fontsize=9)
     ax.set_axis_off()
 
+def simplify_graph(graph: nx.Graph) -> nx.Graph:
+    """
+    Simplify a molecular graph by removing unnecessary attributes and converting to a simple graph.
+    """
+    # Create a new simple graph
+    simple_graph = nx.Graph()
+
+    # Add nodes with only the atomic number as an attribute
+    for node, data in graph.nodes(data=True):
+        atomic_num = int(data.get("atomic_num", data.get("atom_type", 0)))
+        simple_graph.add_node(node, atomic_num=atomic_num)
+
+    # Add edges with only the bond type as an attribute
+    for u, v, data in graph.edges(data=True):
+        bond_type = int(data.get("bond_type", data.get("bond_order", 1)))
+        simple_graph.add_edge(u, v, bond_type=bond_type)
+
+    return simple_graph
+
+
+def _plot_grid(
+    graphs: list[nx.Graph],
+    indices: list[int],
+    *,
+    split: str,
+    cols: int,
+    output_path: Path,
+) -> None:
+    rows = int(math.ceil(len(graphs) / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(3.2 * cols, 3.0 * rows), squeeze=False)
+
+    for ax in axes.reshape(-1):
+        ax.set_axis_off()
+    for ax, graph, idx in zip(axes.reshape(-1), graphs, indices):
+        _draw_graph(
+            ax,
+            graph,
+            f"{split}[{idx}] n={graph.number_of_nodes()} m={graph.number_of_edges()}",
+        )
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot a sample of graphs from a molecular dataset split.")
@@ -186,26 +230,19 @@ def main() -> None:
 
     selected = [graphs[i] for i in indices]
     _print_statistics("Selected graphs", selected)
+    simplified = [simplify_graph(graph) for graph in selected]
+    _print_statistics("Selected simplified graphs", simplified)
     cols = max(1, int(args.cols))
-    rows = int(math.ceil(len(selected) / cols))
-    fig, axes = plt.subplots(rows, cols, figsize=(3.2 * cols, 3.0 * rows), squeeze=False)
-
-    for ax in axes.reshape(-1):
-        ax.set_axis_off()
-    for ax, graph, idx in zip(axes.reshape(-1), selected, indices):
-        _draw_graph(
-            ax,
-            graph,
-            f"{args.split}[{idx}] n={graph.number_of_nodes()} m={graph.number_of_edges()}",
-        )
-
-    fig.tight_layout()
     out_dir = ensure_dir(args.output_dir)
     filename = args.filename or f"{args.dataset}_{args.split}_{n}.png"
     out_path = Path(out_dir) / filename
-    fig.savefig(out_path, dpi=200)
-    plt.close(fig)
+    simple_filename = f"{out_path.stem}_simple{out_path.suffix}"
+    simple_out_path = out_path.with_name(simple_filename)
+
+    _plot_grid(selected, indices, split=args.split, cols=cols, output_path=out_path)
+    _plot_grid(simplified, indices, split=args.split, cols=cols, output_path=simple_out_path)
     print(f"Saved plot to: {out_path}")
+    print(f"Saved simplified plot to: {simple_out_path}")
 
 
 if __name__ == "__main__":
