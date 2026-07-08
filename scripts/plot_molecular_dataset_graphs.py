@@ -7,9 +7,9 @@ from collections import Counter
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import itertools
 import networkx as nx
 import numpy as np
-import itertools
 
 from grapher.data.io import load_dataset_splits
 from grapher.molecular.constants import (
@@ -218,6 +218,7 @@ def _plot_grid(
     output_path: Path,
     use_color: bool,
     show_node_labels: bool,
+    titles: list[str] | None = None,
 ) -> None:
     rows = int(math.ceil(len(graphs) / cols))
     fig, axes = plt.subplots(
@@ -230,11 +231,16 @@ def _plot_grid(
     for ax in axes.reshape(-1):
         ax.set_axis_off()
 
-    for ax, graph, idx in zip(axes.reshape(-1), graphs, indices):
+    for pos_idx, (ax, graph, idx) in enumerate(zip(axes.reshape(-1), graphs, indices)):
+        title = (
+            titles[pos_idx]
+            if titles is not None
+            else f"{split}[{idx}] n={graph.number_of_nodes()} m={graph.number_of_edges()}"
+        )
         _draw_graph(
             ax,
             graph,
-            f"{split}[{idx}] n={graph.number_of_nodes()} m={graph.number_of_edges()}",
+            title,
             use_color=use_color,
             show_node_labels=show_node_labels,
         )
@@ -341,6 +347,45 @@ def aggregate_unique_motifs(graphs: list[nx.Graph], k: int) -> list[nx.Graph]:
     return unique_motifs
 
 
+def aggregate_unique_motifs_with_counts(graphs: list[nx.Graph], k: int) -> list[tuple[nx.Graph, int]]:
+    """
+    Return unique connected induced k-node motifs and their total occurrence
+    counts across all input graphs.
+    """
+    representatives: dict[str, nx.Graph] = {}
+    counts: Counter[str] = Counter()
+
+    for G in graphs:
+        if G.is_directed():
+            raise ValueError("G must be undirected.")
+
+        if any(u == v for u, v in G.edges()):
+            raise ValueError("G must be simple: no self-loops.")
+
+        if k <= 0:
+            raise ValueError("k must be positive.")
+
+        if k > G.number_of_nodes():
+            continue
+
+        for node_subset in itertools.combinations(G.nodes(), k):
+            H = G.subgraph(node_subset).copy()
+
+            if not nx.is_connected(H):
+                continue
+
+            key = canonical_key_bruteforce(H)
+            counts[key] += 1
+
+            if key not in representatives:
+                representatives[key] = nx.convert_node_labels_to_integers(
+                    H,
+                    ordering="sorted",
+                )
+
+    return [(representatives[key], int(counts[key])) for key in counts]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Plot a sample of graphs from a molecular dataset split."
@@ -368,8 +413,9 @@ def main() -> None:
         help="Defaults to <dataset>_<split>_<num>.png.",
     )
     parser.add_argument("--cols", type=int, default=4)
-    parser.add_argument("--motif-size", type=int, default=4, help="Node count k for unique connected induced motifs.")
-    parser.add_argument("--max-motifs", type=int, default=64, help="Maximum number of unique motifs to plot.")
+    parser.add_argument("--motif-min-size", type=int, default=3, help="Minimum motif node count k.")
+    parser.add_argument("--motif-max-size", type=int, default=6, help="Maximum motif node count k.")
+    parser.add_argument("--max-motifs", type=int, default=64, help="Maximum number of unique motifs to plot per k.")
     parser.add_argument(
         "--stats-all-splits",
         action="store_true",
@@ -417,13 +463,28 @@ def main() -> None:
     simplified = [simplify_graph(graph) for graph in selected]
 
     _print_statistics("Selected simplified graphs", simplified)
-    motifs = aggregate_unique_motifs(simplified, int(args.motif_size))
-    if args.max_motifs is not None and int(args.max_motifs) > 0:
-        motifs = motifs[: int(args.max_motifs)]
-    if motifs:
-        _print_statistics(f"Unique {int(args.motif_size)}-node motifs", motifs)
-    else:
-        print(f"Unique {int(args.motif_size)}-node motifs: 0")
+
+    motif_min_size = int(args.motif_min_size)
+    motif_max_size = int(args.motif_max_size)
+    if motif_min_size <= 0:
+        raise ValueError("--motif-min-size must be positive.")
+    if motif_max_size < motif_min_size:
+        raise ValueError("--motif-max-size must be greater than or equal to --motif-min-size.")
+
+    motifs_by_size: dict[int, list[tuple[nx.Graph, int]]] = {}
+    for k in range(motif_min_size, motif_max_size + 1):
+        motifs = aggregate_unique_motifs_with_counts(simplified, k)
+        if args.max_motifs is not None and int(args.max_motifs) > 0:
+            motifs = motifs[: int(args.max_motifs)]
+        motifs_by_size[k] = motifs
+
+        if motifs:
+            motif_graphs = [motif for motif, _count in motifs]
+            motif_counts = [count for _motif, count in motifs]
+            _print_statistics(f"Unique {k}-node motifs", motif_graphs)
+            print(f"  occurrences: {motif_counts}")
+        else:
+            print(f"Unique {k}-node motifs: 0")
 
     cols = max(1, int(args.cols))
     out_dir = ensure_dir(args.output_dir)
@@ -433,8 +494,7 @@ def main() -> None:
 
     simple_filename = f"{out_path.stem}_simple{out_path.suffix}"
     simple_out_path = out_path.with_name(simple_filename)
-    motif_filename = f"{out_path.stem}_motifs_k{int(args.motif_size)}{out_path.suffix}"
-    motif_out_path = out_path.with_name(motif_filename)
+    motif_paths: list[Path] = []
 
     # Original molecular graph plot: colored atoms and bonds.
     _plot_grid(
@@ -457,21 +517,32 @@ def main() -> None:
         use_color=False,
         show_node_labels=False,
     )
-    if motifs:
+    for k, motifs in motifs_by_size.items():
+        if not motifs:
+            continue
+
+        motif_graphs = [motif for motif, _count in motifs]
+        motif_titles = [
+            f"motif[{idx}] count={count}"
+            for idx, (_motif, count) in enumerate(motifs)
+        ]
+        motif_out_path = out_path.with_name(f"{out_path.stem}_motifs_k{k}{out_path.suffix}")
         _plot_grid(
-            motifs,
-            list(range(len(motifs))),
+            motif_graphs,
+            list(range(len(motif_graphs))),
             split="motif",
             cols=cols,
             output_path=motif_out_path,
             use_color=False,
             show_node_labels=False,
+            titles=motif_titles,
         )
+        motif_paths.append(motif_out_path)
 
     print(f"Saved plot to: {out_path}")
     print(f"Saved simplified plot to: {simple_out_path}")
-    if motifs:
-        print(f"Saved motif plot to: {motif_out_path}")
+    for motif_path in motif_paths:
+        print(f"Saved motif plot to: {motif_path}")
 
 
 if __name__ == "__main__":
