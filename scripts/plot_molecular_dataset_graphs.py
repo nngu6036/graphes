@@ -10,7 +10,28 @@ import networkx as nx
 import numpy as np
 
 from grapher.data.io import load_dataset_splits
-from grapher.molecular.constants import BOND_TYPE_NAMES, QM9_ATOM_SYMBOLS
+from grapher.molecular.constants import (
+    BOND_AROMATIC,
+    BOND_DOUBLE,
+    BOND_SINGLE,
+    BOND_TRIPLE,
+    QM9_ATOM_SYMBOLS,
+)
+
+
+ATOM_COLORS = {
+    6: "#4c78a8",  # C
+    7: "#54a24b",  # N
+    8: "#e45756",  # O
+    9: "#f2cf5b",  # F
+}
+
+BOND_COLORS = {
+    BOND_SINGLE: "#7f7f7f",
+    BOND_DOUBLE: "#f58518",
+    BOND_TRIPLE: "#b279a2",
+    BOND_AROMATIC: "#72b7b2",
+}
 from grapher.utils.io import ensure_dir
 
 
@@ -20,31 +41,47 @@ def _node_label(graph: nx.Graph, node: int) -> str:
     return QM9_ATOM_SYMBOLS.get(atomic_num, str(atomic_num))
 
 
-def _edge_label(graph: nx.Graph, u: int, v: int) -> str:
+def _node_color(graph: nx.Graph, node: int) -> str:
+    data = graph.nodes[node]
+    atomic_num = int(data.get("atomic_num", data.get("atom_type", 0)))
+    return ATOM_COLORS.get(atomic_num, "#bab0ac")
+
+
+def _edge_color(graph: nx.Graph, u: int, v: int) -> str:
     data = graph.edges[u, v]
     bond_type = int(data.get("bond_type", data.get("bond_order", 1)))
-    return BOND_TYPE_NAMES.get(bond_type, str(bond_type))
+    return BOND_COLORS.get(bond_type, "#7f7f7f")
 
 
-def _draw_graph(ax, graph: nx.Graph, title: str, *, show_edge_labels: bool) -> None:
+def _edge_width(graph: nx.Graph, u: int, v: int) -> float:
+    data = graph.edges[u, v]
+    bond_type = int(data.get("bond_type", data.get("bond_order", 1)))
+    if bond_type == BOND_DOUBLE:
+        return 2.2
+    if bond_type == BOND_TRIPLE:
+        return 2.8
+    return 1.6
+
+
+def _draw_graph(ax, graph: nx.Graph, title: str) -> None:
     graph = nx.convert_node_labels_to_integers(nx.Graph(graph), ordering="sorted")
     pos = nx.spring_layout(graph, seed=0)
     labels = {node: _node_label(graph, node) for node in graph.nodes()}
+    edge_colors = [_edge_color(graph, u, v) for u, v in graph.edges()]
+    edge_widths = [_edge_width(graph, u, v) for u, v in graph.edges()]
+    node_colors = [_node_color(graph, node) for node in graph.nodes()]
 
-    nx.draw_networkx_edges(graph, pos, ax=ax, width=1.4, edge_color="#777777")
+    nx.draw_networkx_edges(graph, pos, ax=ax, width=edge_widths, edge_color=edge_colors)
     nx.draw_networkx_nodes(
         graph,
         pos,
         ax=ax,
         node_size=520,
-        node_color="#f4f4f4",
+        node_color=node_colors,
         edgecolors="#222222",
         linewidths=1.2,
     )
-    nx.draw_networkx_labels(graph, pos, labels=labels, ax=ax, font_size=9)
-    if show_edge_labels:
-        edge_labels = {(u, v): _edge_label(graph, u, v) for u, v in graph.edges()}
-        nx.draw_networkx_edge_labels(graph, pos, edge_labels=edge_labels, ax=ax, font_size=7)
+    nx.draw_networkx_labels(graph, pos, labels=labels, ax=ax, font_size=9, font_color="#ffffff")
     ax.set_title(title, fontsize=9)
     ax.set_axis_off()
 
@@ -60,7 +97,6 @@ def main() -> None:
     parser.add_argument("--output-dir", default="outputs/plots/molecular_dataset")
     parser.add_argument("--filename", default=None, help="Defaults to <dataset>_<split>_<num>.png.")
     parser.add_argument("--cols", type=int, default=4)
-    parser.add_argument("--show-edge-labels", action="store_true")
     args = parser.parse_args()
 
     splits = load_dataset_splits(args.dataset, root=args.root, build_if_missing=False)
@@ -87,7 +123,6 @@ def main() -> None:
             ax,
             graph,
             f"{args.split}[{idx}] n={graph.number_of_nodes()} m={graph.number_of_edges()}",
-            show_edge_labels=bool(args.show_edge_labels),
         )
 
     fig.tight_layout()
