@@ -9,6 +9,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
+import itertools
 
 from grapher.data.io import load_dataset_splits
 from grapher.molecular.constants import (
@@ -243,6 +244,103 @@ def _plot_grid(
     plt.close(fig)
 
 
+def canonical_key_bruteforce(H: nx.Graph) -> str:
+    """
+    Exact canonical key for a small simple undirected graph.
+
+    Two isomorphic graphs will have the same key.
+    This is suitable for small fixed k, e.g. k <= 6.
+    """
+    nodes = list(H.nodes())
+    k = len(nodes)
+
+    best_key = None
+
+    for perm in itertools.permutations(nodes):
+        bits = []
+
+        for i in range(k):
+            for j in range(i + 1, k):
+                if H.has_edge(perm[i], perm[j]):
+                    bits.append("1")
+                else:
+                    bits.append("0")
+
+        key = "".join(bits)
+
+        if best_key is None or key < best_key:
+            best_key = key
+
+    return best_key
+
+
+def list_motifs(G: nx.Graph, k: int) -> list[nx.Graph]:
+    """
+    Return all unique connected induced motifs of size k from one graph.
+    """
+
+    if G.is_directed():
+        raise ValueError("G must be undirected.")
+
+    if any(u == v for u, v in G.edges()):
+        raise ValueError("G must be simple: no self-loops.")
+
+    if k <= 0:
+        raise ValueError("k must be positive.")
+
+    if k > G.number_of_nodes():
+        return []
+
+    motifs = []
+    seen_keys = set()
+
+    for node_subset in itertools.combinations(G.nodes(), k):
+        H = G.subgraph(node_subset).copy()
+
+        if not nx.is_connected(H):
+            continue
+
+        key = canonical_key_bruteforce(H)
+
+        if key not in seen_keys:
+            seen_keys.add(key)
+
+            H = nx.convert_node_labels_to_integers(H, ordering="sorted")
+            motifs.append(H)
+
+    return motifs
+
+
+def aggregate_unique_motifs(graphs: list[nx.Graph], k: int) -> list[nx.Graph]:
+    """
+    Given a list of graphs, return the unique connected induced k-node motifs
+    appearing in any graph.
+
+    Isomorphic motifs are merged, so only one representative is kept.
+    """
+
+    unique_motifs = []
+    seen_keys = set()
+
+    for G in graphs:
+        motifs = list_motifs(G, k)
+
+        for motif in motifs:
+            key = canonical_key_bruteforce(motif)
+
+            if key not in seen_keys:
+                seen_keys.add(key)
+
+                motif = nx.convert_node_labels_to_integers(
+                    motif,
+                    ordering="sorted",
+                )
+
+                unique_motifs.append(motif)
+
+    return unique_motifs
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Plot a sample of graphs from a molecular dataset split."
@@ -270,6 +368,8 @@ def main() -> None:
         help="Defaults to <dataset>_<split>_<num>.png.",
     )
     parser.add_argument("--cols", type=int, default=4)
+    parser.add_argument("--motif-size", type=int, default=4, help="Node count k for unique connected induced motifs.")
+    parser.add_argument("--max-motifs", type=int, default=64, help="Maximum number of unique motifs to plot.")
     parser.add_argument(
         "--stats-all-splits",
         action="store_true",
@@ -317,6 +417,13 @@ def main() -> None:
     simplified = [simplify_graph(graph) for graph in selected]
 
     _print_statistics("Selected simplified graphs", simplified)
+    motifs = aggregate_unique_motifs(simplified, int(args.motif_size))
+    if args.max_motifs is not None and int(args.max_motifs) > 0:
+        motifs = motifs[: int(args.max_motifs)]
+    if motifs:
+        _print_statistics(f"Unique {int(args.motif_size)}-node motifs", motifs)
+    else:
+        print(f"Unique {int(args.motif_size)}-node motifs: 0")
 
     cols = max(1, int(args.cols))
     out_dir = ensure_dir(args.output_dir)
@@ -326,6 +433,8 @@ def main() -> None:
 
     simple_filename = f"{out_path.stem}_simple{out_path.suffix}"
     simple_out_path = out_path.with_name(simple_filename)
+    motif_filename = f"{out_path.stem}_motifs_k{int(args.motif_size)}{out_path.suffix}"
+    motif_out_path = out_path.with_name(motif_filename)
 
     # Original molecular graph plot: colored atoms and bonds.
     _plot_grid(
@@ -348,9 +457,21 @@ def main() -> None:
         use_color=False,
         show_node_labels=False,
     )
+    if motifs:
+        _plot_grid(
+            motifs,
+            list(range(len(motifs))),
+            split="motif",
+            cols=cols,
+            output_path=motif_out_path,
+            use_color=False,
+            show_node_labels=False,
+        )
 
     print(f"Saved plot to: {out_path}")
     print(f"Saved simplified plot to: {simple_out_path}")
+    if motifs:
+        print(f"Saved motif plot to: {motif_out_path}")
 
 
 if __name__ == "__main__":
