@@ -126,13 +126,20 @@ def _print_statistics(name: str, graphs: list[nx.Graph]) -> None:
     print(f"  bonds: {stats['bond_counts']}")
 
 
-def _draw_graph(ax, graph: nx.Graph, title: str) -> None:
+def _draw_graph(ax, graph: nx.Graph, title: str, *, use_color: bool = True) -> None:
     graph = nx.convert_node_labels_to_integers(nx.Graph(graph), ordering="sorted")
     pos = nx.spring_layout(graph, seed=0)
     labels = {node: _node_label(graph, node) for node in graph.nodes()}
-    edge_colors = [_edge_color(graph, u, v) for u, v in graph.edges()]
-    edge_widths = [_edge_width(graph, u, v) for u, v in graph.edges()]
-    node_colors = [_node_color(graph, node) for node in graph.nodes()]
+    if use_color:
+        edge_colors = [_edge_color(graph, u, v) for u, v in graph.edges()]
+        edge_widths = [_edge_width(graph, u, v) for u, v in graph.edges()]
+        node_colors = [_node_color(graph, node) for node in graph.nodes()]
+        font_color = "#ffffff"
+    else:
+        edge_colors = "#666666"
+        edge_widths = 1.6
+        node_colors = "#f2f2f2"
+        font_color = "#222222"
 
     nx.draw_networkx_edges(graph, pos, ax=ax, width=edge_widths, edge_color=edge_colors)
     nx.draw_networkx_nodes(
@@ -144,7 +151,7 @@ def _draw_graph(ax, graph: nx.Graph, title: str) -> None:
         edgecolors="#222222",
         linewidths=1.2,
     )
-    nx.draw_networkx_labels(graph, pos, labels=labels, ax=ax, font_size=9, font_color="#ffffff")
+    nx.draw_networkx_labels(graph, pos, labels=labels, ax=ax, font_size=9, font_color=font_color)
     ax.set_title(title, fontsize=9)
     ax.set_axis_off()
 
@@ -175,6 +182,7 @@ def _plot_grid(
     split: str,
     cols: int,
     output_path: Path,
+    use_color: bool,
 ) -> None:
     rows = int(math.ceil(len(graphs) / cols))
     fig, axes = plt.subplots(rows, cols, figsize=(3.2 * cols, 3.0 * rows), squeeze=False)
@@ -186,6 +194,7 @@ def _plot_grid(
             ax,
             graph,
             f"{split}[{idx}] n={graph.number_of_nodes()} m={graph.number_of_edges()}",
+            use_color=use_color,
         )
 
     fig.tight_layout()
@@ -239,8 +248,8 @@ def main() -> None:
     simple_filename = f"{out_path.stem}_simple{out_path.suffix}"
     simple_out_path = out_path.with_name(simple_filename)
 
-    _plot_grid(selected, indices, split=args.split, cols=cols, output_path=out_path)
-    _plot_grid(simplified, indices, split=args.split, cols=cols, output_path=simple_out_path)
+    _plot_grid(selected, indices, split=args.split, cols=cols, output_path=out_path, use_color=True)
+    _plot_grid(simplified, indices, split=args.split, cols=cols, output_path=simple_out_path, use_color=False)
     print(f"Saved plot to: {out_path}")
     print(f"Saved simplified plot to: {simple_out_path}")
 
