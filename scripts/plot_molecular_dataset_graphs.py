@@ -18,6 +18,7 @@ from grapher.molecular.constants import (
     BOND_TRIPLE,
     QM9_ATOM_SYMBOLS,
 )
+from grapher.utils.io import ensure_dir
 
 
 ATOM_COLORS = {
@@ -33,7 +34,21 @@ BOND_COLORS = {
     BOND_TRIPLE: "#b279a2",
     BOND_AROMATIC: "#72b7b2",
 }
-from grapher.utils.io import ensure_dir
+
+# Grayscale colors for simplified plots
+ATOM_GRAY_COLORS = {
+    6: "#d9d9d9",  # C
+    7: "#bdbdbd",  # N
+    8: "#969696",  # O
+    9: "#f0f0f0",  # F
+}
+
+BOND_GRAY_COLORS = {
+    BOND_SINGLE: "#666666",
+    BOND_DOUBLE: "#444444",
+    BOND_TRIPLE: "#222222",
+    BOND_AROMATIC: "#888888",
+}
 
 
 def _node_label(graph: nx.Graph, node: int) -> str:
@@ -48,15 +63,28 @@ def _node_color(graph: nx.Graph, node: int) -> str:
     return ATOM_COLORS.get(atomic_num, "#bab0ac")
 
 
+def _node_gray_color(graph: nx.Graph, node: int) -> str:
+    data = graph.nodes[node]
+    atomic_num = int(data.get("atomic_num", data.get("atom_type", 0)))
+    return ATOM_GRAY_COLORS.get(atomic_num, "#cccccc")
+
+
 def _edge_color(graph: nx.Graph, u: int, v: int) -> str:
     data = graph.edges[u, v]
     bond_type = int(data.get("bond_type", data.get("bond_order", 1)))
     return BOND_COLORS.get(bond_type, "#7f7f7f")
 
 
+def _edge_gray_color(graph: nx.Graph, u: int, v: int) -> str:
+    data = graph.edges[u, v]
+    bond_type = int(data.get("bond_type", data.get("bond_order", 1)))
+    return BOND_GRAY_COLORS.get(bond_type, "#666666")
+
+
 def _edge_width(graph: nx.Graph, u: int, v: int) -> float:
     data = graph.edges[u, v]
     bond_type = int(data.get("bond_type", data.get("bond_order", 1)))
+
     if bond_type == BOND_DOUBLE:
         return 2.2
     if bond_type == BOND_TRIPLE:
@@ -67,15 +95,18 @@ def _edge_width(graph: nx.Graph, u: int, v: int) -> float:
 def _graph_statistics(graphs: list[nx.Graph]) -> dict[str, object]:
     node_counts = np.asarray([g.number_of_nodes() for g in graphs], dtype=float)
     edge_counts = np.asarray([g.number_of_edges() for g in graphs], dtype=float)
+
     atom_counts: Counter[str] = Counter()
     bond_counts: Counter[str] = Counter()
 
     for graph in graphs:
         for node in graph.nodes():
             atom_counts[_node_label(graph, int(node))] += 1
+
         for u, v in graph.edges():
             data = graph.edges[u, v]
             bond_type = int(data.get("bond_type", data.get("bond_order", 1)))
+
             if bond_type == BOND_SINGLE:
                 name = "single"
             elif bond_type == BOND_DOUBLE:
@@ -86,11 +117,13 @@ def _graph_statistics(graphs: list[nx.Graph]) -> dict[str, object]:
                 name = "aromatic"
             else:
                 name = str(bond_type)
+
             bond_counts[name] += 1
 
     def summarize(values: np.ndarray) -> dict[str, float]:
         if values.size == 0:
             return {"min": 0.0, "mean": 0.0, "max": 0.0}
+
         return {
             "min": float(values.min()),
             "mean": float(values.mean()),
@@ -108,40 +141,58 @@ def _graph_statistics(graphs: list[nx.Graph]) -> dict[str, object]:
 
 def _print_statistics(name: str, graphs: list[nx.Graph]) -> None:
     stats = _graph_statistics(graphs)
+
     print(f"{name}:")
     print(f"  graphs: {stats['num_graphs']}")
+
     print(
         "  nodes: "
         f"min={stats['nodes']['min']:.0f} "
         f"mean={stats['nodes']['mean']:.2f} "
         f"max={stats['nodes']['max']:.0f}"
     )
+
     print(
         "  edges: "
         f"min={stats['edges']['min']:.0f} "
         f"mean={stats['edges']['mean']:.2f} "
         f"max={stats['edges']['max']:.0f}"
     )
+
     print(f"  atoms: {stats['atom_counts']}")
     print(f"  bonds: {stats['bond_counts']}")
 
 
-def _draw_graph(ax, graph: nx.Graph, title: str, *, use_color: bool = True) -> None:
+def _draw_graph(
+    ax,
+    graph: nx.Graph,
+    title: str,
+    *,
+    use_color: bool = True,
+) -> None:
     graph = nx.convert_node_labels_to_integers(nx.Graph(graph), ordering="sorted")
     pos = nx.spring_layout(graph, seed=0)
+
     labels = {node: _node_label(graph, node) for node in graph.nodes()}
+    edge_widths = [_edge_width(graph, u, v) for u, v in graph.edges()]
+
     if use_color:
-        edge_colors = [_edge_color(graph, u, v) for u, v in graph.edges()]
-        edge_widths = [_edge_width(graph, u, v) for u, v in graph.edges()]
         node_colors = [_node_color(graph, node) for node in graph.nodes()]
+        edge_colors = [_edge_color(graph, u, v) for u, v in graph.edges()]
         font_color = "#ffffff"
     else:
-        edge_colors = "black"
-        edge_widths = 1.6
-        node_colors = "white"
+        node_colors = [_node_gray_color(graph, node) for node in graph.nodes()]
+        edge_colors = [_edge_gray_color(graph, u, v) for u, v in graph.edges()]
         font_color = "black"
 
-    nx.draw_networkx_edges(graph, pos, ax=ax, width=edge_widths, edge_color=edge_colors)
+    nx.draw_networkx_edges(
+        graph,
+        pos,
+        ax=ax,
+        width=edge_widths,
+        edge_color=edge_colors,
+    )
+
     nx.draw_networkx_nodes(
         graph,
         pos,
@@ -151,23 +202,31 @@ def _draw_graph(ax, graph: nx.Graph, title: str, *, use_color: bool = True) -> N
         edgecolors="#222222",
         linewidths=1.2,
     )
-    nx.draw_networkx_labels(graph, pos, labels=labels, ax=ax, font_size=9, font_color=font_color)
+
+    nx.draw_networkx_labels(
+        graph,
+        pos,
+        labels=labels,
+        ax=ax,
+        font_size=9,
+        font_color=font_color,
+    )
+
     ax.set_title(title, fontsize=9)
     ax.set_axis_off()
 
+
 def simplify_graph(graph: nx.Graph) -> nx.Graph:
     """
-    Simplify a molecular graph by removing unnecessary attributes and converting to a simple graph.
+    Simplify a molecular graph by removing unnecessary attributes and
+    keeping only atom type and bond type.
     """
-    # Create a new simple graph
     simple_graph = nx.Graph()
 
-    # Add nodes with only the atomic number as an attribute
     for node, data in graph.nodes(data=True):
         atomic_num = int(data.get("atomic_num", data.get("atom_type", 0)))
         simple_graph.add_node(node, atomic_num=atomic_num)
 
-    # Add edges with only the bond type as an attribute
     for u, v, data in graph.edges(data=True):
         bond_type = int(data.get("bond_type", data.get("bond_order", 1)))
         simple_graph.add_edge(u, v, bond_type=bond_type)
@@ -185,10 +244,16 @@ def _plot_grid(
     use_color: bool,
 ) -> None:
     rows = int(math.ceil(len(graphs) / cols))
-    fig, axes = plt.subplots(rows, cols, figsize=(3.2 * cols, 3.0 * rows), squeeze=False)
+    fig, axes = plt.subplots(
+        rows,
+        cols,
+        figsize=(3.2 * cols, 3.0 * rows),
+        squeeze=False,
+    )
 
     for ax in axes.reshape(-1):
         ax.set_axis_off()
+
     for ax, graph, idx in zip(axes.reshape(-1), graphs, indices):
         _draw_graph(
             ax,
@@ -200,38 +265,58 @@ def _plot_grid(
     fig.tight_layout()
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
-    if not use_color:
-        try:
-            from PIL import Image
-
-            image = Image.open(output_path)
-            image.convert("L").save(output_path)
-        except Exception:
-            pass
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Plot a sample of graphs from a molecular dataset split.")
+    parser = argparse.ArgumentParser(
+        description="Plot a sample of graphs from a molecular dataset split."
+    )
+
     parser.add_argument("--dataset", default="qm9_attributed")
     parser.add_argument("--root", default="outputs/datasets")
     parser.add_argument("--split", default="train", choices=["train", "val", "test"])
     parser.add_argument("--num-graphs", type=int, default=16)
-    parser.add_argument("--seed", type=int, default=0, help="Seed used when --sample-random is set.")
-    parser.add_argument("--sample-random", action="store_true", help="Sample random graphs instead of taking the first N.")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Seed used when --sample-random is set.",
+    )
+    parser.add_argument(
+        "--sample-random",
+        action="store_true",
+        help="Sample random graphs instead of taking the first N.",
+    )
     parser.add_argument("--output-dir", default="outputs/plots/molecular_dataset")
-    parser.add_argument("--filename", default=None, help="Defaults to <dataset>_<split>_<num>.png.")
+    parser.add_argument(
+        "--filename",
+        default=None,
+        help="Defaults to <dataset>_<split>_<num>.png.",
+    )
     parser.add_argument("--cols", type=int, default=4)
-    parser.add_argument("--stats-all-splits", action="store_true", help="Print statistics for train/val/test, not only the requested split.")
+    parser.add_argument(
+        "--stats-all-splits",
+        action="store_true",
+        help="Print statistics for train/val/test, not only the requested split.",
+    )
+
     args = parser.parse_args()
 
-    splits = load_dataset_splits(args.dataset, root=args.root, build_if_missing=False)
+    splits = load_dataset_splits(
+        args.dataset,
+        root=args.root,
+        build_if_missing=False,
+    )
+
     graphs = list(splits[args.split])
+
     if not graphs:
         raise RuntimeError(f"No graphs found for {args.dataset}/{args.split}.")
 
     print(f"Dataset: {args.dataset}")
     print(f"Root: {args.root}")
     print(f"Split sizes: { {split: len(items) for split, items in splits.items()} }")
+
     if args.stats_all_splits:
         for split, split_graphs in splits.items():
             _print_statistics(f"Split {split}", list(split_graphs))
@@ -239,6 +324,10 @@ def main() -> None:
         _print_statistics(f"Split {args.split}", graphs)
 
     n = min(int(args.num_graphs), len(graphs))
+
+    if n <= 0:
+        raise ValueError("--num-graphs must be positive.")
+
     if args.sample_random:
         rng = np.random.default_rng(int(args.seed))
         indices = rng.choice(len(graphs), size=n, replace=False).tolist()
@@ -246,18 +335,42 @@ def main() -> None:
         indices = list(range(n))
 
     selected = [graphs[i] for i in indices]
+
     _print_statistics("Selected graphs", selected)
+
     simplified = [simplify_graph(graph) for graph in selected]
+
     _print_statistics("Selected simplified graphs", simplified)
+
     cols = max(1, int(args.cols))
     out_dir = ensure_dir(args.output_dir)
+
     filename = args.filename or f"{args.dataset}_{args.split}_{n}.png"
     out_path = Path(out_dir) / filename
+
     simple_filename = f"{out_path.stem}_simple{out_path.suffix}"
     simple_out_path = out_path.with_name(simple_filename)
 
-    _plot_grid(selected, indices, split=args.split, cols=cols, output_path=out_path, use_color=True)
-    _plot_grid(simplified, indices, split=args.split, cols=cols, output_path=simple_out_path, use_color=False)
+    # Original molecular graph plot: colored atoms and bonds.
+    _plot_grid(
+        selected,
+        indices,
+        split=args.split,
+        cols=cols,
+        output_path=out_path,
+        use_color=True,
+    )
+
+    # Simplified molecular graph plot: grayscale atoms and bonds.
+    _plot_grid(
+        simplified,
+        indices,
+        split=args.split,
+        cols=cols,
+        output_path=simple_out_path,
+        use_color=False,
+    )
+
     print(f"Saved plot to: {out_path}")
     print(f"Saved simplified plot to: {simple_out_path}")
 
