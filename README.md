@@ -208,6 +208,14 @@ PYTHONPATH=src python scripts/sample_qm9_mixture_catflow.py \
   --steps 64 \
   --temperature 1.0 \
   --seed 42
+
+
+  PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir outputs/molecular/qm9_topology_first_mixture_catflow \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --output-dir outputs/molecular/qm9_topology_first_mixture_catflow/evaluation
+  
 ```
 
 A CatFlow-style Stage-2 ablation is obtained by setting `num_mixtures: 1` in `configs/experiments/qm9_topology_catflow_stage2_ablation.yaml`.
