@@ -35,22 +35,6 @@ BOND_COLORS = {
     BOND_AROMATIC: "#72b7b2",
 }
 
-# Grayscale colors for simplified plots
-ATOM_GRAY_COLORS = {
-    6: "#d9d9d9",  # C
-    7: "#bdbdbd",  # N
-    8: "#969696",  # O
-    9: "#f0f0f0",  # F
-}
-
-BOND_GRAY_COLORS = {
-    BOND_SINGLE: "#666666",
-    BOND_DOUBLE: "#444444",
-    BOND_TRIPLE: "#222222",
-    BOND_AROMATIC: "#888888",
-}
-
-
 def _node_label(graph: nx.Graph, node: int) -> str:
     data = graph.nodes[node]
     atomic_num = int(data.get("atomic_num", data.get("atom_type", 0)))
@@ -63,22 +47,10 @@ def _node_color(graph: nx.Graph, node: int) -> str:
     return ATOM_COLORS.get(atomic_num, "#bab0ac")
 
 
-def _node_gray_color(graph: nx.Graph, node: int) -> str:
-    data = graph.nodes[node]
-    atomic_num = int(data.get("atomic_num", data.get("atom_type", 0)))
-    return ATOM_GRAY_COLORS.get(atomic_num, "#cccccc")
-
-
 def _edge_color(graph: nx.Graph, u: int, v: int) -> str:
     data = graph.edges[u, v]
     bond_type = int(data.get("bond_type", data.get("bond_order", 1)))
     return BOND_COLORS.get(bond_type, "#7f7f7f")
-
-
-def _edge_gray_color(graph: nx.Graph, u: int, v: int) -> str:
-    data = graph.edges[u, v]
-    bond_type = int(data.get("bond_type", data.get("bond_order", 1)))
-    return BOND_GRAY_COLORS.get(bond_type, "#666666")
 
 
 def _edge_width(graph: nx.Graph, u: int, v: int) -> float:
@@ -169,6 +141,7 @@ def _draw_graph(
     title: str,
     *,
     use_color: bool = True,
+    show_node_labels: bool = True,
 ) -> None:
     graph = nx.convert_node_labels_to_integers(nx.Graph(graph), ordering="sorted")
     pos = nx.spring_layout(graph, seed=0)
@@ -181,8 +154,8 @@ def _draw_graph(
         edge_colors = [_edge_color(graph, u, v) for u, v in graph.edges()]
         font_color = "#ffffff"
     else:
-        node_colors = [_node_gray_color(graph, node) for node in graph.nodes()]
-        edge_colors = [_edge_gray_color(graph, u, v) for u, v in graph.edges()]
+        node_colors = "#f2f2f2"
+        edge_colors = "#555555"
         font_color = "black"
 
     nx.draw_networkx_edges(
@@ -203,14 +176,15 @@ def _draw_graph(
         linewidths=1.2,
     )
 
-    nx.draw_networkx_labels(
-        graph,
-        pos,
-        labels=labels,
-        ax=ax,
-        font_size=9,
-        font_color=font_color,
-    )
+    if show_node_labels:
+        nx.draw_networkx_labels(
+            graph,
+            pos,
+            labels=labels,
+            ax=ax,
+            font_size=9,
+            font_color=font_color,
+        )
 
     ax.set_title(title, fontsize=9)
     ax.set_axis_off()
@@ -242,6 +216,7 @@ def _plot_grid(
     cols: int,
     output_path: Path,
     use_color: bool,
+    show_node_labels: bool,
 ) -> None:
     rows = int(math.ceil(len(graphs) / cols))
     fig, axes = plt.subplots(
@@ -260,6 +235,7 @@ def _plot_grid(
             graph,
             f"{split}[{idx}] n={graph.number_of_nodes()} m={graph.number_of_edges()}",
             use_color=use_color,
+            show_node_labels=show_node_labels,
         )
 
     fig.tight_layout()
@@ -359,9 +335,10 @@ def main() -> None:
         cols=cols,
         output_path=out_path,
         use_color=True,
+        show_node_labels=True,
     )
 
-    # Simplified molecular graph plot: grayscale atoms and bonds.
+    # Simplified molecular graph plot: grayscale topology only.
     _plot_grid(
         simplified,
         indices,
@@ -369,6 +346,7 @@ def main() -> None:
         cols=cols,
         output_path=simple_out_path,
         use_color=False,
+        show_node_labels=False,
     )
 
     print(f"Saved plot to: {out_path}")
