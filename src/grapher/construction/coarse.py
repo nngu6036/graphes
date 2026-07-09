@@ -87,7 +87,7 @@ def construct_coarse_graph(summary: dict[str, Any], config: ConstructorConfig | 
     generator = rng if rng is not None else np.random.default_rng(0)
     degree_sequence = [int(d) for d in summary["degree_sequence"]]
     if cfg.type != "havel_hakimi":
-        raise NotImplementedError("Fresh branch currently implements only the havel_hakimi constructor.")
+        raise ValueError(f"Unsupported coarse constructor {cfg.type!r}; expected 'havel_hakimi'.")
     if not nx.is_graphical(degree_sequence, method="eg"):
         raise ValueError("Target degree sequence is not graphical.")
     graph = nx.havel_hakimi_graph(degree_sequence)

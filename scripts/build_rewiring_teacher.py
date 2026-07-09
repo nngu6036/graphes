@@ -103,7 +103,7 @@ def _choose_action(
 def _load_graphs(config: dict[str, Any]) -> dict[str, list[nx.Graph]]:
     dataset_cfg = config.get("dataset", {}) or {}
     splits = load_dataset_splits(
-        dataset_cfg.get("name", "sbm_spectre"),
+        dataset_cfg.get("name", "sbm"),
         root=dataset_cfg.get("root", "outputs/datasets"),
         build_if_missing=bool(dataset_cfg.get("build_if_missing", True)),
         config_path=dataset_cfg.get("config_path"),
@@ -475,34 +475,20 @@ def main() -> None:
         description="Build GraphER-Opt energy-guided rewiring teacher cache."
     )
     parser.add_argument("--config", required=True)
-    parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--num-trajectories", type=int, default=None)
-    parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--debug", action="store_true")
-    parser.add_argument(
-        "--progress-interval",
-        type=int,
-        default=None,
-        help="Print progress every N trajectories. Use 0 to disable periodic trajectory logs.",
-    )
     args = parser.parse_args()
 
     config = load_yaml(args.config)
 
     teacher_cfg = config.get("teacher", {}) or {}
-    output_dir = (
-        args.output_dir
-        or teacher_cfg.get("output_dir")
-        or "outputs/teachers/sbm_report"
-    )
+    output_dir = teacher_cfg.get("output_dir") or "outputs/teachers/teacher"
 
     build_teacher_cache(
         config,
         output_dir=output_dir,
-        num_trajectories=args.num_trajectories,
-        seed=args.seed,
-        debug=args.debug,
-        progress_interval=args.progress_interval,
+        num_trajectories=None,
+        seed=None,
+        debug=bool(teacher_cfg.get("debug", False)),
+        progress_interval=None,
     )
 
 

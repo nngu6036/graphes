@@ -7,7 +7,6 @@ from collections import Counter
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import itertools
 import networkx as nx
 import numpy as np
 
@@ -20,6 +19,7 @@ from grapher.molecular.constants import (
     QM9_ATOM_SYMBOLS,
 )
 from grapher.utils.io import ensure_dir
+from grapher.utils.motifs import aggregate_unique_motifs_with_counts
 
 
 ATOM_COLORS = {
@@ -250,142 +250,6 @@ def _plot_grid(
     plt.close(fig)
 
 
-def canonical_key_bruteforce(H: nx.Graph) -> str:
-    """
-    Exact canonical key for a small simple undirected graph.
-
-    Two isomorphic graphs will have the same key.
-    This is suitable for small fixed k, e.g. k <= 6.
-    """
-    nodes = list(H.nodes())
-    k = len(nodes)
-
-    best_key = None
-
-    for perm in itertools.permutations(nodes):
-        bits = []
-
-        for i in range(k):
-            for j in range(i + 1, k):
-                if H.has_edge(perm[i], perm[j]):
-                    bits.append("1")
-                else:
-                    bits.append("0")
-
-        key = "".join(bits)
-
-        if best_key is None or key < best_key:
-            best_key = key
-
-    return best_key
-
-
-def list_motifs(G: nx.Graph, k: int) -> list[nx.Graph]:
-    """
-    Return all unique connected induced motifs of size k from one graph.
-    """
-
-    if G.is_directed():
-        raise ValueError("G must be undirected.")
-
-    if any(u == v for u, v in G.edges()):
-        raise ValueError("G must be simple: no self-loops.")
-
-    if k <= 0:
-        raise ValueError("k must be positive.")
-
-    if k > G.number_of_nodes():
-        return []
-
-    motifs = []
-    seen_keys = set()
-
-    for node_subset in itertools.combinations(G.nodes(), k):
-        H = G.subgraph(node_subset).copy()
-
-        if not nx.is_connected(H):
-            continue
-
-        key = canonical_key_bruteforce(H)
-
-        if key not in seen_keys:
-            seen_keys.add(key)
-
-            H = nx.convert_node_labels_to_integers(H, ordering="sorted")
-            motifs.append(H)
-
-    return motifs
-
-
-def aggregate_unique_motifs(graphs: list[nx.Graph], k: int) -> list[nx.Graph]:
-    """
-    Given a list of graphs, return the unique connected induced k-node motifs
-    appearing in any graph.
-
-    Isomorphic motifs are merged, so only one representative is kept.
-    """
-
-    unique_motifs = []
-    seen_keys = set()
-
-    for G in graphs:
-        motifs = list_motifs(G, k)
-
-        for motif in motifs:
-            key = canonical_key_bruteforce(motif)
-
-            if key not in seen_keys:
-                seen_keys.add(key)
-
-                motif = nx.convert_node_labels_to_integers(
-                    motif,
-                    ordering="sorted",
-                )
-
-                unique_motifs.append(motif)
-
-    return unique_motifs
-
-
-def aggregate_unique_motifs_with_counts(graphs: list[nx.Graph], k: int) -> list[tuple[nx.Graph, int]]:
-    """
-    Return unique connected induced k-node motifs and their total occurrence
-    counts across all input graphs.
-    """
-    representatives: dict[str, nx.Graph] = {}
-    counts: Counter[str] = Counter()
-
-    for G in graphs:
-        if G.is_directed():
-            raise ValueError("G must be undirected.")
-
-        if any(u == v for u, v in G.edges()):
-            raise ValueError("G must be simple: no self-loops.")
-
-        if k <= 0:
-            raise ValueError("k must be positive.")
-
-        if k > G.number_of_nodes():
-            continue
-
-        for node_subset in itertools.combinations(G.nodes(), k):
-            H = G.subgraph(node_subset).copy()
-
-            if not nx.is_connected(H):
-                continue
-
-            key = canonical_key_bruteforce(H)
-            counts[key] += 1
-
-            if key not in representatives:
-                representatives[key] = nx.convert_node_labels_to_integers(
-                    H,
-                    ordering="sorted",
-                )
-
-    return [(representatives[key], int(counts[key])) for key in counts]
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Plot a sample of graphs from a molecular dataset split."
@@ -415,7 +279,7 @@ def main() -> None:
     parser.add_argument("--cols", type=int, default=4)
     parser.add_argument("--motif-min-size", type=int, default=3, help="Minimum motif node count k.")
     parser.add_argument("--motif-max-size", type=int, default=6, help="Maximum motif node count k.")
-    parser.add_argument("--max-motifs", type=int, default=64, help="Maximum number of unique motifs to plot per k.")
+    parser.add_argument("--max-motifs", type=int, default=0, help="Maximum number of unique motifs to plot per k; 0 plots all.")
     parser.add_argument(
         "--stats-all-splits",
         action="store_true",
@@ -464,6 +328,9 @@ def main() -> None:
 
     _print_statistics("Selected simplified graphs", simplified)
 
+    all_simplified = [simplify_graph(graph) for graph in graphs]
+    _print_statistics(f"All simplified graphs in split {args.split}", all_simplified)
+
     motif_min_size = int(args.motif_min_size)
     motif_max_size = int(args.motif_max_size)
     if motif_min_size <= 0:
@@ -473,7 +340,7 @@ def main() -> None:
 
     motifs_by_size: dict[int, list[tuple[nx.Graph, int]]] = {}
     for k in range(motif_min_size, motif_max_size + 1):
-        motifs = aggregate_unique_motifs_with_counts(simplified, k)
+        motifs = aggregate_unique_motifs_with_counts(all_simplified, k)
         if args.max_motifs is not None and int(args.max_motifs) > 0:
             motifs = motifs[: int(args.max_motifs)]
         motifs_by_size[k] = motifs

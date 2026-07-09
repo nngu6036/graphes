@@ -272,7 +272,7 @@ def run_coarse_to_fine(
     # Dataset
     # ------------------------------------------------------------------
     dataset_cfg = config.get("dataset", {}) or {}
-    dataset_name = str(dataset_cfg.get("name", "sbm_spectre"))
+    dataset_name = str(dataset_cfg.get("name", "sbm"))
 
     _debug_print(
         debug,
@@ -528,6 +528,14 @@ def run_coarse_to_fine(
     _debug_print(debug, "evaluating generated graph sets")
 
     compute_orbit = bool(eval_cfg.get("compute_orbit", True))
+    compute_graphlet_history = bool(eval_cfg.get("compute_graphlet_history", eval_cfg.get("compute_graphlet", False)))
+    graphlet_eval_kwargs = {
+        "compute_graphlet_history": compute_graphlet_history,
+        "graphlet_k_min": int(eval_cfg.get("graphlet_k_min", summary_cfg.graphlet_k_min)),
+        "graphlet_k_max": int(eval_cfg.get("graphlet_k_max", summary_cfg.graphlet_k_max)),
+        "graphlet_connected_only": bool(eval_cfg.get("graphlet_connected_only", summary_cfg.graphlet_connected_only)),
+        "graphlet_num_samples": eval_cfg.get("graphlet_num_samples", summary_cfg.graphlet_num_samples),
+    }
 
     metrics: dict[str, Any] = {}
 
@@ -536,6 +544,7 @@ def run_coarse_to_fine(
         coarse_graphs,
         train_graphs,
         compute_orbit=compute_orbit,
+        **graphlet_eval_kwargs,
     )
 
     metrics[method_name] = evaluate_graph_sets(
@@ -543,6 +552,7 @@ def run_coarse_to_fine(
         refined_graphs,
         train_graphs,
         compute_orbit=compute_orbit,
+        **graphlet_eval_kwargs,
     )
 
     metrics[method_name]["degree_preservation_from_coarse_rate"] = (
@@ -557,6 +567,7 @@ def run_coarse_to_fine(
             oracle_graphs,
             train_graphs,
             compute_orbit=compute_orbit,
+            **graphlet_eval_kwargs,
         )
         metrics["grapher_opt"]["degree_preservation_from_coarse_rate"] = (
             degree_preservation_rate(coarse_graphs, oracle_graphs)
@@ -572,6 +583,7 @@ def run_coarse_to_fine(
             random_graphs,
             train_graphs,
             compute_orbit=compute_orbit,
+            **graphlet_eval_kwargs,
         )
         metrics["random_rewire"]["degree_preservation_from_coarse_rate"] = (
             degree_preservation_rate(coarse_graphs, random_graphs)

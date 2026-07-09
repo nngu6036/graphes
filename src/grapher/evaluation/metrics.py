@@ -6,6 +6,7 @@ import networkx as nx
 import numpy as np
 
 from grapher.properties.summary import clustering_histogram, degree_histogram, motif_proxy_vector, orbit_count_vector, spectral_histogram
+from grapher.utils.motifs import flatten_graphlet_history, graphlet_history, graphlet_keys_by_size
 
 
 def descriptor_matrix(graphs: Sequence[nx.Graph], fn: Callable[[nx.Graph], np.ndarray]) -> np.ndarray:
@@ -80,6 +81,58 @@ def mmd_orbit(reference: Sequence[nx.Graph], generated: Sequence[nx.Graph], sigm
     return float(k_xx.mean() + k_yy.mean() - 2.0 * k_xy.mean())
 
 
+
+def graphlet_history_matrix(
+    graphs: Sequence[nx.Graph],
+    *,
+    k_min: int = 3,
+    k_max: int = 5,
+    connected_only: bool = True,
+    num_samples: int | None = None,
+) -> np.ndarray:
+    histories = [
+        graphlet_history(
+            g,
+            k_min=k_min,
+            k_max=k_max,
+            connected_only=connected_only,
+            num_samples=num_samples,
+        )
+        for g in graphs
+    ]
+    keys_by_k = graphlet_keys_by_size(histories)
+    rows = [flatten_graphlet_history(h, keys_by_k) for h in histories]
+    if not rows:
+        return np.zeros((0, 1), dtype=np.float64)
+    width = max(max((row.size for row in rows), default=0), 1)
+    out = np.zeros((len(rows), width), dtype=np.float64)
+    for i, row in enumerate(rows):
+        out[i, : row.size] = row
+    return out
+
+
+def mmd_graphlet_history(
+    reference: Sequence[nx.Graph],
+    generated: Sequence[nx.Graph],
+    *,
+    k_min: int = 3,
+    k_max: int = 5,
+    connected_only: bool = True,
+    num_samples: int | None = None,
+) -> float:
+    # Build a shared basis from both sets. This is important because generated
+    # graphs may contain graphlets unseen in the reference or vice versa.
+    histories = [
+        graphlet_history(g, k_min=k_min, k_max=k_max, connected_only=connected_only, num_samples=num_samples)
+        for g in list(reference) + list(generated)
+    ]
+    keys_by_k = graphlet_keys_by_size(histories)
+    ref_rows = [flatten_graphlet_history(h, keys_by_k) for h in histories[: len(reference)]]
+    gen_rows = [flatten_graphlet_history(h, keys_by_k) for h in histories[len(reference) :]]
+    if not ref_rows or not gen_rows:
+        return float("nan")
+    return mmd_rbf(np.asarray(ref_rows, dtype=np.float64), np.asarray(gen_rows, dtype=np.float64))
+
 def connectedness_rate(graphs: Sequence[nx.Graph]) -> float:
     if not graphs:
         return 0.0
@@ -121,7 +174,18 @@ def degree_preservation_rate(before: Sequence[nx.Graph], after: Sequence[nx.Grap
     return float(np.mean(vals))
 
 
-def evaluate_graph_sets(reference: Sequence[nx.Graph], generated: Sequence[nx.Graph], train: Sequence[nx.Graph] | None = None, *, compute_orbit: bool = True) -> dict[str, float]:
+def evaluate_graph_sets(
+    reference: Sequence[nx.Graph],
+    generated: Sequence[nx.Graph],
+    train: Sequence[nx.Graph] | None = None,
+    *,
+    compute_orbit: bool = True,
+    compute_graphlet_history: bool = False,
+    graphlet_k_min: int = 3,
+    graphlet_k_max: int = 5,
+    graphlet_connected_only: bool = True,
+    graphlet_num_samples: int | None = None,
+) -> dict[str, float]:
     max_degree = 0
     for g in list(reference) + list(generated):
         if g.number_of_nodes():
@@ -141,6 +205,14 @@ def evaluate_graph_sets(reference: Sequence[nx.Graph], generated: Sequence[nx.Gr
         "spectral_mmd": mmd_rbf(spec_ref, spec_gen),
         "motif_proxy_mmd": mmd_rbf(motif_ref, motif_gen),
         "orbit_mmd": mmd_orbit(reference, generated) if compute_orbit else float("nan"),
+        "graphlet_history_mmd": mmd_graphlet_history(
+            reference,
+            generated,
+            k_min=graphlet_k_min,
+            k_max=graphlet_k_max,
+            connected_only=graphlet_connected_only,
+            num_samples=graphlet_num_samples,
+        ) if compute_graphlet_history else float("nan"),
         "connectedness_rate": connectedness_rate(generated),
         "validity_rate": simple_graph_validity_rate(generated),
         "uniqueness_rate": wl_uniqueness_rate(generated),

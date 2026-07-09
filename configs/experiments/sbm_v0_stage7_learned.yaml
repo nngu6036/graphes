@@ -2,8 +2,8 @@ experiment: coarse_to_fine_sbm_v0_stage7_learned
 seed: 42
 
 dataset:
-  name: sbm_spectre
-  config_path: configs/datasets/sbm_spectre.yaml
+  name: sbm
+  config_path: configs/datasets/sbm.yaml
   root: outputs/datasets
   build_if_missing: true
   max_train_graphs: 64
@@ -21,6 +21,15 @@ summary_generator:
   checkpoint_path: outputs/summary_generators/sbm_v0/checkpoint.pt
   device: auto
   deterministic: false
+  epochs: 200
+  batch_size: 32
+  latent_dim: 32
+  hidden_dim: 128
+  num_layers: 2
+  dropout: 0.0
+  learning_rate: 0.002
+  beta: 0.001
+  progress_interval: 20
 
 constructor:
   type: havel_hakimi

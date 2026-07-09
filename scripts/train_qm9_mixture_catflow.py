@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import random
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -39,26 +40,20 @@ def evaluate(model, loader, device, *, log_interval: int = 0):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train topology-conditioned mixture CatFlow for QM9 attributes.")
     parser.add_argument("--config", required=True)
-    parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--epochs", type=int, default=None)
-    parser.add_argument("--batch-size", type=int, default=None)
-    parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--device", default=None)
-    parser.add_argument("--max-train-graphs", type=int, default=None, help="Override mixture_catflow.dataset.max_train_graphs.")
-    parser.add_argument("--max-val-graphs", type=int, default=None, help="Override mixture_catflow.dataset.max_val_graphs.")
-    parser.add_argument("--progress-interval", type=int, default=None, help="Print epoch summary every N epochs. Use 0 to keep only stage/checkpoint logs.")
-    parser.add_argument("--batch-log-interval", type=int, default=None, help="Print train/validation batch progress every N batches. Use 0 to disable batch logs.")
     args = parser.parse_args()
 
     started_at = time.perf_counter()
     cfg = load_yaml(args.config)
-    seed = int(args.seed if args.seed is not None else cfg.get("seed", 0))
+    flow_cfg = cfg.get("mixture_catflow", {}) or cfg.get("attribute_flow", {}) or {}
+    seed = int(flow_cfg.get("seed", cfg.get("seed", 0)))
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    _log(f"starting QM9 mixture CatFlow training seed={seed} output_dir={args.output_dir}")
+    checkpoint_path = Path(flow_cfg.get("checkpoint_path", "outputs/attribute_flows/qm9_mixture_catflow/checkpoint.pt"))
+    out_dir = ensure_dir(flow_cfg.get("output_dir", checkpoint_path.parent))
+    checkpoint_path = out_dir / checkpoint_path.name
+    _log(f"starting QM9 mixture CatFlow training seed={seed} output_dir={out_dir}")
 
-    flow_cfg = cfg.get("mixture_catflow", {}) or cfg.get("attribute_flow", {}) or {}
     data_cfg = flow_cfg.get("dataset", {}) or cfg.get("attribute_dataset", {}) or {}
     dataset_name = data_cfg.get("name", "qm9_attributed")
     root = data_cfg.get("root", cfg.get("dataset", {}).get("root", "outputs/datasets"))
@@ -66,19 +61,19 @@ def main() -> None:
     splits = load_dataset_splits(dataset_name, root=root, build_if_missing=False)
     train_graphs = list(splits["train"])
     val_graphs = list(splits.get("val", [])) or train_graphs[: max(1, len(train_graphs) // 10)]
-    max_train_graphs = args.max_train_graphs if args.max_train_graphs is not None else data_cfg.get("max_train_graphs")
-    max_val_graphs = args.max_val_graphs if args.max_val_graphs is not None else data_cfg.get("max_val_graphs")
+    max_train_graphs = data_cfg.get("max_train_graphs")
+    max_val_graphs = data_cfg.get("max_val_graphs")
     if max_train_graphs:
         train_graphs = train_graphs[: int(max_train_graphs)]
     if max_val_graphs:
         val_graphs = val_graphs[: int(max_val_graphs)]
     _log(f"dataset ready train={len(train_graphs)} val={len(val_graphs)} splits={list(splits.keys())}")
 
-    device = resolve_torch_device(args.device or flow_cfg.get("device", "auto"))
-    batch_size = int(args.batch_size or flow_cfg.get("batch_size", 64))
-    epochs = int(args.epochs or flow_cfg.get("epochs", 100))
-    progress_interval = int(args.progress_interval if args.progress_interval is not None else flow_cfg.get("progress_interval", 10))
-    batch_log_interval = int(args.batch_log_interval if args.batch_log_interval is not None else flow_cfg.get("batch_log_interval", 0))
+    device = resolve_torch_device(flow_cfg.get("device", "auto"))
+    batch_size = int(flow_cfg.get("batch_size", 64))
+    epochs = int(flow_cfg.get("epochs", 100))
+    progress_interval = int(flow_cfg.get("progress_interval", 10))
+    batch_log_interval = int(flow_cfg.get("batch_log_interval", 0))
     progress_interval = max(progress_interval, 0)
     batch_log_interval = max(batch_log_interval, 0)
     _log(f"using device={device} epochs={epochs} batch_size={batch_size}")
@@ -116,7 +111,6 @@ def main() -> None:
     )
     _log(f"loaders ready train_batches={len(train_loader)} val_batches={len(val_loader)}")
 
-    out_dir = ensure_dir(args.output_dir)
     best_val = float("inf")
     history = []
     for epoch in range(1, epochs + 1):
@@ -144,7 +138,7 @@ def main() -> None:
         history.append(row)
         if val_stats["loss"] < best_val:
             best_val = val_stats["loss"]
-            save_mixture_catflow_checkpoint(model, out_dir / "checkpoint.pt", config=cfg, report=row)
+            save_mixture_catflow_checkpoint(model, checkpoint_path, config=cfg, report=row)
             _log(f"epoch {epoch}/{epochs} saved new best checkpoint val_loss={best_val:.4f}")
         if epoch == 1 or (progress_interval and epoch % progress_interval == 0) or epoch == epochs:
             epoch_elapsed = time.perf_counter() - epoch_started_at
@@ -157,7 +151,7 @@ def main() -> None:
     report = {"best_val_loss": best_val, "history": history, "num_train": len(train_graphs), "num_val": len(val_graphs)}
     _log(f"saving training report best_val_loss={best_val:.4f}")
     save_json(report, out_dir / "training_report.json")
-    print(f"Saved checkpoint to: {out_dir / 'checkpoint.pt'}")
+    print(f"Saved checkpoint to: {checkpoint_path}")
     print(f"Saved training report to: {out_dir / 'training_report.json'}")
 
 

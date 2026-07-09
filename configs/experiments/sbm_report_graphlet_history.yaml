@@ -1,4 +1,4 @@
-experiment: sbm_report_coarse_to_fine
+experiment: sbm_report_graphlet_history
 seed: 42
 
 dataset:
@@ -11,14 +11,17 @@ dataset:
 
 summary:
   degree_hist_max_degree: auto
-  clustering_bins: 20
-  spectral_bins: 20
-  motif_proxy: true
-  orbit_count: false   # keep false for training; use ORCA only in final eval
+  motif_proxy: false
+  orbit_count: false
+  graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_num_samples: 2048
 
 summary_generator:
   type: learned
-  checkpoint_path: outputs/summary_generators/sbm_report/checkpoint.pt
+  checkpoint_path: outputs/summary_generators/sbm_graphlet_history/checkpoint.pt
   device: auto
   deterministic: false
   epochs: 300
@@ -32,9 +35,9 @@ summary_generator:
   progress_interval: 30
 
 degree_generator:
-  enabled: false
+  enabled: true
   type: degree_histogram_vae
-  checkpoint_path: outputs/degree_generators/sbm_report/checkpoint.pt
+  checkpoint_path: outputs/degree_generators/sbm_graphlet_history/checkpoint.pt
   device: auto
   deterministic: false
   epochs: 300
@@ -63,17 +66,20 @@ constructor:
 
 energy:
   degree_weight: 0.0
-  density_weight: 0.0
-  clustering_weight: 1.0
-  spectral_weight: 0.5
-  motif_weight: 0.5
-  triangle_weight: 0.2
-  orbit_weight: 0.0
+  clustering_weight: 0.0
+  spectral_weight: 0.0
+  motif_weight: 0.0
+  triangle_weight: 0.0
+  graphlet_weight: 1.0
+  graphlet_size_weights:
+    "3": 1.0
+    "4": 1.0
+    "5": 1.0
   normalize_terms: true
 
 teacher:
   type: energy_guided
-  output_dir: outputs/teachers/sbm_report
+  output_dir: outputs/teachers/sbm_graphlet_history
   num_trajectories: 512
   steps: 20
   candidate_budget: 64
@@ -88,7 +94,7 @@ teacher:
 
 selector:
   type: graph_action_selector
-  checkpoint_path: outputs/selectors/sbm_report/checkpoint.pt
+  checkpoint_path: outputs/selectors/sbm_graphlet_history/checkpoint.pt
   hidden_dim: 256
   num_layers: 3
   dropout: 0.1
@@ -100,6 +106,12 @@ selector:
   batch_size: 64
   epochs: 100
   weight_decay: 0.00001
+  degree_width: 64
+  clustering_width: 20
+  spectral_width: 20
+  motif_width: 5
+  orbit_width: 15
+  graphlet_width: 256
   device: auto
 
 refiner:
@@ -127,4 +139,8 @@ evaluation:
   learned_selector: true
   save_graphs: true
   compute_orbit: true
+  compute_graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_num_samples: 2048
   orca_exec: ${ORCA_EXEC}

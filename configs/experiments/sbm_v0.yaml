@@ -2,8 +2,8 @@ experiment: coarse_to_fine_sbm_v0
 seed: 42
 
 dataset:
-  name: sbm_spectre
-  config_path: configs/datasets/sbm_spectre.yaml
+  name: sbm
+  config_path: configs/datasets/sbm.yaml
   root: outputs/datasets
   build_if_missing: true
   max_train_graphs: 64

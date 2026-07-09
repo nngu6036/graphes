@@ -89,6 +89,16 @@ def _pad_or_trim(value: Any, width: int) -> np.ndarray:
     return out
 
 
+def _graphlet_history_to_fixed_vector(target: dict[str, Any], width: int) -> np.ndarray:
+    history = target.get("graphlet_history", {}) or {}
+    values: list[float] = []
+    for k in sorted(history.keys(), key=lambda x: int(x)):
+        hist = history.get(str(k), {}) or {}
+        for key in sorted(hist.keys()):
+            values.append(float(hist.get(key, 0.0)))
+    return _pad_or_trim(values, width)
+
+
 def _safe_scalar(value: Any, default: float = 0.0) -> float:
     try:
         val = float(value)
@@ -168,6 +178,7 @@ def _graph_context_features(
         _pad_or_trim(target.get("spectral_hist", []), feature_cfg["spectral_width"]),
         _pad_or_trim(target.get("motif_proxy", []), feature_cfg["motif_width"]),
         _pad_or_trim(target.get("orbit_count", []), feature_cfg["orbit_width"]),
+        _graphlet_history_to_fixed_vector(target, feature_cfg.get("graphlet_width", 0)),
     ]
 
     return np.concatenate([scalar, *target_vecs], axis=0).astype(np.float32)
@@ -460,6 +471,7 @@ def train_selector(
         "spectral_width": int(selector_cfg.get("spectral_width", 20)),
         "motif_width": int(selector_cfg.get("motif_width", 5)),
         "orbit_width": int(selector_cfg.get("orbit_width", 15)),
+        "graphlet_width": int(selector_cfg.get("graphlet_width", 128)),
     }
     if load_log_interval is None:
         load_log_interval = int(selector_cfg.get("load_log_interval", 1000))
@@ -626,51 +638,30 @@ def main() -> None:
     )
 
     parser.add_argument("--config", required=True)
-    parser.add_argument("--teacher-dir", required=True)
-    parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--epochs", type=int, default=None)
-    parser.add_argument("--batch-size", type=int, default=None)
-    parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--device", default=None, help="Torch device. Defaults to CUDA when available, otherwise CPU.")
-    parser.add_argument("--max-train-records", type=int, default=None)
-    parser.add_argument("--max-val-records", type=int, default=None)
-    parser.add_argument(
-        "--progress-interval",
-        type=int,
-        default=None,
-        help="Print epoch summary every N epochs. Use 0 to keep only stage/checkpoint logs.",
-    )
-    parser.add_argument(
-        "--batch-log-interval",
-        type=int,
-        default=None,
-        help="Print batch progress every N batches. Use 0 to disable batch logs.",
-    )
-    parser.add_argument(
-        "--load-log-interval",
-        type=int,
-        default=None,
-        help="Print teacher JSONL read/convert progress every N records. Defaults to 1000. Use 0 to disable load progress logs.",
-    )
 
     args = parser.parse_args()
 
     config = load_yaml(args.config)
-    seed = int(args.seed if args.seed is not None else config.get("seed", 0))
+    selector_cfg = config.get("selector", {}) or {}
+    teacher_cfg = config.get("teacher", {}) or {}
+    seed = int(selector_cfg.get("seed", config.get("seed", 0)))
+    teacher_dir = Path(teacher_cfg.get("output_dir", "outputs/teachers/teacher"))
+    checkpoint_path = Path(selector_cfg.get("checkpoint_path", "outputs/selectors/selector/checkpoint.pt"))
+    output_dir = Path(selector_cfg.get("output_dir", checkpoint_path.parent))
 
     train_selector(
         config=config,
-        teacher_dir=Path(args.teacher_dir),
-        output_dir=Path(args.output_dir),
-        epochs=args.epochs,
-        batch_size=args.batch_size,
+        teacher_dir=teacher_dir,
+        output_dir=output_dir,
+        epochs=None,
+        batch_size=None,
         seed=seed,
-        max_train_records=args.max_train_records,
-        max_val_records=args.max_val_records,
-        device=args.device,
-        progress_interval=args.progress_interval,
-        batch_log_interval=args.batch_log_interval,
-        load_log_interval=args.load_log_interval,
+        max_train_records=None,
+        max_val_records=None,
+        device=None,
+        progress_interval=None,
+        batch_log_interval=None,
+        load_log_interval=None,
     )
 
 

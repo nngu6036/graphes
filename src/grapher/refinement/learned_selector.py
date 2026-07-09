@@ -31,6 +31,16 @@ def _pad_or_trim(value: Any, width: int) -> np.ndarray:
     return out
 
 
+def _graphlet_history_to_fixed_vector(target: dict[str, Any], width: int) -> np.ndarray:
+    history = target.get("graphlet_history", {}) or {}
+    values: list[float] = []
+    for k in sorted(history.keys(), key=lambda x: int(x)):
+        hist = history.get(str(k), {}) or {}
+        for key in sorted(hist.keys()):
+            values.append(float(hist.get(key, 0.0)))
+    return _pad_or_trim(values, width)
+
+
 def _safe_scalar(value: Any, default: float = 0.0) -> float:
     try:
         val = float(value)
@@ -103,6 +113,7 @@ def _graph_context_features(
         _pad_or_trim(target.get("spectral_hist", []), feature_cfg["spectral_width"]),
         _pad_or_trim(target.get("motif_proxy", []), feature_cfg["motif_width"]),
         _pad_or_trim(target.get("orbit_count", []), feature_cfg["orbit_width"]),
+        _graphlet_history_to_fixed_vector(target, feature_cfg.get("graphlet_width", 0)),
     ]
 
     return np.concatenate([scalar, *target_vecs], axis=0).astype(np.float32)
@@ -268,6 +279,7 @@ def load_learned_selector(selector_cfg: dict[str, Any]) -> LoadedSelector:
             "spectral_width": int(selector_cfg.get("spectral_width", 20)),
             "motif_width": int(selector_cfg.get("motif_width", 5)),
             "orbit_width": int(selector_cfg.get("orbit_width", 15)),
+            "graphlet_width": int(selector_cfg.get("graphlet_width", 128)),
         },
     )
 

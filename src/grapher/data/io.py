@@ -5,7 +5,7 @@ from typing import Any
 
 import networkx as nx
 
-from grapher.data.sbm import build_sbm_graphs, split_graphs
+from grapher.data.builders import build_splits_from_config
 from grapher.utils.io import ensure_dir, load_pickle, load_yaml, save_json, save_pickle, save_yaml
 
 
@@ -27,11 +27,7 @@ def save_dataset_splits(dataset: str, splits: dict[str, list[nx.Graph]], config:
 
 def build_dataset_from_config(config_path: str | Path) -> dict[str, list[nx.Graph]]:
     config = load_yaml(config_path)
-    name = str(config.get("name", Path(config_path).stem))
-    if name not in {"sbm_spectre", "sbm"}:
-        raise ValueError(f"Fresh branch currently supports only sbm_spectre/sbm, got {name!r}.")
-    graphs = build_sbm_graphs(config)
-    return split_graphs(graphs, config)
+    return build_splits_from_config(config)
 
 
 def load_dataset_splits(

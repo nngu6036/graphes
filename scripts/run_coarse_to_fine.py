@@ -28,6 +28,7 @@ def main() -> None:
             f"clustering={metrics.get('clustering_mmd', float('nan')):.6f} | "
             f"spectral={metrics.get('spectral_mmd', float('nan')):.6f} | "
             f"motif={metrics.get('motif_proxy_mmd', float('nan')):.6f} | "
+            f"graphlet={metrics.get('graphlet_history_mmd', float('nan')):.6f} | "
             f"orbit={metrics.get('orbit_mmd', float('nan')):.6f} | "
             f"conn={metrics.get('connectedness_rate', float('nan')):.3f}"
         )

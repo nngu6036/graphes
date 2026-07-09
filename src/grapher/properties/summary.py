@@ -10,6 +10,9 @@ from typing import Any
 import networkx as nx
 import numpy as np
 
+from grapher.utils.motifs import graphlet_history as compute_graphlet_history
+from grapher.utils.motifs import graphlet_history_l2_distance
+
 
 ORCA_EXEC = os.environ.get("ORCA_EXEC") or shutil.which("orca")
 ORBIT_MULTIPLICITY_4 = np.asarray([2, 2, 1, 6, 2, 1, 2, 4, 2, 1, 1, 2, 2, 4, 1], dtype=np.int64)
@@ -23,8 +26,17 @@ class SummaryConfig:
     motif_proxy: bool = True
     orbit_count: bool = False
 
+    # New proposal: graph summary = degree histogram + graphlet history.
+    # graphlet_history=False keeps old configs/checkpoints backwards-compatible.
+    graphlet_history: bool = False
+    graphlet_k_min: int = 3
+    graphlet_k_max: int = 5
+    graphlet_connected_only: bool = True
+    graphlet_num_samples: int | None = None
+
     @classmethod
     def from_dict(cls, data: dict[str, Any], graphs: list[nx.Graph] | None = None) -> "SummaryConfig":
+        data = data or {}
         max_degree_raw = data.get("degree_hist_max_degree", "auto")
         if max_degree_raw in {None, "auto"}:
             max_degree = None
@@ -32,12 +44,29 @@ class SummaryConfig:
                 max_degree = max((max(dict(g.degree()).values()) if g.number_of_nodes() else 0) for g in graphs)
         else:
             max_degree = int(max_degree_raw)
+
+        graphlet_enabled = bool(
+            data.get(
+                "graphlet_history",
+                data.get("use_graphlet_history", data.get("graphlets", False)),
+            )
+        )
+        k_min = int(data.get("graphlet_k_min", data.get("k_min", 3)))
+        k_max = int(data.get("graphlet_k_max", data.get("k_max", 5)))
+        num_samples_raw = data.get("graphlet_num_samples", data.get("num_graphlet_samples", None))
+        num_samples = None if num_samples_raw in {None, "", "none", "None"} else int(num_samples_raw)
+
         return cls(
             degree_hist_max_degree=max_degree,
             clustering_bins=int(data.get("clustering_bins", 20)),
             spectral_bins=int(data.get("spectral_bins", 20)),
             motif_proxy=bool(data.get("motif_proxy", True)),
             orbit_count=bool(data.get("orbit_count", data.get("use_orbit", False))),
+            graphlet_history=graphlet_enabled,
+            graphlet_k_min=k_min,
+            graphlet_k_max=k_max,
+            graphlet_connected_only=bool(data.get("graphlet_connected_only", True)),
+            graphlet_num_samples=num_samples,
         )
 
 
@@ -231,6 +260,18 @@ def orbit_count_vector(graph: nx.Graph) -> np.ndarray:
     return python_orbit_count_vector(graph)
 
 
+def graphlet_history_summary(graph: nx.Graph, cfg: SummaryConfig) -> dict[str, dict[str, float]]:
+    if not cfg.graphlet_history:
+        return {}
+    return compute_graphlet_history(
+        graph,
+        k_min=cfg.graphlet_k_min,
+        k_max=cfg.graphlet_k_max,
+        connected_only=cfg.graphlet_connected_only,
+        num_samples=cfg.graphlet_num_samples,
+    )
+
+
 def extract_summary(graph: nx.Graph, config: SummaryConfig | dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = config if isinstance(config, SummaryConfig) else SummaryConfig.from_dict(config or {})
     n = int(graph.number_of_nodes())
@@ -248,6 +289,7 @@ def extract_summary(graph: nx.Graph, config: SummaryConfig | dict[str, Any] | No
         "spectral_hist": spectral_histogram(graph, cfg.spectral_bins),
         "motif_proxy": motif_proxy_vector(graph) if cfg.motif_proxy else np.zeros(0, dtype=np.float64),
         "orbit_count": orbit_count_vector(graph) if cfg.orbit_count else np.zeros(0, dtype=np.float64),
+        "graphlet_history": graphlet_history_summary(graph, cfg),
     }
 
 
@@ -263,12 +305,7 @@ def _l2(a: Any, b: Any) -> float:
 
 
 def _weighted_vector_distance(current: Any, target: Any, *, normalize: bool) -> float:
-    """L2 distance with optional dimension normalization.
-
-    The optional normalization keeps high-dimensional descriptors such as
-    spectral or orbit histograms from dominating low-dimensional terms purely
-    because they have more coordinates.
-    """
+    """L2 distance with optional dimension normalization."""
 
     av = np.asarray(current, dtype=np.float64).reshape(-1)
     bv = np.asarray(target, dtype=np.float64).reshape(-1)
@@ -284,11 +321,9 @@ def _weight(weights: dict[str, Any], key: str, default: float = 0.0) -> float:
 def distance_to_summary(graph: nx.Graph, target: dict[str, Any], config: SummaryConfig | dict[str, Any] | None = None, weights: dict[str, Any] | None = None) -> float:
     """Permutation-invariant energy between a graph and a target summary.
 
-    This function intentionally computes only the descriptors whose weights are
-    non-zero. Earlier versions called ``extract_summary`` first, which computed
-    expensive orbit counts and spectral histograms for every candidate swap even
-    when those terms were not used. Candidate scoring calls this function many
-    times, so unused descriptors must be skipped.
+    The new graphlet-history energy is enabled by setting either
+    ``energy.graphlet_weight`` or ``energy.graphlet_history_weight`` to a
+    non-zero value and ``summary.graphlet_history: true``.
     """
 
     cfg = config if isinstance(config, SummaryConfig) else SummaryConfig.from_dict(config or {})
@@ -336,6 +371,23 @@ def distance_to_summary(graph: nx.Graph, target: dict[str, Any], config: Summary
             normalize=normalize,
         )
 
+    graphlet_w = _weight(w, "graphlet_weight", _weight(w, "graphlet_history_weight", 0.0))
+    if graphlet_w != 0.0 and cfg.graphlet_history:
+        current_history = compute_graphlet_history(
+            graph,
+            k_min=cfg.graphlet_k_min,
+            k_max=cfg.graphlet_k_max,
+            connected_only=cfg.graphlet_connected_only,
+            num_samples=cfg.graphlet_num_samples,
+        )
+        size_weights = w.get("graphlet_size_weights", {}) or {}
+        energy += graphlet_w * graphlet_history_l2_distance(
+            current_history,
+            target.get("graphlet_history", {}) or {},
+            size_weights={str(k): float(v) for k, v in dict(size_weights).items()},
+            normalize_terms=normalize,
+        )
+
     density_w = _weight(w, "density_weight", 0.0)
     if density_w != 0.0:
         n = graph.number_of_nodes()
@@ -351,13 +403,17 @@ def distance_to_summary(graph: nx.Graph, target: dict[str, Any], config: Summary
     return float(energy)
 
 
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.integer, np.floating)):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    return value
+
+
 def summary_to_jsonable(summary: dict[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for key, value in summary.items():
-        if isinstance(value, np.ndarray):
-            out[key] = value.tolist()
-        elif isinstance(value, (np.integer, np.floating)):
-            out[key] = value.item()
-        else:
-            out[key] = value
-    return out
+    return {str(key): _jsonable(value) for key, value in summary.items()}

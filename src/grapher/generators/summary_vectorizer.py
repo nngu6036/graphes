@@ -9,6 +9,11 @@ import networkx as nx
 import numpy as np
 
 from grapher.properties.summary import SummaryConfig, extract_summary
+from grapher.utils.motifs import (
+    flatten_graphlet_history,
+    graphlet_keys_by_size,
+    unflatten_graphlet_history,
+)
 
 
 @dataclass
@@ -19,6 +24,9 @@ class SummaryVectorizer:
     the pipeline expects a summary dictionary with a valid degree sequence. This
     class owns both conversions and the post-processing needed before the coarse
     graph constructor is called.
+
+    New graphlet-history fields are optional and default to empty, so older
+    checkpoints remain loadable.
     """
 
     min_nodes: int
@@ -33,6 +41,10 @@ class SummaryVectorizer:
     orbit_scale: list[float]
     scalar_scale: list[float]
     require_connected: bool = True
+    graphlet_k_min: int = 3
+    graphlet_k_max: int = 5
+    graphlet_keys_by_k: dict[str, list[str]] | None = None
+    graphlet_dim: int = 0
 
     @classmethod
     def fit(
@@ -69,6 +81,14 @@ class SummaryVectorizer:
         orbit_scale = np.maximum(orbit_logs.max(axis=0), 1.0).tolist() if orbit_dim else []
         triangle_max = max(float(s.get("triangle_count_norm", 0.0)) for s in summaries)
         scalar_scale = [1.0, max(triangle_max, 1.0)]
+
+        graphlet_keys = graphlet_keys_by_size([s.get("graphlet_history", {}) or {} for s in summaries]) if cfg.graphlet_history else {}
+        # Ensure all requested k values exist, even if no graphlets of that size appeared.
+        if cfg.graphlet_history:
+            for k in range(int(cfg.graphlet_k_min), int(cfg.graphlet_k_max) + 1):
+                graphlet_keys.setdefault(str(k), [])
+        graphlet_dim = int(sum(len(v) for v in graphlet_keys.values()))
+
         return cls(
             min_nodes=int(min_nodes),
             max_nodes=int(max_nodes),
@@ -82,6 +102,10 @@ class SummaryVectorizer:
             orbit_scale=orbit_scale,
             scalar_scale=scalar_scale,
             require_connected=bool(require_connected),
+            graphlet_k_min=int(cfg.graphlet_k_min),
+            graphlet_k_max=int(cfg.graphlet_k_max),
+            graphlet_keys_by_k={str(k): list(v) for k, v in graphlet_keys.items()},
+            graphlet_dim=graphlet_dim,
         )
 
     @classmethod
@@ -106,7 +130,7 @@ class SummaryVectorizer:
 
     @property
     def input_dim(self) -> int:
-        return int(4 + self.degree_dim + self.clustering_bins + self.spectral_bins + self.motif_dim + self.orbit_dim)
+        return int(4 + self.degree_dim + self.clustering_bins + self.spectral_bins + self.motif_dim + self.orbit_dim + self.graphlet_dim)
 
     def head_dims(self) -> dict[str, int]:
         return {
@@ -116,8 +140,21 @@ class SummaryVectorizer:
             "spectral": self.spectral_bins,
             "motif": self.motif_dim,
             "orbit": self.orbit_dim,
+            "graphlet": self.graphlet_dim,
             "scalar": 2,
         }
+
+    def graphlet_slices(self) -> dict[str, slice]:
+        out: dict[str, slice] = {}
+        pos = 0
+        for k in sorted((self.graphlet_keys_by_k or {}).keys(), key=lambda x: int(x)):
+            width = len((self.graphlet_keys_by_k or {}).get(k, []))
+            out[str(k)] = slice(pos, pos + width)
+            pos += width
+        return out
+
+    def graphlet_to_vector(self, summary: dict[str, Any]) -> np.ndarray:
+        return flatten_graphlet_history(summary.get("graphlet_history", {}) or {}, self.graphlet_keys_by_k or {})
 
     def to_feature_vector(self, summary: dict[str, Any]) -> np.ndarray:
         n = float(summary.get("num_nodes", 0.0))
@@ -138,11 +175,12 @@ class SummaryVectorizer:
         spectral = _normalize(_pad(np.asarray(summary.get("spectral_hist", []), dtype=np.float64), self.spectral_bins))
         motif = np.log1p(_pad(np.asarray(summary.get("motif_proxy", []), dtype=np.float64), self.motif_dim))
         orbit = np.log1p(_pad(np.asarray(summary.get("orbit_count", []), dtype=np.float64), self.orbit_dim))
+        graphlet = _pad(self.graphlet_to_vector(summary), self.graphlet_dim)
         if self.motif_dim:
             motif = motif / np.asarray(self.motif_scale, dtype=np.float64)
         if self.orbit_dim:
             orbit = orbit / np.asarray(self.orbit_scale, dtype=np.float64)
-        return np.concatenate([scalars, degree, clustering, spectral, motif, orbit]).astype(np.float32)
+        return np.concatenate([scalars, degree, clustering, spectral, motif, orbit, graphlet]).astype(np.float32)
 
     def to_targets(self, summary: dict[str, Any]) -> dict[str, np.ndarray | np.int64]:
         node_index = int(np.clip(int(summary["num_nodes"]) - self.min_nodes, 0, self.node_count_classes - 1))
@@ -151,6 +189,7 @@ class SummaryVectorizer:
         spectral = _normalize(_pad(np.asarray(summary.get("spectral_hist", []), dtype=np.float64), self.spectral_bins))
         motif = np.log1p(_pad(np.asarray(summary.get("motif_proxy", []), dtype=np.float64), self.motif_dim))
         orbit = np.log1p(_pad(np.asarray(summary.get("orbit_count", []), dtype=np.float64), self.orbit_dim))
+        graphlet = _pad(self.graphlet_to_vector(summary), self.graphlet_dim)
         if self.motif_dim:
             motif = motif / np.asarray(self.motif_scale, dtype=np.float64)
         if self.orbit_dim:
@@ -169,6 +208,7 @@ class SummaryVectorizer:
             "spectral": spectral.astype(np.float32),
             "motif": motif.astype(np.float32),
             "orbit": orbit.astype(np.float32),
+            "graphlet": graphlet.astype(np.float32),
             "scalar": scalars.astype(np.float32),
         }
 
@@ -233,6 +273,15 @@ class SummaryVectorizer:
                 orbit_scaled = np.maximum(arrays["orbit_log"][i], 0.0)
                 orbit = np.expm1(orbit_scaled * np.asarray(self.orbit_scale, dtype=np.float64))
 
+            graphlet_history = {}
+            if self.graphlet_dim:
+                raw = np.maximum(arrays.get("graphlet", np.zeros((batch, self.graphlet_dim), dtype=np.float64))[i], 0.0)
+                # Normalize each k-slice independently so every h_k is a frequency vector.
+                graphlet_vec = np.zeros(self.graphlet_dim, dtype=np.float64)
+                for _, sl in self.graphlet_slices().items():
+                    graphlet_vec[sl] = _normalize(raw[sl]) if sl.stop > sl.start else raw[sl]
+                graphlet_history = unflatten_graphlet_history(graphlet_vec, self.graphlet_keys_by_k or {})
+
             scalar = arrays.get("scalar", np.zeros((batch, 2), dtype=np.float64))[i]
             triangle = max(float(scalar[1]) * max(float(self.scalar_scale[1]), 1.0), 0.0) if scalar.size > 1 else 0.0
             num_edges = int(sum(degree_sequence) // 2)
@@ -249,6 +298,7 @@ class SummaryVectorizer:
                     "spectral_hist": spectral.astype(np.float64),
                     "motif_proxy": motif.astype(np.float64),
                     "orbit_count": orbit.astype(np.float64),
+                    "graphlet_history": graphlet_history,
                 }
             )
         return summaries

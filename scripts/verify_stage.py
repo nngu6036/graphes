@@ -27,7 +27,7 @@ def _load_graphs(config):
     dataset_cfg = config.get("dataset", {}) or {}
 
     splits = load_dataset_splits(
-        dataset_cfg.get("name", "sbm_spectre"),
+        dataset_cfg.get("name", "sbm"),
         root=dataset_cfg.get("root", "outputs/datasets"),
         build_if_missing=bool(dataset_cfg.get("build_if_missing", True)),
         config_path=dataset_cfg.get("config_path"),

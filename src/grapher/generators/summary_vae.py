@@ -60,6 +60,7 @@ class SummaryVAE(nn.Module):
         self.spectral_head = nn.Linear(hidden_dim, head_dims["spectral"])
         self.motif_head = nn.Linear(hidden_dim, head_dims.get("motif", 0)) if head_dims.get("motif", 0) > 0 else None
         self.orbit_head = nn.Linear(hidden_dim, head_dims.get("orbit", 0)) if head_dims.get("orbit", 0) > 0 else None
+        self.graphlet_head = nn.Linear(hidden_dim, head_dims.get("graphlet", 0)) if head_dims.get("graphlet", 0) > 0 else None
         self.scalar_head = nn.Linear(hidden_dim, head_dims.get("scalar", 2))
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -91,6 +92,10 @@ class SummaryVAE(nn.Module):
             out["orbit_log"] = F.softplus(self.orbit_head(h))
         else:
             out["orbit_log"] = torch.zeros(batch, 0, device=device)
+        if self.graphlet_head is not None:
+            out["graphlet"] = F.softplus(self.graphlet_head(h))
+        else:
+            out["graphlet"] = torch.zeros(batch, 0, device=device)
         return out
 
     def forward(self, x: torch.Tensor) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
@@ -141,6 +146,7 @@ def summary_vae_loss(
     spectral_loss = soft_histogram_ce(outputs["spectral_logits"], targets["spectral"])
     motif_loss = F.mse_loss(outputs["motif_log"], targets["motif"]) if outputs["motif_log"].numel() else torch.zeros((), device=mu.device)
     orbit_loss = F.mse_loss(outputs["orbit_log"], targets["orbit"]) if outputs["orbit_log"].numel() else torch.zeros((), device=mu.device)
+    graphlet_loss = F.mse_loss(outputs["graphlet"], targets["graphlet"]) if outputs.get("graphlet", torch.zeros(0, device=mu.device)).numel() else torch.zeros((), device=mu.device)
     scalar_loss = F.mse_loss(outputs["scalar"], targets["scalar"])
     kld = kl_loss(mu, logvar)
     total = (
@@ -150,6 +156,7 @@ def summary_vae_loss(
         + float(weights.get("spectral", 1.0)) * spectral_loss
         + float(weights.get("motif", 1.0)) * motif_loss
         + float(weights.get("orbit", 1.0)) * orbit_loss
+        + float(weights.get("graphlet", 1.0)) * graphlet_loss
         + float(weights.get("scalar", 1.0)) * scalar_loss
         + float(beta) * kld
     )
@@ -161,6 +168,7 @@ def summary_vae_loss(
         "spectral_loss": float(spectral_loss.detach().cpu()),
         "motif_loss": float(motif_loss.detach().cpu()),
         "orbit_loss": float(orbit_loss.detach().cpu()),
+        "graphlet_loss": float(graphlet_loss.detach().cpu()),
         "scalar_loss": float(scalar_loss.detach().cpu()),
         "kl_loss": float(kld.detach().cpu()),
     }

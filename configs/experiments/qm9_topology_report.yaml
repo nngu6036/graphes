@@ -21,6 +21,15 @@ summary_generator:
   checkpoint_path: outputs/summary_generators/qm9_topology/checkpoint.pt
   device: cpu
   deterministic: false
+  epochs: 300
+  batch_size: 64
+  latent_dim: 32
+  hidden_dim: 128
+  num_layers: 2
+  dropout: 0.0
+  learning_rate: 0.002
+  beta: 0.005
+  progress_interval: 30
 
 degree_generator:
   enabled: true
@@ -28,6 +37,18 @@ degree_generator:
   checkpoint_path: outputs/degree_generators/qm9_topology/checkpoint.pt
   vectorizer_path: outputs/degree_generators/qm9_topology/degree_vectorizer.json
   device: cpu
+  epochs: 300
+  batch_size: 64
+  latent_dim: 32
+  hidden_dim: 128
+  num_layers: 2
+  dropout: 0.0
+  learning_rate: 0.002
+  beta: 0.005
+  node_weight: 1.0
+  degree_weight: 5.0
+  edge_moment_weight: 0.1
+  progress_interval: 30
   sample_num_nodes: empirical
   max_resample: 200
   require_graphical: true
