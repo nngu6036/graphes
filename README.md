@@ -174,37 +174,21 @@ Train the degree generator:
 
 ```bash
 PYTHONPATH=src python scripts/train_degree_generator.py \
-  --config configs/experiments/sbm_report_degreevae.yaml \
-  --output-dir outputs/degree_generators/sbm_report \
-  --epochs 300 \
-  --batch-size 32 \
-  --beta 0.005 \
-  --degree-weight 5.0 \
-  --edge-moment-weight 0.1 \
-  --seed 42
+  --config configs/experiments/degreevae.yaml
 ```
 
 Build the GraphER teacher cache:
 
 ```bash
 PYTHONPATH=src python scripts/build_rewiring_teacher.py \
-  --config configs/experiments/sbm_report_degreevae.yaml \
-  --output-dir outputs/teachers/sbm_report \
-  --num-trajectories 512 \
-  --seed 42 \
-  --debug
+  --config configs/experiments/sbm_report_degreevae.yaml
 ```
 
 Train the learned rewiring selector:
 
 ```bash
 PYTHONPATH=src python scripts/train_rewiring_selector.py \
-  --config configs/experiments/sbm_report_degreevae.yaml \
-  --teacher-dir outputs/teachers/sbm_report \
-  --output-dir outputs/selectors/sbm_report \
-  --epochs 100 \
-  --batch-size 64 \
-  --seed 42
+  --config configs/experiments/sbm_report_degreevae.yaml
 ```
 
 Generate graphs:
@@ -304,68 +288,28 @@ Train graphlet-history SummaryVAE:
 
 ```bash
 PYTHONPATH=src python scripts/train_summary_generator.py \
-  --config configs/experiments/sbm_report_graphlet_history.yaml \
-  --output-dir outputs/summary_generators/sbm_graphlet_history \
-  --epochs 300 \
-  --batch-size 32 \
-  --beta 0.005 \
-  --seed 42
+  --config configs/experiments/sbm_report_graphlet_history.yaml
 ```
 
 Train DegreeVAE:
 
 ```bash
 PYTHONPATH=src python scripts/train_degree_generator.py \
-  --config configs/experiments/sbm_report_graphlet_history.yaml \
-  --output-dir outputs/degree_generators/sbm_graphlet_history \
-  --epochs 300 \
-  --batch-size 32 \
-  --beta 0.005 \
-  --degree-weight 5.0 \
-  --edge-moment-weight 0.1 \
-  --seed 42
+  --config configs/experiments/sbm_report_graphlet_history.yaml
 ```
 
-Verify degree generation:
-
-```bash
-PYTHONPATH=src python scripts/verify_degree_generator.py \
-  --config configs/experiments/sbm_report_graphlet_history.yaml \
-  --num-samples 1000
-```
-
-Run a small teacher-cache smoke test:
+Build the teacher cache:
 
 ```bash
 PYTHONPATH=src python scripts/build_rewiring_teacher.py \
-  --config configs/experiments/sbm_report_graphlet_history.yaml \
-  --output-dir outputs/teachers/sbm_graphlet_history_smoke \
-  --num-trajectories 20 \
-  --seed 42 \
-  --debug
-```
-
-Build the full teacher cache:
-
-```bash
-PYTHONPATH=src python scripts/build_rewiring_teacher.py \
-  --config configs/experiments/sbm_report_graphlet_history.yaml \
-  --output-dir outputs/teachers/sbm_graphlet_history \
-  --num-trajectories 512 \
-  --seed 42 \
-  --debug
+  --config configs/experiments/sbm_report_graphlet_history.yaml
 ```
 
 Train the learned selector:
 
 ```bash
 PYTHONPATH=src python scripts/train_rewiring_selector.py \
-  --config configs/experiments/sbm_report_graphlet_history.yaml \
-  --teacher-dir outputs/teachers/sbm_graphlet_history \
-  --output-dir outputs/selectors/sbm_graphlet_history \
-  --epochs 100 \
-  --batch-size 64 \
-  --seed 42
+  --config configs/experiments/sbm_report_graphlet_history.yaml
 ```
 
 Generate graphs:
@@ -485,49 +429,28 @@ Train topology SummaryVAE:
 
 ```bash
 PYTHONPATH=src python scripts/train_summary_generator.py \
-  --config configs/experiments/qm9_topology_mixture_catflow.yaml \
-  --output-dir outputs/summary_generators/qm9_topology \
-  --epochs 300 \
-  --batch-size 64 \
-  --beta 0.005 \
-  --seed 42
+  --config configs/experiments/qm9_topology_mixture_catflow.yaml
 ```
 
 Train topology DegreeVAE:
 
 ```bash
 PYTHONPATH=src python scripts/train_degree_generator.py \
-  --config configs/experiments/qm9_topology_mixture_catflow.yaml \
-  --output-dir outputs/degree_generators/qm9_topology \
-  --epochs 300 \
-  --batch-size 64 \
-  --beta 0.005 \
-  --degree-weight 5.0 \
-  --edge-moment-weight 0.1 \
-  --seed 42
+  --config configs/experiments/qm9_topology_mixture_catflow.yaml
 ```
 
 Build topology teacher cache:
 
 ```bash
 PYTHONPATH=src python scripts/build_rewiring_teacher.py \
-  --config configs/experiments/qm9_topology_mixture_catflow.yaml \
-  --output-dir outputs/teachers/qm9_topology \
-  --num-trajectories 512 \
-  --seed 42 \
-  --debug
+  --config configs/experiments/qm9_topology_mixture_catflow.yaml
 ```
 
 Train topology selector:
 
 ```bash
 PYTHONPATH=src python scripts/train_rewiring_selector.py \
-  --config configs/experiments/qm9_topology_mixture_catflow.yaml \
-  --teacher-dir outputs/teachers/qm9_topology \
-  --output-dir outputs/selectors/qm9_topology \
-  --epochs 100 \
-  --batch-size 64 \
-  --seed 42
+  --config configs/experiments/qm9_topology_mixture_catflow.yaml
 ```
 
 Generate QM9 topologies:
@@ -560,49 +483,28 @@ Train graphlet-history topology SummaryVAE:
 
 ```bash
 PYTHONPATH=src python scripts/train_summary_generator.py \
-  --config configs/experiments/qm9_topology_graphlet_history.yaml \
-  --output-dir outputs/summary_generators/qm9_topology_graphlet \
-  --epochs 300 \
-  --batch-size 64 \
-  --beta 0.005 \
-  --seed 42
+  --config configs/experiments/qm9_topology_graphlet_history.yaml
 ```
 
 Train topology DegreeVAE:
 
 ```bash
 PYTHONPATH=src python scripts/train_degree_generator.py \
-  --config configs/experiments/qm9_topology_graphlet_history.yaml \
-  --output-dir outputs/degree_generators/qm9_topology_graphlet \
-  --epochs 300 \
-  --batch-size 64 \
-  --beta 0.005 \
-  --degree-weight 5.0 \
-  --edge-moment-weight 0.1 \
-  --seed 42
+  --config configs/experiments/qm9_topology_graphlet_history.yaml
 ```
 
 Build topology teacher cache:
 
 ```bash
 PYTHONPATH=src python scripts/build_rewiring_teacher.py \
-  --config configs/experiments/qm9_topology_graphlet_history.yaml \
-  --output-dir outputs/teachers/qm9_topology_graphlet \
-  --num-trajectories 512 \
-  --seed 42 \
-  --debug
+  --config configs/experiments/qm9_topology_graphlet_history.yaml
 ```
 
 Train topology selector:
 
 ```bash
 PYTHONPATH=src python scripts/train_rewiring_selector.py \
-  --config configs/experiments/qm9_topology_graphlet_history.yaml \
-  --teacher-dir outputs/teachers/qm9_topology_graphlet \
-  --output-dir outputs/selectors/qm9_topology_graphlet \
-  --epochs 100 \
-  --batch-size 64 \
-  --seed 42
+  --config configs/experiments/qm9_topology_graphlet_history.yaml
 ```
 
 Generate graphlet-history QM9 topologies:
@@ -631,11 +533,7 @@ Train a topology-conditioned mixture CatFlow model for atom and bond labels:
 
 ```bash
 PYTHONPATH=src python scripts/train_qm9_mixture_catflow.py \
-  --config configs/experiments/qm9_topology_mixture_catflow.yaml \
-  --output-dir outputs/attribute_flows/qm9_mixture_catflow \
-  --epochs 100 \
-  --batch-size 64 \
-  --seed 42
+  --config configs/experiments/qm9_topology_mixture_catflow.yaml
 ```
 
 A CatFlow-style Stage 2 ablation is obtained by setting:
@@ -888,7 +786,7 @@ Degree generator outputs:
 outputs/degree_generators/<run_name>/
   checkpoint.pt
   degree_vectorizer.json
-  training_report.json
+  training_metrics.json
 ```
 
 Summary generator outputs:
@@ -897,7 +795,7 @@ Summary generator outputs:
 outputs/summary_generators/<run_name>/
   checkpoint.pt
   summary_vectorizer.json
-  training_report.json
+  training_metrics.json
 ```
 
 Teacher cache outputs:
@@ -938,13 +836,11 @@ outputs/molecular/<run_name>/
 1. Prepare SBM.
 2. Train graphlet-history SummaryVAE.
 3. Train DegreeVAE.
-4. Verify degree generator.
-5. Build a small teacher cache as smoke test.
-6. Build full teacher cache.
-7. Train learned selector.
-8. Generate graphs.
-9. Compare against old summary baseline.
-10. Repeat for seeds 42, 43, and 44.
+4. Build the teacher cache.
+5. Train learned selector.
+6. Generate graphs.
+7. Compare against old summary baseline.
+8. Repeat for seeds 42, 43, and 44.
 ```
 
 ## QM9 experiment
