@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pickle
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -259,19 +261,31 @@ class EgoDatasetBuilder:
         )
 
     def _load_citeseer_source(self, cfg: dict[str, Any]) -> nx.Graph:
-        try:
-            from torch_geometric.datasets import Planetoid
-        except Exception as exc:
-            raise ImportError(
-                "PyTorch Geometric is required to load Citeseer ego datasets. "
-                "Install torch-geometric or configure ego.edge_list_path."
-            ) from exc
+        graph_path = cfg.get("source_graph_path")
+        if graph_path is None:
+            root = Path(cfg.get("source_root", "outputs/datasets/planetoid"))
+            graph_path = root / "citeseer" / "raw" / "ind.citeseer.graph"
+            if not graph_path.exists():
+                graph_path.parent.mkdir(parents=True, exist_ok=True)
+                url = str(
+                    cfg.get(
+                        "source_graph_url",
+                        "https://github.com/kimiyoung/planetoid/raw/master/data/ind.citeseer.graph",
+                    )
+                )
+                urllib.request.urlretrieve(url, graph_path)
+        else:
+            graph_path = Path(graph_path)
 
-        root = str(cfg.get("source_root", "outputs/datasets/pyg"))
-        dataset = Planetoid(root=root, name="CiteSeer")
-        data = dataset[0]
-        edge_index = data.edge_index.cpu().numpy()
+        with Path(graph_path).open("rb") as f:
+            adjacency = pickle.load(f, encoding="latin1")
+
         g = nx.Graph()
-        g.add_nodes_from(range(int(data.num_nodes)))
-        g.add_edges_from((int(u), int(v)) for u, v in edge_index.T if int(u) != int(v))
+        for node, neighbors in adjacency.items():
+            node_id = int(node)
+            g.add_node(node_id)
+            for neighbor in neighbors:
+                neighbor_id = int(neighbor)
+                if node_id != neighbor_id:
+                    g.add_edge(node_id, neighbor_id)
         return nx.convert_node_labels_to_integers(g, first_label=0, ordering="sorted")

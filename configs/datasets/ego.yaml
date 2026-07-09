@@ -8,7 +8,7 @@ split:
   test: 0.1
 ego:
   source_model: citeseer
-  source_root: outputs/datasets/pyg
+  source_root: outputs/datasets/planetoid
   radius: 3
   min_nodes: 50
   max_nodes: 399
