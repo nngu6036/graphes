@@ -2,41 +2,14 @@
 from __future__ import annotations
 
 import argparse
-import itertools
 import math
-from collections import Counter
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import networkx as nx
-import numpy as np
 
 from grapher.data.io import load_dataset_splits
-from grapher.utils.motifs import NautyCanonicalizer, k_induced_subgraph_canonical_strings
-
-
-RANDOM_SEED = 0
-MAX_EXACT_CONNECTED_COUNT = 200_000
-MOTIF_SUBGRAPH_SAMPLES = 5_000
-
-
-def count_connected_induced_subgraphs(graph: nx.Graph, k: int) -> tuple[int, int]:
-    total = 0
-    connected = 0
-    for nodes in itertools.combinations(graph.nodes(), int(k)):
-        total += 1
-        subgraph = graph.subgraph(nodes)
-        if nx.is_connected(subgraph):
-            connected += 1
-    return total, connected
-
-
-def maybe_count_connected_induced_subgraphs(graph: nx.Graph, k: int) -> tuple[int, int | None]:
-    total = math.comb(graph.number_of_nodes(), int(k))
-    if total > MAX_EXACT_CONNECTED_COUNT:
-        return total, None
-    _, connected = count_connected_induced_subgraphs(graph, k)
-    return total, connected
+from grapher.utils.motifs import NautyCanonicalizer, aggregate_unique_motifs_with_counts
 
 
 def plot_subgraphs(rows: list[tuple[nx.Graph, str, float]], *, output_path: Path, columns: int) -> None:
@@ -71,7 +44,7 @@ def plot_subgraphs(rows: list[tuple[nx.Graph, str, float]], *, output_path: Path
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="List unique connected k-node motifs from one QM9 topology graph and plot them with canonical keys."
+        description="Aggregate unique connected k-node motifs across QM9 topology train graphs and plot them with frequencies."
     )
     parser.add_argument("--dataset", default="qm9_topology")
     parser.add_argument("--root", default="outputs/datasets")
@@ -82,6 +55,12 @@ def main() -> None:
         type=int,
         default=48,
         help="Maximum number of unique motifs to list and plot. Use 0 to process all.",
+    )
+    parser.add_argument(
+        "--max-graphs",
+        type=int,
+        default=0,
+        help="Maximum number of train graphs to aggregate. Use 0 for all train graphs.",
     )
     parser.add_argument("--columns", type=int, default=6)
     parser.add_argument("--output", default="outputs/plots/qm9_topology_induced_subgraphs.png")
@@ -104,13 +83,10 @@ def main() -> None:
     graphs = list(splits["train"])
     if not graphs:
         raise RuntimeError(f"Dataset split {args.dataset}/train is empty.")
-
-    rng = np.random.default_rng(RANDOM_SEED)
-    graph_index = int(rng.integers(0, len(graphs)))
-    graph = graphs[graph_index]
+    if int(args.max_graphs) > 0:
+        graphs = graphs[: int(args.max_graphs)]
     print(
-        f"[debug] selected train graph index={graph_index} "
-        f"n={graph.number_of_nodes()} m={graph.number_of_edges()} "
+        f"[debug] loaded train graphs={len(graphs)} "
         f"k_min={args.k_min} k_max={args.k_max}",
         flush=True,
     )
@@ -119,63 +95,42 @@ def main() -> None:
     output_paths: list[Path] = []
     for k in range(int(args.k_min), int(args.k_max) + 1):
         print(f"[debug] processing k={k}", flush=True)
-        print("[debug] counting induced subgraphs", flush=True)
-        total_subgraphs, connected_subgraphs = maybe_count_connected_induced_subgraphs(graph, k)
-        if connected_subgraphs is None:
-            print(
-                f"[debug] induced subgraph count total={total_subgraphs}; "
-                f"connected exact count skipped because total>{MAX_EXACT_CONNECTED_COUNT}",
-                flush=True,
-            )
-        else:
-            print(
-                f"[debug] induced subgraph count total={total_subgraphs} connected={connected_subgraphs}",
-                flush=True,
-            )
+        total_induced = sum(math.comb(g.number_of_nodes(), k) for g in graphs if g.number_of_nodes() >= k)
+        print(f"[debug] total possible induced subgraphs across graphs={total_induced}", flush=True)
 
         canonicalizer = NautyCanonicalizer()
-        sample_count = min(MOTIF_SUBGRAPH_SAMPLES, total_subgraphs)
-        print(
-            f"[debug] listing unique connected motifs from sampled induced subgraphs "
-            f"num_samples={sample_count}",
-            flush=True,
-        )
-        sampled_keys = k_induced_subgraph_canonical_strings(
-            graph,
+        print("[debug] aggregating unique motifs with counts across all train graphs", flush=True)
+        motif_counts = aggregate_unique_motifs_with_counts(
+            graphs,
             k,
             connected_only=True,
-            unique=False,
-            num_samples=sample_count,
-            rng=np.random.default_rng(RANDOM_SEED + k),
             canonicalizer=canonicalizer,
         )
-        key_counts = Counter(sampled_keys)
-        total_key_count = sum(key_counts.values())
-        keys = sorted(key_counts)
-        motifs = [nx.from_graph6_bytes(key.encode("ascii")) for key in keys]
-        print(f"[debug] sampled unique connected motif count={len(motifs)}", flush=True)
+        print(f"[debug] unique connected motif count={len(motif_counts)}", flush=True)
+
+        keys = canonicalizer.canonical_graph6_batch([motif for motif, _ in motif_counts])
+        total_count = sum(count for _, count in motif_counts)
+        selected = [
+            (motif, key, float(count) / max(float(total_count), 1.0))
+            for (motif, count), key in zip(motif_counts, keys)
+        ]
         max_subgraphs = int(args.max_subgraphs)
         if max_subgraphs > 0:
-            keys = keys[:max_subgraphs]
-            motifs = motifs[:max_subgraphs]
+            selected = selected[:max_subgraphs]
             print(f"[debug] capped plotted motifs to max_subgraphs={max_subgraphs}", flush=True)
 
-        selected = [
-            (motif, key, float(key_counts[key]) / max(float(total_key_count), 1.0))
-            for motif, key in zip(motifs, keys)
-        ]
         for idx, (motif, key, frequency) in enumerate(selected, start=1):
+            count = int(round(frequency * max(float(total_count), 1.0)))
             print(
                 f"[debug] motif {idx}/{len(selected)} "
                 f"canonical={key} frequency={frequency:.6f} "
-                f"count={key_counts[key]} n={motif.number_of_nodes()} m={motif.number_of_edges()}",
+                f"count={count} n={motif.number_of_nodes()} m={motif.number_of_edges()}",
                 flush=True,
             )
 
         print(
-            f"graph_index={graph_index} "
-            f"n={graph.number_of_nodes()} m={graph.number_of_edges()} k={k} "
-            f"unique_connected_motifs={len(keys)} plotted={len(selected)}"
+            f"graphs={len(graphs)} k={k} total_connected_occurrences={total_count} "
+            f"unique_connected_motifs={len(motif_counts)} plotted={len(selected)}"
         )
 
         if args.k_min == args.k_max:
