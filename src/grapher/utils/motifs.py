@@ -1133,6 +1133,8 @@ def aggregate_unique_attributed_k_motifs_with_counts_nauty(
     label_normalizer: Callable[[Any], str] = _stable_label_token,
     missing_ok: bool = False,
     preserve_original_attrs: bool = True,
+    progress_interval: int = 0,
+    log_fn=None,
 ) -> list[AttributedMotifOccurrence]:
     """
     Aggregate unique attributed k-induced motifs across a list of attributed graphs.
@@ -1163,7 +1165,8 @@ def aggregate_unique_attributed_k_motifs_with_counts_nauty(
     counts: Counter[str] = Counter()
     representatives: dict[str, nx.Graph] = {}
 
-    for graph_idx, G in enumerate(graphs):
+    total_graphs = len(graphs)
+    for graph_idx, G in enumerate(graphs, start=1):
         _validate_simple_undirected(G)
 
         if k > G.number_of_nodes():
@@ -1215,6 +1218,19 @@ def aggregate_unique_attributed_k_motifs_with_counts_nauty(
                     edge_label_attr=edge_label_attr,
                     preserve_original_attrs=preserve_original_attrs,
                 )
+        if progress_interval and (
+            graph_idx == 1
+            or graph_idx % int(progress_interval) == 0
+            or graph_idx == total_graphs
+        ):
+            message = (
+                f"attributed k={k} graph={graph_idx}/{total_graphs} "
+                f"unique_motifs={len(counts)} total_occurrences={sum(counts.values())}"
+            )
+            if log_fn is not None:
+                log_fn(message)
+            else:
+                print(message, flush=True)
 
     return [
         AttributedMotifOccurrence(

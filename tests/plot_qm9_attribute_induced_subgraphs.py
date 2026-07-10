@@ -130,6 +130,12 @@ def main() -> None:
         default=0,
         help="Maximum number of train graphs to aggregate. Use 0 for all train graphs.",
     )
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=25,
+        help="Print aggregation progress every N graphs within each k. Use 0 to disable.",
+    )
     parser.add_argument("--columns", type=int, default=6)
     parser.add_argument("--output", default="outputs/plots/qm9_attributed_induced_subgraphs.png")
     args = parser.parse_args()
@@ -165,6 +171,8 @@ def main() -> None:
             connected_only=True,
             missing_ok=False,
             preserve_original_attrs=True,
+            progress_interval=max(int(args.progress_interval), 0),
+            log_fn=log,
         )
         log(f"unique connected attributed motif count={len(motif_counts)}")
         total_count = sum(count for _, count in motif_counts)
