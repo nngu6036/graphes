@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import math
 from pathlib import Path
 
@@ -16,6 +17,17 @@ from grapher.utils.motifs import NautyCanonicalizer, list_motifs
 RANDOM_SEED = 0
 
 
+def count_connected_induced_subgraphs(graph: nx.Graph, k: int) -> tuple[int, int]:
+    total = 0
+    connected = 0
+    for nodes in itertools.combinations(graph.nodes(), int(k)):
+        total += 1
+        subgraph = graph.subgraph(nodes)
+        if nx.is_connected(subgraph):
+            connected += 1
+    return total, connected
+
+
 def plot_subgraphs(rows: list[tuple[nx.Graph, str]], *, output_path: Path, columns: int) -> None:
     if not rows:
         raise ValueError("No induced subgraphs to plot.")
@@ -27,7 +39,12 @@ def plot_subgraphs(rows: list[tuple[nx.Graph, str]], *, output_path: Path, colum
     for ax in axes.ravel():
         ax.axis("off")
 
-    for ax, (subgraph, key) in zip(axes.ravel(), rows):
+    for idx, (ax, (subgraph, key)) in enumerate(zip(axes.ravel(), rows), start=1):
+        print(
+            f"[debug] plotting motif {idx}/{len(rows)} "
+            f"canonical={key} n={subgraph.number_of_nodes()} m={subgraph.number_of_edges()}",
+            flush=True,
+        )
         pos = nx.spring_layout(subgraph, seed=0)
         nx.draw_networkx_nodes(subgraph, pos, ax=ax, node_size=360, node_color="#d9d9d9", edgecolors="#333333")
         nx.draw_networkx_edges(subgraph, pos, ax=ax, width=1.6, edge_color="#333333")
@@ -64,6 +81,7 @@ def main() -> None:
     if not config_path.exists():
         raise FileNotFoundError(f"Missing dataset config: {config_path}")
 
+    print(f"[debug] loading dataset={args.dataset} root={args.root} config={config_path}", flush=True)
     splits = load_dataset_splits(
         args.dataset,
         root=args.root,
@@ -77,17 +95,36 @@ def main() -> None:
     rng = np.random.default_rng(RANDOM_SEED)
     graph_index = int(rng.integers(0, len(graphs)))
     graph = graphs[graph_index]
+    print(
+        f"[debug] selected train graph index={graph_index} "
+        f"n={graph.number_of_nodes()} m={graph.number_of_edges()} k={args.k}",
+        flush=True,
+    )
+
+    print("[debug] counting induced subgraphs", flush=True)
+    total_subgraphs, connected_subgraphs = count_connected_induced_subgraphs(graph, args.k)
+    print(
+        f"[debug] induced subgraph count total={total_subgraphs} connected={connected_subgraphs}",
+        flush=True,
+    )
 
     canonicalizer = NautyCanonicalizer()
+    print("[debug] listing unique connected motifs", flush=True)
     motifs = list_motifs(graph, args.k, canonicalizer=canonicalizer, connected_only=True)
+    print(f"[debug] unique connected motif count={len(motifs)}", flush=True)
     max_subgraphs = int(args.max_subgraphs)
     if max_subgraphs > 0:
         motifs = motifs[:max_subgraphs]
+        print(f"[debug] capped plotted motifs to max_subgraphs={max_subgraphs}", flush=True)
 
     keys = canonicalizer.canonical_graph6_batch(motifs)
     selected = list(zip(motifs, keys))
-    for idx, (_, key) in enumerate(selected, start=1):
-        print(f"{idx:04d} canonical={key}")
+    for idx, (motif, key) in enumerate(selected, start=1):
+        print(
+            f"[debug] motif {idx}/{len(selected)} "
+            f"canonical={key} n={motif.number_of_nodes()} m={motif.number_of_edges()}",
+            flush=True,
+        )
 
     print(
         f"graph_index={graph_index} "
