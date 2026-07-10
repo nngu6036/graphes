@@ -625,3 +625,46 @@ def graphlet_history_l2_distance(
         total += float(size_weights.get(str(k), 1.0)) * dist
 
     return float(total)
+
+
+def attributed_to_colored_incidence_graph(
+    G: nx.Graph,
+    *,
+    node_label_attr: str = "node_label",
+    edge_label_attr: str = "edge_label",
+) -> nx.Graph:
+    """
+    Convert a node/edge-attributed graph into a vertex-coloured incidence graph.
+
+    Original nodes become coloured vertices.
+    Original labelled edges become auxiliary coloured vertices.
+
+    The output graph is simple, undirected, and suitable for nauty-style
+    vertex-colour canonicalization.
+    """
+    H = nx.Graph()
+
+    # Add original nodes.
+    for v, data in G.nodes(data=True):
+        node_label = data.get(node_label_attr, "__missing_node_label__")
+        H.add_node(
+            ("node", v),
+            color=("node", node_label),
+            original_node=v,
+        )
+
+    # Add one auxiliary vertex per edge.
+    for edge_id, (u, v, data) in enumerate(G.edges(data=True)):
+        edge_label = data.get(edge_label_attr, "__missing_edge_label__")
+
+        aux = ("edge", edge_id, u, v)
+        H.add_node(
+            aux,
+            color=("edge", edge_label),
+            original_edge=(u, v),
+        )
+
+        H.add_edge(("node", u), aux)
+        H.add_edge(aux, ("node", v))
+
+    return H
