@@ -668,3 +668,568 @@ def attributed_to_colored_incidence_graph(
         H.add_edge(aux, ("node", v))
 
     return H
+
+# ============================================================
+# Data classes
+# ============================================================
+
+@dataclass(frozen=True)
+class ColoredIncidenceTransform:
+    colored_graph: nx.Graph
+    original_to_colored_node: dict[Any, int]
+    edge_to_aux_node: dict[frozenset[Any], int]
+
+
+@dataclass
+class AttributedMotifOccurrence:
+    motif: nx.Graph
+    count: int
+    canonical_key: str
+
+
+# ============================================================
+# Basic helpers
+# ============================================================
+
+def _resolve_labelg(nauty_exec: str | os.PathLike[str]) -> str:
+    """
+    Resolve NAUTY_EXEC into the labelg executable.
+
+    Accepts either:
+      1. /path/to/labelg
+      2. /path/to/nauty_directory
+    """
+    path = Path(nauty_exec)
+
+    if path.is_dir():
+        path = path / "labelg"
+
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Cannot find labelg at {path}. "
+            "Set NAUTY_EXEC to either the labelg executable or the nauty directory."
+        )
+
+    if not os.access(path, os.X_OK):
+        raise PermissionError(f"{path} exists but is not executable.")
+
+    return str(path)
+
+
+def _validate_simple_undirected(G: nx.Graph) -> None:
+    """
+    Validate that G is a simple undirected NetworkX graph.
+    """
+    if G.is_directed():
+        raise ValueError("Expected an undirected nx.Graph.")
+
+    if G.is_multigraph():
+        raise ValueError("Expected a simple nx.Graph, not a MultiGraph.")
+
+    if nx.number_of_selfloops(G) > 0:
+        raise ValueError("Self-loops are not supported in this graph6 workflow.")
+
+
+def _stable_label_token(label: Any) -> str:
+    """
+    Convert a Python label value into a stable string token.
+
+    Examples:
+        6       -> "builtins.int:6"
+        "C"     -> "builtins.str:'C'"
+        ("C",1) -> "builtins.tuple:('C', 1)"
+    """
+    return f"{type(label).__module__}.{type(label).__qualname__}:{repr(label)}"
+
+
+def _safe_colour_alphabet() -> list[str]:
+    """
+    Single-character colour alphabet for labelg -f.
+
+    Avoid:
+      - '-' because -f-xxx has special meaning.
+      - '^' because x^N has repetition meaning in labelg -f.
+      - whitespace.
+    """
+    chars = (
+        string.ascii_letters
+        + string.digits
+        + "!#$%&()*+,./:;<=>?@[]_{}~"
+    )
+    return list(dict.fromkeys(chars))
+
+
+def _make_colour_map(colour_tokens: list[str]) -> dict[str, str]:
+    """
+    Map semantic colour tokens to single ASCII characters for labelg -f.
+    """
+    unique_tokens = sorted(set(colour_tokens))
+    alphabet = _safe_colour_alphabet()
+
+    if len(unique_tokens) > len(alphabet):
+        raise ValueError(
+            f"Too many distinct colours: {len(unique_tokens)}. "
+            f"This wrapper supports at most {len(alphabet)} colours. "
+            "For many colours, use the nauty C API with lab/ptn instead."
+        )
+
+    return {token: alphabet[i] for i, token in enumerate(unique_tokens)}
+
+
+# ============================================================
+# Attributed graph -> coloured incidence graph
+# ============================================================
+
+def attributed_to_colored_incidence_graph(
+    G: nx.Graph,
+    *,
+    node_label_attr: str = "node_label",
+    edge_label_attr: str = "edge_label",
+    label_normalizer: Callable[[Any], str] = _stable_label_token,
+    missing_ok: bool = False,
+) -> ColoredIncidenceTransform:
+    """
+    Convert an attributed graph into a vertex-coloured incidence graph.
+
+    Original node:
+        v with node label X[v]
+        -> coloured vertex with colour token "node:<label>"
+
+    Original labelled edge:
+        (u, v) with edge label Y[u, v]
+        -> auxiliary coloured vertex with colour token "edge:<label>"
+        -> edges u -- aux -- v
+
+    This converts node/edge-labelled graph isomorphism into
+    vertex-coloured graph isomorphism.
+    """
+    _validate_simple_undirected(G)
+
+    H = nx.Graph()
+    original_to_colored_node: dict[Any, int] = {}
+    edge_to_aux_node: dict[frozenset[Any], int] = {}
+
+    # Original nodes become coloured vertices.
+    for v, data in G.nodes(data=True):
+        if node_label_attr not in data:
+            if not missing_ok:
+                raise KeyError(f"Node {v!r} is missing {node_label_attr!r}")
+            raw_label = "__MISSING__"
+        else:
+            raw_label = data[node_label_attr]
+
+        new_id = H.number_of_nodes()
+        original_to_colored_node[v] = new_id
+
+        node_attrs = dict(data)
+        H.add_node(
+            new_id,
+            kind="node",
+            color_token="node:" + label_normalizer(raw_label),
+            label=raw_label,
+            original_node=v,
+            original_attrs=node_attrs,
+        )
+
+    # Original edges become auxiliary coloured vertices.
+    for u, v, data in G.edges(data=True):
+        if edge_label_attr not in data:
+            if not missing_ok:
+                raise KeyError(f"Edge {(u, v)!r} is missing {edge_label_attr!r}")
+            raw_label = "__MISSING__"
+        else:
+            raw_label = data[edge_label_attr]
+
+        aux_id = H.number_of_nodes()
+        edge_key = frozenset((u, v))
+        edge_to_aux_node[edge_key] = aux_id
+
+        edge_attrs = dict(data)
+        H.add_node(
+            aux_id,
+            kind="edge",
+            color_token="edge:" + label_normalizer(raw_label),
+            label=raw_label,
+            original_edge=(u, v),
+            original_attrs=edge_attrs,
+        )
+
+        H.add_edge(original_to_colored_node[u], aux_id)
+        H.add_edge(aux_id, original_to_colored_node[v])
+
+    return ColoredIncidenceTransform(
+        colored_graph=H,
+        original_to_colored_node=original_to_colored_node,
+        edge_to_aux_node=edge_to_aux_node,
+    )
+
+
+# ============================================================
+# Coloured graph canonicalization using nauty labelg -f
+# ============================================================
+
+def canonicalize_colored_graph_nauty(
+    H: nx.Graph,
+    *,
+    color_attr: str = "color_token",
+    nauty_exec: str | os.PathLike[str] = NAUTY_EXEC,
+    use_traces: bool = False,
+) -> str:
+    """
+    Canonicalize a vertex-coloured simple graph using nauty labelg -f.
+
+    Returns a canonical string that includes:
+      - semantic colour legend
+      - canonical colour sequence
+      - canonical graph6 topology
+
+    Important:
+        graph6 stores only topology, not colours.
+        Therefore the returned key includes colour information as well.
+    """
+    _validate_simple_undirected(H)
+
+    # Relabel to 0..n-1 for graph6 and for the colour string.
+    mapping = {v: i for i, v in enumerate(H.nodes())}
+    J = nx.relabel_nodes(H, mapping, copy=True)
+
+    colour_tokens: list[str] = []
+    for i in range(J.number_of_nodes()):
+        if color_attr not in J.nodes[i]:
+            raise KeyError(f"Node {i!r} is missing colour attribute {color_attr!r}")
+        colour_tokens.append(str(J.nodes[i][color_attr]))
+
+    colour_map = _make_colour_map(colour_tokens)
+    colour_string = "".join(colour_map[token] for token in colour_tokens)
+
+    graph6_input = nx.to_graph6_bytes(J, header=False)
+
+    cmd = [
+        _resolve_labelg(nauty_exec),
+        "-q",
+        "-g",
+        f"-f{colour_string}",
+    ]
+
+    if use_traces:
+        cmd.append("-t")
+
+    result = subprocess.run(
+        cmd,
+        input=graph6_input,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "labelg failed.\n"
+            f"Command: {' '.join(cmd)}\n"
+            f"stderr:\n{result.stderr.decode(errors='replace')}"
+        )
+
+    canonical_graph6 = result.stdout.decode("ascii").strip()
+
+    # labelg orders colour classes by ASCII order.
+    canonical_colour_string = "".join(sorted(colour_string))
+
+    # Include semantic legend so local character mappings cannot collide.
+    legend = sorted(
+        [(char, token) for token, char in colour_map.items()],
+        key=lambda x: x[0],
+    )
+    legend_json = json.dumps(legend, separators=(",", ":"))
+
+    return f"ATTR_NAUTY_V1|{legend_json}|{canonical_colour_string}|{canonical_graph6}"
+
+
+# ============================================================
+# Coloured incidence subgraph -> attributed nx.Graph
+# ============================================================
+
+def colored_incidence_subgraph_to_attributed_graph(
+    H_sub: nx.Graph,
+    *,
+    node_label_attr: str = "node_label",
+    edge_label_attr: str = "edge_label",
+    preserve_original_attrs: bool = True,
+) -> nx.Graph:
+    """
+    Convert a valid coloured incidence subgraph back to an attributed nx.Graph.
+
+    The input must contain:
+      - original vertices with kind="node"
+      - auxiliary edge vertices with kind="edge"
+
+    Each edge-auxiliary vertex must be adjacent to exactly two original-node vertices.
+    """
+    G_out = nx.Graph()
+
+    node_vertices = [
+        v for v, data in H_sub.nodes(data=True)
+        if data.get("kind") == "node"
+    ]
+
+    # Relabel output motif nodes to 0..k-1.
+    node_map = {v: i for i, v in enumerate(node_vertices)}
+
+    for v in node_vertices:
+        data = H_sub.nodes[v]
+
+        attrs = {}
+        if preserve_original_attrs:
+            attrs.update(dict(data.get("original_attrs", {})))
+
+        attrs[node_label_attr] = data.get("label")
+        G_out.add_node(node_map[v], **attrs)
+
+    for aux, data in H_sub.nodes(data=True):
+        if data.get("kind") != "edge":
+            continue
+
+        nbrs = [
+            nbr for nbr in H_sub.neighbors(aux)
+            if H_sub.nodes[nbr].get("kind") == "node"
+        ]
+
+        if len(nbrs) != 2:
+            raise ValueError(
+                f"Invalid incidence subgraph: edge-auxiliary vertex {aux!r} "
+                f"has {len(nbrs)} node-neighbours, expected 2."
+            )
+
+        u, v = nbrs
+
+        attrs = {}
+        if preserve_original_attrs:
+            attrs.update(dict(data.get("original_attrs", {})))
+
+        attrs[edge_label_attr] = data.get("label")
+        G_out.add_edge(node_map[u], node_map[v], **attrs)
+
+    return G_out
+
+
+# ============================================================
+# Single graph: list unique attributed k-induced motifs
+# ============================================================
+
+def list_unique_attributed_k_motifs_nauty(
+    G: nx.Graph,
+    k: int,
+    *,
+    node_label_attr: str = "node_label",
+    edge_label_attr: str = "edge_label",
+    connected_only: bool = True,
+    nauty_exec: str | os.PathLike[str] = NAUTY_EXEC,
+    use_traces: bool = False,
+    label_normalizer: Callable[[Any], str] = _stable_label_token,
+    missing_ok: bool = False,
+    preserve_original_attrs: bool = True,
+) -> list[nx.Graph]:
+    """
+    Return unique attributed k-induced subgraphs of one attributed graph.
+
+    Here k means k original graph nodes, not k vertices in the transformed
+    coloured incidence graph.
+
+    Steps:
+      1. Transform G into a coloured incidence graph.
+      2. For each k-subset of original nodes:
+           - include those k original-node vertices
+           - include auxiliary edge vertices for edges among them
+      3. Canonicalize the coloured incidence subgraph with nauty labelg -f.
+      4. Keep one representative per canonical string.
+      5. Convert representatives back to attributed nx.Graph objects.
+
+    Returns
+    -------
+    list[nx.Graph]
+        Unique attributed motif representatives.
+        Nodes are relabelled to 0..k-1.
+    """
+    _validate_simple_undirected(G)
+
+    if k <= 0:
+        raise ValueError("k must be positive.")
+
+    if k > G.number_of_nodes():
+        return []
+
+    transform = attributed_to_colored_incidence_graph(
+        G,
+        node_label_attr=node_label_attr,
+        edge_label_attr=edge_label_attr,
+        label_normalizer=label_normalizer,
+        missing_ok=missing_ok,
+    )
+
+    H_full = transform.colored_graph
+    seen: dict[str, nx.Graph] = {}
+
+    original_nodes = list(G.nodes())
+
+    for subset in itertools.combinations(original_nodes, k):
+        original_subgraph = G.subgraph(subset)
+
+        if connected_only and not nx.is_connected(original_subgraph):
+            continue
+
+        # Include selected original-node vertices in the coloured graph.
+        coloured_nodes = [
+            transform.original_to_colored_node[v]
+            for v in subset
+        ]
+
+        # Include edge-label auxiliary vertices for edges induced by the subset.
+        for u, v in original_subgraph.edges():
+            aux = transform.edge_to_aux_node[frozenset((u, v))]
+            coloured_nodes.append(aux)
+
+        H_sub = H_full.subgraph(coloured_nodes).copy()
+
+        key = canonicalize_colored_graph_nauty(
+            H_sub,
+            color_attr="color_token",
+            nauty_exec=nauty_exec,
+            use_traces=use_traces,
+        )
+
+        if key not in seen:
+            seen[key] = colored_incidence_subgraph_to_attributed_graph(
+                H_sub,
+                node_label_attr=node_label_attr,
+                edge_label_attr=edge_label_attr,
+                preserve_original_attrs=preserve_original_attrs,
+            )
+
+    return list(seen.values())
+
+
+# ============================================================
+# Graph list: aggregate unique attributed k-induced motifs + counts
+# ============================================================
+
+def aggregate_unique_attributed_k_motifs_with_counts_nauty(
+    graphs: list[nx.Graph],
+    k: int,
+    *,
+    node_label_attr: str = "node_label",
+    edge_label_attr: str = "edge_label",
+    connected_only: bool = True,
+    nauty_exec: str | os.PathLike[str] = NAUTY_EXEC,
+    use_traces: bool = False,
+    label_normalizer: Callable[[Any], str] = _stable_label_token,
+    missing_ok: bool = False,
+    preserve_original_attrs: bool = True,
+) -> list[AttributedMotifOccurrence]:
+    """
+    Aggregate unique attributed k-induced motifs across a list of attributed graphs.
+
+    Here k means k original graph nodes, not k vertices in the coloured incidence graph.
+
+    For each input graph:
+      1. Transform the attributed graph into a coloured incidence graph.
+      2. Enumerate all k-node induced subgraphs in the original graph.
+      3. For each induced subgraph, include:
+           - selected original-node vertices
+           - auxiliary edge vertices for edges among selected nodes
+      4. Canonicalize the coloured incidence subgraph using nauty/Traces.
+      5. Count occurrences by canonical key.
+      6. Keep one attributed nx.Graph representative for each unique key.
+
+    Returns
+    -------
+    list[AttributedMotifOccurrence]
+        Each item contains:
+          - motif: representative attributed nx.Graph
+          - count: total number of occurrences across all graphs
+          - canonical_key: nauty-based attributed canonical key
+    """
+    if k <= 0:
+        raise ValueError("k must be positive.")
+
+    counts: Counter[str] = Counter()
+    representatives: dict[str, nx.Graph] = {}
+
+    for graph_idx, G in enumerate(graphs):
+        _validate_simple_undirected(G)
+
+        if k > G.number_of_nodes():
+            continue
+
+        transform = attributed_to_colored_incidence_graph(
+            G,
+            node_label_attr=node_label_attr,
+            edge_label_attr=edge_label_attr,
+            label_normalizer=label_normalizer,
+            missing_ok=missing_ok,
+        )
+
+        H_full = transform.colored_graph
+        original_nodes = list(G.nodes())
+
+        for subset in itertools.combinations(original_nodes, k):
+            original_subgraph = G.subgraph(subset)
+
+            if connected_only and not nx.is_connected(original_subgraph):
+                continue
+
+            # Include selected original-node vertices in the coloured graph.
+            coloured_nodes = [
+                transform.original_to_colored_node[v]
+                for v in subset
+            ]
+
+            # Include edge-label auxiliary vertices for edges induced by the subset.
+            for u, v in original_subgraph.edges():
+                aux = transform.edge_to_aux_node[frozenset((u, v))]
+                coloured_nodes.append(aux)
+
+            H_sub = H_full.subgraph(coloured_nodes).copy()
+
+            key = canonicalize_colored_graph_nauty(
+                H_sub,
+                color_attr="color_token",
+                nauty_exec=nauty_exec,
+                use_traces=use_traces,
+            )
+
+            counts[key] += 1
+
+            if key not in representatives:
+                representatives[key] = colored_incidence_subgraph_to_attributed_graph(
+                    H_sub,
+                    node_label_attr=node_label_attr,
+                    edge_label_attr=edge_label_attr,
+                    preserve_original_attrs=preserve_original_attrs,
+                )
+
+    return [
+        AttributedMotifOccurrence(
+            motif=representatives[key],
+            count=int(counts[key]),
+            canonical_key=key,
+        )
+        for key in sorted(counts.keys())
+    ]
+
+
+def aggregate_unique_attributed_k_motifs_with_counts_as_tuples(
+    graphs: list[nx.Graph],
+    k: int,
+    **kwargs,
+) -> list[tuple[nx.Graph, int]]:
+    """
+    Convenience wrapper.
+
+    Returns exactly:
+        list[(motif_graph, occurrence_count)]
+    """
+    results = aggregate_unique_attributed_k_motifs_with_counts_nauty(
+        graphs,
+        k,
+        **kwargs,
+    )
+    return [(item.motif, item.count) for item in results]
