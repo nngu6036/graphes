@@ -272,7 +272,7 @@ class DenseMolecularMixtureCatFlow(nn.Module):
         num_nodes: int | None = None,
         steps: int = 64,
         temperature: float = 1.0,
-        device: torch.device | str = "cpu",
+        device: torch.device | str = "auto",
         seed: int = 0,
         sample_categorical: bool = False,
     ) -> nx.Graph:
@@ -381,7 +381,7 @@ def save_dense_mixture_catflow_checkpoint(
     )
 
 
-def load_dense_mixture_catflow_checkpoint(path: str | Path, *, device: str | torch.device = "cpu") -> DenseMolecularMixtureCatFlow:
+def load_dense_mixture_catflow_checkpoint(path: str | Path, *, device: str | torch.device = "auto") -> DenseMolecularMixtureCatFlow:
     device = resolve_torch_device(device)
     checkpoint = torch.load(path, map_location=device)
     cfg = checkpoint.get("model_config", {})

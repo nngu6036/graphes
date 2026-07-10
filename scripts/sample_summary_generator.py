@@ -18,7 +18,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--num-samples", type=int, default=20)
     parser.add_argument("--output-dir", default="outputs/summary_generators/samples")
-    parser.add_argument("--device", default="auto", help="Torch device. Defaults to CUDA when available, otherwise CPU.")
+    parser.add_argument("--device", default="auto", help="Torch device. CUDA is required.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--deterministic", action="store_true", help="Use argmax/rounded postprocessing rather than categorical sampling.")
     args = parser.parse_args()

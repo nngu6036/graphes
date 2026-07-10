@@ -240,7 +240,7 @@ class TopologyConditionalAttributeFlow(nn.Module):
         *,
         steps: int = 32,
         temperature: float = 1.0,
-        device: str | torch.device = "cpu",
+        device: str | torch.device = "auto",
         seed: int | None = None,
     ) -> nx.Graph:
         device = resolve_torch_device(str(device)) if not isinstance(device, torch.device) else device

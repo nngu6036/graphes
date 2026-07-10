@@ -4,8 +4,7 @@ import networkx as nx
 import numpy as np
 import torch
 
-from grapher.generators.degree_vectorizer import DegreeVectorizer, connected_feasible_degree_sequence
-from grapher.generators.degree_vae import build_degree_vae
+from grapher.generators.degree_vae import DegreeVectorizer, build_degree_vae, connected_feasible_degree_sequence
 
 
 def test_degree_vectorizer_outputs_graphical_summaries():

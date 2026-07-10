@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=64)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--sample-categorical", action="store_true")
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-nodes", type=int, default=None)
     args = parser.parse_args()

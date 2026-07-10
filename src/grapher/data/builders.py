@@ -9,8 +9,6 @@ from typing import Any, Protocol
 import networkx as nx
 import numpy as np
 
-from grapher.data.sbm import build_sbm_graphs
-
 
 SPLIT_NAMES = ("train", "val", "test")
 
@@ -18,6 +16,141 @@ SPLIT_NAMES = ("train", "val", "test")
 class GraphDatasetBuilder(Protocol):
     def build_graphs(self) -> list[nx.Graph]:
         ...
+
+
+@dataclass(frozen=True)
+class SBMSpec:
+    num_graphs: int = 200
+    seed: int = 0
+    min_blocks: int = 2
+    max_blocks: int = 5
+    min_nodes_per_block: int = 20
+    max_nodes_per_block: int = 40
+    equal_block_sizes: bool = False
+    p_in: float = 0.30
+    p_out: float = 0.005
+    inter_edges_per_node_fraction: float | None = None
+    require_connected: bool = True
+    reject_zero_degree: bool = True
+    max_attempts_per_graph: int = 300
+
+
+def _sbm_spec_from_config(config: dict[str, Any]) -> SBMSpec:
+    communities = config.get("communities", {}) or {}
+    edge_probs = config.get("edge_probs", {}) or {}
+    filters = config.get("filters", {}) or {}
+    return SBMSpec(
+        num_graphs=int(config.get("num_graphs", 200)),
+        seed=int(config.get("seed", 0)),
+        min_blocks=int(communities.get("min_blocks", 2)),
+        max_blocks=int(communities.get("max_blocks", 5)),
+        min_nodes_per_block=int(communities.get("min_nodes_per_block", 20)),
+        max_nodes_per_block=int(communities.get("max_nodes_per_block", 40)),
+        equal_block_sizes=bool(communities.get("equal_block_sizes", False)),
+        p_in=float(edge_probs.get("p_in", 0.30)),
+        p_out=float(edge_probs.get("p_out", 0.005)),
+        inter_edges_per_node_fraction=(
+            float(edge_probs["inter_edges_per_node_fraction"])
+            if "inter_edges_per_node_fraction" in edge_probs
+            else None
+        ),
+        require_connected=bool(filters.get("require_connected", True)),
+        reject_zero_degree=bool(filters.get("reject_zero_degree", True)),
+        max_attempts_per_graph=int(filters.get("max_attempts_per_graph", 300)),
+    )
+
+
+def _acceptable_sbm_graph(graph: nx.Graph, spec: SBMSpec) -> bool:
+    if graph.number_of_nodes() <= 0:
+        return False
+    if spec.require_connected and graph.number_of_nodes() > 1 and not nx.is_connected(graph):
+        return False
+    if spec.reject_zero_degree and graph.number_of_nodes() > 1:
+        if any(deg == 0 for _, deg in graph.degree()):
+            return False
+    return True
+
+
+def _add_uniform_inter_community_edges(
+    graph: nx.Graph,
+    sizes: list[int],
+    num_edges: int,
+    rng: np.random.Generator,
+) -> None:
+    if num_edges <= 0:
+        return
+
+    communities: list[list[int]] = []
+    offset = 0
+    for size in sizes:
+        communities.append(list(range(offset, offset + size)))
+        offset += size
+
+    candidates: list[tuple[int, int]] = []
+    for i, left in enumerate(communities):
+        for right in communities[i + 1 :]:
+            candidates.extend((u, v) for u in left for v in right if not graph.has_edge(u, v))
+
+    if num_edges > len(candidates):
+        raise RuntimeError(
+            f"Cannot add {num_edges} inter-community edges; only {len(candidates)} candidates exist."
+        )
+
+    chosen = rng.choice(len(candidates), size=num_edges, replace=False)
+    graph.add_edges_from(candidates[int(idx)] for idx in chosen)
+
+
+def build_sbm_graphs(config: dict[str, Any]) -> list[nx.Graph]:
+    spec = _sbm_spec_from_config(config)
+    rng = np.random.default_rng(spec.seed)
+    graphs: list[nx.Graph] = []
+    attempts = 0
+    max_attempts = spec.num_graphs * spec.max_attempts_per_graph
+
+    while len(graphs) < spec.num_graphs and attempts < max_attempts:
+        attempts += 1
+        k = int(rng.integers(spec.min_blocks, spec.max_blocks + 1))
+        if spec.equal_block_sizes:
+            block_size = int(rng.integers(spec.min_nodes_per_block, spec.max_nodes_per_block + 1))
+            sizes = [block_size] * k
+        else:
+            sizes = rng.integers(spec.min_nodes_per_block, spec.max_nodes_per_block + 1, size=k).astype(int).tolist()
+
+        probs = [[spec.p_in if i == j else spec.p_out for j in range(k)] for i in range(k)]
+        graph_seed = int(rng.integers(0, 2**31 - 1))
+        g = nx.stochastic_block_model(sizes, probs, seed=graph_seed, selfloops=False)
+        g = nx.convert_node_labels_to_integers(nx.Graph(g), first_label=0, ordering="sorted")
+
+        if spec.inter_edges_per_node_fraction is not None:
+            num_inter_edges = int(round(spec.inter_edges_per_node_fraction * g.number_of_nodes()))
+            _add_uniform_inter_community_edges(g, sizes, num_inter_edges, rng)
+
+        community_labels: list[int] = []
+        for community_id, size in enumerate(sizes):
+            community_labels.extend([community_id] * size)
+        nx.set_node_attributes(g, {i: int(c) for i, c in enumerate(community_labels)}, "community")
+        g.graph.update(
+            {
+                "source_dataset": "sbm",
+                "num_blocks": k,
+                "block_sizes": sizes,
+                "p_in": spec.p_in,
+                "p_out": spec.p_out,
+                "inter_edges_per_node_fraction": spec.inter_edges_per_node_fraction,
+                "seed": graph_seed,
+            }
+        )
+
+        if not _acceptable_sbm_graph(g, spec):
+            continue
+        graphs.append(g)
+
+    if len(graphs) < spec.num_graphs:
+        raise RuntimeError(
+            f"Could not build {spec.num_graphs} acceptable SBM graphs; "
+            f"got {len(graphs)} after {attempts} attempts."
+        )
+    return graphs
 
 
 def infer_dataset_type(config: dict[str, Any]) -> str:

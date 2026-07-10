@@ -15,7 +15,7 @@ joint_mixture_catflow:
     max_train_graphs: null
     max_val_graphs: null
   checkpoint_path: outputs/attribute_flows/qm9_joint_mixture_catflow/checkpoint.pt
-  device: cpu
+  device: auto
   hidden_dim: 128
   edge_dim: 64
   num_layers: 4

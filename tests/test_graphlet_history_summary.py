@@ -4,8 +4,7 @@ import networkx as nx
 import numpy as np
 import torch
 
-from grapher.generators.summary_vae import build_summary_vae, summary_vae_loss
-from grapher.generators.summary_vectorizer import SummaryVectorizer
+from grapher.generators.summary_vae import SummaryVectorizer, build_summary_vae, summary_vae_loss
 from grapher.properties.summary import SummaryConfig, distance_to_summary, extract_summary
 from grapher.utils.motifs import graphlet_history, graphlet_history_l2_distance
 

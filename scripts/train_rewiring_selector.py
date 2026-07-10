@@ -17,11 +17,16 @@ from torch import nn
 from torch.utils.data import Dataset
 
 from grapher.utils.device import resolve_torch_device
-from grapher.utils.io import ensure_dir, load_yaml, save_json
+from grapher.utils.io import ensure_dir, load_yaml, require_config, require_config_section, save_json
 
 
 def _log(message: str) -> None:
     print(f"[progress] {message}", flush=True)
+
+
+LOAD_LOG_INTERVAL = 1000
+PROGRESS_INTERVAL = 10
+BATCH_LOG_INTERVAL = 0
 
 
 @dataclass
@@ -461,20 +466,20 @@ def train_selector(
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-    selector_cfg = config.get("selector", {}) or {}
-    torch_device = resolve_torch_device(device if device is not None else selector_cfg.get("device", "auto"))
+    selector_cfg = require_config_section(config, "selector")
+    torch_device = resolve_torch_device(device if device is not None else require_config(selector_cfg, "device", context="config.selector"))
     _log(f"using device={torch_device}")
 
     feature_cfg = {
-        "degree_width": int(selector_cfg.get("degree_width", 64)),
-        "clustering_width": int(selector_cfg.get("clustering_width", 20)),
-        "spectral_width": int(selector_cfg.get("spectral_width", 20)),
-        "motif_width": int(selector_cfg.get("motif_width", 5)),
-        "orbit_width": int(selector_cfg.get("orbit_width", 15)),
-        "graphlet_width": int(selector_cfg.get("graphlet_width", 128)),
+        "degree_width": int(require_config(selector_cfg, "degree_width", context="config.selector")),
+        "clustering_width": int(require_config(selector_cfg, "clustering_width", context="config.selector")),
+        "spectral_width": int(require_config(selector_cfg, "spectral_width", context="config.selector")),
+        "motif_width": int(require_config(selector_cfg, "motif_width", context="config.selector")),
+        "orbit_width": int(require_config(selector_cfg, "orbit_width", context="config.selector")),
+        "graphlet_width": int(require_config(selector_cfg, "graphlet_width", context="config.selector")),
     }
     if load_log_interval is None:
-        load_log_interval = int(selector_cfg.get("load_log_interval", 1000))
+        load_log_interval = LOAD_LOG_INTERVAL
     load_log_interval = max(int(load_log_interval), 0)
 
     train_path = teacher_dir / "train.jsonl"
@@ -499,18 +504,18 @@ def train_selector(
 
     input_dim = int(train_examples[0].features.shape[-1])
 
-    hidden_dim = int(selector_cfg.get("hidden_dim", 256))
-    num_layers = int(selector_cfg.get("num_layers", 3))
-    dropout = float(selector_cfg.get("dropout", 0.1))
-    lr = float(selector_cfg.get("learning_rate", 3.0e-4))
-    weight_decay = float(selector_cfg.get("weight_decay", 1.0e-5))
+    hidden_dim = int(require_config(selector_cfg, "hidden_dim", context="config.selector"))
+    num_layers = int(require_config(selector_cfg, "num_layers", context="config.selector"))
+    dropout = float(require_config(selector_cfg, "dropout", context="config.selector"))
+    lr = float(require_config(selector_cfg, "learning_rate", context="config.selector"))
+    weight_decay = float(require_config(selector_cfg, "weight_decay", context="config.selector"))
 
-    epochs = int(epochs if epochs is not None else selector_cfg.get("epochs", 100))
-    batch_size = int(batch_size if batch_size is not None else selector_cfg.get("batch_size", 64))
+    epochs = int(epochs if epochs is not None else require_config(selector_cfg, "epochs", context="config.selector"))
+    batch_size = int(batch_size if batch_size is not None else require_config(selector_cfg, "batch_size", context="config.selector"))
     if progress_interval is None:
-        progress_interval = int(selector_cfg.get("progress_interval", 10))
+        progress_interval = PROGRESS_INTERVAL
     if batch_log_interval is None:
-        batch_log_interval = int(selector_cfg.get("batch_log_interval", 0))
+        batch_log_interval = BATCH_LOG_INTERVAL
     progress_interval = max(int(progress_interval), 0)
     batch_log_interval = max(int(batch_log_interval), 0)
     batches_per_epoch = math.ceil(len(train_examples) / max(batch_size, 1))
@@ -642,12 +647,12 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_yaml(args.config)
-    selector_cfg = config.get("selector", {}) or {}
-    teacher_cfg = config.get("teacher", {}) or {}
-    seed = int(selector_cfg.get("seed", config.get("seed", 0)))
-    teacher_dir = Path(teacher_cfg.get("output_dir", "outputs/teachers/teacher"))
-    checkpoint_path = Path(selector_cfg.get("checkpoint_path", "outputs/selectors/selector/checkpoint.pt"))
-    output_dir = Path(selector_cfg.get("output_dir", checkpoint_path.parent))
+    selector_cfg = require_config_section(config, "selector")
+    teacher_cfg = require_config_section(config, "teacher")
+    seed = int(require_config(config, "seed"))
+    teacher_dir = Path(require_config(teacher_cfg, "output_dir", context="config.teacher"))
+    checkpoint_path = Path(require_config(selector_cfg, "checkpoint_path", context="config.selector"))
+    output_dir = checkpoint_path.parent
 
     train_selector(
         config=config,

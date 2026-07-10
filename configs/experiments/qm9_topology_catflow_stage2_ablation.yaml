@@ -10,7 +10,7 @@ mixture_catflow:
     name: qm9_attributed
     root: outputs/datasets
   checkpoint_path: outputs/attribute_flows/qm9_catflow_stage2/checkpoint.pt
-  device: cpu
+  device: auto
   hidden_dim: 128
   edge_dim: 64
   num_layers: 4

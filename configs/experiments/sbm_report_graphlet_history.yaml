@@ -31,7 +31,9 @@ summary_generator:
   num_layers: 2
   dropout: 0.0
   learning_rate: 0.002
+  weight_decay: 0.0
   beta: 0.005
+  loss_weights: {}
   progress_interval: 30
 
 degree_generator:

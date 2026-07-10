@@ -38,6 +38,7 @@ from grapher.molecular.graph_io import (
     read_smiles_file,
     require_rdkit,
 )
+from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir, load_pickle, save_json
 
 
@@ -292,7 +293,7 @@ def compute_fcd(
     reference_smiles: list[str],
     generated_smiles: list[str],
     *,
-    device: str = "cpu",
+    device: str = "auto",
     skip: bool = False,
 ) -> tuple[float | None, dict[str, Any]]:
     if skip:
@@ -304,25 +305,27 @@ def compute_fcd(
             "num_generated_smiles": len(generated_smiles),
         }
 
+    resolved_device = str(resolve_torch_device(device))
+
     # fcd_torch has had a few APIs. Try the common ones.
     try:
         from fcd_torch import FCD  # type: ignore
 
-        fcd = FCD(device=device)
+        fcd = FCD(device=resolved_device)
         value = fcd(reference_smiles, generated_smiles)
         return float(value), {"status": "ok", "backend": "fcd_torch.FCD"}
     except Exception as exc1:
         try:
             from fcd_torch.fcd import FCD  # type: ignore
 
-            fcd = FCD(device=device)
+            fcd = FCD(device=resolved_device)
             value = fcd(reference_smiles, generated_smiles)
             return float(value), {"status": "ok", "backend": "fcd_torch.fcd.FCD"}
         except Exception as exc2:
             try:
                 from fcd_torch import get_fcd  # type: ignore
 
-                value = get_fcd(generated_smiles, reference_smiles, device=device)
+                value = get_fcd(generated_smiles, reference_smiles, device=resolved_device)
                 return float(value), {"status": "ok", "backend": "fcd_torch.get_fcd"}
             except Exception as exc3:
                 return None, {
@@ -469,7 +472,7 @@ def main() -> None:
     parser.add_argument("--no-nspdk-normalize", action="store_true")
 
     parser.add_argument("--skip-fcd", action="store_true")
-    parser.add_argument("--fcd-device", default="cpu")
+    parser.add_argument("--fcd-device", default="auto")
 
     args = parser.parse_args()
 

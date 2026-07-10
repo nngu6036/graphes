@@ -94,10 +94,7 @@ src/grapher/generators/degree_vae.py
     DegreeHistogramVAE for degree-sequence generation
 
 src/grapher/generators/summary_vae.py
-    SummaryVAE for learned graph summaries
-
-src/grapher/generators/summary_vectorizer.py
-    vectorization of graph summaries, including graphlet histories
+    SummaryVAE and summary vectorization for learned graph summaries
 
 src/grapher/construction/coarse.py
     Havel-Hakimi coarse graph construction
@@ -174,7 +171,8 @@ Train the degree generator:
 
 ```bash
 PYTHONPATH=src python scripts/train_degree_generator.py \
-  --config configs/experiments/degreevae.yaml
+  --config configs/experiments/degreevae.yaml \
+  --dataset sbm
 ```
 
 Build the GraphER teacher cache:
@@ -295,7 +293,8 @@ Train DegreeVAE:
 
 ```bash
 PYTHONPATH=src python scripts/train_degree_generator.py \
-  --config configs/experiments/sbm_report_graphlet_history.yaml
+  --config configs/experiments/sbm_report_graphlet_history.yaml \
+  --dataset sbm
 ```
 
 Build the teacher cache:
@@ -436,7 +435,8 @@ Train topology DegreeVAE:
 
 ```bash
 PYTHONPATH=src python scripts/train_degree_generator.py \
-  --config configs/experiments/qm9_topology_mixture_catflow.yaml
+  --config configs/experiments/qm9_topology_mixture_catflow.yaml \
+  --dataset qm9_topology
 ```
 
 Build topology teacher cache:
@@ -490,7 +490,8 @@ Train topology DegreeVAE:
 
 ```bash
 PYTHONPATH=src python scripts/train_degree_generator.py \
-  --config configs/experiments/qm9_topology_graphlet_history.yaml
+  --config configs/experiments/qm9_topology_graphlet_history.yaml \
+  --dataset qm9_topology
 ```
 
 Build topology teacher cache:

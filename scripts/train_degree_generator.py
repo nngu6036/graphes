@@ -3,23 +3,20 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from grapher.data.io import load_dataset_splits
-from grapher.generators.degree_vae import build_degree_vae, degree_vae_loss, save_degree_vae_checkpoint
-from grapher.generators.degree_vectorizer import DegreeVectorizer
+from grapher.generators.degree_vae import DegreeVectorizer, build_degree_vae, degree_vae_loss, save_degree_vae_checkpoint
 from grapher.utils.device import resolve_torch_device
-from grapher.utils.io import ensure_dir, load_yaml, save_json
+from grapher.utils.io import ensure_dir, load_yaml, require_config, require_config_section, save_json
 
 
-def _limit(items: list[Any], limit: int | None) -> list[Any]:
-    if limit is None or int(limit) <= 0:
-        return items
-    return items[: int(limit)]
+DEFAULT_DEVICE = "auto"
+DEFAULT_CHECKPOINT_PATH = Path("outputs/degree_generators/degree/checkpoint.pt")
+PROGRESS_INTERVAL = 30
 
 
 def _targets_to_tensors(targets: dict[str, np.ndarray], device: torch.device) -> dict[str, torch.Tensor]:
@@ -37,62 +34,69 @@ def _targets_to_tensors(targets: dict[str, np.ndarray], device: torch.device) ->
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a degree-histogram VAE for the coarse-to-fine generator.")
     parser.add_argument("--config", required=True)
+    parser.add_argument("--dataset", required=True, help="Dataset name to load, e.g. sbm, grid, ego, qm9_topology.")
+    parser.add_argument("--root", default="outputs/datasets", help="Dataset root directory.")
     args = parser.parse_args()
 
     config = load_yaml(args.config)
-    degree_cfg = config.get("degree_generator", {}) or {}
-    seed = int(degree_cfg.get("seed", config.get("seed", 0)))
+    degree_cfg = require_config_section(config, "degree_generator")
+    seed = int(require_config(config, "seed"))
     np.random.seed(seed)
     torch.manual_seed(seed)
-    device = resolve_torch_device(degree_cfg.get("device", "auto"))
-    checkpoint_path = Path(degree_cfg.get("checkpoint_path", "outputs/degree_generators/degree/checkpoint.pt"))
-    out_dir = ensure_dir(degree_cfg.get("output_dir", checkpoint_path.parent))
+    device = resolve_torch_device(DEFAULT_DEVICE)
+    checkpoint_path = DEFAULT_CHECKPOINT_PATH
+    out_dir = ensure_dir(checkpoint_path.parent)
     checkpoint_path = out_dir / checkpoint_path.name
     print(f"Using device: {device}", flush=True)
 
-    dataset_cfg = config.get("dataset", {}) or {}
+    dataset_config_path = Path("configs/datasets") / f"{args.dataset}.yaml"
+    if not dataset_config_path.exists():
+        raise FileNotFoundError(f"Missing dataset config: {dataset_config_path}")
     splits = load_dataset_splits(
-        dataset_cfg.get("name", "sbm"),
-        root=dataset_cfg.get("root", "outputs/datasets"),
-        build_if_missing=bool(dataset_cfg.get("build_if_missing", True)),
-        config_path=dataset_cfg.get("config_path"),
+        args.dataset,
+        root=args.root,
+        build_if_missing=False,
+        config_path=dataset_config_path,
     )
-    max_train = dataset_cfg.get("max_train_graphs")
-    train_graphs = _limit(list(splits["train"]), max_train)
-    require_connected = bool((config.get("constructor", {}) or {}).get("ensure_connected", True))
-    max_degree_raw = (config.get("summary", {}) or {}).get("degree_hist_max_degree", "auto")
+    train_graphs = list(splits["train"])
+    if not train_graphs:
+        raise RuntimeError(f"Dataset {args.dataset!r} has an empty training split.")
+    constructor_cfg = require_config_section(config, "constructor")
+    summary_cfg = require_config_section(config, "summary")
+    require_connected = bool(require_config(constructor_cfg, "ensure_connected", context="config.constructor"))
+    max_degree_raw = require_config(summary_cfg, "degree_hist_max_degree", context="config.summary")
     max_degree = None if max_degree_raw in {None, "auto"} else int(max_degree_raw)
     vectorizer = DegreeVectorizer.fit(train_graphs, max_degree=max_degree, require_connected=require_connected)
     x_np, targets_np = vectorizer.to_training_arrays(train_graphs)
 
     x = torch.as_tensor(x_np, dtype=torch.float32)
     dataset = TensorDataset(x, torch.arange(x.shape[0]))
-    batch_size = int(degree_cfg.get("batch_size", 32))
+    batch_size = int(require_config(degree_cfg, "batch_size", context="config.degree_generator"))
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
     all_targets = _targets_to_tensors(targets_np, device)
 
     model = build_degree_vae(
         vectorizer,
-        latent_dim=int(degree_cfg.get("latent_dim", 32)),
-        hidden_dim=int(degree_cfg.get("hidden_dim", 128)),
-        num_layers=int(degree_cfg.get("num_layers", 2)),
-        dropout=float(degree_cfg.get("dropout", 0.0)),
+        latent_dim=int(require_config(degree_cfg, "latent_dim", context="config.degree_generator")),
+        hidden_dim=int(require_config(degree_cfg, "hidden_dim", context="config.degree_generator")),
+        num_layers=int(require_config(degree_cfg, "num_layers", context="config.degree_generator")),
+        dropout=float(require_config(degree_cfg, "dropout", context="config.degree_generator")),
     ).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(),
-        lr=float(degree_cfg.get("learning_rate", degree_cfg.get("lr", 2e-3))),
-        weight_decay=float(degree_cfg.get("weight_decay", 0.0)),
+        lr=float(require_config(degree_cfg, "learning_rate", context="config.degree_generator")),
+        weight_decay=float(require_config(degree_cfg, "weight_decay", context="config.degree_generator")),
     )
     weights = {
-        "num_nodes": float(degree_cfg.get("node_weight", 1.0)),
-        "degree": float(degree_cfg.get("degree_weight", 5.0)),
-        "edge_scalar": float(degree_cfg.get("edge_moment_weight", 0.1)),
+        "num_nodes": float(require_config(degree_cfg, "node_count_loss_weight", context="config.degree_generator")),
+        "degree": float(require_config(degree_cfg, "degree_histogram_loss_weight", context="config.degree_generator")),
+        "edge_scalar": float(require_config(degree_cfg, "edge_count_loss_weight", context="config.degree_generator")),
     }
 
     history: list[dict[str, float]] = []
-    epochs = int(degree_cfg.get("epochs", 300))
-    beta = float(degree_cfg.get("beta", 5e-3))
-    progress_interval = int(degree_cfg.get("progress_interval", max(1, epochs // 10)))
+    epochs = int(require_config(degree_cfg, "epochs", context="config.degree_generator"))
+    kl_loss_weight = float(require_config(degree_cfg, "kl_loss_weight", context="config.degree_generator"))
+    progress_interval = PROGRESS_INTERVAL
     for epoch in range(1, epochs + 1):
         model.train()
         epoch_metrics: dict[str, list[float]] = {}
@@ -100,7 +104,7 @@ def main() -> None:
             batch_x = batch_x.to(device)
             batch_targets = {key: value[batch_idx.to(device)] for key, value in all_targets.items()}
             outputs, mu, logvar = model(batch_x)
-            loss, metrics = degree_vae_loss(outputs, batch_targets, mu, logvar, beta=beta, weights=weights)
+            loss, metrics = degree_vae_loss(outputs, batch_targets, mu, logvar, beta=kl_loss_weight, weights=weights)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
@@ -122,7 +126,16 @@ def main() -> None:
         checkpoint_path,
         model,
         vectorizer,
-        config={"experiment_config": config},
+        config={
+            "experiment_config": config,
+            "dataset": {
+                "name": args.dataset,
+                "root": args.root,
+                "config_path": str(dataset_config_path),
+                "build_if_missing": False,
+                "num_train_graphs": len(train_graphs),
+            },
+        },
         metrics={"history": history, "final": history[-1] if history else {}},
     )
     vectorizer.save(out_dir / "degree_vectorizer.json")

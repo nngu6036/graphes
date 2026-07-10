@@ -19,7 +19,7 @@ summary:
 summary_generator:
   type: learned
   checkpoint_path: outputs/summary_generators/qm9_topology/checkpoint.pt
-  device: cpu
+  device: auto
   deterministic: false
   epochs: 300
   batch_size: 64
@@ -28,7 +28,9 @@ summary_generator:
   num_layers: 2
   dropout: 0.0
   learning_rate: 0.002
+  weight_decay: 0.0
   beta: 0.005
+  loss_weights: {}
   progress_interval: 30
 
 degree_generator:
@@ -36,7 +38,7 @@ degree_generator:
   type: degree_histogram_vae
   checkpoint_path: outputs/degree_generators/qm9_topology/checkpoint.pt
   vectorizer_path: outputs/degree_generators/qm9_topology/degree_vectorizer.json
-  device: cpu
+  device: auto
   epochs: 300
   batch_size: 64
   latent_dim: 32
@@ -98,11 +100,12 @@ selector:
   spectral_width: 10
   motif_width: 5
   orbit_width: 15
+  graphlet_width: 128
   learning_rate: 0.0003
   batch_size: 64
   epochs: 100
   weight_decay: 0.00001
-  device: cpu
+  device: auto
 
 refiner:
   type: learned_selector
@@ -135,7 +138,7 @@ attribute_flow:
     name: qm9_attributed
     root: outputs/datasets
   checkpoint_path: outputs/attribute_flows/qm9/checkpoint.pt
-  device: cpu
+  device: auto
   hidden_dim: 128
   edge_dim: 64
   num_layers: 4

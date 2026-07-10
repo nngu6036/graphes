@@ -318,7 +318,7 @@ def verify_summary_generator(config) -> None:
 def verify_degree_generator(config) -> None:
     """Verify sampled degree sequences from an optional DegreeVAE."""
     from grapher.generators.degree_sampler import DegreeVAESampler
-    from grapher.generators.degree_vectorizer import connected_feasible_degree_sequence
+    from grapher.generators.degree_vae import connected_feasible_degree_sequence
 
     rng = np.random.default_rng(int(config.get("seed", 0)))
     graphs = _load_graphs(config)

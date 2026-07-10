@@ -10,11 +10,10 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from grapher.data.io import load_dataset_splits
-from grapher.generators.summary_vae import build_summary_vae, save_summary_vae_checkpoint, summary_vae_loss
-from grapher.generators.summary_vectorizer import SummaryVectorizer
+from grapher.generators.summary_vae import SummaryVectorizer, build_summary_vae, save_summary_vae_checkpoint, summary_vae_loss
 from grapher.properties.summary import SummaryConfig, extract_summary, summary_to_jsonable
 from grapher.utils.device import resolve_torch_device
-from grapher.utils.io import ensure_dir, load_yaml, save_json
+from grapher.utils.io import ensure_dir, load_yaml, require_config, require_config_section, save_json
 
 
 def _limit(items: list[Any], limit: int | None) -> list[Any]:
@@ -41,54 +40,59 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_yaml(args.config)
-    generator_cfg = config.get("summary_generator", {}) or {}
-    seed = int(generator_cfg.get("seed", config.get("seed", 0)))
+    generator_cfg = require_config_section(config, "summary_generator")
+    seed = int(require_config(config, "seed"))
     np.random.seed(seed)
     torch.manual_seed(seed)
-    device = resolve_torch_device(generator_cfg.get("device", "auto"))
-    checkpoint_path = Path(generator_cfg.get("checkpoint_path", "outputs/summary_generators/summary/checkpoint.pt"))
-    out_dir = ensure_dir(generator_cfg.get("output_dir", checkpoint_path.parent))
+    device = resolve_torch_device(require_config(generator_cfg, "device", context="config.summary_generator"))
+    checkpoint_path = Path(require_config(generator_cfg, "checkpoint_path", context="config.summary_generator"))
+    out_dir = ensure_dir(checkpoint_path.parent)
     checkpoint_path = out_dir / checkpoint_path.name
     print(f"Using device: {device}", flush=True)
 
-    dataset_cfg = config.get("dataset", {}) or {}
+    dataset_cfg = require_config_section(config, "dataset")
     splits = load_dataset_splits(
-        dataset_cfg.get("name", "sbm"),
-        root=dataset_cfg.get("root", "outputs/datasets"),
-        build_if_missing=bool(dataset_cfg.get("build_if_missing", True)),
-        config_path=dataset_cfg.get("config_path"),
+        require_config(dataset_cfg, "name", context="config.dataset"),
+        root=require_config(dataset_cfg, "root", context="config.dataset"),
+        build_if_missing=bool(require_config(dataset_cfg, "build_if_missing", context="config.dataset")),
+        config_path=require_config(dataset_cfg, "config_path", context="config.dataset"),
     )
-    max_train = dataset_cfg.get("max_train_graphs")
+    max_train = require_config(dataset_cfg, "max_train_graphs", context="config.dataset")
     train_graphs = _limit(list(splits["train"]), max_train)
-    summary_cfg = SummaryConfig.from_dict(config.get("summary", {}) or {}, train_graphs)
+    summary_cfg = SummaryConfig.from_dict(require_config_section(config, "summary"), train_graphs)
     summaries = [extract_summary(g, summary_cfg) for g in train_graphs]
-    vectorizer = SummaryVectorizer.fit(summaries, summary_cfg, require_connected=bool((config.get("constructor", {}) or {}).get("ensure_connected", True)))
+    constructor_cfg = require_config_section(config, "constructor")
+    vectorizer = SummaryVectorizer.fit(
+        summaries,
+        summary_cfg,
+        require_connected=bool(require_config(constructor_cfg, "ensure_connected", context="config.constructor")),
+    )
     x_np, targets_np = vectorizer.to_training_arrays(summaries)
 
     x = torch.as_tensor(x_np, dtype=torch.float32)
     dataset = TensorDataset(x, torch.arange(x.shape[0]))
-    batch_size = int(generator_cfg.get("batch_size", 32))
+    batch_size = int(require_config(generator_cfg, "batch_size", context="config.summary_generator"))
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
     all_targets = _targets_to_tensors(targets_np, device)
 
     model = build_summary_vae(
         vectorizer,
-        latent_dim=int(generator_cfg.get("latent_dim", 32)),
-        hidden_dim=int(generator_cfg.get("hidden_dim", 128)),
-        num_layers=int(generator_cfg.get("num_layers", 2)),
-        dropout=float(generator_cfg.get("dropout", 0.0)),
+        latent_dim=int(require_config(generator_cfg, "latent_dim", context="config.summary_generator")),
+        hidden_dim=int(require_config(generator_cfg, "hidden_dim", context="config.summary_generator")),
+        num_layers=int(require_config(generator_cfg, "num_layers", context="config.summary_generator")),
+        dropout=float(require_config(generator_cfg, "dropout", context="config.summary_generator")),
     ).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(),
-        lr=float(generator_cfg.get("learning_rate", generator_cfg.get("lr", 2e-3))),
-        weight_decay=float(generator_cfg.get("weight_decay", 0.0)),
+        lr=float(require_config(generator_cfg, "learning_rate", context="config.summary_generator")),
+        weight_decay=float(require_config(generator_cfg, "weight_decay", context="config.summary_generator")),
     )
 
     history: list[dict[str, float]] = []
-    epochs = int(generator_cfg.get("epochs", 200))
-    beta = float(generator_cfg.get("beta", 1e-3))
-    loss_weights = dict(generator_cfg.get("loss_weights", {}) or {})
-    progress_interval = int(generator_cfg.get("progress_interval", max(1, epochs // 10)))
+    epochs = int(require_config(generator_cfg, "epochs", context="config.summary_generator"))
+    beta = float(require_config(generator_cfg, "beta", context="config.summary_generator"))
+    loss_weights = dict(require_config(generator_cfg, "loss_weights", context="config.summary_generator") or {})
+    progress_interval = int(require_config(generator_cfg, "progress_interval", context="config.summary_generator"))
     for epoch in range(1, epochs + 1):
         model.train()
         epoch_metrics: dict[str, list[float]] = {}

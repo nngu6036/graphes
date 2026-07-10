@@ -20,6 +20,19 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     return data or {}
 
 
+def require_config(mapping: dict[str, Any], key: str, *, context: str = "config") -> Any:
+    if key not in mapping:
+        raise KeyError(f"Missing required config parameter: {context}.{key}")
+    return mapping[key]
+
+
+def require_config_section(mapping: dict[str, Any], key: str, *, context: str = "config") -> dict[str, Any]:
+    value = require_config(mapping, key, context=context)
+    if not isinstance(value, dict):
+        raise TypeError(f"Config parameter {context}.{key} must be a mapping.")
+    return value
+
+
 def save_yaml(obj: Any, path: str | Path) -> None:
     path = Path(path)
     ensure_dir(path.parent)

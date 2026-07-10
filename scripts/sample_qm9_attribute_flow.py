@@ -18,7 +18,7 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--steps", type=int, default=32)
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-graphs", type=int, default=None)
     args = parser.parse_args()
