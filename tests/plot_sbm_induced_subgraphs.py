@@ -12,6 +12,10 @@ from grapher.data.io import load_dataset_splits
 from grapher.utils.motifs import NautyCanonicalizer, aggregate_unique_motifs_with_counts
 
 
+def log(message: str) -> None:
+    print(f"[debug] {message}", flush=True)
+
+
 def plot_subgraphs(rows: list[tuple[nx.Graph, str, float]], *, output_path: Path, columns: int) -> None:
     if not rows:
         raise ValueError("No induced subgraphs to plot.")
@@ -62,6 +66,12 @@ def main() -> None:
         default=0,
         help="Maximum number of train graphs to aggregate. Use 0 for all train graphs.",
     )
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=25,
+        help="Print aggregation progress every N graphs within each k. Use 0 to disable.",
+    )
     parser.add_argument("--columns", type=int, default=6)
     parser.add_argument("--output", default="outputs/plots/qm9_topology_induced_subgraphs.png")
     args = parser.parse_args()
@@ -105,6 +115,8 @@ def main() -> None:
             k,
             connected_only=True,
             canonicalizer=canonicalizer,
+            progress_interval=max(int(args.progress_interval), 0),
+            log_fn=log,
         )
         print(f"[debug] unique connected motif count={len(motif_counts)}", flush=True)
 

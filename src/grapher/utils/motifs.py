@@ -391,6 +391,8 @@ def aggregate_unique_motifs_with_counts(
     canonicalizer: NautyCanonicalizer | None = None,
     connected_only: bool = True,
     batch_size: int = 4096,
+    progress_interval: int = 0,
+    log_fn=None,
 ) -> list[tuple[nx.Graph, int]]:
     """
     Return unique induced k-node motif types and their total occurrence counts
@@ -400,7 +402,8 @@ def aggregate_unique_motifs_with_counts(
 
     counts: Counter[str] = Counter()
 
-    for G in graphs:
+    total_graphs = len(graphs)
+    for graph_idx, G in enumerate(graphs, start=1):
         counts.update(
             graphlet_count_dict(
                 G,
@@ -410,6 +413,19 @@ def aggregate_unique_motifs_with_counts(
                 batch_size=batch_size,
             )
         )
+        if progress_interval and (
+            graph_idx == 1
+            or graph_idx % int(progress_interval) == 0
+            or graph_idx == total_graphs
+        ):
+            message = (
+                f"k={k} graph={graph_idx}/{total_graphs} "
+                f"unique_motifs={len(counts)} total_occurrences={sum(counts.values())}"
+            )
+            if log_fn is not None:
+                log_fn(message)
+            else:
+                print(message, flush=True)
 
     return [
         (nx.from_graph6_bytes(key.encode("ascii")), int(counts[key]))
