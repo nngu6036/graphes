@@ -75,7 +75,8 @@ def main() -> None:
     )
     parser.add_argument("--dataset", default="qm9_topology")
     parser.add_argument("--root", default="outputs/datasets")
-    parser.add_argument("--k", type=int, default=3)
+    parser.add_argument("--k-min", type=int, default=3)
+    parser.add_argument("--k-max", type=int, default=5)
     parser.add_argument(
         "--max-subgraphs",
         type=int,
@@ -86,8 +87,8 @@ def main() -> None:
     parser.add_argument("--output", default="outputs/plots/qm9_topology_induced_subgraphs.png")
     args = parser.parse_args()
 
-    if args.k <= 0:
-        raise ValueError("--k must be positive.")
+    if args.k_min <= 0 or args.k_max < args.k_min:
+        raise ValueError("Require 1 <= --k-min <= --k-max.")
 
     config_path = Path("configs/datasets") / f"{args.dataset}.yaml"
     if not config_path.exists():
@@ -109,71 +110,87 @@ def main() -> None:
     graph = graphs[graph_index]
     print(
         f"[debug] selected train graph index={graph_index} "
-        f"n={graph.number_of_nodes()} m={graph.number_of_edges()} k={args.k}",
+        f"n={graph.number_of_nodes()} m={graph.number_of_edges()} "
+        f"k_min={args.k_min} k_max={args.k_max}",
         flush=True,
     )
 
-    print("[debug] counting induced subgraphs", flush=True)
-    total_subgraphs, connected_subgraphs = maybe_count_connected_induced_subgraphs(graph, args.k)
-    if connected_subgraphs is None:
+    output_path = Path(args.output)
+    output_paths: list[Path] = []
+    for k in range(int(args.k_min), int(args.k_max) + 1):
+        print(f"[debug] processing k={k}", flush=True)
+        print("[debug] counting induced subgraphs", flush=True)
+        total_subgraphs, connected_subgraphs = maybe_count_connected_induced_subgraphs(graph, k)
+        if connected_subgraphs is None:
+            print(
+                f"[debug] induced subgraph count total={total_subgraphs}; "
+                f"connected exact count skipped because total>{MAX_EXACT_CONNECTED_COUNT}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[debug] induced subgraph count total={total_subgraphs} connected={connected_subgraphs}",
+                flush=True,
+            )
+
+        canonicalizer = NautyCanonicalizer()
+        sample_count = min(MOTIF_SUBGRAPH_SAMPLES, total_subgraphs)
         print(
-            f"[debug] induced subgraph count total={total_subgraphs}; "
-            f"connected exact count skipped because total>{MAX_EXACT_CONNECTED_COUNT}",
+            f"[debug] listing unique connected motifs from sampled induced subgraphs "
+            f"num_samples={sample_count}",
             flush=True,
         )
-    else:
+        sampled_keys = k_induced_subgraph_canonical_strings(
+            graph,
+            k,
+            connected_only=True,
+            unique=False,
+            num_samples=sample_count,
+            rng=np.random.default_rng(RANDOM_SEED + k),
+            canonicalizer=canonicalizer,
+        )
+        key_counts = Counter(sampled_keys)
+        total_key_count = sum(key_counts.values())
+        keys = sorted(key_counts)
+        motifs = [nx.from_graph6_bytes(key.encode("ascii")) for key in keys]
+        print(f"[debug] sampled unique connected motif count={len(motifs)}", flush=True)
+        max_subgraphs = int(args.max_subgraphs)
+        if max_subgraphs > 0:
+            keys = keys[:max_subgraphs]
+            motifs = motifs[:max_subgraphs]
+            print(f"[debug] capped plotted motifs to max_subgraphs={max_subgraphs}", flush=True)
+
+        selected = [
+            (motif, key, float(key_counts[key]) / max(float(total_key_count), 1.0))
+            for motif, key in zip(motifs, keys)
+        ]
+        for idx, (motif, key, frequency) in enumerate(selected, start=1):
+            print(
+                f"[debug] motif {idx}/{len(selected)} "
+                f"canonical={key} frequency={frequency:.6f} "
+                f"count={key_counts[key]} n={motif.number_of_nodes()} m={motif.number_of_edges()}",
+                flush=True,
+            )
+
         print(
-            f"[debug] induced subgraph count total={total_subgraphs} connected={connected_subgraphs}",
-            flush=True,
+            f"graph_index={graph_index} "
+            f"n={graph.number_of_nodes()} m={graph.number_of_edges()} k={k} "
+            f"unique_connected_motifs={len(keys)} plotted={len(selected)}"
         )
 
-    canonicalizer = NautyCanonicalizer()
-    sample_count = min(MOTIF_SUBGRAPH_SAMPLES, total_subgraphs)
+        if args.k_min == args.k_max:
+            k_output_path = output_path
+        else:
+            k_output_path = output_path.with_name(f"{output_path.stem}_k{k}{output_path.suffix}")
+        plot_subgraphs(selected, output_path=k_output_path, columns=args.columns)
+        output_paths.append(k_output_path)
+        print(f"Saved plot to: {k_output_path}")
+
     print(
-        f"[debug] listing unique connected motifs from sampled induced subgraphs "
-        f"num_samples={sample_count}",
+        "Saved plots: "
+        + ", ".join(str(path) for path in output_paths),
         flush=True,
     )
-    sampled_keys = k_induced_subgraph_canonical_strings(
-        graph,
-        args.k,
-        connected_only=True,
-        unique=False,
-        num_samples=sample_count,
-        rng=np.random.default_rng(RANDOM_SEED),
-        canonicalizer=canonicalizer,
-    )
-    key_counts = Counter(sampled_keys)
-    total_key_count = sum(key_counts.values())
-    keys = sorted(key_counts)
-    motifs = [nx.from_graph6_bytes(key.encode("ascii")) for key in keys]
-    print(f"[debug] sampled unique connected motif count={len(motifs)}", flush=True)
-    max_subgraphs = int(args.max_subgraphs)
-    if max_subgraphs > 0:
-        keys = keys[:max_subgraphs]
-        motifs = motifs[:max_subgraphs]
-        print(f"[debug] capped plotted motifs to max_subgraphs={max_subgraphs}", flush=True)
-
-    selected = [
-        (motif, key, float(key_counts[key]) / max(float(total_key_count), 1.0))
-        for motif, key in zip(motifs, keys)
-    ]
-    for idx, (motif, key, frequency) in enumerate(selected, start=1):
-        print(
-            f"[debug] motif {idx}/{len(selected)} "
-            f"canonical={key} frequency={frequency:.6f} "
-            f"count={key_counts[key]} n={motif.number_of_nodes()} m={motif.number_of_edges()}",
-            flush=True,
-        )
-
-    print(
-        f"graph_index={graph_index} "
-        f"n={graph.number_of_nodes()} m={graph.number_of_edges()} k={args.k} "
-        f"unique_connected_motifs={len(keys)} plotted={len(selected)}"
-    )
-
-    plot_subgraphs(selected, output_path=Path(args.output), columns=args.columns)
-    print(f"Saved plot to: {args.output}")
 
 
 if __name__ == "__main__":
