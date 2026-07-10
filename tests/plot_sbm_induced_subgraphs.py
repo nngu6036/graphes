@@ -27,10 +27,10 @@ def plot_subgraphs(rows: list[tuple[nx.Graph, str, float]], *, output_path: Path
     for ax in axes.ravel():
         ax.axis("off")
 
-    for idx, (ax, (subgraph, key, frequency)) in enumerate(zip(axes.ravel(), rows), start=1):
+    for idx, (ax, (subgraph, key, percentage)) in enumerate(zip(axes.ravel(), rows), start=1):
         print(
             f"[debug] plotting motif {idx}/{len(rows)} "
-            f"canonical={key} frequency={frequency:.6f} "
+            f"canonical={key} percentage={percentage:.2f}% "
             f"n={subgraph.number_of_nodes()} m={subgraph.number_of_edges()}",
             flush=True,
         )
@@ -38,7 +38,7 @@ def plot_subgraphs(rows: list[tuple[nx.Graph, str, float]], *, output_path: Path
         nx.draw_networkx_nodes(subgraph, pos, ax=ax, node_size=360, node_color="#d9d9d9", edgecolors="#333333")
         nx.draw_networkx_edges(subgraph, pos, ax=ax, width=1.6, edge_color="#333333")
         nx.draw_networkx_labels(subgraph, pos, ax=ax, font_size=8)
-        ax.set_title(f"{key}\nf={frequency:.4f}", fontsize=8)
+        ax.set_title(f"{key}\n{percentage:.2f}%", fontsize=8)
 
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,7 +48,7 @@ def plot_subgraphs(rows: list[tuple[nx.Graph, str, float]], *, output_path: Path
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Aggregate unique connected k-node motifs across QM9 topology train graphs and plot them with frequencies."
+        description="Aggregate unique connected k-node motifs across QM9 topology train graphs and plot them with dataset-normalized percentages."
     )
     parser.add_argument("--dataset", default="qm9_topology")
     parser.add_argument("--root", default="outputs/datasets")
@@ -123,7 +123,7 @@ def main() -> None:
         keys = canonicalizer.canonical_graph6_batch([motif for motif, _ in motif_counts])
         total_count = sum(count for _, count in motif_counts)
         selected = [
-            (motif, key, float(count) / max(float(total_count), 1.0))
+            (motif, key, 100.0 * float(count) / max(float(len(graphs)), 1.0))
             for (motif, count), key in zip(motif_counts, keys)
         ]
         max_subgraphs = int(args.max_subgraphs)
@@ -131,11 +131,11 @@ def main() -> None:
             selected = selected[:max_subgraphs]
             print(f"[debug] capped plotted motifs to max_subgraphs={max_subgraphs}", flush=True)
 
-        for idx, (motif, key, frequency) in enumerate(selected, start=1):
-            count = int(round(frequency * max(float(total_count), 1.0)))
+        for idx, (motif, key, percentage) in enumerate(selected, start=1):
+            count = int(round(percentage * max(float(len(graphs)), 1.0) / 100.0))
             print(
                 f"[debug] motif {idx}/{len(selected)} "
-                f"canonical={key} frequency={frequency:.6f} "
+                f"canonical={key} percentage={percentage:.2f}% "
                 f"count={count} n={motif.number_of_nodes()} m={motif.number_of_edges()}",
                 flush=True,
             )
