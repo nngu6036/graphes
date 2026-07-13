@@ -122,7 +122,7 @@ def main() -> None:
         "--max-subgraphs",
         type=int,
         default=48,
-        help="Maximum number of unique attributed motifs to plot. Use 0 to plot all.",
+        help="Maximum number of top-occurrence unique attributed motifs to plot. Use 0 to plot all.",
     )
     parser.add_argument(
         "--max-graphs",
@@ -176,13 +176,21 @@ def main() -> None:
         )
         log(f"unique connected attributed motif count={len(motif_counts)}")
         total_count = sum(count for _, count in motif_counts)
+        motif_counts = sorted(
+            motif_counts,
+            key=lambda item: (
+                -int(item[1]),
+                item[0].number_of_nodes(),
+                item[0].number_of_edges(),
+            ),
+        )
         selected = [
             (motif, count, float(count) / max(float(len(graphs)), 1.0))
             for motif, count in motif_counts
         ]
         if int(args.max_subgraphs) > 0:
             selected = selected[: int(args.max_subgraphs)]
-            log(f"capped plotted motifs to max_subgraphs={args.max_subgraphs}")
+            log(f"capped plotted motifs to top max_subgraphs={args.max_subgraphs} by occurrence count")
 
         for idx, (motif, count, normalized_count) in enumerate(selected, start=1):
             log(
