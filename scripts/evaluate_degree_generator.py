@@ -56,6 +56,7 @@ def _sample_degree_sequences(
     batch_size: int,
     seed: int,
     device: str,
+    prior_mode: str = "model",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     model, vectorizer, _checkpoint = load_degree_vae_checkpoint(
         checkpoint_path, device=device
@@ -80,6 +81,7 @@ def _sample_degree_sequences(
                 deterministic_node_count=bool(
                     degree_cfg.get("deterministic", False)
                 ),
+                prior_mode=prior_mode,
                 device=next(model.parameters()).device,
             )
         batch = vectorizer.outputs_to_summaries(
@@ -91,6 +93,12 @@ def _sample_degree_sequences(
             ),
             max_resample=int(degree_cfg.get("max_resample", 200)),
             fallback=str(degree_cfg.get("fallback", "empirical_nearest_n")),
+            parity_conditioned=bool(
+                degree_cfg.get("parity_conditioned", True)
+            ),
+            max_parity_resample=int(
+                degree_cfg.get("max_parity_resample", 32)
+            ),
             include_diagnostics=True,
         )
         for summary in batch:
@@ -98,6 +106,70 @@ def _sample_degree_sequences(
             summaries.append(summary)
         remaining -= current_batch
     return summaries, diagnostics
+
+
+def _aggregate_posterior_sequences(
+    *,
+    checkpoint_path: str | Path,
+    graphs: list[nx.Graph],
+    degree_cfg: dict[str, Any],
+    num_samples: int,
+    batch_size: int,
+    seed: int,
+    device: str,
+) -> list[list[int]]:
+    """Sample z from the encoded training aggregate posterior and decode raw."""
+
+    model, vectorizer, _checkpoint = load_degree_vae_checkpoint(
+        checkpoint_path, device=device
+    )
+    x_np, targets_np = vectorizer.to_training_arrays(graphs)
+    rng = np.random.default_rng(seed)
+    torch.manual_seed(seed)
+    model_device = next(model.parameters()).device
+    sampled: list[list[int]] = []
+    remaining = int(num_samples)
+    while remaining > 0:
+        current_batch = min(max(int(batch_size), 1), remaining)
+        indices = rng.choice(len(graphs), size=current_batch, replace=True)
+        batch_x = torch.as_tensor(
+            x_np[indices], dtype=torch.float32, device=model_device
+        )
+        node_counts = torch.as_tensor(
+            targets_np["num_nodes_count"][indices],
+            dtype=torch.long,
+            device=model_device,
+        )
+        with torch.no_grad():
+            mu, logvar = model.encode(batch_x)
+            z = model.reparameterize(mu, logvar)
+            outputs = model.decode(z, node_counts)
+        decoded = vectorizer.outputs_to_summaries(
+            outputs,
+            rng=rng,
+            deterministic=False,
+            sample_num_nodes="conditioned",
+            max_resample=1,
+            fallback="empirical_nearest_n",
+            parity_conditioned=bool(
+                degree_cfg.get("parity_conditioned", True)
+            ),
+            max_parity_resample=int(
+                degree_cfg.get("max_parity_resample", 32)
+            ),
+            include_diagnostics=True,
+        )
+        for summary in decoded:
+            sampled.append(
+                [
+                    int(degree)
+                    for degree in summary["sampling_diagnostics"][
+                        "first_raw_degree_sequence"
+                    ]
+                ]
+            )
+        remaining -= current_batch
+    return sampled
 
 
 def _posterior_reconstruction_sequences(
@@ -138,6 +210,7 @@ def _posterior_reconstruction_sequences(
             sample_num_nodes="conditioned",
             max_resample=1,
             fallback="empirical_nearest_n",
+            parity_conditioned=False,
             include_diagnostics=True,
         )
         for summary in decoded:
@@ -224,6 +297,16 @@ def _quality_metrics(
             np.mean(
                 [
                     float(item.get("attempts_used", 0.0))
+                    for item in diagnostics
+                ]
+            )
+        )
+        if diagnostics
+        else 0.0,
+        "mean_parity_redraws": float(
+            np.mean(
+                [
+                    float(item.get("parity_redraws", 0.0))
                     for item in diagnostics
                 ]
             )
@@ -351,6 +434,7 @@ def main() -> None:
         batch_size=batch_size,
         seed=seed,
         device=device,
+        prior_mode="model",
     )
     generated_sequences = [
         [int(degree) for degree in summary["degree_sequence"]]
@@ -360,6 +444,28 @@ def main() -> None:
         [int(degree) for degree in item["first_raw_degree_sequence"]]
         for item in diagnostics
     ]
+    _, standard_diagnostics = _sample_degree_sequences(
+        checkpoint_path=checkpoint_path,
+        degree_cfg=degree_cfg,
+        num_samples=num_samples,
+        batch_size=batch_size,
+        seed=seed,
+        device=device,
+        prior_mode="standard_normal",
+    )
+    standard_normal_sequences = [
+        [int(degree) for degree in item["first_raw_degree_sequence"]]
+        for item in standard_diagnostics
+    ]
+    aggregate_posterior_sequences = _aggregate_posterior_sequences(
+        checkpoint_path=checkpoint_path,
+        graphs=train_graphs,
+        degree_cfg=degree_cfg,
+        num_samples=num_samples,
+        batch_size=batch_size,
+        seed=seed,
+        device=device,
+    )
     posterior_sequences = _posterior_reconstruction_sequences(
         checkpoint_path=checkpoint_path,
         graphs=test_graphs,
@@ -390,6 +496,18 @@ def main() -> None:
         train=train_sequences,
         degree_mmd_sigma=float(train_test["degree_mmd_sigma"]),
     )
+    aggregate_posterior_test = evaluate_degree_sequence_sets(
+        test_sequences,
+        aggregate_posterior_sequences,
+        train=train_sequences,
+        degree_mmd_sigma=float(train_test["degree_mmd_sigma"]),
+    )
+    standard_normal_test = evaluate_degree_sequence_sets(
+        test_sequences,
+        standard_normal_sequences,
+        train=train_sequences,
+        degree_mmd_sigma=float(train_test["degree_mmd_sigma"]),
+    )
     quality = _quality_metrics(
         summaries,
         diagnostics,
@@ -413,9 +531,13 @@ def main() -> None:
             "degree_mmd_sigma": float(train_test["degree_mmd_sigma"]),
             "constructor_check": not args.skip_constructor_check,
             "postprocessing_note": (
-                "Posterior reconstruction and raw-prior distribution metrics "
-                "are measured before repair. Accepted-prior metrics are "
-                "measured after rejection sampling, repair, or fallback."
+                "Posterior reconstruction, aggregate-posterior, standard-normal, "
+                "and learned-prior-raw metrics are measured before repair. "
+                "Learned-prior-accepted metrics are measured after rejection "
+                "sampling, repair, or fallback."
+            ),
+            "learned_prior_type": str(
+                load_degree_vae_checkpoint(checkpoint_path, device=device)[0].prior_type
             ),
         },
         "comparison_table": {
@@ -423,11 +545,24 @@ def main() -> None:
             "posterior_reconstruction_to_test": _compact_comparison(
                 posterior_test
             ),
-            "prior_raw_to_test": _compact_comparison(raw_prior_test),
-            "prior_accepted_to_test": _compact_comparison(generated_test),
+            "aggregate_posterior_to_test": _compact_comparison(
+                aggregate_posterior_test
+            ),
+            "standard_normal_prior_to_test": _compact_comparison(
+                standard_normal_test
+            ),
+            "learned_prior_raw_to_test": _compact_comparison(raw_prior_test),
+            "learned_prior_accepted_to_test": _compact_comparison(
+                generated_test
+            ),
         },
         "dh_vae_quality": quality,
         "posterior_reconstruction_distribution": posterior_test,
+        "aggregate_posterior_distribution": aggregate_posterior_test,
+        "standard_normal_prior_distribution": standard_normal_test,
+        "learned_prior_raw_distribution": raw_prior_test,
+        "learned_prior_accepted_distribution": generated_test,
+        # Backward-compatible aliases for downstream report readers.
         "prior_raw_distribution": raw_prior_test,
         "prior_accepted_distribution": generated_test,
         "train_test_baseline": train_test,
@@ -437,6 +572,10 @@ def main() -> None:
         {
             "accepted_degree_sequences": generated_sequences,
             "raw_prior_degree_sequences": raw_prior_sequences,
+            "standard_normal_prior_degree_sequences": standard_normal_sequences,
+            "aggregate_posterior_degree_sequences": (
+                aggregate_posterior_sequences
+            ),
             "posterior_reconstruction_degree_sequences": posterior_sequences,
         },
         output_dir / "generated_degree_sequences.json",
@@ -444,12 +583,12 @@ def main() -> None:
 
     print("\nDegree-sequence distribution matching (lower is better)")
     print(
-        f"{'Comparison':<20} {'KL(test||candidate)':>20} "
+        f"{'Comparison':<38} {'KL(test||candidate)':>20} "
         f"{'MMD':>12} {'Node TV':>12} {'Edge TV':>12}"
     )
     for name, metrics in report["comparison_table"].items():
         print(
-            f"{name:<20} {metrics['degree_kl']:>20.6f} "
+            f"{name:<38} {metrics['degree_kl']:>20.6f} "
             f"{metrics['degree_mmd']:>12.6f} "
             f"{metrics['node_count_tv']:>12.6f} "
             f"{metrics['edge_count_tv']:>12.6f}"

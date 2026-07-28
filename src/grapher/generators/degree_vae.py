@@ -67,6 +67,25 @@ def _integer_counts_from_probs(n: int, probs: np.ndarray) -> np.ndarray:
     return counts
 
 
+def _sample_even_degree_counts(
+    n: int,
+    probs: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    max_attempts: int = 32,
+) -> tuple[np.ndarray, int]:
+    """Sample a multinomial histogram conditional on an even degree sum."""
+
+    attempts = max(int(max_attempts), 1)
+    counts = rng.multinomial(int(n), _normalize(probs))
+    for draw in range(1, attempts + 1):
+        if int(np.dot(np.arange(counts.size), counts)) % 2 == 0:
+            return counts, draw
+        if draw < attempts:
+            counts = rng.multinomial(int(n), _normalize(probs))
+    return counts, attempts
+
+
 def connected_feasible_degree_sequence(sequence: list[int]) -> bool:
     n = len(sequence)
     if n <= 1:
@@ -217,6 +236,8 @@ class DegreeVectorizer:
         sample_num_nodes: str = "empirical",
         max_resample: int = 200,
         fallback: str = "empirical_nearest_n",
+        parity_conditioned: bool = True,
+        max_parity_resample: int = 32,
         include_diagnostics: bool = False,
     ) -> list[dict[str, Any]]:
         generator = rng if rng is not None else np.random.default_rng(0)
@@ -256,12 +277,23 @@ class DegreeVectorizer:
             repair_used = False
             fallback_used = False
             accepted_without_postprocessing = False
+            parity_draws_total = 0
             attempt_limit = 1 if deterministic else max(int(max_resample), 1)
             for attempt in range(attempt_limit):
                 if deterministic:
                     counts = _integer_counts_from_probs(n, degree_probs)
+                    parity_draws = 1
+                elif parity_conditioned:
+                    counts, parity_draws = _sample_even_degree_counts(
+                        n,
+                        degree_probs,
+                        generator,
+                        max_attempts=max_parity_resample,
+                    )
                 else:
                     counts = generator.multinomial(int(n), degree_probs)
+                    parity_draws = 1
+                parity_draws_total += int(parity_draws)
                 raw_seq = _degree_counts_to_sequence(counts)
                 if first_raw_sequence is None:
                     first_raw_sequence = list(raw_seq)
@@ -361,6 +393,10 @@ class DegreeVectorizer:
                     "repair_l1_adjustment": repair_l1,
                     "fallback_used": bool(fallback_used),
                     "attempts_used": int(attempts_used),
+                    "parity_draws": int(parity_draws_total),
+                    "parity_redraws": int(
+                        max(parity_draws_total - attempts_used, 0)
+                    ),
                     "accepted_without_postprocessing": bool(
                         accepted_without_postprocessing
                     ),
@@ -415,11 +451,26 @@ class DegreeHistogramVAE(nn.Module):
         max_nodes: int,
         max_degree: int,
         size_condition_dim: int = 16,
+        prior_type: str = "conditional_gmm",
+        prior_components: int = 4,
+        prior_hidden_dim: int | None = None,
+        prior_logvar_min: float = -6.0,
+        prior_logvar_max: float = 4.0,
         num_layers: int = 2,
         dropout: float = 0.0,
     ):
         super().__init__()
-        self.architecture_version = 2
+        prior_type = str(prior_type).lower()
+        if prior_type not in {"standard_normal", "conditional_gaussian", "conditional_gmm"}:
+            raise ValueError(
+                "prior_type must be standard_normal, conditional_gaussian, "
+                "or conditional_gmm."
+            )
+        if prior_type == "conditional_gaussian":
+            prior_components = 1
+        if int(prior_components) < 1:
+            raise ValueError("prior_components must be at least one.")
+        self.architecture_version = 3
         self.input_dim = int(input_dim)
         self.latent_dim = int(latent_dim)
         self.hidden_dim = int(hidden_dim)
@@ -428,6 +479,11 @@ class DegreeHistogramVAE(nn.Module):
         self.max_nodes = int(max_nodes)
         self.max_degree = int(max_degree)
         self.size_condition_dim = int(size_condition_dim)
+        self.prior_type = prior_type
+        self.prior_components = int(prior_components)
+        self.prior_hidden_dim = int(prior_hidden_dim or hidden_dim)
+        self.prior_logvar_min = float(prior_logvar_min)
+        self.prior_logvar_max = float(prior_logvar_max)
         self.num_layers = int(num_layers)
         self.dropout = float(dropout)
         self.encoder = MLP(input_dim, hidden_dim, num_layers=num_layers, dropout=dropout)
@@ -444,6 +500,30 @@ class DegreeHistogramVAE(nn.Module):
             num_layers=1,
             dropout=dropout,
         )
+        if self.prior_type != "standard_normal":
+            self.conditional_prior = MLP(
+                2,
+                self.prior_hidden_dim,
+                output_dim=self.prior_components * (1 + 2 * self.latent_dim),
+                num_layers=1,
+                dropout=dropout,
+            )
+            final = self.conditional_prior.net[-1]
+            if isinstance(final, nn.Linear):
+                nn.init.zeros_(final.weight)
+                nn.init.zeros_(final.bias)
+                if self.prior_components > 1:
+                    with torch.no_grad():
+                        bias = final.bias.reshape(
+                            self.prior_components,
+                            1 + 2 * self.latent_dim,
+                        )
+                        bias[:, 1] = torch.linspace(
+                            -0.1,
+                            0.1,
+                            self.prior_components,
+                            device=bias.device,
+                        )
         self.degree_decoder = MLP(
             latent_dim + self.size_condition_dim,
             hidden_dim,
@@ -472,6 +552,62 @@ class DegreeHistogramVAE(nn.Module):
             float(np.log1p(self.max_nodes)), 1.0
         )
         return torch.cat([linear, logarithmic], dim=-1)
+
+    def prior_parameters(
+        self, node_counts: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        node_counts = node_counts.to(
+            device=next(self.parameters()).device, dtype=torch.long
+        ).reshape(-1)
+        batch = int(node_counts.shape[0])
+        if self.prior_type == "standard_normal":
+            logits = torch.zeros(batch, 1, device=node_counts.device)
+            means = torch.zeros(
+                batch, 1, self.latent_dim, device=node_counts.device
+            )
+            logvars = torch.zeros_like(means)
+        else:
+            raw = self.conditional_prior(self._size_features(node_counts))
+            raw = raw.reshape(
+                batch, self.prior_components, 1 + 2 * self.latent_dim
+            )
+            logits = raw[..., 0]
+            means = raw[..., 1 : 1 + self.latent_dim]
+            logvars = raw[..., 1 + self.latent_dim :].clamp(
+                min=self.prior_logvar_min, max=self.prior_logvar_max
+            )
+        return {
+            "prior_logits": logits,
+            "prior_means": means,
+            "prior_logvars": logvars,
+        }
+
+    def sample_prior(
+        self,
+        node_counts: torch.Tensor,
+        *,
+        prior_mode: str = "model",
+    ) -> torch.Tensor:
+        prior_mode = str(prior_mode).lower()
+        node_counts = node_counts.to(
+            device=next(self.parameters()).device, dtype=torch.long
+        ).reshape(-1)
+        if prior_mode == "standard_normal":
+            return torch.randn(
+                node_counts.shape[0],
+                self.latent_dim,
+                device=node_counts.device,
+            )
+        if prior_mode != "model":
+            raise ValueError("prior_mode must be 'model' or 'standard_normal'.")
+        params = self.prior_parameters(node_counts)
+        components = torch.distributions.Categorical(
+            logits=params["prior_logits"]
+        ).sample()
+        rows = torch.arange(node_counts.shape[0], device=node_counts.device)
+        means = params["prior_means"][rows, components]
+        logvars = params["prior_logvars"][rows, components]
+        return means + torch.randn_like(means) * torch.exp(0.5 * logvars)
 
     def decode(
         self, z: torch.Tensor, node_counts: torch.Tensor
@@ -516,7 +652,10 @@ class DegreeHistogramVAE(nn.Module):
         z = self.reparameterize(mu, logvar)
         if node_counts is None:
             node_counts = torch.round(x[:, 0] * float(self.max_nodes)).long()
-        return self.decode(z, node_counts), mu, logvar
+        outputs = self.decode(z, node_counts)
+        outputs.update(self.prior_parameters(node_counts))
+        outputs["latent_z"] = z
+        return outputs, mu, logvar
 
     @torch.no_grad()
     def reconstruct_outputs(
@@ -537,13 +676,14 @@ class DegreeHistogramVAE(nn.Module):
         *,
         node_counts: torch.Tensor | np.ndarray | list[int] | None = None,
         deterministic_node_count: bool = False,
+        prior_mode: str = "model",
         device: torch.device | str | None = None,
     ) -> dict[str, torch.Tensor]:
         if device is None:
             device = next(self.parameters()).device
-        z = torch.randn(int(num_samples), self.latent_dim, device=device)
         if node_counts is None:
-            logits = self.node_count_logits(z)
+            size_z = torch.randn(int(num_samples), self.latent_dim, device=device)
+            logits = self.node_count_logits(size_z)
             if deterministic_node_count:
                 indices = torch.argmax(logits, dim=-1)
             else:
@@ -553,6 +693,7 @@ class DegreeHistogramVAE(nn.Module):
             node_counts = torch.as_tensor(
                 node_counts, dtype=torch.long, device=device
             )
+        z = self.sample_prior(node_counts, prior_mode=prior_mode)
         return self.decode(z, node_counts)
 
     def model_config(self) -> dict[str, Any]:
@@ -566,6 +707,11 @@ class DegreeHistogramVAE(nn.Module):
             "max_nodes": self.max_nodes,
             "max_degree": self.max_degree,
             "size_condition_dim": self.size_condition_dim,
+            "prior_type": self.prior_type,
+            "prior_components": self.prior_components,
+            "prior_hidden_dim": self.prior_hidden_dim,
+            "prior_logvar_min": self.prior_logvar_min,
+            "prior_logvar_max": self.prior_logvar_max,
             "num_layers": self.num_layers,
             "dropout": self.dropout,
         }
@@ -578,6 +724,35 @@ def soft_histogram_ce(logits: torch.Tensor, target: torch.Tensor) -> torch.Tenso
 
 def kl_loss(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
     return -0.5 * torch.mean(torch.sum(1.0 + logvar - mu.pow(2) - logvar.exp(), dim=-1))
+
+
+def conditional_prior_kl(
+    z: torch.Tensor,
+    mu: torch.Tensor,
+    logvar: torch.Tensor,
+    prior_logits: torch.Tensor,
+    prior_means: torch.Tensor,
+    prior_logvars: torch.Tensor,
+) -> torch.Tensor:
+    """Monte Carlo KL(q(z|x) || p(z|n)) for a diagonal Gaussian-mixture prior."""
+
+    log_two_pi = float(np.log(2.0 * np.pi))
+    log_q = -0.5 * torch.sum(
+        log_two_pi + logvar + (z - mu).pow(2) * torch.exp(-logvar),
+        dim=-1,
+    )
+    expanded_z = z.unsqueeze(1)
+    component_log_prob = -0.5 * torch.sum(
+        log_two_pi
+        + prior_logvars
+        + (expanded_z - prior_means).pow(2) * torch.exp(-prior_logvars),
+        dim=-1,
+    )
+    log_p = torch.logsumexp(
+        F.log_softmax(prior_logits, dim=-1) + component_log_prob,
+        dim=-1,
+    )
+    return torch.mean(log_q - log_p)
 
 
 def degree_vae_loss(
@@ -599,7 +774,22 @@ def degree_vae_loss(
         predicted_mean_degree / degree_scale,
         target_mean_degree / degree_scale,
     )
-    kld = kl_loss(mu, logvar)
+    if {
+        "latent_z",
+        "prior_logits",
+        "prior_means",
+        "prior_logvars",
+    }.issubset(outputs):
+        kld = conditional_prior_kl(
+            outputs["latent_z"],
+            mu,
+            logvar,
+            outputs["prior_logits"],
+            outputs["prior_means"],
+            outputs["prior_logvars"],
+        )
+    else:
+        kld = kl_loss(mu, logvar)
     total = (
         float(weights.get("num_nodes", 1.0)) * n_loss
         + float(weights.get("degree", 5.0)) * degree_loss
@@ -625,6 +815,11 @@ def build_degree_vae(
     latent_dim: int = 32,
     hidden_dim: int = 128,
     size_condition_dim: int = 16,
+    prior_type: str = "conditional_gmm",
+    prior_components: int = 4,
+    prior_hidden_dim: int | None = None,
+    prior_logvar_min: float = -6.0,
+    prior_logvar_max: float = 4.0,
     num_layers: int = 2,
     dropout: float = 0.0,
 ) -> DegreeHistogramVAE:
@@ -637,6 +832,11 @@ def build_degree_vae(
         max_nodes=vectorizer.max_nodes,
         max_degree=vectorizer.max_degree,
         size_condition_dim=int(size_condition_dim),
+        prior_type=str(prior_type),
+        prior_components=int(prior_components),
+        prior_hidden_dim=prior_hidden_dim,
+        prior_logvar_min=float(prior_logvar_min),
+        prior_logvar_max=float(prior_logvar_max),
         num_layers=int(num_layers),
         dropout=float(dropout),
     )
@@ -668,11 +868,21 @@ def load_degree_vae_checkpoint(path: str | Path, *, device: torch.device | str =
     resolved_device = resolve_torch_device(device)
     checkpoint = torch.load(path, map_location=resolved_device)
     model_config = dict(checkpoint.get("model_config", {}))
-    if int(model_config.get("architecture_version", 1)) != 2:
+    architecture_version = int(model_config.get("architecture_version", 1))
+    if architecture_version == 1:
         raise RuntimeError(
             "This checkpoint uses the old unconditional DH-VAE decoder. "
             "Retrain it with scripts/train_degree_generator.py so decoding is "
             "conditioned on graph size."
+        )
+    if architecture_version == 2:
+        # Version 2 is the corrected size-conditioned decoder with a fixed
+        # standard-normal prior. Keep it loadable for baseline evaluation.
+        model_config.setdefault("prior_type", "standard_normal")
+        model_config.setdefault("prior_components", 1)
+    elif architecture_version != 3:
+        raise RuntimeError(
+            f"Unsupported DH-VAE architecture version {architecture_version}."
         )
     model_config.pop("architecture_version", None)
     vectorizer = DegreeVectorizer(**checkpoint["vectorizer"])

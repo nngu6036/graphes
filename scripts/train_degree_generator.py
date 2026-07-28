@@ -121,6 +121,13 @@ def main() -> None:
             require_config(degree_cfg, "hidden_dim", context="config.degree_generator")
         ),
         size_condition_dim=int(degree_cfg.get("size_condition_dim", 16)),
+        prior_type=str(degree_cfg.get("prior_type", "conditional_gmm")),
+        prior_components=int(degree_cfg.get("prior_components", 4)),
+        prior_hidden_dim=int(
+            degree_cfg.get("prior_hidden_dim", degree_cfg.get("hidden_dim", 128))
+        ),
+        prior_logvar_min=float(degree_cfg.get("prior_logvar_min", -6.0)),
+        prior_logvar_max=float(degree_cfg.get("prior_logvar_max", 4.0)),
         num_layers=int(
             require_config(degree_cfg, "num_layers", context="config.degree_generator")
         ),

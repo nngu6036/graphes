@@ -115,6 +115,12 @@ def test_size_conditioned_vae_loss_and_checkpoint_round_trip(tmp_path):
     assert np.isfinite(float(loss.detach()))
     assert np.isfinite(metrics["degree_moment_loss"])
     assert model.degree_head.weight.grad is not None
+    assert model.prior_type == "conditional_gmm"
+    assert model.prior_components == 4
+    assert any(
+        parameter.grad is not None
+        for parameter in model.conditional_prior.parameters()
+    )
 
     checkpoint = tmp_path / "degree_vae.pt"
     save_degree_vae_checkpoint(checkpoint, model, vectorizer)
@@ -126,6 +132,54 @@ def test_size_conditioned_vae_loss_and_checkpoint_round_trip(tmp_path):
     )
     assert sampled["conditioned_num_nodes"].tolist() == [8, 12]
     assert loaded_vectorizer.input_dim == vectorizer.input_dim
+    assert loaded.prior_type == "conditional_gmm"
+    assert loaded.prior_components == 4
+
+
+def test_parity_conditioned_sampling_produces_even_raw_sequence():
+    graphs = [nx.cycle_graph(4)]
+    vectorizer = DegreeVectorizer.fit(graphs, require_connected=True)
+    outputs = {
+        "num_nodes_logits": torch.tensor([[10.0]]),
+        "degree_logits": torch.tensor([[-10.0, 0.0, 0.0]]),
+        "conditioned_num_nodes": torch.tensor([4]),
+    }
+    summaries = vectorizer.outputs_to_summaries(
+        outputs,
+        rng=np.random.default_rng(7),
+        deterministic=False,
+        max_resample=1,
+        parity_conditioned=True,
+        max_parity_resample=128,
+        include_diagnostics=True,
+    )
+    diagnostic = summaries[0]["sampling_diagnostics"]
+    assert diagnostic["raw_even_degree_sum"]
+    assert diagnostic["parity_draws"] >= 1
+
+
+def test_conditional_gmm_prior_shapes_and_standard_normal_override():
+    vectorizer = DegreeVectorizer.fit(
+        [nx.path_graph(8), nx.cycle_graph(12)],
+        require_connected=True,
+    )
+    model = build_degree_vae(
+        vectorizer,
+        latent_dim=5,
+        hidden_dim=16,
+        prior_type="conditional_gmm",
+        prior_components=3,
+    )
+    node_counts = torch.tensor([8, 12])
+    params = model.prior_parameters(node_counts)
+    assert params["prior_logits"].shape == (2, 3)
+    assert params["prior_means"].shape == (2, 3, 5)
+    assert params["prior_logvars"].shape == (2, 3, 5)
+    learned_z = model.sample_prior(node_counts, prior_mode="model")
+    standard_z = model.sample_prior(
+        node_counts, prior_mode="standard_normal"
+    )
+    assert learned_z.shape == standard_z.shape == (2, 5)
 
 
 def test_degree_sequence_evaluation_is_zero_for_identical_sets():

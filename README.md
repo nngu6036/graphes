@@ -209,18 +209,29 @@ This creates the train/validation/test splits consumed by every later stage.
 
 ### Step 2: train the degree-sequence generator
 
-The corrected DH-VAE implements the paper's size-conditioned factorization
-\(p_\theta(D\mid n,z)\). The decoder receives a continuous embedding of the
-true graph size during training and of the sampled graph size during
-generation. The degree-moment loss is calculated from the decoded categorical
-distribution itself, so it directly constrains the implied edge count.
+The improved DH-VAE keeps the paper's size-conditioned decoder
+\(p_\theta(D\mid n,z)\), but replaces its fixed \(N(0,I)\) prior with
 
-Old checkpoints are incompatible because their decoder implements
-\(p_\theta(D\mid z)\). Remove or rename the old checkpoint, then retrain:
+\[
+p_\gamma(z\mid n)=
+\sum_{c=1}^{C}\alpha_c(n)
+\mathcal N(z;\mu_c(n),\operatorname{diag}(\sigma_c^2(n))).
+\]
+
+The encoder is trained against this learned prior with a Monte Carlo estimate
+of \(\mathrm{KL}(q_\phi(z\mid h_D,n)\Vert p_\gamma(z\mid n))\). The default
+configuration uses four components. The degree-moment loss is calculated from
+the decoded categorical distribution itself, so it directly constrains the
+implied edge count.
+
+Version-1 checkpoints are incompatible because their decoder implements
+\(p_\theta(D\mid z)\). Version-2 size-conditioned checkpoints remain loadable
+as standard-normal baselines, but retraining is required to learn the
+conditional mixture prior:
 
 ```bash
 mv outputs/degree_generators/sbm_target_refinement/checkpoint.pt \
-  outputs/degree_generators/sbm_target_refinement/checkpoint_unconditional.pt
+  outputs/degree_generators/sbm_target_refinement/checkpoint_standard_normal.pt
 
 PYTHONPATH=src python scripts/train_degree_generator.py \
   --config configs/experiments/sbm_target_refinement.yaml
@@ -248,21 +259,27 @@ outputs/degree_generators/sbm_target_refinement/evaluation/degree_evaluation.jso
 outputs/degree_generators/sbm_target_refinement/evaluation/generated_degree_sequences.json
 ```
 
-The report contains four distribution comparisons using the same held-out test
+The report contains six distribution comparisons using the same held-out test
 split and the same RBF-kernel bandwidth:
 
 ```text
 Train <-> Test
 Posterior reconstruction -> Test
-Raw prior -> Test
-Accepted prior -> Test
+Aggregate posterior -> Test
+Standard-normal prior -> Test
+Learned conditional prior, raw -> Test
+Learned conditional prior, accepted -> Test
 ```
 
 `Posterior reconstruction` decodes the test histograms through
 \(q_\phi(z\mid h_D,n)\) using the posterior mean and performs no repair.
-`Raw prior` evaluates the first multinomial draw from \(z\sim N(0,I)\).
-`Accepted prior` evaluates the sequence after genuine rejection sampling and,
-only if the retry budget is exhausted, repair or empirical fallback.
+`Aggregate posterior` samples encoded training latents and diagnoses the
+distribution that the learned prior must match. `Standard-normal prior`
+preserves the previous \(z\sim N(0,I)\) baseline. The two learned-prior rows
+evaluate \(z\sim p_\gamma(z\mid n)\) before and after validity rejection.
+Parity-conditioned multinomial sampling avoids spending about half the
+attempts on odd degree sums; repair or empirical fallback is still used only
+after the retry budget is exhausted.
 
 For the manuscript table, use the accepted-prior `degree_kl` and `degree_mmd`.
 The KL direction is
@@ -293,13 +310,16 @@ that a hard guarantee. A healthy checkpoint should also have low KL/MMD
 relative to the Train-Test oracle gap, low fallback usage, and non-trivial
 sequence diversity.
 
-Interpret the three model rows as follows:
+Interpret the five model rows as follows:
 
 - high posterior MMD means the conditional decoder or reconstruction loss is
   inadequate;
-- low posterior MMD but high raw-prior MMD indicates posterior-prior mismatch;
-- low raw-prior MMD but high accepted-prior MMD means post-processing is
-  distorting the distribution.
+- aggregate-posterior MMD close to posterior-reconstruction MMD confirms that
+  the decoder can generate well from encoded latent regions;
+- learned-prior MMD lower than standard-normal-prior MMD shows that
+  \(p_\gamma(z\mid n)\) is closing the prior-posterior gap;
+- low learned-prior-raw MMD but high learned-prior-accepted MMD means
+  validity filtering or post-processing is distorting the distribution.
 
 For a quick smoke evaluation:
 

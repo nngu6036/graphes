@@ -21,6 +21,8 @@ class DegreeVAESampler:
         seed: int = 0,
         sample_num_nodes: str = "empirical",
         max_resample: int = 200,
+        parity_conditioned: bool = True,
+        max_parity_resample: int = 32,
         fallback: str = "empirical_nearest_n",
     ):
         self.checkpoint_path = str(checkpoint_path)
@@ -29,6 +31,8 @@ class DegreeVAESampler:
         self.seed = int(seed)
         self.sample_num_nodes = str(sample_num_nodes)
         self.max_resample = int(max_resample)
+        self.parity_conditioned = bool(parity_conditioned)
+        self.max_parity_resample = int(max_parity_resample)
         self.fallback = str(fallback)
         self._model = None
         self._vectorizer = None
@@ -51,6 +55,8 @@ class DegreeVAESampler:
             seed=int(data.get("seed", seed)),
             sample_num_nodes=str(data.get("sample_num_nodes", "empirical")),
             max_resample=int(data.get("max_resample", 200)),
+            parity_conditioned=bool(data.get("parity_conditioned", True)),
+            max_parity_resample=int(data.get("max_parity_resample", 32)),
             fallback=str(data.get("fallback", "empirical_nearest_n")),
         )
 
@@ -78,6 +84,8 @@ class DegreeVAESampler:
             deterministic=self.deterministic,
             sample_num_nodes=self.sample_num_nodes,
             max_resample=self.max_resample,
+            parity_conditioned=self.parity_conditioned,
+            max_parity_resample=self.max_parity_resample,
             fallback=self.fallback,
         )[0]
 
