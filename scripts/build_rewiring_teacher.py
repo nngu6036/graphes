@@ -12,13 +12,18 @@ import numpy as np
 
 from grapher.construction.coarse import construct_coarse_graph
 from grapher.data.io import load_dataset_splits
-from grapher.properties.sampler import EmpiricalSummarySampler, LearnedSummarySampler, maybe_wrap_with_degree_sampler
+from grapher.properties.sampler import (
+    EmpiricalSummarySampler,
+    LearnedSummarySampler,
+    maybe_wrap_with_degree_sampler,
+)
 from grapher.properties.summary import (
     SummaryConfig,
     distance_to_summary,
     extract_summary,
     summary_to_jsonable,
 )
+from grapher.refinement.learned_selector import load_learned_selector
 from grapher.refinement.rewiring import (
     Action,
     apply_action,
@@ -41,16 +46,31 @@ def _json_edges(edges) -> list[list[int]]:
 
 
 def _graph_to_edges(graph: nx.Graph) -> list[list[int]]:
-    return _json_edges((min(int(u), int(v)), max(int(u), int(v))) for u, v in graph.edges())
+    return _json_edges(
+        (min(int(u), int(v)), max(int(u), int(v))) for u, v in graph.edges()
+    )
 
 
-def _action_to_json(action: Action, delta_energy: float, candidate_energy: float) -> dict[str, Any]:
+def _action_to_json(
+    action: Action, delta_energy: float, candidate_energy: float
+) -> dict[str, Any]:
     removed, added = action
     return {
+        "type": "swap",
         "removed": _json_edges(removed),
         "added": _json_edges(added),
         "delta_energy": float(delta_energy),
         "candidate_energy": float(candidate_energy),
+    }
+
+
+def _stop_action_to_json(current_energy: float) -> dict[str, Any]:
+    return {
+        "type": "stop",
+        "removed": [],
+        "added": [],
+        "delta_energy": 0.0,
+        "candidate_energy": float(current_energy),
     }
 
 
@@ -141,7 +161,9 @@ def _maybe_build_learned_sampler(
     if generator_type not in {"learned", "summary_vae", "vae"}:
         return None
 
-    checkpoint_path = generator_cfg.get("checkpoint_path") or generator_cfg.get("checkpoint")
+    checkpoint_path = generator_cfg.get("checkpoint_path") or generator_cfg.get(
+        "checkpoint"
+    )
     if not checkpoint_path:
         return None
 
@@ -161,26 +183,32 @@ def _sample_target_summary(
 ) -> tuple[dict[str, Any], str]:
     target_source = str(teacher_cfg.get("target_source", "mixed")).lower()
 
-    if target_source == "empirical":
-        return empirical_sampler.sample(rng), "empirical"
+    if target_source in {"empirical", "oracle", "ground_truth"}:
+        return empirical_sampler.sample(rng), "oracle"
 
-    if target_source == "learned":
+    if target_source in {"learned", "predicted", "model"}:
         if learned_sampler is None:
             raise RuntimeError(
-                "teacher.target_source=learned but no learned summary sampler is available."
+                "teacher.target_source=predicted but no learned conditional "
+                "summary sampler is available."
             )
-        return learned_sampler.sample(rng), "learned"
+        return learned_sampler.sample(rng), "predicted"
 
-    if target_source == "mixed":
-        learned_prob = float(teacher_cfg.get("learned_target_prob", 0.5))
+    if target_source in {"mixed", "scheduled", "schedule"}:
+        learned_prob = float(
+            teacher_cfg.get(
+                "predicted_target_probability",
+                teacher_cfg.get("learned_target_prob", 0.5),
+            )
+        )
         empirical_prob = float(teacher_cfg.get("empirical_target_prob", 0.5))
         total = max(learned_prob + empirical_prob, 1.0e-12)
         learned_prob = learned_prob / total
 
         if learned_sampler is not None and float(rng.random()) < learned_prob:
-            return learned_sampler.sample(rng), "learned"
+            return learned_sampler.sample(rng), "predicted"
 
-        return empirical_sampler.sample(rng), "empirical"
+        return empirical_sampler.sample(rng), "oracle"
 
     raise ValueError(f"Unknown teacher.target_source: {target_source!r}")
 
@@ -195,6 +223,7 @@ def build_one_trajectory(
     energy_cfg: dict[str, Any],
     teacher_cfg: dict[str, Any],
     rng: np.random.Generator,
+    rollout_selector: Any | None = None,
 ) -> list[dict[str, Any]]:
     steps = int(teacher_cfg.get("steps", 20))
     candidate_budget = int(teacher_cfg.get("candidate_budget", 64))
@@ -203,6 +232,7 @@ def build_one_trajectory(
     temperature = float(teacher_cfg.get("temperature", 0.05))
     accept_only_improving = bool(teacher_cfg.get("accept_only_improving", True))
     min_improvement = float(teacher_cfg.get("min_improvement", 1.0e-12))
+    include_stop_action = bool(teacher_cfg.get("include_stop_action", True))
 
     graph = construct_coarse_graph(target_summary, constructor_cfg, rng)
     records: list[dict[str, Any]] = []
@@ -215,6 +245,7 @@ def build_one_trajectory(
     )
 
     for step in range(steps):
+        current_summary = extract_summary(graph, summary_config)
         candidates = sample_valid_double_edge_swaps(
             graph,
             candidate_budget,
@@ -223,6 +254,27 @@ def build_one_trajectory(
         )
 
         if not candidates:
+            if include_stop_action:
+                records.append(
+                    {
+                        "trajectory_id": int(trajectory_id),
+                        "step": int(step),
+                        "target_source": str(target_source),
+                        "num_nodes": int(graph.number_of_nodes()),
+                        "num_edges": int(graph.number_of_edges()),
+                        "edges": _graph_to_edges(graph),
+                        "current_summary": summary_to_jsonable(current_summary),
+                        "target_summary": summary_to_jsonable(target_summary),
+                        "current_energy": float(current_energy),
+                        "actions": [_stop_action_to_json(current_energy)],
+                        "teacher_probs": [1.0],
+                        "chosen_index": 0,
+                        "chosen_delta": 0.0,
+                        "best_delta": 0.0,
+                        "num_candidates": 0,
+                        "stopped": True,
+                    }
+                )
             break
 
         candidate_energies: list[float] = []
@@ -246,29 +298,75 @@ def build_one_trajectory(
         else:
             valid_mask = np.ones_like(deltas_np, dtype=bool)
 
-        if not np.any(valid_mask):
-            break
-
-        teacher_probs = _softmax_masked(
-            deltas_np,
-            temperature=temperature,
-            mask=valid_mask,
-        )
-
-        chosen_idx = _choose_action(
-            deltas_np,
-            teacher_probs,
-            selection=selection,
-            rng=rng,
-        )
-
-        chosen_action = candidates[chosen_idx]
-        chosen_delta = float(deltas_np[chosen_idx])
-
         action_records = [
             _action_to_json(action, delta, energy)
             for action, delta, energy in zip(candidates, deltas, candidate_energies)
         ]
+        if include_stop_action:
+            action_records.append(_stop_action_to_json(current_energy))
+            teacher_utilities = np.concatenate(
+                [deltas_np - min_improvement, np.asarray([0.0])]
+            )
+            teacher_mask = np.concatenate([valid_mask, np.asarray([True])])
+            teacher_probs = _softmax_masked(
+                teacher_utilities,
+                temperature=temperature,
+                mask=teacher_mask,
+            )
+        else:
+            teacher_probs = _softmax_masked(
+                deltas_np,
+                temperature=temperature,
+                mask=valid_mask,
+            )
+
+        should_stop = not np.any(valid_mask)
+        if should_stop:
+            if not include_stop_action:
+                break
+            chosen_idx = len(action_records) - 1
+            chosen_delta = 0.0
+        else:
+            real_probs = teacher_probs[: len(candidates)]
+            real_probs = real_probs / real_probs.sum()
+            chosen_idx = _choose_action(
+                deltas_np,
+                real_probs,
+                selection=selection,
+                rng=rng,
+            )
+            chosen_delta = float(deltas_np[chosen_idx])
+
+        rollout_idx = chosen_idx
+        if rollout_selector is not None and not should_stop:
+            rollout_logits = rollout_selector.score_actions(
+                graph,
+                target_summary,
+                candidates,
+                summary_config=summary_config,
+            )
+            rollout_selection = str(
+                teacher_cfg.get("rollout_selection", "greedy")
+            ).lower()
+            if rollout_selection in {"greedy", "argmax"}:
+                rollout_idx = int(np.argmax(rollout_logits))
+            elif rollout_selection in {"soft", "softmax", "sample"}:
+                temperature_rollout = max(
+                    float(teacher_cfg.get("rollout_temperature", 0.1)),
+                    1.0e-8,
+                )
+                rollout_probs = np.exp(
+                    (rollout_logits - np.max(rollout_logits)) / temperature_rollout
+                )
+                rollout_probs = rollout_probs / rollout_probs.sum()
+                rollout_idx = int(
+                    rng.choice(np.arange(len(candidates)), p=rollout_probs)
+                )
+            else:
+                raise ValueError(
+                    f"Unknown teacher.rollout_selection: {rollout_selection!r}"
+                )
+        rollout_delta = 0.0 if should_stop else float(deltas_np[rollout_idx])
 
         record = {
             "trajectory_id": int(trajectory_id),
@@ -277,20 +375,28 @@ def build_one_trajectory(
             "num_nodes": int(graph.number_of_nodes()),
             "num_edges": int(graph.number_of_edges()),
             "edges": _graph_to_edges(graph),
+            "current_summary": summary_to_jsonable(current_summary),
             "target_summary": summary_to_jsonable(target_summary),
             "current_energy": float(current_energy),
             "actions": action_records,
             "teacher_probs": [float(x) for x in teacher_probs.tolist()],
             "chosen_index": int(chosen_idx),
             "chosen_delta": float(chosen_delta),
+            "rollout_index": int(rollout_idx),
+            "rollout_delta": float(rollout_delta),
+            "state_source": ("on_policy" if rollout_selector is not None else "oracle"),
             "best_delta": float(np.max(deltas_np)),
-            "num_candidates": int(len(candidates)),
+            "num_candidates": len(candidates),
+            "stopped": bool(should_stop),
         }
 
         records.append(record)
 
+        if should_stop:
+            break
+        chosen_action = candidates[rollout_idx]
         graph = apply_action(graph, chosen_action)
-        current_energy = float(current_energy - chosen_delta)
+        current_energy = float(candidate_energies[rollout_idx])
 
     return records
 
@@ -347,6 +453,14 @@ def build_teacher_cache(
     else:
         _log("learned summary sampler loaded")
 
+    rollout_selector = None
+    rollout_checkpoint = teacher_cfg.get("rollout_selector_checkpoint")
+    if rollout_checkpoint:
+        selector_cfg = dict(config.get("selector", {}) or {})
+        selector_cfg["checkpoint_path"] = str(rollout_checkpoint)
+        rollout_selector = load_learned_selector(selector_cfg)
+        _log(f"on-policy rollout selector loaded: {rollout_checkpoint}")
+
     train_path = output_dir / "train.jsonl"
     val_path = output_dir / "val.jsonl"
     _log(
@@ -374,7 +488,10 @@ def build_teacher_cache(
     all_chosen_deltas: list[float] = []
     all_num_candidates: list[int] = []
 
-    with train_path.open("w", encoding="utf-8") as f_train, val_path.open("w", encoding="utf-8") as f_val:
+    with (
+        train_path.open("w", encoding="utf-8") as f_train,
+        val_path.open("w", encoding="utf-8") as f_val,
+    ):
         for trajectory_id in range(n_trajectories):
             if progress_interval and trajectory_id % progress_interval == 0:
                 elapsed = time.perf_counter() - started_at
@@ -407,8 +524,9 @@ def build_teacher_cache(
                     energy_cfg=energy_cfg,
                     teacher_cfg=teacher_cfg,
                     rng=rng,
+                    rollout_selector=rollout_selector,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - isolate failed trajectories
                 stats["num_empty_trajectories"] += 1
                 _log(f"trajectory {trajectory_id + 1}/{n_trajectories} failed: {exc}")
                 if debug:
@@ -418,7 +536,9 @@ def build_teacher_cache(
             if not records:
                 stats["num_empty_trajectories"] += 1
                 if debug:
-                    _log(f"trajectory {trajectory_id + 1}/{n_trajectories} produced no records")
+                    _log(
+                        f"trajectory {trajectory_id + 1}/{n_trajectories} produced no records"
+                    )
                 continue
 
             out = f_val if is_val else f_train
@@ -453,7 +573,9 @@ def build_teacher_cache(
         stats["mean_num_candidates"] = float(np.mean(all_num_candidates))
 
     elapsed_total = time.perf_counter() - started_at
-    _log(f"saving teacher report elapsed={elapsed_total:.1f}s records={stats['num_records']}")
+    _log(
+        f"saving teacher report elapsed={elapsed_total:.1f}s records={stats['num_records']}"
+    )
     save_json(stats, output_dir / "teacher_report.json")
 
     print("Teacher cache built")
@@ -475,18 +597,42 @@ def main() -> None:
         description="Build GraphER-Opt energy-guided rewiring teacher cache."
     )
     parser.add_argument("--config", required=True)
+    parser.add_argument(
+        "--target-source",
+        choices=["oracle", "predicted", "mixed"],
+        default=None,
+        help="Override teacher.target_source for curriculum stages.",
+    )
+    parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--num-trajectories", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--rollout-selector-checkpoint",
+        default=None,
+        help=(
+            "Visit states with this learned selector while retaining exact "
+            "energy-based teacher labels (DAgger-style aggregation)."
+        ),
+    )
     args = parser.parse_args()
 
     config = load_yaml(args.config)
 
-    teacher_cfg = config.get("teacher", {}) or {}
-    output_dir = teacher_cfg.get("output_dir") or "outputs/teachers/teacher"
+    teacher_cfg = dict(config.get("teacher", {}) or {})
+    if args.target_source is not None:
+        teacher_cfg["target_source"] = args.target_source
+    if args.rollout_selector_checkpoint is not None:
+        teacher_cfg["rollout_selector_checkpoint"] = args.rollout_selector_checkpoint
+    config["teacher"] = teacher_cfg
+    output_dir = (
+        args.output_dir or teacher_cfg.get("output_dir") or "outputs/teachers/teacher"
+    )
 
     build_teacher_cache(
         config,
         output_dir=output_dir,
-        num_trajectories=None,
-        seed=None,
+        num_trajectories=args.num_trajectories,
+        seed=args.seed,
         debug=bool(teacher_cfg.get("debug", False)),
         progress_interval=None,
     )

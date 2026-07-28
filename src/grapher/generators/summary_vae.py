@@ -8,16 +8,16 @@ from typing import Any
 import networkx as nx
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from grapher.properties.summary import SummaryConfig, extract_summary
+from grapher.utils.device import resolve_torch_device
 from grapher.utils.motifs import (
     flatten_graphlet_history,
     graphlet_keys_by_size,
     unflatten_graphlet_history,
 )
-from grapher.utils.device import resolve_torch_device
 
 
 @dataclass
@@ -48,36 +48,69 @@ class SummaryVectorizer:
         config: SummaryConfig | dict[str, Any] | None = None,
         *,
         require_connected: bool = True,
-    ) -> "SummaryVectorizer":
+    ) -> SummaryVectorizer:
         if not summaries:
             raise ValueError("Cannot fit SummaryVectorizer on an empty summary list.")
-        cfg = config if isinstance(config, SummaryConfig) else SummaryConfig.from_dict(config or {})
+        cfg = (
+            config
+            if isinstance(config, SummaryConfig)
+            else SummaryConfig.from_dict(config or {})
+        )
         min_nodes = min(int(s["num_nodes"]) for s in summaries)
         max_nodes = max(int(s["num_nodes"]) for s in summaries)
         max_edges = max(int(s.get("num_edges", 0)) for s in summaries)
         max_degree = cfg.degree_hist_max_degree
         if max_degree is None:
-            max_degree = max(max([0] + [int(d) for d in s.get("degree_sequence", [])]) for s in summaries)
+            max_degree = max(
+                max([0] + [int(d) for d in s.get("degree_sequence", [])])
+                for s in summaries
+            )
         clustering_bins = int(cfg.clustering_bins)
         spectral_bins = int(cfg.spectral_bins)
-        motif_dim = max((np.asarray(s.get("motif_proxy", []), dtype=np.float64).size for s in summaries), default=0)
-        orbit_dim = max((np.asarray(s.get("orbit_count", []), dtype=np.float64).size for s in summaries), default=0)
+        motif_dim = max(
+            (
+                np.asarray(s.get("motif_proxy", []), dtype=np.float64).size
+                for s in summaries
+            ),
+            default=0,
+        )
+        orbit_dim = max(
+            (
+                np.asarray(s.get("orbit_count", []), dtype=np.float64).size
+                for s in summaries
+            ),
+            default=0,
+        )
 
         motif_logs = np.zeros((len(summaries), motif_dim), dtype=np.float64)
         orbit_logs = np.zeros((len(summaries), orbit_dim), dtype=np.float64)
         for i, s in enumerate(summaries):
-            motif = np.log1p(_pad(np.asarray(s.get("motif_proxy", []), dtype=np.float64), motif_dim))
-            orbit = np.log1p(_pad(np.asarray(s.get("orbit_count", []), dtype=np.float64), orbit_dim))
+            motif = np.log1p(
+                _pad(np.asarray(s.get("motif_proxy", []), dtype=np.float64), motif_dim)
+            )
+            orbit = np.log1p(
+                _pad(np.asarray(s.get("orbit_count", []), dtype=np.float64), orbit_dim)
+            )
             if motif_dim:
                 motif_logs[i] = motif
             if orbit_dim:
                 orbit_logs[i] = orbit
-        motif_scale = np.maximum(motif_logs.max(axis=0), 1.0).tolist() if motif_dim else []
-        orbit_scale = np.maximum(orbit_logs.max(axis=0), 1.0).tolist() if orbit_dim else []
+        motif_scale = (
+            np.maximum(motif_logs.max(axis=0), 1.0).tolist() if motif_dim else []
+        )
+        orbit_scale = (
+            np.maximum(orbit_logs.max(axis=0), 1.0).tolist() if orbit_dim else []
+        )
         triangle_max = max(float(s.get("triangle_count_norm", 0.0)) for s in summaries)
         scalar_scale = [1.0, max(triangle_max, 1.0)]
 
-        graphlet_keys = graphlet_keys_by_size([s.get("graphlet_history", {}) or {} for s in summaries]) if cfg.graphlet_history else {}
+        graphlet_keys = (
+            graphlet_keys_by_size(
+                [s.get("graphlet_history", {}) or {} for s in summaries]
+            )
+            if cfg.graphlet_history
+            else {}
+        )
         if cfg.graphlet_history:
             for k in range(int(cfg.graphlet_k_min), int(cfg.graphlet_k_max) + 1):
                 graphlet_keys.setdefault(str(k), [])
@@ -109,8 +142,12 @@ class SummaryVectorizer:
         config: SummaryConfig | dict[str, Any] | None = None,
         *,
         require_connected: bool = True,
-    ) -> "SummaryVectorizer":
-        cfg = config if isinstance(config, SummaryConfig) else SummaryConfig.from_dict(config or {}, graphs)
+    ) -> SummaryVectorizer:
+        cfg = (
+            config
+            if isinstance(config, SummaryConfig)
+            else SummaryConfig.from_dict(config or {}, graphs)
+        )
         summaries = [extract_summary(g, cfg) for g in graphs]
         return cls.fit(summaries, cfg, require_connected=require_connected)
 
@@ -124,7 +161,21 @@ class SummaryVectorizer:
 
     @property
     def input_dim(self) -> int:
-        return int(4 + self.degree_dim + self.clustering_bins + self.spectral_bins + self.motif_dim + self.orbit_dim + self.graphlet_dim)
+        return int(
+            4
+            + self.degree_dim
+            + self.clustering_bins
+            + self.spectral_bins
+            + self.motif_dim
+            + self.orbit_dim
+            + self.graphlet_dim
+        )
+
+    @property
+    def condition_dim(self) -> int:
+        """Width of the fixed-degree condition used by the target-summary CVAE."""
+
+        return int(2 + self.degree_dim)
 
     def head_dims(self) -> dict[str, int]:
         return {
@@ -148,7 +199,9 @@ class SummaryVectorizer:
         return out
 
     def graphlet_to_vector(self, summary: dict[str, Any]) -> np.ndarray:
-        return flatten_graphlet_history(summary.get("graphlet_history", {}) or {}, self.graphlet_keys_by_k or {})
+        return flatten_graphlet_history(
+            summary.get("graphlet_history", {}) or {}, self.graphlet_keys_by_k or {}
+        )
 
     def to_feature_vector(self, summary: dict[str, Any]) -> np.ndarray:
         n = float(summary.get("num_nodes", 0.0))
@@ -164,25 +217,112 @@ class SummaryVectorizer:
             ],
             dtype=np.float64,
         )
-        degree = _normalize(_pad(np.asarray(summary.get("degree_hist", []), dtype=np.float64), self.degree_dim))
-        clustering = _normalize(_pad(np.asarray(summary.get("clustering_hist", []), dtype=np.float64), self.clustering_bins))
-        spectral = _normalize(_pad(np.asarray(summary.get("spectral_hist", []), dtype=np.float64), self.spectral_bins))
-        motif = np.log1p(_pad(np.asarray(summary.get("motif_proxy", []), dtype=np.float64), self.motif_dim))
-        orbit = np.log1p(_pad(np.asarray(summary.get("orbit_count", []), dtype=np.float64), self.orbit_dim))
+        degree = _normalize(
+            _pad(
+                np.asarray(summary.get("degree_hist", []), dtype=np.float64),
+                self.degree_dim,
+            )
+        )
+        clustering = _normalize(
+            _pad(
+                np.asarray(summary.get("clustering_hist", []), dtype=np.float64),
+                self.clustering_bins,
+            )
+        )
+        spectral = _normalize(
+            _pad(
+                np.asarray(summary.get("spectral_hist", []), dtype=np.float64),
+                self.spectral_bins,
+            )
+        )
+        motif = np.log1p(
+            _pad(
+                np.asarray(summary.get("motif_proxy", []), dtype=np.float64),
+                self.motif_dim,
+            )
+        )
+        orbit = np.log1p(
+            _pad(
+                np.asarray(summary.get("orbit_count", []), dtype=np.float64),
+                self.orbit_dim,
+            )
+        )
         graphlet = _pad(self.graphlet_to_vector(summary), self.graphlet_dim)
         if self.motif_dim:
             motif = motif / np.asarray(self.motif_scale, dtype=np.float64)
         if self.orbit_dim:
             orbit = orbit / np.asarray(self.orbit_scale, dtype=np.float64)
-        return np.concatenate([scalars, degree, clustering, spectral, motif, orbit, graphlet]).astype(np.float32)
+        return np.concatenate(
+            [scalars, degree, clustering, spectral, motif, orbit, graphlet]
+        ).astype(np.float32)
+
+    def to_condition_vector(self, summary: dict[str, Any]) -> np.ndarray:
+        """Encode only invariants fixed before refinement.
+
+        The number of nodes, number of edges, and degree histogram completely
+        describe the information that the target-summary generator is allowed
+        to condition on.  The Havel--Hakimi graph is intentionally omitted
+        because it is a deterministic realization of the same degree sequence.
+        """
+
+        n = float(summary.get("num_nodes", len(summary.get("degree_sequence", []))))
+        sequence = [int(d) for d in summary.get("degree_sequence", [])]
+        m = float(summary.get("num_edges", sum(sequence) // 2))
+        degree = np.asarray(summary.get("degree_hist", []), dtype=np.float64)
+        if degree.size == 0 and sequence:
+            degree = _degree_sequence_to_hist(sequence, self.degree_dim)
+        degree = _normalize(_pad(degree, self.degree_dim))
+        return np.concatenate(
+            [
+                np.asarray(
+                    [
+                        n / max(float(self.max_nodes), 1.0),
+                        m / max(float(self.max_edges), 1.0),
+                    ],
+                    dtype=np.float64,
+                ),
+                degree,
+            ]
+        ).astype(np.float32)
 
     def to_targets(self, summary: dict[str, Any]) -> dict[str, np.ndarray | np.int64]:
-        node_index = int(np.clip(int(summary["num_nodes"]) - self.min_nodes, 0, self.node_count_classes - 1))
-        degree = _normalize(_pad(np.asarray(summary.get("degree_hist", []), dtype=np.float64), self.degree_dim))
-        clustering = _normalize(_pad(np.asarray(summary.get("clustering_hist", []), dtype=np.float64), self.clustering_bins))
-        spectral = _normalize(_pad(np.asarray(summary.get("spectral_hist", []), dtype=np.float64), self.spectral_bins))
-        motif = np.log1p(_pad(np.asarray(summary.get("motif_proxy", []), dtype=np.float64), self.motif_dim))
-        orbit = np.log1p(_pad(np.asarray(summary.get("orbit_count", []), dtype=np.float64), self.orbit_dim))
+        node_index = int(
+            np.clip(
+                int(summary["num_nodes"]) - self.min_nodes,
+                0,
+                self.node_count_classes - 1,
+            )
+        )
+        degree = _normalize(
+            _pad(
+                np.asarray(summary.get("degree_hist", []), dtype=np.float64),
+                self.degree_dim,
+            )
+        )
+        clustering = _normalize(
+            _pad(
+                np.asarray(summary.get("clustering_hist", []), dtype=np.float64),
+                self.clustering_bins,
+            )
+        )
+        spectral = _normalize(
+            _pad(
+                np.asarray(summary.get("spectral_hist", []), dtype=np.float64),
+                self.spectral_bins,
+            )
+        )
+        motif = np.log1p(
+            _pad(
+                np.asarray(summary.get("motif_proxy", []), dtype=np.float64),
+                self.motif_dim,
+            )
+        )
+        orbit = np.log1p(
+            _pad(
+                np.asarray(summary.get("orbit_count", []), dtype=np.float64),
+                self.orbit_dim,
+            )
+        )
         graphlet = _pad(self.graphlet_to_vector(summary), self.graphlet_dim)
         if self.motif_dim:
             motif = motif / np.asarray(self.motif_scale, dtype=np.float64)
@@ -191,7 +331,8 @@ class SummaryVectorizer:
         scalars = np.asarray(
             [
                 float(summary.get("density", 0.0)),
-                float(summary.get("triangle_count_norm", 0.0)) / max(float(self.scalar_scale[1]), 1.0),
+                float(summary.get("triangle_count_norm", 0.0))
+                / max(float(self.scalar_scale[1]), 1.0),
             ],
             dtype=np.float64,
         )
@@ -206,7 +347,9 @@ class SummaryVectorizer:
             "scalar": scalars.astype(np.float32),
         }
 
-    def to_training_arrays(self, summaries: list[dict[str, Any]]) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    def to_training_arrays(
+        self, summaries: list[dict[str, Any]]
+    ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
         x = np.stack([self.to_feature_vector(s) for s in summaries]).astype(np.float32)
         target_items = [self.to_targets(s) for s in summaries]
         targets: dict[str, np.ndarray] = {}
@@ -214,12 +357,18 @@ class SummaryVectorizer:
             targets[key] = np.asarray([item[key] for item in target_items])
         return x, targets
 
+    def to_condition_array(self, summaries: list[dict[str, Any]]) -> np.ndarray:
+        return np.stack([self.to_condition_vector(s) for s in summaries]).astype(
+            np.float32
+        )
+
     def outputs_to_summaries(
         self,
         outputs: dict[str, Any],
         *,
         rng: np.random.Generator | None = None,
         deterministic: bool = False,
+        condition_summaries: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         generator = rng if rng is not None else np.random.default_rng(0)
         arrays: dict[str, np.ndarray] = {}
@@ -229,29 +378,73 @@ class SummaryVectorizer:
             else:
                 arrays[key] = np.asarray(value)
         batch = int(next(iter(arrays.values())).shape[0])
+        if condition_summaries is not None and len(condition_summaries) != batch:
+            raise ValueError(
+                "condition_summaries must contain one degree condition per output "
+                f"(expected {batch}, got {len(condition_summaries)})."
+            )
         summaries = []
         for i in range(batch):
-            n_logits = arrays["num_nodes_logits"][i]
-            n_probs = _softmax_np(n_logits)
-            if deterministic:
-                node_index = int(np.argmax(n_probs))
+            if condition_summaries is not None:
+                condition_summary = condition_summaries[i]
+                degree_sequence = sorted(
+                    [int(d) for d in condition_summary.get("degree_sequence", [])],
+                    reverse=True,
+                )
+                n = int(condition_summary.get("num_nodes", len(degree_sequence)))
+                if len(degree_sequence) != n:
+                    raise ValueError(
+                        "Conditional summary has inconsistent num_nodes and "
+                        "degree_sequence."
+                    )
+                degree_hist = np.asarray(
+                    condition_summary.get("degree_hist", []),
+                    dtype=np.float64,
+                )
+                if degree_hist.size == 0:
+                    degree_hist = _degree_sequence_to_hist(
+                        degree_sequence,
+                        self.degree_dim,
+                    )
+                else:
+                    degree_hist = _normalize(_pad(degree_hist, self.degree_dim))
             else:
-                node_index = int(generator.choice(np.arange(self.node_count_classes), p=n_probs))
-            n = int(self.min_nodes + node_index)
+                n_logits = arrays["num_nodes_logits"][i]
+                n_probs = _softmax_np(n_logits)
+                if deterministic:
+                    node_index = int(np.argmax(n_probs))
+                else:
+                    node_index = int(
+                        generator.choice(
+                            np.arange(self.node_count_classes),
+                            p=n_probs,
+                        )
+                    )
+                n = int(self.min_nodes + node_index)
 
-            degree_probs = _softmax_np(arrays["degree_logits"][i]).astype(np.float64)
-            if n < degree_probs.size:
-                degree_probs[n:] = 0.0
-            if self.require_connected and n > 1:
-                degree_probs[0] = 0.0
-            degree_probs = _normalize(degree_probs)
-            if deterministic:
-                degree_counts = _integer_counts_from_probs(n, degree_probs)
-            else:
-                degree_counts = generator.multinomial(n, degree_probs)
-            degree_sequence = _degree_counts_to_sequence(degree_counts)
-            degree_sequence = repair_degree_sequence(degree_sequence, n=n, require_connected=self.require_connected, rng=generator)
-            degree_hist = _degree_sequence_to_hist(degree_sequence, self.degree_dim)
+                degree_probs = _softmax_np(arrays["degree_logits"][i]).astype(
+                    np.float64
+                )
+                if n < degree_probs.size:
+                    degree_probs[n:] = 0.0
+                if self.require_connected and n > 1:
+                    degree_probs[0] = 0.0
+                degree_probs = _normalize(degree_probs)
+                if deterministic:
+                    degree_counts = _integer_counts_from_probs(n, degree_probs)
+                else:
+                    degree_counts = generator.multinomial(n, degree_probs)
+                degree_sequence = _degree_counts_to_sequence(degree_counts)
+                degree_sequence = repair_degree_sequence(
+                    degree_sequence,
+                    n=n,
+                    require_connected=self.require_connected,
+                    rng=generator,
+                )
+                degree_hist = _degree_sequence_to_hist(
+                    degree_sequence,
+                    self.degree_dim,
+                )
 
             clustering = _normalize(_softmax_np(arrays["clustering_logits"][i]))
             spectral = _normalize(_softmax_np(arrays["spectral_logits"][i]))
@@ -259,39 +452,62 @@ class SummaryVectorizer:
             motif = np.zeros(self.motif_dim, dtype=np.float64)
             if self.motif_dim:
                 motif_scaled = np.maximum(arrays["motif_log"][i], 0.0)
-                motif = np.expm1(motif_scaled * np.asarray(self.motif_scale, dtype=np.float64))
+                motif = np.expm1(
+                    motif_scaled * np.asarray(self.motif_scale, dtype=np.float64)
+                )
             orbit = np.zeros(self.orbit_dim, dtype=np.float64)
             if self.orbit_dim:
                 orbit_scaled = np.maximum(arrays["orbit_log"][i], 0.0)
-                orbit = np.expm1(orbit_scaled * np.asarray(self.orbit_scale, dtype=np.float64))
+                orbit = np.expm1(
+                    orbit_scaled * np.asarray(self.orbit_scale, dtype=np.float64)
+                )
 
             graphlet_history = {}
             if self.graphlet_dim:
-                raw = np.maximum(arrays.get("graphlet", np.zeros((batch, self.graphlet_dim), dtype=np.float64))[i], 0.0)
+                raw = np.maximum(
+                    arrays.get(
+                        "graphlet",
+                        np.zeros((batch, self.graphlet_dim), dtype=np.float64),
+                    )[i],
+                    0.0,
+                )
                 graphlet_vec = np.zeros(self.graphlet_dim, dtype=np.float64)
-                for _, sl in self.graphlet_slices().items():
-                    graphlet_vec[sl] = _normalize(raw[sl]) if sl.stop > sl.start else raw[sl]
-                graphlet_history = unflatten_graphlet_history(graphlet_vec, self.graphlet_keys_by_k or {})
+                for sl in self.graphlet_slices().values():
+                    graphlet_vec[sl] = (
+                        _normalize(raw[sl]) if sl.stop > sl.start else raw[sl]
+                    )
+                graphlet_history = unflatten_graphlet_history(
+                    graphlet_vec, self.graphlet_keys_by_k or {}
+                )
 
             scalar = arrays.get("scalar", np.zeros((batch, 2), dtype=np.float64))[i]
-            triangle = max(float(scalar[1]) * max(float(self.scalar_scale[1]), 1.0), 0.0) if scalar.size > 1 else 0.0
+            triangle = (
+                max(float(scalar[1]) * max(float(self.scalar_scale[1]), 1.0), 0.0)
+                if scalar.size > 1
+                else 0.0
+            )
             num_edges = int(sum(degree_sequence) // 2)
             density = (2.0 * num_edges / (n * (n - 1))) if n > 1 else 0.0
-            summaries.append(
-                {
-                    "num_nodes": n,
-                    "num_edges": num_edges,
-                    "degree_sequence": sorted([int(d) for d in degree_sequence], reverse=True),
-                    "density": float(density),
-                    "triangle_count_norm": float(triangle),
-                    "degree_hist": degree_hist,
-                    "clustering_hist": clustering.astype(np.float64),
-                    "spectral_hist": spectral.astype(np.float64),
-                    "motif_proxy": motif.astype(np.float64),
-                    "orbit_count": orbit.astype(np.float64),
-                    "graphlet_history": graphlet_history,
-                }
-            )
+            summary = {
+                "num_nodes": n,
+                "num_edges": num_edges,
+                "degree_sequence": sorted(
+                    [int(d) for d in degree_sequence], reverse=True
+                ),
+                "density": float(density),
+                "triangle_count_norm": float(triangle),
+                "degree_hist": degree_hist,
+                "clustering_hist": clustering.astype(np.float64),
+                "spectral_hist": spectral.astype(np.float64),
+                "motif_proxy": motif.astype(np.float64),
+                "orbit_count": orbit.astype(np.float64),
+                "graphlet_history": graphlet_history,
+            }
+            if condition_summaries is not None:
+                summary = _apply_degree_condition(
+                    summary, condition_summaries[i], self.degree_dim
+                )
+            summaries.append(summary)
         return summaries
 
     def save(self, path: str | Path) -> None:
@@ -301,7 +517,7 @@ class SummaryVectorizer:
             json.dump(asdict(self), f, indent=2, sort_keys=True)
 
     @classmethod
-    def load(cls, path: str | Path) -> "SummaryVectorizer":
+    def load(cls, path: str | Path) -> SummaryVectorizer:
         with Path(path).open("r", encoding="utf-8") as f:
             data = json.load(f)
         return cls(**data)
@@ -346,7 +562,7 @@ def _integer_counts_from_probs(n: int, probs: np.ndarray) -> np.ndarray:
             counts[int(idx)] += 1
     elif remainder < 0:
         order = np.argsort(raw - counts)
-        for idx in order[: -remainder]:
+        for idx in order[:-remainder]:
             if counts[int(idx)] > 0:
                 counts[int(idx)] -= 1
     return counts
@@ -365,6 +581,44 @@ def _degree_sequence_to_hist(degree_sequence: list[int], width: int) -> np.ndarr
         d = int(np.clip(degree, 0, width - 1))
         hist[d] += 1.0
     return _normalize(hist)
+
+
+def _apply_degree_condition(
+    structural_summary: dict[str, Any],
+    condition_summary: dict[str, Any],
+    degree_width: int,
+) -> dict[str, Any]:
+    """Overwrite invariant fields with the exact sampled degree condition."""
+
+    out = dict(structural_summary)
+    sequence = sorted(
+        [int(d) for d in condition_summary.get("degree_sequence", [])],
+        reverse=True,
+    )
+    n = int(condition_summary.get("num_nodes", len(sequence)))
+    if not sequence and n > 0:
+        raise ValueError("A conditional target summary requires degree_sequence.")
+    if len(sequence) != n:
+        raise ValueError(
+            "Degree condition is inconsistent: "
+            f"num_nodes={n}, len(degree_sequence)={len(sequence)}."
+        )
+    m = int(sum(sequence) // 2)
+    degree_hist = np.asarray(condition_summary.get("degree_hist", []), dtype=np.float64)
+    if degree_hist.size == 0:
+        degree_hist = _degree_sequence_to_hist(sequence, degree_width)
+    else:
+        degree_hist = _normalize(_pad(degree_hist, degree_width))
+    out.update(
+        {
+            "num_nodes": n,
+            "num_edges": m,
+            "degree_sequence": sequence,
+            "degree_hist": degree_hist,
+            "density": float((2.0 * m / (n * (n - 1))) if n > 1 else 0.0),
+        }
+    )
+    return out
 
 
 def repair_degree_sequence(
@@ -431,7 +685,14 @@ def repair_degree_sequence(
 
 
 class MLP(nn.Module):
-    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int | None = None, num_layers: int = 2, dropout: float = 0.0):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int | None = None,
+        num_layers: int = 2,
+        dropout: float = 0.0,
+    ):
         super().__init__()
         layers: list[nn.Module] = []
         dim = int(input_dim)
@@ -469,17 +730,33 @@ class SummaryVAE(nn.Module):
         self.head_dims = dict(head_dims)
         self.num_layers = int(num_layers)
         self.dropout = float(dropout)
-        self.encoder = MLP(input_dim, hidden_dim, num_layers=num_layers, dropout=dropout)
+        self.encoder = MLP(
+            input_dim, hidden_dim, num_layers=num_layers, dropout=dropout
+        )
         self.mu = nn.Linear(hidden_dim, latent_dim)
         self.logvar = nn.Linear(hidden_dim, latent_dim)
-        self.decoder = MLP(latent_dim, hidden_dim, num_layers=num_layers, dropout=dropout)
+        self.decoder = MLP(
+            latent_dim, hidden_dim, num_layers=num_layers, dropout=dropout
+        )
         self.num_nodes_head = nn.Linear(hidden_dim, head_dims["num_nodes"])
         self.degree_head = nn.Linear(hidden_dim, head_dims["degree"])
         self.clustering_head = nn.Linear(hidden_dim, head_dims["clustering"])
         self.spectral_head = nn.Linear(hidden_dim, head_dims["spectral"])
-        self.motif_head = nn.Linear(hidden_dim, head_dims.get("motif", 0)) if head_dims.get("motif", 0) > 0 else None
-        self.orbit_head = nn.Linear(hidden_dim, head_dims.get("orbit", 0)) if head_dims.get("orbit", 0) > 0 else None
-        self.graphlet_head = nn.Linear(hidden_dim, head_dims.get("graphlet", 0)) if head_dims.get("graphlet", 0) > 0 else None
+        self.motif_head = (
+            nn.Linear(hidden_dim, head_dims.get("motif", 0))
+            if head_dims.get("motif", 0) > 0
+            else None
+        )
+        self.orbit_head = (
+            nn.Linear(hidden_dim, head_dims.get("orbit", 0))
+            if head_dims.get("orbit", 0) > 0
+            else None
+        )
+        self.graphlet_head = (
+            nn.Linear(hidden_dim, head_dims.get("graphlet", 0))
+            if head_dims.get("graphlet", 0) > 0
+            else None
+        )
         self.scalar_head = nn.Linear(hidden_dim, head_dims.get("scalar", 2))
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -517,13 +794,17 @@ class SummaryVAE(nn.Module):
             out["graphlet"] = torch.zeros(batch, 0, device=device)
         return out
 
-    def forward(self, x: torch.Tensor) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
         return self.decode(z), mu, logvar
 
     @torch.no_grad()
-    def sample_outputs(self, num_samples: int, *, device: torch.device | str | None = None) -> dict[str, torch.Tensor]:
+    def sample_outputs(
+        self, num_samples: int, *, device: torch.device | str | None = None
+    ) -> dict[str, torch.Tensor]:
         if device is None:
             device = next(self.parameters()).device
         z = torch.randn(int(num_samples), self.latent_dim, device=device)
@@ -532,6 +813,149 @@ class SummaryVAE(nn.Module):
     def model_config(self) -> dict[str, Any]:
         return {
             "input_dim": self.input_dim,
+            "latent_dim": self.latent_dim,
+            "hidden_dim": self.hidden_dim,
+            "head_dims": self.head_dims,
+            "num_layers": self.num_layers,
+            "dropout": self.dropout,
+        }
+
+
+class ConditionalSummaryVAE(nn.Module):
+    """Conditional VAE for structural targets given a fixed degree sequence.
+
+    The encoder observes the complete training summary and the fixed-degree
+    condition.  The decoder receives ``(z, condition)`` and predicts only the
+    structural target used to guide rewiring.  Legacy output heads remain
+    present for checkpoint compatibility and diagnostics; generated invariant
+    fields are overwritten by the exact condition during decoding.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        condition_dim: int,
+        latent_dim: int,
+        hidden_dim: int,
+        head_dims: dict[str, int],
+        *,
+        num_layers: int = 2,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.input_dim = int(input_dim)
+        self.condition_dim = int(condition_dim)
+        self.latent_dim = int(latent_dim)
+        self.hidden_dim = int(hidden_dim)
+        self.head_dims = dict(head_dims)
+        self.num_layers = int(num_layers)
+        self.dropout = float(dropout)
+
+        self.encoder = MLP(
+            self.input_dim + self.condition_dim,
+            hidden_dim,
+            num_layers=num_layers,
+            dropout=dropout,
+        )
+        self.mu = nn.Linear(hidden_dim, latent_dim)
+        self.logvar = nn.Linear(hidden_dim, latent_dim)
+        self.decoder = MLP(
+            self.latent_dim + self.condition_dim,
+            hidden_dim,
+            num_layers=num_layers,
+            dropout=dropout,
+        )
+        self.num_nodes_head = nn.Linear(hidden_dim, head_dims["num_nodes"])
+        self.degree_head = nn.Linear(hidden_dim, head_dims["degree"])
+        self.clustering_head = nn.Linear(hidden_dim, head_dims["clustering"])
+        self.spectral_head = nn.Linear(hidden_dim, head_dims["spectral"])
+        self.motif_head = (
+            nn.Linear(hidden_dim, head_dims.get("motif", 0))
+            if head_dims.get("motif", 0) > 0
+            else None
+        )
+        self.orbit_head = (
+            nn.Linear(hidden_dim, head_dims.get("orbit", 0))
+            if head_dims.get("orbit", 0) > 0
+            else None
+        )
+        self.graphlet_head = (
+            nn.Linear(hidden_dim, head_dims.get("graphlet", 0))
+            if head_dims.get("graphlet", 0) > 0
+            else None
+        )
+        self.scalar_head = nn.Linear(hidden_dim, head_dims.get("scalar", 2))
+
+    def encode(
+        self,
+        x: torch.Tensor,
+        condition: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        h = self.encoder(torch.cat([x, condition], dim=-1))
+        return self.mu(h), self.logvar(h).clamp(min=-10.0, max=10.0)
+
+    @staticmethod
+    def reparameterize(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        return SummaryVAE.reparameterize(mu, logvar)
+
+    def decode(
+        self,
+        z: torch.Tensor,
+        condition: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        h = self.decoder(torch.cat([z, condition], dim=-1))
+        batch = z.shape[0]
+        device = z.device
+        out = {
+            "num_nodes_logits": self.num_nodes_head(h),
+            "degree_logits": self.degree_head(h),
+            "clustering_logits": self.clustering_head(h),
+            "spectral_logits": self.spectral_head(h),
+            "scalar": F.softplus(self.scalar_head(h)),
+        }
+        out["motif_log"] = (
+            F.softplus(self.motif_head(h))
+            if self.motif_head is not None
+            else torch.zeros(batch, 0, device=device)
+        )
+        out["orbit_log"] = (
+            F.softplus(self.orbit_head(h))
+            if self.orbit_head is not None
+            else torch.zeros(batch, 0, device=device)
+        )
+        out["graphlet"] = (
+            F.softplus(self.graphlet_head(h))
+            if self.graphlet_head is not None
+            else torch.zeros(batch, 0, device=device)
+        )
+        return out
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        condition: torch.Tensor,
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+        mu, logvar = self.encode(x, condition)
+        z = self.reparameterize(mu, logvar)
+        return self.decode(z, condition), mu, logvar
+
+    @torch.no_grad()
+    def sample_outputs(
+        self,
+        condition: torch.Tensor,
+        *,
+        device: torch.device | str | None = None,
+    ) -> dict[str, torch.Tensor]:
+        if device is None:
+            device = next(self.parameters()).device
+        condition = condition.to(device)
+        z = torch.randn(condition.shape[0], self.latent_dim, device=device)
+        return self.decode(z, condition)
+
+    def model_config(self) -> dict[str, Any]:
+        return {
+            "input_dim": self.input_dim,
+            "condition_dim": self.condition_dim,
             "latent_dim": self.latent_dim,
             "hidden_dim": self.hidden_dim,
             "head_dims": self.head_dims,
@@ -561,11 +985,25 @@ def summary_vae_loss(
     weights = weights or {}
     n_loss = F.cross_entropy(outputs["num_nodes_logits"], targets["num_nodes"].long())
     degree_loss = soft_histogram_ce(outputs["degree_logits"], targets["degree"])
-    clustering_loss = soft_histogram_ce(outputs["clustering_logits"], targets["clustering"])
+    clustering_loss = soft_histogram_ce(
+        outputs["clustering_logits"], targets["clustering"]
+    )
     spectral_loss = soft_histogram_ce(outputs["spectral_logits"], targets["spectral"])
-    motif_loss = F.mse_loss(outputs["motif_log"], targets["motif"]) if outputs["motif_log"].numel() else torch.zeros((), device=mu.device)
-    orbit_loss = F.mse_loss(outputs["orbit_log"], targets["orbit"]) if outputs["orbit_log"].numel() else torch.zeros((), device=mu.device)
-    graphlet_loss = F.mse_loss(outputs["graphlet"], targets["graphlet"]) if outputs.get("graphlet", torch.zeros(0, device=mu.device)).numel() else torch.zeros((), device=mu.device)
+    motif_loss = (
+        F.mse_loss(outputs["motif_log"], targets["motif"])
+        if outputs["motif_log"].numel()
+        else torch.zeros((), device=mu.device)
+    )
+    orbit_loss = (
+        F.mse_loss(outputs["orbit_log"], targets["orbit"])
+        if outputs["orbit_log"].numel()
+        else torch.zeros((), device=mu.device)
+    )
+    graphlet_loss = (
+        F.mse_loss(outputs["graphlet"], targets["graphlet"])
+        if outputs.get("graphlet", torch.zeros(0, device=mu.device)).numel()
+        else torch.zeros((), device=mu.device)
+    )
     scalar_loss = F.mse_loss(outputs["scalar"], targets["scalar"])
     kld = kl_loss(mu, logvar)
     total = (
@@ -594,7 +1032,14 @@ def summary_vae_loss(
     return total, metrics
 
 
-def build_summary_vae(vectorizer: SummaryVectorizer, *, latent_dim: int = 32, hidden_dim: int = 128, num_layers: int = 2, dropout: float = 0.0) -> SummaryVAE:
+def build_summary_vae(
+    vectorizer: SummaryVectorizer,
+    *,
+    latent_dim: int = 32,
+    hidden_dim: int = 128,
+    num_layers: int = 2,
+    dropout: float = 0.0,
+) -> SummaryVAE:
     return SummaryVAE(
         input_dim=vectorizer.input_dim,
         latent_dim=latent_dim,
@@ -605,9 +1050,28 @@ def build_summary_vae(vectorizer: SummaryVectorizer, *, latent_dim: int = 32, hi
     )
 
 
+def build_conditional_summary_vae(
+    vectorizer: SummaryVectorizer,
+    *,
+    latent_dim: int = 32,
+    hidden_dim: int = 128,
+    num_layers: int = 2,
+    dropout: float = 0.0,
+) -> ConditionalSummaryVAE:
+    return ConditionalSummaryVAE(
+        input_dim=vectorizer.input_dim,
+        condition_dim=vectorizer.condition_dim,
+        latent_dim=latent_dim,
+        hidden_dim=hidden_dim,
+        head_dims=vectorizer.head_dims(),
+        num_layers=num_layers,
+        dropout=dropout,
+    )
+
+
 def save_summary_vae_checkpoint(
     path: str | Path,
-    model: SummaryVAE,
+    model: SummaryVAE | ConditionalSummaryVAE,
     vectorizer: SummaryVectorizer,
     *,
     config: dict[str, Any] | None = None,
@@ -617,6 +1081,11 @@ def save_summary_vae_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
+            "model_type": (
+                "conditional_summary_vae"
+                if isinstance(model, ConditionalSummaryVAE)
+                else "summary_vae"
+            ),
             "model_state_dict": model.state_dict(),
             "model_config": model.model_config(),
             "vectorizer": vectorizer.__dict__,
@@ -627,11 +1096,21 @@ def save_summary_vae_checkpoint(
     )
 
 
-def load_summary_vae_checkpoint(path: str | Path, *, device: torch.device | str = "auto") -> tuple[SummaryVAE, SummaryVectorizer, dict[str, Any]]:
+def load_summary_vae_checkpoint(
+    path: str | Path,
+    *,
+    device: torch.device | str = "auto",
+) -> tuple[SummaryVAE | ConditionalSummaryVAE, SummaryVectorizer, dict[str, Any]]:
     resolved_device = resolve_torch_device(device)
     checkpoint = torch.load(path, map_location=resolved_device)
     vectorizer = SummaryVectorizer(**checkpoint["vectorizer"])
-    model = SummaryVAE(**checkpoint["model_config"])
+    model_type = str(checkpoint.get("model_type", "summary_vae")).lower()
+    if model_type == "conditional_summary_vae":
+        model = ConditionalSummaryVAE(**checkpoint["model_config"])
+    elif model_type == "summary_vae":
+        model = SummaryVAE(**checkpoint["model_config"])
+    else:
+        raise ValueError(f"Unknown summary checkpoint model_type: {model_type!r}")
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(resolved_device)
     model.eval()

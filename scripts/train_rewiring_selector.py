@@ -16,8 +16,20 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset
 
+from grapher.refinement.features import (
+    action_local_features as invariant_action_local_features,
+)
+from grapher.refinement.features import (
+    graph_context_features as residual_graph_context_features,
+)
 from grapher.utils.device import resolve_torch_device
-from grapher.utils.io import ensure_dir, load_yaml, require_config, require_config_section, save_json
+from grapher.utils.io import (
+    ensure_dir,
+    load_yaml,
+    require_config,
+    require_config_section,
+    save_json,
+)
 
 
 def _log(message: str) -> None:
@@ -47,7 +59,9 @@ class RewiringTeacherDataset(Dataset):
         return self.examples[idx]
 
 
-def _read_jsonl(path: Path, max_records: int | None = None, progress_interval: int = 1000) -> list[dict[str, Any]]:
+def _read_jsonl(
+    path: Path, max_records: int | None = None, progress_interval: int = 1000
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     if not path.exists():
         return out
@@ -64,7 +78,11 @@ def _read_jsonl(path: Path, max_records: int | None = None, progress_interval: i
                 out.append(json.loads(line))
             if max_records is not None and len(out) >= int(max_records):
                 break
-            if progress_interval and len(out) > 0 and len(out) % int(progress_interval) == 0:
+            if (
+                progress_interval
+                and len(out) > 0
+                and len(out) % int(progress_interval) == 0
+            ):
                 elapsed = time.perf_counter() - started_at
                 bytes_read = f.tell()
                 percent = 100.0 * bytes_read / max(file_size, 1)
@@ -74,7 +92,9 @@ def _read_jsonl(path: Path, max_records: int | None = None, progress_interval: i
                     f"({percent:.1f}%) elapsed={elapsed:.1f}s"
                 )
     elapsed = time.perf_counter() - started_at
-    _log(f"read {path.name}: complete records={len(out)} size={file_size_mb:.1f}MB elapsed={elapsed:.1f}s")
+    _log(
+        f"read {path.name}: complete records={len(out)} size={file_size_mb:.1f}MB elapsed={elapsed:.1f}s"
+    )
     return out
 
 
@@ -108,7 +128,7 @@ def _safe_scalar(value: Any, default: float = 0.0) -> float:
     try:
         val = float(value)
         return val if math.isfinite(val) else default
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -179,7 +199,9 @@ def _graph_context_features(
 
     target_vecs = [
         _pad_or_trim(target.get("degree_hist", []), feature_cfg["degree_width"]),
-        _pad_or_trim(target.get("clustering_hist", []), feature_cfg["clustering_width"]),
+        _pad_or_trim(
+            target.get("clustering_hist", []), feature_cfg["clustering_width"]
+        ),
         _pad_or_trim(target.get("spectral_hist", []), feature_cfg["spectral_width"]),
         _pad_or_trim(target.get("motif_proxy", []), feature_cfg["motif_width"]),
         _pad_or_trim(target.get("orbit_count", []), feature_cfg["orbit_width"]),
@@ -189,7 +211,9 @@ def _graph_context_features(
     return np.concatenate([scalar, *target_vecs], axis=0).astype(np.float32)
 
 
-def _action_local_features(graph: nx.Graph, action_record: dict[str, Any]) -> np.ndarray:
+def _action_local_features(
+    graph: nx.Graph, action_record: dict[str, Any]
+) -> np.ndarray:
     n = max(int(graph.number_of_nodes()), 1)
 
     removed = [_edge(e) for e in action_record.get("removed", [])]
@@ -282,13 +306,22 @@ def _record_to_example(
 
     graph = _build_graph(int(record["num_nodes"]), record["edges"])
     target = record.get("target_summary", {}) or {}
-    context = _graph_context_features(graph, target, feature_cfg)
+    context = residual_graph_context_features(
+        graph,
+        target,
+        feature_cfg,
+        current_summary=record.get("current_summary"),
+    )
 
     features = []
     deltas = []
 
     for action in actions:
-        local = _action_local_features(graph, action)
+        local = invariant_action_local_features(
+            graph,
+            action,
+            feature_version=int(feature_cfg.get("feature_version", 1)),
+        )
         features.append(np.concatenate([context, local], axis=0))
         deltas.append(_safe_scalar(action.get("delta_energy", 0.0), 0.0))
 
@@ -305,7 +338,9 @@ def load_teacher_examples(
     max_records: int | None = None,
     progress_interval: int = 1000,
 ) -> list[SelectorExample]:
-    records = _read_jsonl(path, max_records=max_records, progress_interval=progress_interval)
+    records = _read_jsonl(
+        path, max_records=max_records, progress_interval=progress_interval
+    )
 
     examples: list[SelectorExample] = []
     skipped = 0
@@ -318,7 +353,9 @@ def load_teacher_examples(
             skipped += 1
         else:
             examples.append(ex)
-        if progress_interval and (idx == 1 or idx % int(progress_interval) == 0 or idx == len(records)):
+        if progress_interval and (
+            idx == 1 or idx % int(progress_interval) == 0 or idx == len(records)
+        ):
             elapsed = time.perf_counter() - started_at
             rate = idx / max(elapsed, 1.0e-12)
             _log(
@@ -327,7 +364,9 @@ def load_teacher_examples(
             )
 
     if not examples:
-        raise RuntimeError(f"No valid teacher examples loaded from {path}; skipped={skipped}")
+        raise RuntimeError(
+            f"No valid teacher examples loaded from {path}; skipped={skipped}"
+        )
 
     elapsed = time.perf_counter() - started_at
     _log(
@@ -368,8 +407,12 @@ def _batch_loss(
     model: nn.Module,
     batch: list[SelectorExample],
     device: torch.device,
+    *,
+    delta_regression_weight: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     losses = []
+    policy_losses = []
+    delta_losses = []
     top1 = []
     mean_pred_delta = []
     entropy = []
@@ -381,8 +424,19 @@ def _batch_loss(
 
         logits = model(x)
         log_probs = torch.log_softmax(logits, dim=0)
-        loss = -(q * log_probs).sum()
+        policy_loss = -(q * log_probs).sum()
+        normalized_deltas = (deltas - deltas.mean()) / deltas.std(
+            unbiased=False
+        ).clamp_min(1.0e-6)
+        centered_logits = logits - logits.mean()
+        delta_loss = torch.nn.functional.smooth_l1_loss(
+            centered_logits,
+            normalized_deltas,
+        )
+        loss = policy_loss + float(delta_regression_weight) * delta_loss
         losses.append(loss)
+        policy_losses.append(policy_loss)
+        delta_losses.append(delta_loss)
 
         pred_idx = int(torch.argmax(logits).item())
         teacher_idx = int(torch.argmax(q).item())
@@ -390,12 +444,21 @@ def _batch_loss(
         top1.append(float(pred_idx == teacher_idx))
         mean_pred_delta.append(float(deltas[pred_idx].detach().cpu().item()))
         entropy.append(
-            float((-(torch.softmax(logits, dim=0) * log_probs).sum()).detach().cpu().item())
+            float(
+                (-(torch.softmax(logits, dim=0) * log_probs).sum())
+                .detach()
+                .cpu()
+                .item()
+            )
         )
 
     return torch.stack(losses).mean(), {
+        "policy_loss": float(torch.stack(policy_losses).mean().detach().cpu()),
+        "delta_loss": float(torch.stack(delta_losses).mean().detach().cpu()),
         "top1": float(np.mean(top1)) if top1 else 0.0,
-        "mean_predicted_delta": float(np.mean(mean_pred_delta)) if mean_pred_delta else 0.0,
+        "mean_predicted_delta": float(np.mean(mean_pred_delta))
+        if mean_pred_delta
+        else 0.0,
         "pred_entropy": float(np.mean(entropy)) if entropy else 0.0,
     }
 
@@ -419,24 +482,37 @@ def evaluate(
     examples: list[SelectorExample],
     batch_size: int,
     device: torch.device,
+    *,
+    delta_regression_weight: float = 0.0,
 ) -> dict[str, float]:
     model.eval()
     losses = []
     top1 = []
     mean_pred_delta = []
     pred_entropy = []
+    policy_losses = []
+    delta_losses = []
     rng = random.Random(0)
 
     with torch.no_grad():
         for batch in _iter_batches(examples, batch_size, rng, shuffle=False):
-            loss, stats = _batch_loss(model, batch, device)
+            loss, stats = _batch_loss(
+                model,
+                batch,
+                device,
+                delta_regression_weight=delta_regression_weight,
+            )
             losses.append(float(loss.cpu().item()))
+            policy_losses.append(stats["policy_loss"])
+            delta_losses.append(stats["delta_loss"])
             top1.append(stats["top1"])
             mean_pred_delta.append(stats["mean_predicted_delta"])
             pred_entropy.append(stats["pred_entropy"])
 
     return {
         "loss": float(np.mean(losses)),
+        "policy_loss": float(np.mean(policy_losses)),
+        "delta_loss": float(np.mean(delta_losses)),
         "top1": float(np.mean(top1)),
         "mean_predicted_delta": float(np.mean(mean_pred_delta)),
         "pred_entropy": float(np.mean(pred_entropy)),
@@ -457,26 +533,52 @@ def train_selector(
     progress_interval: int | None = None,
     batch_log_interval: int | None = None,
     load_log_interval: int | None = None,
+    resume_checkpoint: Path | None = None,
 ) -> dict[str, Any]:
     started_at = time.perf_counter()
     ensure_dir(output_dir)
-    _log(f"starting selector training seed={seed} teacher_dir={teacher_dir} output_dir={output_dir}")
+    _log(
+        f"starting selector training seed={seed} teacher_dir={teacher_dir} output_dir={output_dir}"
+    )
 
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
 
     selector_cfg = require_config_section(config, "selector")
-    torch_device = resolve_torch_device(device if device is not None else require_config(selector_cfg, "device", context="config.selector"))
+    torch_device = resolve_torch_device(
+        device
+        if device is not None
+        else require_config(selector_cfg, "device", context="config.selector")
+    )
     _log(f"using device={torch_device}")
 
     feature_cfg = {
-        "degree_width": int(require_config(selector_cfg, "degree_width", context="config.selector")),
-        "clustering_width": int(require_config(selector_cfg, "clustering_width", context="config.selector")),
-        "spectral_width": int(require_config(selector_cfg, "spectral_width", context="config.selector")),
-        "motif_width": int(require_config(selector_cfg, "motif_width", context="config.selector")),
-        "orbit_width": int(require_config(selector_cfg, "orbit_width", context="config.selector")),
-        "graphlet_width": int(require_config(selector_cfg, "graphlet_width", context="config.selector")),
+        "feature_version": int(selector_cfg.get("feature_version", 2)),
+        "degree_width": int(
+            require_config(selector_cfg, "degree_width", context="config.selector")
+        ),
+        "clustering_width": int(
+            require_config(selector_cfg, "clustering_width", context="config.selector")
+        ),
+        "spectral_width": int(
+            require_config(selector_cfg, "spectral_width", context="config.selector")
+        ),
+        "motif_width": int(
+            require_config(selector_cfg, "motif_width", context="config.selector")
+        ),
+        "orbit_width": int(
+            require_config(selector_cfg, "orbit_width", context="config.selector")
+        ),
+        "graphlet_width": int(
+            require_config(selector_cfg, "graphlet_width", context="config.selector")
+        ),
+        "graphlet_connected_only": bool(
+            (config.get("summary", {}) or {}).get("graphlet_connected_only", True)
+        ),
+        "graphlet_num_samples": (
+            (config.get("summary", {}) or {}).get("graphlet_num_samples")
+        ),
     }
     if load_log_interval is None:
         load_log_interval = LOAD_LOG_INTERVAL
@@ -489,29 +591,50 @@ def train_selector(
         raise FileNotFoundError(f"Missing teacher train file: {train_path}")
 
     _log(f"loading train examples from {train_path}")
-    train_examples = load_teacher_examples(train_path, feature_cfg, max_train_records, progress_interval=load_log_interval)
+    train_examples = load_teacher_examples(
+        train_path, feature_cfg, max_train_records, progress_interval=load_log_interval
+    )
     _log(f"loaded train examples={len(train_examples)}")
 
     if val_path.exists() and val_path.stat().st_size > 0:
         _log(f"loading val examples from {val_path}")
-        val_examples = load_teacher_examples(val_path, feature_cfg, max_val_records, progress_interval=load_log_interval)
+        val_examples = load_teacher_examples(
+            val_path, feature_cfg, max_val_records, progress_interval=load_log_interval
+        )
         _log(f"loaded val examples={len(val_examples)}")
     else:
         split = max(1, int(0.1 * len(train_examples)))
         val_examples = train_examples[:split]
         train_examples = train_examples[split:]
-        _log(f"no val file found; split train examples into train={len(train_examples)} val={len(val_examples)}")
+        _log(
+            f"no val file found; split train examples into train={len(train_examples)} val={len(val_examples)}"
+        )
 
     input_dim = int(train_examples[0].features.shape[-1])
 
-    hidden_dim = int(require_config(selector_cfg, "hidden_dim", context="config.selector"))
-    num_layers = int(require_config(selector_cfg, "num_layers", context="config.selector"))
+    hidden_dim = int(
+        require_config(selector_cfg, "hidden_dim", context="config.selector")
+    )
+    num_layers = int(
+        require_config(selector_cfg, "num_layers", context="config.selector")
+    )
     dropout = float(require_config(selector_cfg, "dropout", context="config.selector"))
     lr = float(require_config(selector_cfg, "learning_rate", context="config.selector"))
-    weight_decay = float(require_config(selector_cfg, "weight_decay", context="config.selector"))
+    weight_decay = float(
+        require_config(selector_cfg, "weight_decay", context="config.selector")
+    )
+    delta_regression_weight = float(selector_cfg.get("delta_regression_weight", 0.0))
 
-    epochs = int(epochs if epochs is not None else require_config(selector_cfg, "epochs", context="config.selector"))
-    batch_size = int(batch_size if batch_size is not None else require_config(selector_cfg, "batch_size", context="config.selector"))
+    epochs = int(
+        epochs
+        if epochs is not None
+        else require_config(selector_cfg, "epochs", context="config.selector")
+    )
+    batch_size = int(
+        batch_size
+        if batch_size is not None
+        else require_config(selector_cfg, "batch_size", context="config.selector")
+    )
     if progress_interval is None:
         progress_interval = PROGRESS_INTERVAL
     if batch_log_interval is None:
@@ -531,6 +654,16 @@ def train_selector(
         num_layers=num_layers,
         dropout=dropout,
     ).to(torch_device)
+    if resume_checkpoint is not None:
+        checkpoint = torch.load(resume_checkpoint, map_location=torch_device)
+        expected_input_dim = int(checkpoint.get("input_dim", input_dim))
+        if expected_input_dim != input_dim:
+            raise ValueError(
+                "Cannot resume selector: feature dimension changed "
+                f"({expected_input_dim} != {input_dim})."
+            )
+        model.load_state_dict(checkpoint.get("model_state_dict", checkpoint))
+        _log(f"resumed model weights from {resume_checkpoint}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
@@ -548,10 +681,17 @@ def train_selector(
         train_top1 = []
         train_delta = []
 
-        for batch_idx, batch in enumerate(_iter_batches(train_examples, batch_size, rng, shuffle=True), start=1):
+        for batch_idx, batch in enumerate(
+            _iter_batches(train_examples, batch_size, rng, shuffle=True), start=1
+        ):
             optimizer.zero_grad(set_to_none=True)
 
-            loss, stats = _batch_loss(model, batch, torch_device)
+            loss, stats = _batch_loss(
+                model,
+                batch,
+                torch_device,
+                delta_regression_weight=delta_regression_weight,
+            )
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimizer.step()
@@ -560,14 +700,24 @@ def train_selector(
             train_top1.append(stats["top1"])
             train_delta.append(stats["mean_predicted_delta"])
 
-            if batch_log_interval and (batch_idx == 1 or batch_idx % batch_log_interval == 0 or batch_idx == batches_per_epoch):
+            if batch_log_interval and (
+                batch_idx == 1
+                or batch_idx % batch_log_interval == 0
+                or batch_idx == batches_per_epoch
+            ):
                 _log(
                     f"epoch {epoch}/{epochs} batch {batch_idx}/{batches_per_epoch} "
                     f"loss={float(loss.detach().cpu().item()):.4f} top1={stats['top1']:.3f}"
                 )
 
         _log(f"epoch {epoch}/{epochs} evaluating validation set")
-        val = evaluate(model, val_examples, batch_size, torch_device)
+        val = evaluate(
+            model,
+            val_examples,
+            batch_size,
+            torch_device,
+            delta_regression_weight=delta_regression_weight,
+        )
 
         row = {
             "epoch": epoch,
@@ -575,6 +725,8 @@ def train_selector(
             "train_top1": float(np.mean(train_top1)),
             "train_mean_predicted_delta": float(np.mean(train_delta)),
             "val_loss": val["loss"],
+            "val_policy_loss": val["policy_loss"],
+            "val_delta_loss": val["delta_loss"],
             "val_top1": val["top1"],
             "val_mean_predicted_delta": val["mean_predicted_delta"],
             "val_pred_entropy": val["pred_entropy"],
@@ -599,10 +751,16 @@ def train_selector(
                 },
                 output_dir / "checkpoint.pt",
             )
-            _log(f"epoch {epoch}/{epochs} saved new best checkpoint val_loss={best_val:.4f}")
+            _log(
+                f"epoch {epoch}/{epochs} saved new best checkpoint val_loss={best_val:.4f}"
+            )
 
         epoch_elapsed = time.perf_counter() - epoch_started_at
-        should_log_epoch = epoch == 1 or (progress_interval and epoch % progress_interval == 0) or epoch == epochs
+        should_log_epoch = (
+            epoch == 1
+            or (progress_interval and epoch % progress_interval == 0)
+            or epoch == epochs
+        )
         if should_log_epoch:
             elapsed_total = time.perf_counter() - started_at
             _log(
@@ -626,6 +784,9 @@ def train_selector(
         "val_top1": best_report.get("val_top1"),
         "val_mean_predicted_delta": best_report.get("val_mean_predicted_delta"),
         "history": history,
+        "resume_checkpoint": (
+            str(resume_checkpoint) if resume_checkpoint is not None else None
+        ),
     }
 
     _log(f"saving training report best_val_loss={best_val:.4f}")
@@ -643,6 +804,10 @@ def main() -> None:
     )
 
     parser.add_argument("--config", required=True)
+    parser.add_argument("--teacher-dir", default=None)
+    parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--resume-checkpoint", default=None)
 
     args = parser.parse_args()
 
@@ -650,15 +815,20 @@ def main() -> None:
     selector_cfg = require_config_section(config, "selector")
     teacher_cfg = require_config_section(config, "teacher")
     seed = int(require_config(config, "seed"))
-    teacher_dir = Path(require_config(teacher_cfg, "output_dir", context="config.teacher"))
-    checkpoint_path = Path(require_config(selector_cfg, "checkpoint_path", context="config.selector"))
-    output_dir = checkpoint_path.parent
+    teacher_dir = Path(
+        args.teacher_dir
+        or require_config(teacher_cfg, "output_dir", context="config.teacher")
+    )
+    checkpoint_path = Path(
+        require_config(selector_cfg, "checkpoint_path", context="config.selector")
+    )
+    output_dir = Path(args.output_dir) if args.output_dir else checkpoint_path.parent
 
     train_selector(
         config=config,
         teacher_dir=teacher_dir,
         output_dir=output_dir,
-        epochs=None,
+        epochs=args.epochs,
         batch_size=None,
         seed=seed,
         max_train_records=None,
@@ -667,6 +837,9 @@ def main() -> None:
         progress_interval=None,
         batch_log_interval=None,
         load_log_interval=None,
+        resume_checkpoint=(
+            Path(args.resume_checkpoint) if args.resume_checkpoint else None
+        ),
     )
 
 

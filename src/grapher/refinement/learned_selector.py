@@ -11,7 +11,17 @@ import torch
 from torch import nn
 
 from grapher.properties.summary import SummaryConfig, distance_to_summary
-from grapher.refinement.rewiring import Action, apply_action, sample_valid_double_edge_swaps
+from grapher.refinement.features import (
+    action_local_features as invariant_action_local_features,
+)
+from grapher.refinement.features import (
+    graph_context_features as residual_graph_context_features,
+)
+from grapher.refinement.rewiring import (
+    Action,
+    apply_action,
+    sample_valid_double_edge_swaps,
+)
 from grapher.utils.device import resolve_torch_device
 
 
@@ -45,7 +55,7 @@ def _safe_scalar(value: Any, default: float = 0.0) -> float:
     try:
         val = float(value)
         return val if math.isfinite(val) else default
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -109,7 +119,9 @@ def _graph_context_features(
 
     target_vecs = [
         _pad_or_trim(target.get("degree_hist", []), feature_cfg["degree_width"]),
-        _pad_or_trim(target.get("clustering_hist", []), feature_cfg["clustering_width"]),
+        _pad_or_trim(
+            target.get("clustering_hist", []), feature_cfg["clustering_width"]
+        ),
         _pad_or_trim(target.get("spectral_hist", []), feature_cfg["spectral_width"]),
         _pad_or_trim(target.get("motif_proxy", []), feature_cfg["motif_width"]),
         _pad_or_trim(target.get("orbit_count", []), feature_cfg["orbit_width"]),
@@ -234,34 +246,82 @@ class LoadedSelector:
         graph: nx.Graph,
         target_summary: dict[str, Any],
         actions: list[Action],
+        *,
+        summary_config: SummaryConfig | dict[str, Any] | None = None,
     ) -> np.ndarray:
-        if not actions:
-            return np.zeros(0, dtype=np.float64)
+        logits, _ = self.score_candidates(
+            graph,
+            target_summary,
+            actions,
+            summary_config=summary_config,
+            include_stop=False,
+        )
+        return logits
 
-        context = _graph_context_features(graph, target_summary, self.feature_cfg)
-        features = []
+    def score_candidates(
+        self,
+        graph: nx.Graph,
+        target_summary: dict[str, Any],
+        actions: list[Action],
+        *,
+        summary_config: SummaryConfig | dict[str, Any] | None = None,
+        include_stop: bool = False,
+    ) -> tuple[np.ndarray, float | None]:
+        if not actions and not include_stop:
+            return np.zeros(0, dtype=np.float64), None
 
-        for action in actions:
-            local = _action_local_features(graph, action)
-            features.append(np.concatenate([context, local], axis=0))
+        feature_version = int(self.feature_cfg.get("feature_version", 1))
+        context = residual_graph_context_features(
+            graph,
+            target_summary,
+            self.feature_cfg,
+            summary_config=summary_config,
+        )
+        action_items: list[Action | None] = list(actions)
+        if include_stop:
+            action_items.append(None)
+        features = [
+            np.concatenate(
+                [
+                    context,
+                    invariant_action_local_features(
+                        graph,
+                        action,
+                        feature_version=feature_version,
+                    ),
+                ],
+                axis=0,
+            )
+            for action in action_items
+        ]
 
-        x = torch.tensor(np.stack(features, axis=0), dtype=torch.float32, device=self.device)
+        x = torch.tensor(
+            np.stack(features, axis=0), dtype=torch.float32, device=self.device
+        )
 
         self.model.eval()
         with torch.no_grad():
-            logits = self.model(x).detach().cpu().numpy().astype(np.float64)
+            all_logits = self.model(x).detach().cpu().numpy().astype(np.float64)
 
-        return logits
+        if include_stop:
+            return all_logits[:-1], float(all_logits[-1])
+        return all_logits, None
 
 
 def load_learned_selector(selector_cfg: dict[str, Any]) -> LoadedSelector:
-    checkpoint_path = selector_cfg.get("checkpoint_path") or selector_cfg.get("checkpoint")
+    checkpoint_path = selector_cfg.get("checkpoint_path") or selector_cfg.get(
+        "checkpoint"
+    )
     if not checkpoint_path:
-        raise ValueError("selector.checkpoint_path is required for learned_selector refiner.")
+        raise ValueError(
+            "selector.checkpoint_path is required for learned_selector refiner."
+        )
 
     checkpoint_path = Path(checkpoint_path)
     if not checkpoint_path.exists():
-        raise FileNotFoundError(f"Missing learned selector checkpoint: {checkpoint_path}")
+        raise FileNotFoundError(
+            f"Missing learned selector checkpoint: {checkpoint_path}"
+        )
 
     device = resolve_torch_device(selector_cfg.get("device", "auto"))
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -345,6 +405,10 @@ def refine_graph_with_selector(
     preserve_connectivity = bool(cfg.get("preserve_connectivity", True))
     selection = str(cfg.get("selection", "greedy"))
     temperature = float(cfg.get("temperature", 0.1))
+    exact_top_k = int(cfg.get("exact_top_k", cfg.get("hybrid_top_k", 0)) or 0)
+    use_stop_action = bool(cfg.get("use_stop_action", False))
+    target_energy_threshold = float(cfg.get("target_energy_threshold", -1.0))
+    patience = max(int(cfg.get("patience", 1)), 1)
 
     # Usually false for learned selector. If true, this filters using actual energy.
     accept_only_improving = bool(cfg.get("accept_only_improving", False))
@@ -354,10 +418,35 @@ def refine_graph_with_selector(
     trace: list[dict[str, Any]] = []
 
     current_energy = None
-    if return_trace or accept_only_improving:
-        current_energy = distance_to_summary(g, target_summary, summary_config, energy_weights)
+    if (
+        return_trace
+        or accept_only_improving
+        or exact_top_k > 0
+        or target_energy_threshold >= 0.0
+        or patience > 1
+    ):
+        current_energy = distance_to_summary(
+            g, target_summary, summary_config, energy_weights
+        )
 
+    stalled_steps = 0
     for step in range(steps):
+        if (
+            current_energy is not None
+            and target_energy_threshold >= 0.0
+            and current_energy <= target_energy_threshold
+        ):
+            if return_trace:
+                trace.append(
+                    {
+                        "step": step,
+                        "energy": float(current_energy),
+                        "accepted": False,
+                        "reason": "target_reached",
+                    }
+                )
+            break
+
         candidates = sample_valid_double_edge_swaps(
             g,
             candidate_budget,
@@ -377,12 +466,42 @@ def refine_graph_with_selector(
                 )
             break
 
-        logits = selector.score_actions(g, target_summary, candidates)
+        logits, stop_logit = selector.score_candidates(
+            g,
+            target_summary,
+            candidates,
+            summary_config=summary_config,
+            include_stop=use_stop_action,
+        )
 
-        if accept_only_improving:
+        if (
+            use_stop_action
+            and stop_logit is not None
+            and (not logits.size or stop_logit >= float(np.max(logits)))
+        ):
+            if return_trace:
+                trace.append(
+                    {
+                        "step": step,
+                        "energy": current_energy,
+                        "accepted": False,
+                        "reason": "learned_stop",
+                        "stop_logit": float(stop_logit),
+                        "best_action_logit": (
+                            float(np.max(logits)) if logits.size else None
+                        ),
+                        "num_candidates": len(candidates),
+                    }
+                )
+            break
+
+        if exact_top_k > 0:
             assert current_energy is not None
+            top_k = min(exact_top_k, len(candidates))
+            top_indices = np.argsort(-logits)[:top_k]
+            shortlisted = [candidates[int(idx)] for idx in top_indices]
             deltas = []
-            for action in candidates:
+            for action in shortlisted:
                 candidate_energy = distance_to_summary(
                     apply_action(g, action),
                     target_summary,
@@ -392,44 +511,89 @@ def refine_graph_with_selector(
                 deltas.append(float(current_energy - candidate_energy))
 
             deltas_np = np.asarray(deltas, dtype=np.float64)
-            mask = deltas_np > min_improvement
 
-            if not np.any(mask):
+            best_idx = int(np.argmax(deltas_np))
+            best_delta = float(deltas_np[best_idx])
+            if best_delta <= min_improvement:
                 if return_trace:
                     trace.append(
                         {
                             "step": step,
                             "accepted": False,
                             "reason": "no_improving_candidate",
-                            "best_delta": float(np.max(deltas_np)),
+                            "best_delta": best_delta,
                             "num_candidates": len(candidates),
+                            "num_shortlisted": top_k,
                         }
                     )
                 break
+            chosen_action = shortlisted[best_idx]
+            chosen_logit = float(logits[int(top_indices[best_idx])])
+        else:
+            if accept_only_improving:
+                assert current_energy is not None
+                deltas = []
+                for action in candidates:
+                    candidate_energy = distance_to_summary(
+                        apply_action(g, action),
+                        target_summary,
+                        summary_config,
+                        energy_weights,
+                    )
+                    deltas.append(float(current_energy - candidate_energy))
 
-            candidates = [a for a, keep in zip(candidates, mask) if bool(keep)]
-            logits = logits[mask]
+                deltas_np = np.asarray(deltas, dtype=np.float64)
+                mask = deltas_np > min_improvement
 
-        chosen_action, chosen_logit = _choose_by_logits(
-            candidates,
-            logits,
-            selection=selection,
-            temperature=temperature,
-            rng=generator,
-        )
+                if not np.any(mask):
+                    if return_trace:
+                        trace.append(
+                            {
+                                "step": step,
+                                "accepted": False,
+                                "reason": "no_improving_candidate",
+                                "best_delta": float(np.max(deltas_np)),
+                                "num_candidates": len(candidates),
+                            }
+                        )
+                    break
 
-        if chosen_action is None:
-            break
+                candidates = [a for a, keep in zip(candidates, mask) if bool(keep)]
+                logits = logits[mask]
+
+            chosen_action, chosen_logit = _choose_by_logits(
+                candidates,
+                logits,
+                selection=selection,
+                temperature=temperature,
+                rng=generator,
+            )
+
+            if chosen_action is None:
+                break
 
         old_energy = current_energy
         g = apply_action(g, chosen_action)
 
         actual_delta = None
-        if return_trace or accept_only_improving:
-            new_energy = distance_to_summary(g, target_summary, summary_config, energy_weights)
+        if (
+            return_trace
+            or accept_only_improving
+            or exact_top_k > 0
+            or target_energy_threshold >= 0.0
+            or patience > 1
+        ):
+            new_energy = distance_to_summary(
+                g, target_summary, summary_config, energy_weights
+            )
             if old_energy is not None:
                 actual_delta = float(old_energy - new_energy)
             current_energy = new_energy
+
+        if actual_delta is not None and actual_delta <= min_improvement:
+            stalled_steps += 1
+        else:
+            stalled_steps = 0
 
         if return_trace:
             trace.append(
@@ -439,8 +603,24 @@ def refine_graph_with_selector(
                     "num_candidates": len(candidates),
                     "chosen_logit": float(chosen_logit),
                     "actual_delta": actual_delta,
+                    "energy": current_energy,
+                    "num_shortlisted": (
+                        min(exact_top_k, len(candidates)) if exact_top_k > 0 else None
+                    ),
                 }
             )
+        if stalled_steps >= patience:
+            if return_trace:
+                trace.append(
+                    {
+                        "step": step,
+                        "energy": current_energy,
+                        "accepted": False,
+                        "reason": "patience_exhausted",
+                        "stalled_steps": stalled_steps,
+                    }
+                )
+            break
 
     if return_trace:
         return g, trace

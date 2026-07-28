@@ -1,17 +1,19 @@
-# GraphES: Coarse-to-Fine Graph Generation
+# GraphES: Target-Conditioned Graph Refinement
 
-GraphES implements a coarse-to-fine graph generation pipeline for generic graphs and molecular graphs.
+GraphES implements a stochastic, target-summary-conditioned, constraint-preserving graph refinement generator.
 
-The core idea is:
+For a generic graph, the revised pipeline is:
 
 ```text
 training graphs
-  -> permutation-invariant graph summaries
-  -> learned summary generator
-  -> coarse graph constructor
-  -> GraphER rewiring refinement
+  -> degree-sequence generator p(D)
+  -> connected Havel-Hakimi realization G0(D)
+  -> conditional target-summary generator p(s* | D, z)
+  -> valid double-edge-swap refinement toward s*
   -> evaluation
 ```
+
+The target is a structural description—initially graphlet histories and clustering statistics—not a sampled adjacency matrix. This keeps the target compatible with the fixed-degree rewiring state space and avoids moving the full combinatorial graph-generation problem into the estimator.
 
 For molecular generation, GraphES currently follows a topology-first design:
 
@@ -36,12 +38,18 @@ GraphES supports:
 - QM9 topology-only graph generation
 - QM9 attributed molecular graph generation
 - empirical summary sampling
-- learned SummaryVAE summary generation
+- legacy unconditional SummaryVAE generation
+- degree-conditioned target-summary CVAE generation
 - DegreeHistogramVAE for degree-sequence generation
 - graphlet-history topology summaries
 - Havel-Hakimi coarse graph construction
 - GraphER-Opt energy-guided rewiring
-- learned GraphER action-selector refinement
+- learned GraphER action-selector refinement with:
+  - current/target/residual summary features
+  - soft energy-based teacher distributions
+  - explicit `STOP` supervision
+  - optional neural top-\(K\) plus exact-energy selection
+  - DAgger-style on-policy teacher aggregation
 - topology-conditioned mixture CatFlow for molecular attributes
 - molecular evaluation:
   - validity
@@ -67,6 +75,8 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+Install a PyTorch build appropriate for the machine separately if it is not already available. CUDA is recommended for training; CPU execution is supported for tests and small smoke runs.
+
 Set `PYTHONPATH`:
 
 ```bash
@@ -78,6 +88,14 @@ For ORCA orbit evaluation, set:
 ```bash
 export ORCA_EXEC=/path/to/orca
 ```
+
+For fast graphlet canonicalization, install nauty/Traces and set:
+
+```bash
+export NAUTY_EXEC=/path/to/labelg
+```
+
+Without `labelg`, topology graphlets of size at most 8 use an exact Python fallback. The fallback is suitable for tests and small experiments but is much slower than nauty.
 
 ---
 
@@ -94,7 +112,7 @@ src/grapher/generators/degree_vae.py
     DegreeHistogramVAE for degree-sequence generation
 
 src/grapher/generators/summary_vae.py
-    SummaryVAE and summary vectorization for learned graph summaries
+    legacy SummaryVAE, conditional target-summary CVAE, and vectorization
 
 src/grapher/construction/coarse.py
     Havel-Hakimi coarse graph construction
@@ -106,7 +124,10 @@ src/grapher/refinement/grapher_opt.py
     training-free GraphER-Opt refinement
 
 src/grapher/refinement/learned_selector.py
-    learned GraphER action selector
+    learned selector, learned STOP, and hybrid neural/exact refinement
+
+src/grapher/refinement/features.py
+    permutation-invariant current/target/residual and action features
 
 src/grapher/evaluation/metrics.py
     generic graph metrics, including graphlet-history MMD
@@ -116,13 +137,258 @@ src/grapher/pipeline/coarse_to_fine.py
 
 src/grapher/molecular/
     QM9 topology preparation, molecular attribute generation, and molecular utilities
+
+scripts/verify_target_summary_generator.py
+    held-out conditional-summary reconstruction and diversity checks
+
+configs/experiments/sbm_target_refinement.yaml
+    complete configuration for the revised generic-graph proposal
 ```
 
 ---
 
-# Part A. Generic graph generation
+# Part A. Revised target-conditioned GraphER
 
-## 4. Prepare generic datasets
+## 4. Model contract
+
+The generator factorizes as
+
+\[
+p(G)=\sum_D p_\psi(D)\int p(z)\,
+p_\phi(\mathbf{s}^{*}\mid D,z)\,
+p_\theta(G\mid G_{\mathrm{HH}}(D),D,\mathbf{s}^{*})\,dz.
+\]
+
+Each component has one responsibility:
+
+| Component | Responsibility |
+| --- | --- |
+| `DegreeHistogramVAE` | Samples \(D\), which fixes graph size, edge count, and degree multiset |
+| Havel-Hakimi constructor | Creates a simple connected starting graph \(G_0\) with exactly \(D\) |
+| `ConditionalSummaryVAE` | Samples a structural mode \(\mathbf{s}^{*}\) conditioned on \(D\) and latent \(z\) |
+| Energy teacher | Labels valid swap candidates by exact reduction in summary discrepancy |
+| Learned selector | Ranks a finite valid candidate set and optionally predicts `STOP` |
+| Hybrid refiner | Re-evaluates the neural top-\(K\) candidates with exact energy before applying one |
+
+The sampled target summary remains fixed for one rollout. Degree and density have zero refinement-energy weight because a double-edge swap cannot change them.
+
+The default target summary in `sbm_target_refinement.yaml` is
+
+\[
+\mathbf{s}(G)=
+\left[\mathbf{h}_3(G),\mathbf{h}_4(G),\mathbf{c}(G)\right],
+\]
+
+where \(\mathbf{h}_k\) is the connected induced graphlet-frequency vector and \(\mathbf{c}\) is the clustering-coefficient histogram.
+
+## 5. Complete step-by-step training curriculum
+
+Run every command from the repository root.
+
+### Step 0: set up and test the repository
+
+```bash
+export PYTHONPATH=src
+PYTHONPATH=src pytest -q
+```
+
+The expected result for this release is `16 passed`.
+
+### Step 1: prepare the training graphs
+
+```bash
+PYTHONPATH=src python scripts/prepare_generic_dataset.py \
+  --dataset sbm \
+  --root outputs/datasets
+```
+
+This creates the train/validation/test splits consumed by every later stage.
+
+### Step 2: train the degree-sequence generator
+
+```bash
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/sbm_target_refinement.yaml
+```
+
+Output:
+
+```text
+outputs/degree_generators/sbm_target_refinement/checkpoint.pt
+```
+
+Validate the graphicality, connected-feasibility, node-count distribution, and degree MMD before proceeding. Refinement cannot repair a wrong degree sequence.
+
+### Step 3: train \(p_\phi(\mathbf{s}^{*}\mid D,z)\)
+
+```bash
+PYTHONPATH=src python scripts/train_summary_generator.py \
+  --config configs/experiments/sbm_target_refinement.yaml
+```
+
+The config sets `conditional_on_degree: true`. The encoder observes the training summary and degree condition; the decoder receives the condition and latent sample. Node count and degree losses are zero because those invariant fields are copied exactly from \(D\) during sampling.
+
+Output:
+
+```text
+outputs/target_summary_generators/sbm_target_refinement/checkpoint.pt
+```
+
+Verify the checkpoint:
+
+```bash
+PYTHONPATH=src python scripts/verify_target_summary_generator.py \
+  --config configs/experiments/sbm_target_refinement.yaml \
+  --output outputs/target_summary_generators/sbm_target_refinement/verification.json
+```
+
+The required invariant check is:
+
+```text
+degree_condition_match_rate: 1.0
+```
+
+Also inspect reconstruction error and `prior_structural_diversity`. Near-zero diversity suggests posterior collapse or an overly large KL weight.
+
+### Step 4: build oracle-guided teacher trajectories
+
+```bash
+PYTHONPATH=src python scripts/build_rewiring_teacher.py \
+  --config configs/experiments/sbm_target_refinement.yaml \
+  --target-source oracle \
+  --output-dir outputs/teachers/sbm_target_refinement/oracle
+```
+
+For each training target, the script:
+
+1. extracts its degree sequence and target summary;
+2. constructs the connected Havel-Hakimi source graph;
+3. samples a finite set of valid degree-preserving swaps;
+4. computes each candidate's exact energy reduction;
+5. saves a soft teacher distribution over candidates plus `STOP`;
+6. applies an improving teacher action and repeats until convergence or the maximum budget.
+
+Every cache record contains the current graph, current summary, fixed target summary, residual-compatible features, candidate swaps, energy changes, soft labels, and stopping label. The target adjacency matrix is never used to create a candidate.
+
+### Step 5: train the oracle-guided selector
+
+```bash
+PYTHONPATH=src python scripts/train_rewiring_selector.py \
+  --config configs/experiments/sbm_target_refinement.yaml \
+  --teacher-dir outputs/teachers/sbm_target_refinement/oracle \
+  --output-dir outputs/selectors/sbm_target_refinement/oracle
+```
+
+The selector minimizes soft cross-entropy against the teacher distribution, with an optional Huber regression term on normalized energy improvement. Its version-2 features are permutation-invariant and include current summaries, target summaries, their residuals, invariant local swap features, and a `STOP` flag.
+
+### Step 6: expose the selector to predicted targets
+
+Build a deployment-aware cache using prior samples from the conditional target generator:
+
+```bash
+PYTHONPATH=src python scripts/build_rewiring_teacher.py \
+  --config configs/experiments/sbm_target_refinement.yaml \
+  --target-source predicted \
+  --output-dir outputs/teachers/sbm_target_refinement/predicted
+```
+
+Fine-tune from the oracle-guided checkpoint:
+
+```bash
+PYTHONPATH=src python scripts/train_rewiring_selector.py \
+  --config configs/experiments/sbm_target_refinement.yaml \
+  --teacher-dir outputs/teachers/sbm_target_refinement/predicted \
+  --output-dir outputs/selectors/sbm_target_refinement/predicted \
+  --resume-checkpoint outputs/selectors/sbm_target_refinement/oracle/checkpoint.pt
+```
+
+This stage removes the train/generation mismatch while keeping the target-summary model frozen.
+
+### Step 7: aggregate on-policy states
+
+Visit states generated by the current selector, but label every visited state with the exact energy teacher:
+
+```bash
+PYTHONPATH=src python scripts/build_rewiring_teacher.py \
+  --config configs/experiments/sbm_target_refinement.yaml \
+  --target-source predicted \
+  --rollout-selector-checkpoint outputs/selectors/sbm_target_refinement/predicted/checkpoint.pt \
+  --output-dir outputs/teachers/sbm_target_refinement/on_policy
+```
+
+Fine-tune again:
+
+```bash
+PYTHONPATH=src python scripts/train_rewiring_selector.py \
+  --config configs/experiments/sbm_target_refinement.yaml \
+  --teacher-dir outputs/teachers/sbm_target_refinement/on_policy \
+  --output-dir outputs/selectors/sbm_target_refinement/final \
+  --resume-checkpoint outputs/selectors/sbm_target_refinement/predicted/checkpoint.pt
+```
+
+Repeat Step 7 if validation rollouts continue to improve. This is a DAgger-style loop: the learned selector chooses which states are visited, while exact metric evaluation supplies the labels.
+
+### Step 8: generate and evaluate graphs
+
+```bash
+PYTHONPATH=src python scripts/run_coarse_to_fine.py \
+  --config configs/experiments/sbm_target_refinement.yaml \
+  --selector-checkpoint outputs/selectors/sbm_target_refinement/final/checkpoint.pt \
+  --num-generate 40 \
+  --output-dir outputs/coarse_to_fine/sbm_target_refinement_seed42 \
+  --debug
+```
+
+Generation performs:
+
+```text
+D ~ p_psi(D)
+G0 = connected_havel_hakimi(D)
+s* ~ p_phi(s | D, z)
+repeat:
+    sample valid double-edge swaps
+    rank them with the learned selector
+    compare STOP with the candidate scores
+    exactly evaluate the neural top-K
+    apply the best improving candidate
+until STOP, convergence, patience exhaustion, or T_max
+```
+
+The final report compares:
+
+- unrefined Havel-Hakimi graphs;
+- the learned/hybrid selector;
+- exact GraphER-Opt;
+- random valid rewiring.
+
+Check that connectivity and degree preservation are exactly `1.0`, and compare graphlet, clustering, and spectral MMD. `T_max` is only a hard compute budget; `STOP`, target-energy threshold, minimum improvement, and patience provide adaptive termination.
+
+## 6. Recommended ablations
+
+Run the following order so error sources remain identifiable:
+
+1. oracle \(D\) + oracle summary + exact candidate search;
+2. oracle \(D\) + oracle summary + learned selector;
+3. oracle \(D\) + predicted summary + learned selector;
+4. generated \(D\) + predicted summary + learned selector;
+5. neural-only selection versus exact search versus neural top-\(K\) plus exact energy;
+6. fixed step budget versus learned/adaptive stopping;
+7. deterministic versus randomly relabeled Havel-Hakimi initialization.
+
+For a pure metric-search baseline, set:
+
+```yaml
+refiner:
+  type: grapher_opt
+```
+
+For neural-only selection, set `exact_top_k: 0`. For the recommended hybrid, keep `exact_top_k: 8`.
+
+---
+
+# Legacy generic graph generation
+
+## Prepare generic datasets
 
 Prepare SBM:
 
@@ -164,7 +430,10 @@ motif / orbit summaries
 Example config:
 
 ```text
-configs/experiments/sbm_report_degreevae.yaml
+configs/experiments/sbm_target_refinement.yaml
+    revised degree-conditioned target-summary and GraphER refinement curriculum
+
+configs/experiments/sbm_report.yaml
 ```
 
 Train the degree generator:
@@ -179,21 +448,21 @@ Build the GraphER teacher cache:
 
 ```bash
 PYTHONPATH=src python scripts/build_rewiring_teacher.py \
-  --config configs/experiments/sbm_report_degreevae.yaml
+  --config configs/experiments/sbm_report.yaml
 ```
 
 Train the learned rewiring selector:
 
 ```bash
 PYTHONPATH=src python scripts/train_rewiring_selector.py \
-  --config configs/experiments/sbm_report_degreevae.yaml
+  --config configs/experiments/sbm_report.yaml
 ```
 
 Generate graphs:
 
 ```bash
 PYTHONPATH=src python scripts/run_coarse_to_fine.py \
-  --config configs/experiments/sbm_report_degreevae.yaml \
+  --config configs/experiments/sbm_report.yaml \
   --num-generate 40 \
   --output-dir outputs/coarse_to_fine/sbm_report_degreevae_seed42 \
   --debug
@@ -338,7 +607,7 @@ Run the old degree-summary baseline:
 
 ```bash
 PYTHONPATH=src python scripts/run_coarse_to_fine.py \
-  --config configs/experiments/sbm_report_degreevae.yaml \
+  --config configs/experiments/sbm_report.yaml \
   --num-generate 40 \
   --output-dir outputs/coarse_to_fine/sbm_old_summary_seed42 \
   --debug
@@ -746,7 +1015,7 @@ real-topology Stage 2 still bad:
 # Part F. Useful configs
 
 ```text
-configs/experiments/sbm_report_degreevae.yaml
+configs/experiments/sbm_report.yaml
     generic graph pipeline with degree generator and original structural summaries
 
 configs/experiments/sbm_report_graphlet_history.yaml
@@ -797,6 +1066,12 @@ outputs/summary_generators/<run_name>/
   checkpoint.pt
   summary_vectorizer.json
   training_metrics.json
+
+outputs/target_summary_generators/<run_name>/
+  checkpoint.pt
+  summary_vectorizer.json
+  training_metrics.json
+  verification.json
 ```
 
 Teacher cache outputs:
@@ -834,14 +1109,10 @@ outputs/molecular/<run_name>/
 ## Generic graph experiment
 
 ```text
-1. Prepare SBM.
-2. Train graphlet-history SummaryVAE.
-3. Train DegreeVAE.
-4. Build the teacher cache.
-5. Train learned selector.
-6. Generate graphs.
-7. Compare against old summary baseline.
-8. Repeat for seeds 42, 43, and 44.
+1. Follow Part A, Steps 0--8.
+2. Run the six component-isolating ablations in Section 6.
+3. Compare against the legacy unconditional-summary pipeline.
+4. Repeat the complete evaluation for seeds 42, 43, and 44.
 ```
 
 ## QM9 experiment

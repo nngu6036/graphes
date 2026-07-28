@@ -1,29 +1,23 @@
 from __future__ import annotations
 
 import itertools
-import os
-import subprocess
-from collections import Counter
-from dataclasses import dataclass
-from math import comb
-from pathlib import Path
-from typing import Any, Iterable, Iterator
-
-import itertools
 import json
 import os
+import shutil
 import string
 import subprocess
 from collections import Counter
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from functools import lru_cache
+from math import comb
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import networkx as nx
 import numpy as np
 
-
-NAUTY_EXEC = os.environ.get("NAUTY_EXEC")
+NAUTY_EXEC = os.environ.get("NAUTY_EXEC") or shutil.which("labelg")
 
 
 # ============================================================
@@ -71,6 +65,10 @@ class NautyCanonicalizer:
     use_sparse_internal: bool = False
 
     def _labelg_path(self) -> str:
+        if not self.nauty_exec:
+            raise FileNotFoundError(
+                "Cannot find nauty labelg. Set NAUTY_EXEC or add labelg to PATH."
+            )
         path = Path(self.nauty_exec)
 
         if path.is_dir():
@@ -161,6 +159,69 @@ class NautyCanonicalizer:
             )
 
         return keys
+
+
+@dataclass(frozen=True)
+class PythonCanonicalizer:
+    """Exact dependency-free canonicalizer for small topology graphlets.
+
+    It enumerates node orders and selects the lexicographically smallest
+    graph6 representation.  This is deliberately a fallback for tests and
+    small k; nauty remains strongly recommended for dataset-scale extraction.
+    """
+
+    max_nodes: int = 8
+
+    def canonical_graph6(self, graph: nx.Graph) -> str:
+        return self.canonical_graph6_batch([graph])[0]
+
+    def canonical_graph(self, graph: nx.Graph) -> tuple[str, nx.Graph]:
+        key = self.canonical_graph6(graph)
+        return key, nx.from_graph6_bytes(key.encode("ascii"))
+
+    def canonical_graph6_batch(
+        self,
+        graphs: Iterable[nx.Graph],
+    ) -> list[str]:
+        return [self._canonical_graph6(graph) for graph in graphs]
+
+    def _canonical_graph6(self, graph: nx.Graph) -> str:
+        _validate_simple_undirected(graph)
+        normalized = nx.convert_node_labels_to_integers(graph, ordering="default")
+        raw = nx.to_graph6_bytes(normalized, header=False).strip().decode("ascii")
+        return self._canonical_graph6_from_raw(raw, self.max_nodes)
+
+    @staticmethod
+    @lru_cache(maxsize=65536)
+    def _canonical_graph6_from_raw(raw: str, max_nodes: int) -> str:
+        graph = nx.from_graph6_bytes(raw.encode("ascii"))
+        nodes = list(graph.nodes())
+        n = len(nodes)
+        if n > max_nodes:
+            raise RuntimeError(
+                "The Python graphlet canonicalizer supports at most "
+                f"{max_nodes} nodes; install nauty labelg for k={n}."
+            )
+        best: bytes | None = None
+        for order in itertools.permutations(nodes):
+            position = {node: idx for idx, node in enumerate(order)}
+            relabeled = nx.relabel_nodes(graph, position, copy=True)
+            encoded = nx.to_graph6_bytes(
+                relabeled,
+                nodes=range(n),
+                header=False,
+            ).strip()
+            if best is None or encoded < best:
+                best = encoded
+        if best is None:
+            best = nx.to_graph6_bytes(nx.Graph(), header=False).strip()
+        return best.decode("ascii")
+
+
+def default_topology_canonicalizer() -> NautyCanonicalizer | PythonCanonicalizer:
+    if NAUTY_EXEC:
+        return NautyCanonicalizer(NAUTY_EXEC)
+    return PythonCanonicalizer()
 
 
 # ============================================================
@@ -287,7 +348,7 @@ def k_induced_subgraph_canonical_strings(
     If unique=False, returns one key per accepted k-subset.
     If unique=True, returns unique canonical keys only.
     """
-    canonicalizer = canonicalizer or NautyCanonicalizer()
+    canonicalizer = canonicalizer or default_topology_canonicalizer()
 
     keys: list[str] = []
 
@@ -321,7 +382,7 @@ def graphlet_count_dict(
     """
     Count induced graphlets of size k using nauty canonical graph6 keys.
     """
-    canonicalizer = canonicalizer or NautyCanonicalizer()
+    canonicalizer = canonicalizer or default_topology_canonicalizer()
 
     counts: Counter[str] = Counter()
 
@@ -376,7 +437,7 @@ def aggregate_unique_motifs(
     """
     Return unique induced k-node motif types appearing in any graph.
     """
-    canonicalizer = canonicalizer or NautyCanonicalizer()
+    canonicalizer = canonicalizer or default_topology_canonicalizer()
 
     seen_keys: set[str] = set()
 
@@ -408,7 +469,7 @@ def aggregate_unique_motifs_with_counts(
     Return unique induced k-node motif types and their total occurrence counts
     across all input graphs.
     """
-    canonicalizer = canonicalizer or NautyCanonicalizer()
+    canonicalizer = canonicalizer or default_topology_canonicalizer()
 
     counts: Counter[str] = Counter()
 
@@ -499,7 +560,7 @@ def graphlet_history(
     if k_min <= 0 or k_max < k_min:
         raise ValueError("Require 1 <= k_min <= k_max.")
 
-    canonicalizer = canonicalizer or NautyCanonicalizer()
+    canonicalizer = canonicalizer or default_topology_canonicalizer()
 
     return {
         str(k): graphlet_frequency_dict(
@@ -749,7 +810,7 @@ def _stable_label_token(label: Any) -> str:
         "C"     -> "builtins.str:'C'"
         ("C",1) -> "builtins.tuple:('C', 1)"
     """
-    return f"{type(label).__module__}.{type(label).__qualname__}:{repr(label)}"
+    return f"{type(label).__module__}.{type(label).__qualname__}:{label!r}"
 
 
 def _safe_colour_alphabet() -> list[str]:

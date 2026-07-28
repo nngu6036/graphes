@@ -174,6 +174,16 @@ def main() -> None:
             progress_interval=max(int(args.progress_interval), 0),
             log_fn=log,
         )
+        disconnected_count = sum(
+            1 for motif, _ in motif_counts if not nx.is_connected(motif)
+        )
+        motif_counts = [
+            (motif, count)
+            for motif, count in motif_counts
+            if nx.is_connected(motif)
+        ]
+        if disconnected_count:
+            log(f"discarded disconnected attributed motifs={disconnected_count}")
         log(f"unique connected attributed motif count={len(motif_counts)}")
         total_count = sum(count for _, count in motif_counts)
         motif_counts = sorted(

@@ -15,7 +15,9 @@ from grapher.utils.motifs import graphlet_history_l2_distance
 
 
 ORCA_EXEC = os.environ.get("ORCA_EXEC") or shutil.which("orca")
-ORBIT_MULTIPLICITY_4 = np.asarray([2, 2, 1, 6, 2, 1, 2, 4, 2, 1, 1, 2, 2, 4, 1], dtype=np.int64)
+ORBIT_MULTIPLICITY_4 = np.asarray(
+    [2, 2, 1, 6, 2, 1, 2, 4, 2, 1, 1, 2, 2, 4, 1], dtype=np.int64
+)
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,8 @@ class SummaryConfig:
     degree_hist_max_degree: int | None = None
     clustering_bins: int = 20
     spectral_bins: int = 20
+    clustering_summary: bool = True
+    spectral_summary: bool = True
     motif_proxy: bool = True
     orbit_count: bool = False
 
@@ -35,13 +39,18 @@ class SummaryConfig:
     graphlet_num_samples: int | None = None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], graphs: list[nx.Graph] | None = None) -> "SummaryConfig":
+    def from_dict(
+        cls, data: dict[str, Any], graphs: list[nx.Graph] | None = None
+    ) -> "SummaryConfig":
         data = data or {}
         max_degree_raw = data.get("degree_hist_max_degree", "auto")
         if max_degree_raw in {None, "auto"}:
             max_degree = None
             if graphs:
-                max_degree = max((max(dict(g.degree()).values()) if g.number_of_nodes() else 0) for g in graphs)
+                max_degree = max(
+                    (max(dict(g.degree()).values()) if g.number_of_nodes() else 0)
+                    for g in graphs
+                )
         else:
             max_degree = int(max_degree_raw)
 
@@ -53,13 +62,25 @@ class SummaryConfig:
         )
         k_min = int(data.get("graphlet_k_min", data.get("k_min", 3)))
         k_max = int(data.get("graphlet_k_max", data.get("k_max", 5)))
-        num_samples_raw = data.get("graphlet_num_samples", data.get("num_graphlet_samples", None))
-        num_samples = None if num_samples_raw in {None, "", "none", "None"} else int(num_samples_raw)
+        num_samples_raw = data.get(
+            "graphlet_num_samples", data.get("num_graphlet_samples", None)
+        )
+        num_samples = (
+            None
+            if num_samples_raw in {None, "", "none", "None"}
+            else int(num_samples_raw)
+        )
 
         return cls(
             degree_hist_max_degree=max_degree,
             clustering_bins=int(data.get("clustering_bins", 20)),
             spectral_bins=int(data.get("spectral_bins", 20)),
+            clustering_summary=bool(
+                data.get("clustering_summary", data.get("use_clustering", True))
+            ),
+            spectral_summary=bool(
+                data.get("spectral_summary", data.get("use_spectral", True))
+            ),
             motif_proxy=bool(data.get("motif_proxy", True)),
             orbit_count=bool(data.get("orbit_count", data.get("use_orbit", False))),
             graphlet_history=graphlet_enabled,
@@ -107,7 +128,9 @@ def spectral_histogram(graph: nx.Graph, bins: int = 20) -> np.ndarray:
     degrees = adjacency.sum(axis=1)
     inv_sqrt = np.zeros_like(degrees)
     inv_sqrt[degrees > 0] = 1.0 / np.sqrt(degrees[degrees > 0])
-    laplacian = np.eye(adjacency.shape[0]) - np.diag(inv_sqrt) @ adjacency @ np.diag(inv_sqrt)
+    laplacian = np.eye(adjacency.shape[0]) - np.diag(inv_sqrt) @ adjacency @ np.diag(
+        inv_sqrt
+    )
     try:
         vals = np.linalg.eigvalsh(laplacian)
     except np.linalg.LinAlgError:
@@ -121,9 +144,15 @@ def motif_proxy_vector(graph: nx.Graph) -> np.ndarray:
     m = graph.number_of_edges()
     degrees = np.asarray([d for _, d in graph.degree()], dtype=np.float64)
     wedges = float(np.sum(degrees * np.maximum(degrees - 1.0, 0.0) / 2.0))
-    triangles = float(sum(nx.triangles(graph).values()) / 3.0) if graph.number_of_nodes() else 0.0
+    triangles = (
+        float(sum(nx.triangles(graph).values()) / 3.0)
+        if graph.number_of_nodes()
+        else 0.0
+    )
     transitivity = float(nx.transitivity(graph)) if m > 0 else 0.0
-    avg_clustering = float(nx.average_clustering(graph)) if graph.number_of_nodes() else 0.0
+    avg_clustering = (
+        float(nx.average_clustering(graph)) if graph.number_of_nodes() else 0.0
+    )
     return np.asarray(
         [
             m / n,
@@ -161,7 +190,10 @@ def python_orbit_count_vector(graph: nx.Graph) -> np.ndarray:
         for b_idx in range(a_idx + 1, n):
             for c_idx in range(b_idx + 1, n):
                 subset = [nodes[a_idx], nodes[b_idx], nodes[c_idx]]
-                degrees = {u: sum(1 for v in subset if u != v and has_edge(u, v)) for u in subset}
+                degrees = {
+                    u: sum(1 for v in subset if u != v and has_edge(u, v))
+                    for u in subset
+                }
                 edge_count = sum(degrees.values()) // 2
                 if edge_count == 2:
                     for degree in degrees.values():
@@ -174,7 +206,10 @@ def python_orbit_count_vector(graph: nx.Graph) -> np.ndarray:
             for c_idx in range(b_idx + 1, n):
                 for d_idx in range(c_idx + 1, n):
                     subset = [nodes[a_idx], nodes[b_idx], nodes[c_idx], nodes[d_idx]]
-                    degrees = {u: sum(1 for v in subset if u != v and has_edge(u, v)) for u in subset}
+                    degrees = {
+                        u: sum(1 for v in subset if u != v and has_edge(u, v))
+                        for u in subset
+                    }
                     edge_count = sum(degrees.values()) // 2
                     if edge_count == 3:
                         if sorted(degrees.values()) == [1, 1, 1, 3]:
@@ -210,14 +245,19 @@ def orca_orbit_count_vector(graph: nx.Graph, orbit_size: int = 4) -> np.ndarray:
     """
 
     if not ORCA_EXEC:
-        raise RuntimeError("ORCA module is not found. Set ORCA_EXEC or add orca to PATH.")
+        raise RuntimeError(
+            "ORCA module is not found. Set ORCA_EXEC or add orca to PATH."
+        )
     if graph.number_of_nodes() == 0:
         return np.zeros(15, dtype=np.float64)
 
     temp1_path: str | None = None
     temp2_path: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp1, tempfile.NamedTemporaryFile(mode="r", delete=False) as temp2:
+        with (
+            tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp1,
+            tempfile.NamedTemporaryFile(mode="r", delete=False) as temp2,
+        ):
             temp1_path = temp1.name
             temp2_path = temp2.name
 
@@ -239,7 +279,9 @@ def orca_orbit_count_vector(graph: nx.Graph, orbit_size: int = 4) -> np.ndarray:
                 raise RuntimeError(f"ORCA execution failed: {stderr}") from exc
 
         with open(temp2_path, "r", encoding="utf-8") as f:
-            orbit_counts = [list(map(int, line.strip().split())) for line in f if line.strip()]
+            orbit_counts = [
+                list(map(int, line.strip().split())) for line in f if line.strip()
+            ]
         if not orbit_counts:
             return np.zeros(15, dtype=np.float64)
 
@@ -260,7 +302,9 @@ def orbit_count_vector(graph: nx.Graph) -> np.ndarray:
     return python_orbit_count_vector(graph)
 
 
-def graphlet_history_summary(graph: nx.Graph, cfg: SummaryConfig) -> dict[str, dict[str, float]]:
+def graphlet_history_summary(
+    graph: nx.Graph, cfg: SummaryConfig
+) -> dict[str, dict[str, float]]:
     if not cfg.graphlet_history:
         return {}
     return compute_graphlet_history(
@@ -272,8 +316,14 @@ def graphlet_history_summary(graph: nx.Graph, cfg: SummaryConfig) -> dict[str, d
     )
 
 
-def extract_summary(graph: nx.Graph, config: SummaryConfig | dict[str, Any] | None = None) -> dict[str, Any]:
-    cfg = config if isinstance(config, SummaryConfig) else SummaryConfig.from_dict(config or {})
+def extract_summary(
+    graph: nx.Graph, config: SummaryConfig | dict[str, Any] | None = None
+) -> dict[str, Any]:
+    cfg = (
+        config
+        if isinstance(config, SummaryConfig)
+        else SummaryConfig.from_dict(config or {})
+    )
     n = int(graph.number_of_nodes())
     m = int(graph.number_of_edges())
     degree_seq = sorted_degree_sequence(graph)
@@ -285,10 +335,22 @@ def extract_summary(graph: nx.Graph, config: SummaryConfig | dict[str, Any] | No
         "density": float(nx.density(graph)) if n > 1 else 0.0,
         "triangle_count_norm": triangles / max(n, 1),
         "degree_hist": degree_histogram(graph, cfg.degree_hist_max_degree),
-        "clustering_hist": clustering_histogram(graph, cfg.clustering_bins),
-        "spectral_hist": spectral_histogram(graph, cfg.spectral_bins),
-        "motif_proxy": motif_proxy_vector(graph) if cfg.motif_proxy else np.zeros(0, dtype=np.float64),
-        "orbit_count": orbit_count_vector(graph) if cfg.orbit_count else np.zeros(0, dtype=np.float64),
+        "clustering_hist": (
+            clustering_histogram(graph, cfg.clustering_bins)
+            if cfg.clustering_summary
+            else np.zeros(cfg.clustering_bins, dtype=np.float64)
+        ),
+        "spectral_hist": (
+            spectral_histogram(graph, cfg.spectral_bins)
+            if cfg.spectral_summary
+            else np.zeros(cfg.spectral_bins, dtype=np.float64)
+        ),
+        "motif_proxy": motif_proxy_vector(graph)
+        if cfg.motif_proxy
+        else np.zeros(0, dtype=np.float64),
+        "orbit_count": orbit_count_vector(graph)
+        if cfg.orbit_count
+        else np.zeros(0, dtype=np.float64),
         "graphlet_history": graphlet_history_summary(graph, cfg),
     }
 
@@ -318,7 +380,12 @@ def _weight(weights: dict[str, Any], key: str, default: float = 0.0) -> float:
     return float(weights.get(key, default) or 0.0)
 
 
-def distance_to_summary(graph: nx.Graph, target: dict[str, Any], config: SummaryConfig | dict[str, Any] | None = None, weights: dict[str, Any] | None = None) -> float:
+def distance_to_summary(
+    graph: nx.Graph,
+    target: dict[str, Any],
+    config: SummaryConfig | dict[str, Any] | None = None,
+    weights: dict[str, Any] | None = None,
+) -> float:
     """Permutation-invariant energy between a graph and a target summary.
 
     The new graphlet-history energy is enabled by setting either
@@ -326,7 +393,11 @@ def distance_to_summary(graph: nx.Graph, target: dict[str, Any], config: Summary
     non-zero value and ``summary.graphlet_history: true``.
     """
 
-    cfg = config if isinstance(config, SummaryConfig) else SummaryConfig.from_dict(config or {})
+    cfg = (
+        config
+        if isinstance(config, SummaryConfig)
+        else SummaryConfig.from_dict(config or {})
+    )
     w = weights or {}
     normalize = bool(w.get("normalize_terms", False))
     energy = 0.0
@@ -371,7 +442,9 @@ def distance_to_summary(graph: nx.Graph, target: dict[str, Any], config: Summary
             normalize=normalize,
         )
 
-    graphlet_w = _weight(w, "graphlet_weight", _weight(w, "graphlet_history_weight", 0.0))
+    graphlet_w = _weight(
+        w, "graphlet_weight", _weight(w, "graphlet_history_weight", 0.0)
+    )
     if graphlet_w != 0.0 and cfg.graphlet_history:
         current_history = compute_graphlet_history(
             graph,
@@ -398,7 +471,9 @@ def distance_to_summary(graph: nx.Graph, target: dict[str, Any], config: Summary
     if triangle_w != 0.0:
         n = graph.number_of_nodes()
         triangles = float(sum(nx.triangles(graph).values()) / 3.0) if n else 0.0
-        energy += triangle_w * abs((triangles / max(n, 1)) - float(target.get("triangle_count_norm", 0.0)))
+        energy += triangle_w * abs(
+            (triangles / max(n, 1)) - float(target.get("triangle_count_norm", 0.0))
+        )
 
     return float(energy)
 
