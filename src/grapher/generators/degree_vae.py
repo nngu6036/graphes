@@ -218,6 +218,7 @@ class DegreeVectorizer:
         sample_num_nodes: str = "empirical",
         max_resample: int = 200,
         fallback: str = "empirical_nearest_n",
+        include_diagnostics: bool = False,
     ) -> list[dict[str, Any]]:
         generator = rng if rng is not None else np.random.default_rng(0)
         arrays: dict[str, np.ndarray] = {}
@@ -247,34 +248,87 @@ class DegreeVectorizer:
             degree_probs = _normalize(degree_probs)
 
             degree_sequence: list[int] | None = None
-            for _ in range(max(int(max_resample), 1)):
+            accepted_raw_sequence: list[int] | None = None
+            attempts_used = 0
+            repair_used = False
+            fallback_used = False
+            for attempt in range(max(int(max_resample), 1)):
                 if deterministic:
                     counts = _integer_counts_from_probs(n, degree_probs)
                 else:
                     counts = generator.multinomial(int(n), degree_probs)
-                seq = _degree_counts_to_sequence(counts)
-                seq = repair_degree_sequence(seq, n=int(n), require_connected=self.require_connected, rng=generator)
+                raw_seq = _degree_counts_to_sequence(counts)
+                seq = repair_degree_sequence(
+                    raw_seq,
+                    n=int(n),
+                    require_connected=self.require_connected,
+                    rng=generator,
+                )
                 if nx.is_graphical(seq, method="eg") and (not self.require_connected or connected_feasible_degree_sequence(seq)):
                     degree_sequence = seq
+                    accepted_raw_sequence = raw_seq
+                    attempts_used = attempt + 1
+                    repair_used = sorted(raw_seq, reverse=True) != sorted(seq, reverse=True)
                     break
             if degree_sequence is None:
                 if fallback == "error":
                     raise RuntimeError("Degree generator failed to sample a graphical degree sequence.")
                 degree_sequence = self.empirical_nearest_degree_sequence(n, generator)
+                fallback_used = True
+                attempts_used = max(int(max_resample), 1)
 
             counts = _degree_sequence_to_counts(degree_sequence, self.degree_dim).astype(np.float64)
             degree_hist = _normalize(counts)
             num_edges = int(sum(degree_sequence) // 2)
             density = (2.0 * num_edges / (int(n) * (int(n) - 1))) if int(n) > 1 else 0.0
-            summaries.append(
-                {
-                    "num_nodes": int(n),
-                    "num_edges": int(num_edges),
-                    "degree_sequence": sorted([int(d) for d in degree_sequence], reverse=True),
-                    "degree_hist": degree_hist.astype(np.float64),
-                    "density": float(density),
+            summary = {
+                "num_nodes": int(n),
+                "num_edges": int(num_edges),
+                "degree_sequence": sorted([int(d) for d in degree_sequence], reverse=True),
+                "degree_hist": degree_hist.astype(np.float64),
+                "density": float(density),
+            }
+            if include_diagnostics:
+                raw_seq = accepted_raw_sequence
+                raw_graphical = bool(
+                    raw_seq is not None and nx.is_graphical(raw_seq, method="eg")
+                )
+                raw_connected_feasible = bool(
+                    raw_seq is not None
+                    and connected_feasible_degree_sequence(raw_seq)
+                )
+                raw_even_sum = bool(
+                    raw_seq is not None and sum(raw_seq) % 2 == 0
+                )
+                raw_degree_bounds = bool(
+                    raw_seq is not None
+                    and len(raw_seq) == int(n)
+                    and all(0 <= int(d) < int(n) for d in raw_seq)
+                )
+                repair_l1 = (
+                    int(
+                        np.abs(
+                            np.asarray(sorted(raw_seq, reverse=True), dtype=np.int64)
+                            - np.asarray(
+                                sorted(degree_sequence, reverse=True),
+                                dtype=np.int64,
+                            )
+                        ).sum()
+                    )
+                    if raw_seq is not None
+                    else 0
+                )
+                summary["sampling_diagnostics"] = {
+                    "raw_graphical": raw_graphical,
+                    "raw_connected_feasible": raw_connected_feasible,
+                    "raw_even_degree_sum": raw_even_sum,
+                    "raw_degree_bounds_valid": raw_degree_bounds,
+                    "repair_used": bool(repair_used),
+                    "repair_l1_adjustment": repair_l1,
+                    "fallback_used": bool(fallback_used),
+                    "attempts_used": int(attempts_used),
                 }
-            )
+            summaries.append(summary)
         return summaries
 
     def save(self, path: str | Path) -> None:

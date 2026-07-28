@@ -51,6 +51,15 @@ degree_generator:
   require_connected_feasible: true
   fallback: empirical_nearest_n
 
+# Evaluate DH-VAE before training the structural target generator.  Raw
+# decoder rates reveal reliance on repair; accepted rates verify the hard
+# guarantees after repair/resampling/fallback.
+degree_evaluation:
+  num_samples: 1024
+  max_reference_sequences: 1024
+  batch_size: 256
+  output_dir: outputs/degree_generators/sbm_target_refinement/evaluation
+
 # p_phi(s* | D, z): the central change in the target-conditioned proposal.
 summary_generator:
   type: learned
