@@ -345,7 +345,63 @@ Output:
 outputs/target_summary_generators/sbm_target_refinement/checkpoint.pt
 ```
 
-Verify the checkpoint:
+### Step 4a: evaluate the conditional target-summary generator
+
+Run the held-out evaluation gate before building teacher trajectories:
+
+```bash
+PYTHONPATH=src python scripts/evaluate_target_summary_generator.py \
+  --config configs/experiments/sbm_target_refinement.yaml
+```
+
+The evaluation uses the test split as the reference and reports:
+
+- `train_to_test`: the finite-sample oracle gap between genuine data splits;
+- `posterior_reconstruction_to_test`: held-out decoder reconstruction;
+- `aggregate_posterior_to_test`: samples decoded from encoded training latents;
+- `empirical_conditioned_to_test`: a nearest-degree non-parametric baseline;
+- `conditional_prior_to_test`: deployment-time samples from
+  \(z\sim\mathcal N(0,I)\), conditioned only on the held-out degree sequence.
+
+All rows use MMD bandwidths fitted once from the real Train-to-Test comparison.
+The report includes one structural MMD and component MMDs for every active
+summary head. It also reports the conditional energy score, conditional-mean
+error, within-condition diversity, latent active units, and exact preservation
+of node count, edge count, and degree sequence.
+
+Outputs:
+
+```text
+outputs/target_summary_generators/sbm_target_refinement/evaluation/target_summary_evaluation.json
+outputs/target_summary_generators/sbm_target_refinement/evaluation/generated_target_summaries.json
+```
+
+Required hard checks:
+
+```text
+posterior_degree_condition_match_rate = 1.0
+prior_degree_condition_match_rate     = 1.0
+```
+
+The main distributional gate is that `conditional_prior_to_test` should be
+reasonably close to `train_to_test`, and should improve over or remain
+competitive with `empirical_conditioned_to_test`. A good posterior row but a
+weak conditional-prior row indicates latent prior-posterior mismatch. A weak
+posterior row indicates insufficient decoder capacity, training, or an
+inappropriate reconstruction objective. Near-zero prior diversity indicates
+conditional collapse even when MMD is acceptable.
+
+For a quick smoke evaluation:
+
+```bash
+PYTHONPATH=src python scripts/evaluate_target_summary_generator.py \
+  --config configs/experiments/sbm_target_refinement.yaml \
+  --max-train-graphs 64 \
+  --max-test-graphs 32 \
+  --samples-per-condition 4
+```
+
+The older lightweight checkpoint verifier remains available:
 
 ```bash
 PYTHONPATH=src python scripts/verify_target_summary_generator.py \

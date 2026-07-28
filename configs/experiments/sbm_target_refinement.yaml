@@ -98,6 +98,15 @@ summary_generator:
     scalar: 0.25
   progress_interval: 30
 
+# Held-out gate after Step 4. MMD bandwidths are fixed from the real
+# Train-to-Test comparison so every row is directly comparable.
+target_summary_evaluation:
+  max_train_graphs: 512
+  max_test_graphs: 256
+  samples_per_condition: 8
+  batch_size: 256
+  output_dir: outputs/target_summary_generators/sbm_target_refinement/evaluation
+
 constructor:
   type: havel_hakimi
   ensure_connected: true
