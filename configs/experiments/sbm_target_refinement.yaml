@@ -87,6 +87,10 @@ summary_generator:
   learning_rate: 0.002
   weight_decay: 0.0
   beta: 0.005
+  kl_warmup_epochs: 50
+  # Save the epoch with the best deterministic held-out objective rather than
+  # blindly keeping the final epoch.
+  validation_metric: loss
   loss_weights:
     num_nodes: 0.0
     degree: 0.0
@@ -94,8 +98,14 @@ summary_generator:
     spectral: 0.0
     motif: 0.0
     orbit: 0.0
+    # Graphlet history is decoded as one categorical distribution per k and
+    # trained with per-size soft cross-entropy.
     graphlet: 2.0
-    scalar: 0.25
+    # Density is fixed by the degree condition. Only the non-invariant
+    # triangle statistic is trained from the scalar head.
+    scalar: 0.0
+    density: 0.0
+    triangle: 0.25
   progress_interval: 30
 
 # Held-out gate after Step 4. MMD bandwidths are fixed from the real
@@ -105,6 +115,7 @@ target_summary_evaluation:
   max_test_graphs: 256
   samples_per_condition: 8
   batch_size: 256
+  report_top_graphlet_bins: 10
   output_dir: outputs/target_summary_generators/sbm_target_refinement/evaluation
 
 constructor:

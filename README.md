@@ -337,7 +337,30 @@ PYTHONPATH=src python scripts/train_summary_generator.py \
   --config configs/experiments/sbm_target_refinement.yaml
 ```
 
-The config sets `conditional_on_degree: true`. The encoder observes the training summary and degree condition; the decoder receives the condition and latent sample. Node count and degree losses are zero because those invariant fields are copied exactly from \(D\) during sampling.
+The config sets `conditional_on_degree: true`. The encoder observes the
+training summary and degree condition; the decoder receives the condition and
+latent sample. Node count, degree, and density losses are zero because those
+invariant fields are copied exactly from \(D\) during sampling.
+
+Graphlet history is not a generic non-negative regression target. For every
+size \(k\), it is a categorical frequency distribution over canonical
+graphlets. The decoder therefore emits logits independently for each \(k\),
+applies a per-size softmax, and trains with per-size soft cross-entropy. This
+keeps training, evaluation, and refinement on the same normalized
+representation. KL warm-up protects reconstruction early in training, and
+the saved checkpoint is selected by deterministic validation loss rather than
+always using the final epoch.
+
+Legacy target-summary checkpoints used unnormalized `softplus` outputs with
+MSE and are intentionally rejected. Rename the old checkpoint and retrain:
+
+```bash
+mv outputs/target_summary_generators/sbm_target_refinement/checkpoint.pt \
+  outputs/target_summary_generators/sbm_target_refinement/checkpoint_graphlet_mse.pt
+
+PYTHONPATH=src python scripts/train_summary_generator.py \
+  --config configs/experiments/sbm_target_refinement.yaml
+```
 
 Output:
 
@@ -367,7 +390,9 @@ All rows use MMD bandwidths fitted once from the real Train-to-Test comparison.
 The report includes one structural MMD and component MMDs for every active
 summary head. It also reports the conditional energy score, conditional-mean
 error, within-condition diversity, latent active units, and exact preservation
-of node count, edge count, and degree sequence.
+of node count, edge count, and degree sequence. The JSON report additionally
+contains `per_graphlet_bin_errors`; the console prints the ten graphlet bins
+with the largest marginal errors.
 
 Outputs:
 

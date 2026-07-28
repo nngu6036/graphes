@@ -203,6 +203,15 @@ class SummaryVectorizer:
             summary.get("graphlet_history", {}) or {}, self.graphlet_keys_by_k or {}
         )
 
+    def normalize_graphlet_vector(self, values: np.ndarray) -> np.ndarray:
+        """Normalize every graphlet-size block as its own categorical law."""
+
+        vector = _pad(np.asarray(values, dtype=np.float64), self.graphlet_dim)
+        for graphlet_slice in self.graphlet_slices().values():
+            if graphlet_slice.stop > graphlet_slice.start:
+                vector[graphlet_slice] = _normalize(vector[graphlet_slice])
+        return vector
+
     def to_feature_vector(self, summary: dict[str, Any]) -> np.ndarray:
         n = float(summary.get("num_nodes", 0.0))
         m = float(summary.get("num_edges", 0.0))
@@ -247,7 +256,9 @@ class SummaryVectorizer:
                 self.orbit_dim,
             )
         )
-        graphlet = _pad(self.graphlet_to_vector(summary), self.graphlet_dim)
+        graphlet = self.normalize_graphlet_vector(
+            self.graphlet_to_vector(summary)
+        )
         if self.motif_dim:
             motif = motif / np.asarray(self.motif_scale, dtype=np.float64)
         if self.orbit_dim:
@@ -323,7 +334,9 @@ class SummaryVectorizer:
                 self.orbit_dim,
             )
         )
-        graphlet = _pad(self.graphlet_to_vector(summary), self.graphlet_dim)
+        graphlet = self.normalize_graphlet_vector(
+            self.graphlet_to_vector(summary)
+        )
         if self.motif_dim:
             motif = motif / np.asarray(self.motif_scale, dtype=np.float64)
         if self.orbit_dim:
@@ -464,17 +477,16 @@ class SummaryVectorizer:
 
             graphlet_history = {}
             if self.graphlet_dim:
-                raw = np.maximum(
-                    arrays.get(
-                        "graphlet",
-                        np.zeros((batch, self.graphlet_dim), dtype=np.float64),
-                    )[i],
-                    0.0,
-                )
+                logits = arrays.get(
+                    "graphlet_logits",
+                    np.zeros((batch, self.graphlet_dim), dtype=np.float64),
+                )[i]
                 graphlet_vec = np.zeros(self.graphlet_dim, dtype=np.float64)
                 for sl in self.graphlet_slices().values():
                     graphlet_vec[sl] = (
-                        _normalize(raw[sl]) if sl.stop > sl.start else raw[sl]
+                        _softmax_np(logits[sl])
+                        if sl.stop > sl.start
+                        else logits[sl]
                     )
                 graphlet_history = unflatten_graphlet_history(
                     graphlet_vec, self.graphlet_keys_by_k or {}
@@ -788,10 +800,11 @@ class SummaryVAE(nn.Module):
             out["orbit_log"] = F.softplus(self.orbit_head(h))
         else:
             out["orbit_log"] = torch.zeros(batch, 0, device=device)
-        if self.graphlet_head is not None:
-            out["graphlet"] = F.softplus(self.graphlet_head(h))
-        else:
-            out["graphlet"] = torch.zeros(batch, 0, device=device)
+        out["graphlet_logits"] = (
+            self.graphlet_head(h)
+            if self.graphlet_head is not None
+            else torch.zeros(batch, 0, device=device)
+        )
         return out
 
     def forward(
@@ -923,8 +936,8 @@ class ConditionalSummaryVAE(nn.Module):
             if self.orbit_head is not None
             else torch.zeros(batch, 0, device=device)
         )
-        out["graphlet"] = (
-            F.softplus(self.graphlet_head(h))
+        out["graphlet_logits"] = (
+            self.graphlet_head(h)
             if self.graphlet_head is not None
             else torch.zeros(batch, 0, device=device)
         )
@@ -969,6 +982,28 @@ def soft_histogram_ce(logits: torch.Tensor, target: torch.Tensor) -> torch.Tenso
     return -(target * log_probs).sum(dim=-1).mean()
 
 
+def graphlet_histogram_ce(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    graphlet_slices: list[tuple[int, int]] | None = None,
+) -> torch.Tensor:
+    """Average categorical cross-entropy equally across graphlet sizes."""
+
+    if logits.numel() == 0:
+        return torch.zeros((), device=logits.device)
+    slices = graphlet_slices or [(0, int(logits.shape[-1]))]
+    losses = [
+        soft_histogram_ce(logits[:, start:stop], target[:, start:stop])
+        for start, stop in slices
+        if stop > start
+    ]
+    return (
+        torch.stack(losses).mean()
+        if losses
+        else torch.zeros((), device=logits.device)
+    )
+
+
 def kl_loss(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
     return -0.5 * torch.mean(torch.sum(1.0 + logvar - mu.pow(2) - logvar.exp(), dim=-1))
 
@@ -981,6 +1016,7 @@ def summary_vae_loss(
     *,
     beta: float = 1.0e-3,
     weights: dict[str, float] | None = None,
+    graphlet_slices: list[tuple[int, int]] | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     weights = weights or {}
     n_loss = F.cross_entropy(outputs["num_nodes_logits"], targets["num_nodes"].long())
@@ -999,12 +1035,19 @@ def summary_vae_loss(
         if outputs["orbit_log"].numel()
         else torch.zeros((), device=mu.device)
     )
-    graphlet_loss = (
-        F.mse_loss(outputs["graphlet"], targets["graphlet"])
-        if outputs.get("graphlet", torch.zeros(0, device=mu.device)).numel()
-        else torch.zeros((), device=mu.device)
+    graphlet_loss = graphlet_histogram_ce(
+        outputs.get(
+            "graphlet_logits",
+            torch.zeros((mu.shape[0], 0), device=mu.device),
+        ),
+        targets["graphlet"],
+        graphlet_slices,
     )
-    scalar_loss = F.mse_loss(outputs["scalar"], targets["scalar"])
+    density_loss = F.mse_loss(outputs["scalar"][:, 0], targets["scalar"][:, 0])
+    triangle_loss = F.mse_loss(outputs["scalar"][:, 1], targets["scalar"][:, 1])
+    density_weight = float(weights.get("density", weights.get("scalar", 1.0)))
+    triangle_weight = float(weights.get("triangle", weights.get("scalar", 1.0)))
+    scalar_loss = density_weight * density_loss + triangle_weight * triangle_loss
     kld = kl_loss(mu, logvar)
     total = (
         float(weights.get("num_nodes", 1.0)) * n_loss
@@ -1014,7 +1057,7 @@ def summary_vae_loss(
         + float(weights.get("motif", 1.0)) * motif_loss
         + float(weights.get("orbit", 1.0)) * orbit_loss
         + float(weights.get("graphlet", 1.0)) * graphlet_loss
-        + float(weights.get("scalar", 1.0)) * scalar_loss
+        + scalar_loss
         + float(beta) * kld
     )
     metrics = {
@@ -1027,6 +1070,8 @@ def summary_vae_loss(
         "orbit_loss": float(orbit_loss.detach().cpu()),
         "graphlet_loss": float(graphlet_loss.detach().cpu()),
         "scalar_loss": float(scalar_loss.detach().cpu()),
+        "density_loss": float(density_loss.detach().cpu()),
+        "triangle_loss": float(triangle_loss.detach().cpu()),
         "kl_loss": float(kld.detach().cpu()),
     }
     return total, metrics
@@ -1081,6 +1126,8 @@ def save_summary_vae_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
+            "format_version": 2,
+            "graphlet_decoder": "per_size_categorical_v1",
             "model_type": (
                 "conditional_summary_vae"
                 if isinstance(model, ConditionalSummaryVAE)
@@ -1104,6 +1151,12 @@ def load_summary_vae_checkpoint(
     resolved_device = resolve_torch_device(device)
     checkpoint = torch.load(path, map_location=resolved_device)
     vectorizer = SummaryVectorizer(**checkpoint["vectorizer"])
+    if vectorizer.graphlet_dim > 0 and int(checkpoint.get("format_version", 1)) < 2:
+        raise RuntimeError(
+            "This checkpoint used the legacy unnormalized graphlet-MSE decoder. "
+            "Retrain the target-summary generator with the per-size categorical "
+            "graphlet decoder."
+        )
     model_type = str(checkpoint.get("model_type", "summary_vae")).lower()
     if model_type == "conditional_summary_vae":
         model = ConditionalSummaryVAE(**checkpoint["model_config"])

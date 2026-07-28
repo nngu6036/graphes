@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -95,6 +96,7 @@ def main() -> None:
         dataset_cfg, "max_train_graphs", context="config.dataset"
     )
     train_graphs = _limit(list(splits["train"]), max_train)
+    val_graphs = _limit(list(splits.get("val", [])), max_train)
     summary_cfg = SummaryConfig.from_dict(
         require_config_section(config, "summary"), train_graphs
     )
@@ -121,6 +123,17 @@ def main() -> None:
     )
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
     all_targets = _targets_to_tensors(targets_np, device)
+    val_summaries = [extract_summary(g, summary_cfg) for g in val_graphs]
+    if val_summaries:
+        val_x_np, val_targets_np = vectorizer.to_training_arrays(val_summaries)
+        val_condition_np = vectorizer.to_condition_array(val_summaries)
+        val_targets = _targets_to_tensors(val_targets_np, device)
+    else:
+        val_x_np = np.zeros((0, vectorizer.input_dim), dtype=np.float32)
+        val_condition_np = np.zeros(
+            (0, vectorizer.condition_dim), dtype=np.float32
+        )
+        val_targets = {}
 
     model_builder = (
         build_conditional_summary_vae if conditional_on_degree else build_summary_vae
@@ -167,6 +180,7 @@ def main() -> None:
     beta = float(
         require_config(generator_cfg, "beta", context="config.summary_generator")
     )
+    kl_warmup_epochs = max(int(generator_cfg.get("kl_warmup_epochs", 0)), 0)
     loss_weights = dict(
         require_config(
             generator_cfg, "loss_weights", context="config.summary_generator"
@@ -179,14 +193,30 @@ def main() -> None:
         # that the refiner can never change.
         loss_weights.setdefault("num_nodes", 0.0)
         loss_weights.setdefault("degree", 0.0)
+        # Density is completely determined by (n, m), which is part of the
+        # condition and is copied exactly during sampling.
+        loss_weights.setdefault("density", 0.0)
+    graphlet_slices = [
+        (int(graphlet_slice.start), int(graphlet_slice.stop))
+        for graphlet_slice in vectorizer.graphlet_slices().values()
+    ]
     progress_interval = int(
         require_config(
             generator_cfg, "progress_interval", context="config.summary_generator"
         )
     )
+    validation_metric = str(generator_cfg.get("validation_metric", "loss"))
+    best_metric = float("inf")
+    best_epoch = 0
+    best_state: dict[str, torch.Tensor] | None = None
     for epoch in range(1, epochs + 1):
         model.train()
         epoch_metrics: dict[str, list[float]] = {}
+        effective_beta = (
+            beta
+            if kl_warmup_epochs <= 0
+            else beta * min(float(epoch) / float(kl_warmup_epochs), 1.0)
+        )
         for batch_x, batch_condition, batch_idx in loader:
             batch_x = batch_x.to(device)
             batch_condition = batch_condition.to(device)
@@ -198,7 +228,13 @@ def main() -> None:
             else:
                 outputs, mu, logvar = model(batch_x)
             loss, metrics = summary_vae_loss(
-                outputs, batch_targets, mu, logvar, beta=beta, weights=loss_weights
+                outputs,
+                batch_targets,
+                mu,
+                logvar,
+                beta=effective_beta,
+                weights=loss_weights,
+                graphlet_slices=graphlet_slices,
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -209,7 +245,57 @@ def main() -> None:
         mean_metrics = {
             key: float(np.mean(values)) for key, values in epoch_metrics.items()
         }
+        if val_summaries:
+            model.eval()
+            val_metrics: dict[str, list[float]] = {}
+            with torch.no_grad():
+                for start in range(0, len(val_summaries), batch_size):
+                    stop = min(start + batch_size, len(val_summaries))
+                    batch_x = torch.as_tensor(
+                        val_x_np[start:stop],
+                        dtype=torch.float32,
+                        device=device,
+                    )
+                    batch_condition = torch.as_tensor(
+                        val_condition_np[start:stop],
+                        dtype=torch.float32,
+                        device=device,
+                    )
+                    batch_targets = {
+                        key: value[start:stop]
+                        for key, value in val_targets.items()
+                    }
+                    if conditional_on_degree:
+                        mu, logvar = model.encode(batch_x, batch_condition)
+                        outputs = model.decode(mu, batch_condition)
+                    else:
+                        mu, logvar = model.encode(batch_x)
+                        outputs = model.decode(mu)
+                    _, metrics = summary_vae_loss(
+                        outputs,
+                        batch_targets,
+                        mu,
+                        logvar,
+                        beta=effective_beta,
+                        weights=loss_weights,
+                        graphlet_slices=graphlet_slices,
+                    )
+                    for key, value in metrics.items():
+                        val_metrics.setdefault(key, []).append(float(value))
+            for key, values in val_metrics.items():
+                mean_metrics[f"val_{key}"] = float(np.mean(values))
+            selected = float(
+                mean_metrics.get(
+                    f"val_{validation_metric}",
+                    mean_metrics["val_loss"],
+                )
+            )
+            if selected < best_metric:
+                best_metric = selected
+                best_epoch = epoch
+                best_state = copy.deepcopy(model.state_dict())
         mean_metrics["epoch"] = float(epoch)
+        mean_metrics["beta"] = float(effective_beta)
         history.append(mean_metrics)
         if (
             epoch == 1
@@ -220,10 +306,18 @@ def main() -> None:
                 f"epoch={epoch:04d} loss={mean_metrics['loss']:.4f} "
                 f"degree={mean_metrics['degree_loss']:.4f} clustering={mean_metrics['clustering_loss']:.4f} "
                 f"spectral={mean_metrics['spectral_loss']:.4f} graphlet={mean_metrics.get('graphlet_loss', 0.0):.4f} "
-                f"kl={mean_metrics['kl_loss']:.4f}",
+                f"kl={mean_metrics['kl_loss']:.4f}"
+                + (
+                    f" val_loss={mean_metrics['val_loss']:.4f} "
+                    f"val_graphlet={mean_metrics['val_graphlet_loss']:.4f}"
+                    if val_summaries
+                    else ""
+                ),
                 flush=True,
             )
 
+    if best_state is not None:
+        model.load_state_dict(best_state)
     save_summary_vae_checkpoint(
         checkpoint_path,
         model,
@@ -232,11 +326,27 @@ def main() -> None:
             "experiment_config": config,
             "conditional_on_degree": conditional_on_degree,
         },
-        metrics={"history": history, "final": history[-1] if history else {}},
+        metrics={
+            "history": history,
+            "final": history[-1] if history else {},
+            "selected_checkpoint": {
+                "metric": validation_metric,
+                "epoch": best_epoch,
+                "value": best_metric,
+            },
+        },
     )
     vectorizer.save(out_dir / "summary_vectorizer.json")
     save_json(
-        {"history": history, "final": history[-1] if history else {}},
+        {
+            "history": history,
+            "final": history[-1] if history else {},
+            "selected_checkpoint": {
+                "metric": validation_metric,
+                "epoch": best_epoch,
+                "value": best_metric,
+            },
+        },
         out_dir / "training_metrics.json",
     )
     save_json(

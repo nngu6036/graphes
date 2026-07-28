@@ -17,6 +17,7 @@ from grapher.evaluation.target_summaries import (
     degree_condition_match_rate,
     evaluate_summary_sets,
     fit_mmd_bandwidths,
+    graphlet_bin_errors,
     paired_summary_errors,
 )
 from grapher.generators.summary_vae import (
@@ -400,6 +401,11 @@ def main() -> None:
         )
         for name, candidate in candidates.items()
     }
+    per_graphlet_bin = {
+        name: graphlet_bin_errors(test_targets, candidate, vectorizer)
+        for name, candidate in candidates.items()
+        if vectorizer.graphlet_dim > 0
+    }
     paired = {
         "posterior_reconstruction": paired_summary_errors(
             test_targets,
@@ -456,6 +462,7 @@ def main() -> None:
         "active_components": components,
         "mmd_bandwidths_from_train_test": bandwidths,
         "comparisons": comparisons,
+        "per_graphlet_bin_errors": per_graphlet_bin,
         "conditional_metrics": paired,
         "invariants": invariants,
         "latent_diagnostics": _latent_diagnostics(mu, logvar),
@@ -526,6 +533,20 @@ def main() -> None:
         f"rmse={reconstruction_metrics['structural_rmse']:.6f} "
         f"mae={reconstruction_metrics['structural_mae']:.6f}"
     )
+    if "conditional_prior_to_test" in per_graphlet_bin:
+        print("\nLargest conditional-prior graphlet-bin errors")
+        print(
+            f"{'k':>2s} {'canonical key':>18s} {'reference':>11s} "
+            f"{'candidate':>11s} {'mean |error|':>13s}"
+        )
+        max_bins = int(evaluation_cfg.get("report_top_graphlet_bins", 10))
+        for row in per_graphlet_bin["conditional_prior_to_test"][:max_bins]:
+            print(
+                f"{row['k']:2d} {row['canonical_key'][:18]:>18s} "
+                f"{row['reference_mean']:11.6f} "
+                f"{row['candidate_mean']:11.6f} "
+                f"{row['mean_absolute_error']:13.6f}"
+            )
     print("\nHard degree-condition invariants")
     for key, value in invariants.items():
         print(f"{key}: {value:.6f}")

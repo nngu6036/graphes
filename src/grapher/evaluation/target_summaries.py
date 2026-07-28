@@ -180,8 +180,11 @@ def active_component_names(
     ]
     active = []
     for name, width in candidates:
-        weight_name = "scalar" if name == "triangle" else name
-        if width > 0 and float(weights.get(weight_name, 1.0)) > 0.0:
+        if name == "triangle":
+            weight = weights.get("triangle", weights.get("scalar", 1.0))
+        else:
+            weight = weights.get(name, 1.0)
+        if width > 0 and float(weight) > 0.0:
             active.append(name)
     return active
 
@@ -198,8 +201,11 @@ def structural_matrix(
     blocks: list[np.ndarray] = []
     for name in component_names:
         block = arrays[name]
-        weight_name = "scalar" if name == "triangle" else name
-        weight = max(float(weights.get(weight_name, 1.0)), 0.0)
+        if name == "triangle":
+            raw_weight = weights.get("triangle", weights.get("scalar", 1.0))
+        else:
+            raw_weight = weights.get(name, 1.0)
+        weight = max(float(raw_weight), 0.0)
         # sqrt(weight) makes squared Euclidean distances consistent with the
         # weighted reconstruction objective.
         blocks.append(block * np.sqrt(weight) / np.sqrt(max(block.shape[1], 1)))
@@ -284,6 +290,52 @@ def evaluate_summary_sets(
         "structural_mmd": structural_mmd,
         "component_mmd": component_mmd,
     }
+
+
+def graphlet_bin_errors(
+    reference: Sequence[dict[str, Any]],
+    candidate: Sequence[dict[str, Any]],
+    vectorizer: Any,
+) -> list[dict[str, Any]]:
+    """Report marginal errors for every canonical graphlet coordinate."""
+
+    if int(vectorizer.graphlet_dim) <= 0:
+        return []
+    reference_values = _component_arrays(reference, vectorizer)["graphlet"]
+    candidate_values = _component_arrays(candidate, vectorizer)["graphlet"]
+    rows: list[dict[str, Any]] = []
+    position = 0
+    keys_by_k = vectorizer.graphlet_keys_by_k or {}
+    for k in sorted(keys_by_k, key=lambda value: int(value)):
+        for key in keys_by_k[k]:
+            ref = reference_values[:, position]
+            pred = candidate_values[:, position]
+            rows.append(
+                {
+                    "k": int(k),
+                    "canonical_key": str(key),
+                    "reference_mean": float(ref.mean()),
+                    "candidate_mean": float(pred.mean()),
+                    "mean_absolute_error": float(abs(pred.mean() - ref.mean())),
+                    "rmse": float(
+                        np.sqrt(
+                            np.mean(
+                                (
+                                    np.sort(pred)
+                                    - np.interp(
+                                        np.linspace(0.0, 1.0, pred.size),
+                                        np.linspace(0.0, 1.0, ref.size),
+                                        np.sort(ref),
+                                    )
+                                )
+                                ** 2
+                            )
+                        )
+                    ),
+                }
+            )
+            position += 1
+    return sorted(rows, key=lambda item: item["mean_absolute_error"], reverse=True)
 
 
 def paired_summary_errors(
