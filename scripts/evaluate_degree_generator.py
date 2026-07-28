@@ -67,8 +67,21 @@ def _sample_degree_sequences(
     remaining = int(num_samples)
     while remaining > 0:
         current_batch = min(int(batch_size), remaining)
+        node_counts = None
+        if str(degree_cfg.get("sample_num_nodes", "empirical")).lower() == "empirical":
+            node_counts = [
+                vectorizer.sample_empirical_node_count(rng)
+                for _ in range(current_batch)
+            ]
         with torch.no_grad():
-            outputs = model.sample_outputs(current_batch, device=next(model.parameters()).device)
+            outputs = model.sample_outputs(
+                current_batch,
+                node_counts=node_counts,
+                deterministic_node_count=bool(
+                    degree_cfg.get("deterministic", False)
+                ),
+                device=next(model.parameters()).device,
+            )
         batch = vectorizer.outputs_to_summaries(
             outputs,
             rng=rng,
@@ -85,6 +98,57 @@ def _sample_degree_sequences(
             summaries.append(summary)
         remaining -= current_batch
     return summaries, diagnostics
+
+
+def _posterior_reconstruction_sequences(
+    *,
+    checkpoint_path: str | Path,
+    graphs: list[nx.Graph],
+    batch_size: int,
+    seed: int,
+    device: str,
+) -> list[list[int]]:
+    """Decode q(z|h_D,n) means without repair or empirical fallback."""
+
+    model, vectorizer, _checkpoint = load_degree_vae_checkpoint(
+        checkpoint_path, device=device
+    )
+    x_np, targets_np = vectorizer.to_training_arrays(graphs)
+    rng = np.random.default_rng(seed)
+    reconstructed: list[list[int]] = []
+    model_device = next(model.parameters()).device
+    for start in range(0, len(graphs), max(int(batch_size), 1)):
+        stop = min(start + max(int(batch_size), 1), len(graphs))
+        batch_x = torch.as_tensor(
+            x_np[start:stop], dtype=torch.float32, device=model_device
+        )
+        node_counts = torch.as_tensor(
+            targets_np["num_nodes_count"][start:stop],
+            dtype=torch.long,
+            device=model_device,
+        )
+        with torch.no_grad():
+            outputs = model.reconstruct_outputs(
+                batch_x, node_counts, use_mean=True
+            )
+        decoded = vectorizer.outputs_to_summaries(
+            outputs,
+            rng=rng,
+            deterministic=True,
+            sample_num_nodes="conditioned",
+            max_resample=1,
+            fallback="empirical_nearest_n",
+            include_diagnostics=True,
+        )
+        for summary in decoded:
+            diagnostic = summary["sampling_diagnostics"]
+            reconstructed.append(
+                [
+                    int(degree)
+                    for degree in diagnostic["first_raw_degree_sequence"]
+                ]
+            )
+    return reconstructed
 
 
 def _quality_metrics(
@@ -143,6 +207,9 @@ def _quality_metrics(
         ),
         "repair_usage_rate": _mean_bool(diagnostics, "repair_used"),
         "fallback_usage_rate": _mean_bool(diagnostics, "fallback_used"),
+        "accepted_without_postprocessing_rate": _mean_bool(
+            diagnostics, "accepted_without_postprocessing"
+        ),
         "mean_repair_l1_adjustment": float(
             np.mean(
                 [
@@ -289,6 +356,17 @@ def main() -> None:
         [int(degree) for degree in summary["degree_sequence"]]
         for summary in summaries
     ]
+    raw_prior_sequences = [
+        [int(degree) for degree in item["first_raw_degree_sequence"]]
+        for item in diagnostics
+    ]
+    posterior_sequences = _posterior_reconstruction_sequences(
+        checkpoint_path=checkpoint_path,
+        graphs=test_graphs,
+        batch_size=batch_size,
+        seed=seed,
+        device=device,
+    )
 
     train_test = evaluate_degree_sequence_sets(
         test_sequences,
@@ -297,6 +375,18 @@ def main() -> None:
     generated_test = evaluate_degree_sequence_sets(
         test_sequences,
         generated_sequences,
+        train=train_sequences,
+        degree_mmd_sigma=float(train_test["degree_mmd_sigma"]),
+    )
+    raw_prior_test = evaluate_degree_sequence_sets(
+        test_sequences,
+        raw_prior_sequences,
+        train=train_sequences,
+        degree_mmd_sigma=float(train_test["degree_mmd_sigma"]),
+    )
+    posterior_test = evaluate_degree_sequence_sets(
+        test_sequences,
+        posterior_sequences,
         train=train_sequences,
         degree_mmd_sigma=float(train_test["degree_mmd_sigma"]),
     )
@@ -323,21 +413,32 @@ def main() -> None:
             "degree_mmd_sigma": float(train_test["degree_mmd_sigma"]),
             "constructor_check": not args.skip_constructor_check,
             "postprocessing_note": (
-                "Raw metrics are measured before degree-sequence repair. "
-                "Accepted metrics are measured after repair/resampling/fallback."
+                "Posterior reconstruction and raw-prior distribution metrics "
+                "are measured before repair. Accepted-prior metrics are "
+                "measured after rejection sampling, repair, or fallback."
             ),
         },
         "comparison_table": {
             "train_to_test": _compact_comparison(train_test),
-            "dh_vae_to_test": _compact_comparison(generated_test),
+            "posterior_reconstruction_to_test": _compact_comparison(
+                posterior_test
+            ),
+            "prior_raw_to_test": _compact_comparison(raw_prior_test),
+            "prior_accepted_to_test": _compact_comparison(generated_test),
         },
         "dh_vae_quality": quality,
-        "dh_vae_distribution": generated_test,
+        "posterior_reconstruction_distribution": posterior_test,
+        "prior_raw_distribution": raw_prior_test,
+        "prior_accepted_distribution": generated_test,
         "train_test_baseline": train_test,
     }
     save_json(report, output_dir / "degree_evaluation.json")
     save_json(
-        {"degree_sequences": generated_sequences},
+        {
+            "accepted_degree_sequences": generated_sequences,
+            "raw_prior_degree_sequences": raw_prior_sequences,
+            "posterior_reconstruction_degree_sequences": posterior_sequences,
+        },
         output_dir / "generated_degree_sequences.json",
     )
 

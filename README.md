@@ -209,7 +209,19 @@ This creates the train/validation/test splits consumed by every later stage.
 
 ### Step 2: train the degree-sequence generator
 
+The corrected DH-VAE implements the paper's size-conditioned factorization
+\(p_\theta(D\mid n,z)\). The decoder receives a continuous embedding of the
+true graph size during training and of the sampled graph size during
+generation. The degree-moment loss is calculated from the decoded categorical
+distribution itself, so it directly constrains the implied edge count.
+
+Old checkpoints are incompatible because their decoder implements
+\(p_\theta(D\mid z)\). Remove or rename the old checkpoint, then retrain:
+
 ```bash
+mv outputs/degree_generators/sbm_target_refinement/checkpoint.pt \
+  outputs/degree_generators/sbm_target_refinement/checkpoint_unconditional.pt
+
 PYTHONPATH=src python scripts/train_degree_generator.py \
   --config configs/experiments/sbm_target_refinement.yaml
 ```
@@ -236,15 +248,24 @@ outputs/degree_generators/sbm_target_refinement/evaluation/degree_evaluation.jso
 outputs/degree_generators/sbm_target_refinement/evaluation/generated_degree_sequences.json
 ```
 
-The report contains two distribution comparisons using the same held-out test
+The report contains four distribution comparisons using the same held-out test
 split and the same RBF-kernel bandwidth:
 
 ```text
 Train <-> Test
-DH-VAE -> Test
+Posterior reconstruction -> Test
+Raw prior -> Test
+Accepted prior -> Test
 ```
 
-For the manuscript table, use `degree_kl` and `degree_mmd`. The KL direction is
+`Posterior reconstruction` decodes the test histograms through
+\(q_\phi(z\mid h_D,n)\) using the posterior mean and performs no repair.
+`Raw prior` evaluates the first multinomial draw from \(z\sim N(0,I)\).
+`Accepted prior` evaluates the sequence after genuine rejection sampling and,
+only if the retry budget is exhausted, repair or empirical fallback.
+
+For the manuscript table, use the accepted-prior `degree_kl` and `degree_mmd`.
+The KL direction is
 explicitly fixed as \(D_{\mathrm{KL}}(P_{\mathrm{test}}\Vert
 P_{\mathrm{candidate}})\), and MMD is computed over per-graph normalized
 degree histograms. `Train <-> Test` is the empirical oracle-gap reference, not
@@ -252,8 +273,10 @@ a model.
 
 Inspect both native decoder quality and final accepted quality:
 
-- `raw_graphicality_rate` and `raw_connected_feasible_rate` are measured
-  before repair;
+- `raw_graphicality_rate` and `raw_connected_feasible_rate` are measured on
+  the first prior draw before repair;
+- `accepted_without_postprocessing` is represented by the aggregate native
+  acceptance rate in the saved per-sample diagnostics;
 - `repair_usage_rate`, `mean_repair_l1_adjustment`, and
   `fallback_usage_rate` reveal how strongly sampling depends on
   post-processing;
@@ -269,6 +292,14 @@ Do not proceed merely because accepted graphicality is `1.0`: repair makes
 that a hard guarantee. A healthy checkpoint should also have low KL/MMD
 relative to the Train-Test oracle gap, low fallback usage, and non-trivial
 sequence diversity.
+
+Interpret the three model rows as follows:
+
+- high posterior MMD means the conditional decoder or reconstruction loss is
+  inadequate;
+- low posterior MMD but high raw-prior MMD indicates posterior-prior mismatch;
+- low raw-prior MMD but high accepted-prior MMD means post-processing is
+  distorting the distribution.
 
 For a quick smoke evaluation:
 

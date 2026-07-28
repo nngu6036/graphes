@@ -35,7 +35,7 @@ def _targets_to_tensors(
     out: dict[str, torch.Tensor] = {}
     for key, value in targets.items():
         tensor = torch.as_tensor(value, device=device)
-        if key == "num_nodes":
+        if key in {"num_nodes", "num_nodes_count"}:
             tensor = tensor.long()
         else:
             tensor = tensor.float()
@@ -120,6 +120,7 @@ def main() -> None:
         hidden_dim=int(
             require_config(degree_cfg, "hidden_dim", context="config.degree_generator")
         ),
+        size_condition_dim=int(degree_cfg.get("size_condition_dim", 16)),
         num_layers=int(
             require_config(degree_cfg, "num_layers", context="config.degree_generator")
         ),
@@ -153,9 +154,9 @@ def main() -> None:
                 degree_cfg.get("degree_weight", 5.0),
             )
         ),
-        "edge_scalar": float(
+        "degree_moment": float(
             degree_cfg.get(
-                "edge_count_loss_weight",
+                "degree_moment_loss_weight",
                 degree_cfg.get("edge_moment_weight", 0.1),
             )
         ),
@@ -168,6 +169,7 @@ def main() -> None:
     kl_loss_weight = float(
         degree_cfg.get("kl_loss_weight", degree_cfg.get("beta", 0.005))
     )
+    kl_warmup_epochs = int(degree_cfg.get("kl_warmup_epochs", 0))
     progress_interval = int(degree_cfg.get("progress_interval", PROGRESS_INTERVAL))
     for epoch in range(1, epochs + 1):
         model.train()
@@ -177,9 +179,19 @@ def main() -> None:
             batch_targets = {
                 key: value[batch_idx.to(device)] for key, value in all_targets.items()
             }
-            outputs, mu, logvar = model(batch_x)
+            outputs, mu, logvar = model(
+                batch_x, batch_targets["num_nodes_count"]
+            )
+            effective_beta = kl_loss_weight
+            if kl_warmup_epochs > 0:
+                effective_beta *= min(float(epoch) / kl_warmup_epochs, 1.0)
             loss, metrics = degree_vae_loss(
-                outputs, batch_targets, mu, logvar, beta=kl_loss_weight, weights=weights
+                outputs,
+                batch_targets,
+                mu,
+                logvar,
+                beta=effective_beta,
+                weights=weights,
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -200,7 +212,8 @@ def main() -> None:
             print(
                 f"epoch={epoch:04d} loss={mean_metrics['loss']:.4f} "
                 f"degree={mean_metrics['degree_loss']:.4f} nodes={mean_metrics['num_nodes_loss']:.4f} "
-                f"edge={mean_metrics['edge_scalar_loss']:.4f} kl={mean_metrics['kl_loss']:.4f}",
+                f"moment={mean_metrics['degree_moment_loss']:.4f} "
+                f"kl={mean_metrics['kl_loss']:.4f} beta={effective_beta:.6f}",
                 flush=True,
             )
 

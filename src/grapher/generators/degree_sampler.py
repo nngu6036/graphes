@@ -60,8 +60,18 @@ class DegreeVAESampler:
         if self._model is None or self._vectorizer is None:
             self._load()
         generator = rng if rng is not None else np.random.default_rng(self.seed)
+        node_counts = None
+        if self.sample_num_nodes.lower() == "empirical":
+            node_counts = [
+                self._vectorizer.sample_empirical_node_count(generator)
+            ]
         with torch.no_grad():
-            outputs = self._model.sample_outputs(1, device=self.device)
+            outputs = self._model.sample_outputs(
+                1,
+                node_counts=node_counts,
+                deterministic_node_count=self.deterministic,
+                device=self.device,
+            )
         return self._vectorizer.outputs_to_summaries(
             outputs,
             rng=generator,

@@ -5,7 +5,14 @@ import numpy as np
 import torch
 
 from grapher.evaluation.degree_sequences import evaluate_degree_sequence_sets
-from grapher.generators.degree_vae import DegreeVectorizer, build_degree_vae, connected_feasible_degree_sequence
+from grapher.generators.degree_vae import (
+    DegreeVectorizer,
+    build_degree_vae,
+    connected_feasible_degree_sequence,
+    degree_vae_loss,
+    load_degree_vae_checkpoint,
+    save_degree_vae_checkpoint,
+)
 
 
 def test_degree_vectorizer_outputs_graphical_summaries():
@@ -30,7 +37,6 @@ def test_degree_sampling_diagnostics_distinguish_raw_and_accepted_quality():
     outputs = {
         "num_nodes_logits": torch.tensor([[10.0]]),
         "degree_logits": torch.tensor([[-10.0, -10.0, 10.0]]),
-        "edge_scalar": torch.tensor([[1.0]]),
     }
     summaries = vectorizer.outputs_to_summaries(
         outputs,
@@ -44,6 +50,82 @@ def test_degree_sampling_diagnostics_distinguish_raw_and_accepted_quality():
     assert diagnostics["raw_connected_feasible"]
     assert not diagnostics["repair_used"]
     assert not diagnostics["fallback_used"]
+    assert diagnostics["accepted_without_postprocessing"]
+
+
+def test_degree_decoder_is_explicitly_conditioned_on_graph_size():
+    graphs = [nx.cycle_graph(8), nx.cycle_graph(16)]
+    vectorizer = DegreeVectorizer.fit(graphs, require_connected=True)
+    model = build_degree_vae(
+        vectorizer,
+        latent_dim=4,
+        hidden_dim=16,
+        size_condition_dim=8,
+    )
+    z = torch.zeros(2, 4)
+    outputs = model.decode(z, torch.tensor([8, 16]))
+    assert outputs["conditioned_num_nodes"].tolist() == [8, 16]
+    # The same latent receives different continuous size embeddings.
+    assert not torch.allclose(
+        outputs["degree_logits"][0],
+        outputs["degree_logits"][1],
+    )
+
+
+def test_training_targets_include_true_size_and_degree_moment():
+    graph = nx.path_graph(6)
+    vectorizer = DegreeVectorizer.fit([graph], require_connected=True)
+    targets = vectorizer.to_targets(graph)
+    assert int(targets["num_nodes_count"]) == 6
+    assert np.isclose(float(targets["mean_degree"][0]), 10.0 / 6.0)
+    assert "edge_scalar" not in targets
+
+
+def test_size_conditioned_vae_loss_and_checkpoint_round_trip(tmp_path):
+    graphs = [nx.path_graph(8), nx.cycle_graph(12)]
+    vectorizer = DegreeVectorizer.fit(graphs, require_connected=True)
+    x_np, targets_np = vectorizer.to_training_arrays(graphs)
+    model = build_degree_vae(
+        vectorizer,
+        latent_dim=4,
+        hidden_dim=16,
+        size_condition_dim=8,
+    )
+    x = torch.as_tensor(x_np, dtype=torch.float32)
+    targets = {
+        key: torch.as_tensor(
+            value,
+            dtype=(
+                torch.long
+                if key in {"num_nodes", "num_nodes_count"}
+                else torch.float32
+            ),
+        )
+        for key, value in targets_np.items()
+    }
+    outputs, mu, logvar = model(x, targets["num_nodes_count"])
+    loss, metrics = degree_vae_loss(
+        outputs,
+        targets,
+        mu,
+        logvar,
+        weights={"degree_moment": 1.0},
+    )
+    loss.backward()
+    assert np.isfinite(float(loss.detach()))
+    assert np.isfinite(metrics["degree_moment_loss"])
+    assert model.degree_head.weight.grad is not None
+
+    checkpoint = tmp_path / "degree_vae.pt"
+    save_degree_vae_checkpoint(checkpoint, model, vectorizer)
+    loaded, loaded_vectorizer, _ = load_degree_vae_checkpoint(
+        checkpoint, device="cpu"
+    )
+    sampled = loaded.sample_outputs(
+        2, node_counts=[8, 12], device="cpu"
+    )
+    assert sampled["conditioned_num_nodes"].tolist() == [8, 12]
+    assert loaded_vectorizer.input_dim == vectorizer.input_dim
 
 
 def test_degree_sequence_evaluation_is_zero_for_identical_sets():
