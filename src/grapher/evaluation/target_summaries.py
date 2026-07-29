@@ -143,7 +143,7 @@ def _component_arrays(
                 graphlet[:, graphlet_slice]
             )
     graphlet_sizes = sorted(
-        (vectorizer.graphlet_keys_by_k or {}).keys(),
+        (getattr(vectorizer, "graphlet_keys_by_k", {}) or {}).keys(),
         key=int,
     )
     connected_mass = np.asarray(
@@ -194,7 +194,7 @@ def active_component_names(
         ("graphlet", int(vectorizer.graphlet_dim)),
         (
             "connected_mass",
-            len(vectorizer.graphlet_keys_by_k or {}),
+            len(getattr(vectorizer, "graphlet_keys_by_k", {}) or {}),
         ),
         ("triangle", 1),
     ]
@@ -329,7 +329,7 @@ def graphlet_bin_errors(
     candidate_values = _component_arrays(candidate, vectorizer)["graphlet"]
     rows: list[dict[str, Any]] = []
     position = 0
-    keys_by_k = vectorizer.graphlet_keys_by_k or {}
+    keys_by_k = getattr(vectorizer, "graphlet_keys_by_k", {}) or {}
     for k in sorted(keys_by_k, key=lambda value: int(value)):
         for key in keys_by_k[k]:
             ref = reference_values[:, position]

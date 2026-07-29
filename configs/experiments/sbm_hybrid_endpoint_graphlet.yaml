@@ -1,0 +1,118 @@
+experiment: sbm_hybrid_endpoint_graphlet
+seed: 42
+
+dataset:
+  name: sbm
+  config_path: configs/datasets/sbm.yaml
+  root: outputs/datasets
+  build_if_missing: true
+  max_train_graphs: null
+  max_val_graphs: null
+
+# Generic featureless graphs have one node category and two dense edge states:
+# no-edge (reserved index 0) and edge (index 1).
+categorical_state:
+  node_attribute: null
+  node_categories: [0]
+  edge_attribute: null
+  edge_categories: [1]
+
+# These are clean-endpoint targets H(G_1), not a replacement for G_1.
+graphlet_prediction:
+  graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 4
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 2048
+  clustering_summary: false
+  spectral_summary: false
+  motif_proxy: false
+  orbit_count: false
+
+# Build G_0 with the degree of target node i assigned to source node i.
+# Shared relabel augmentation permutes G_t and G_1 together.
+endpoint_trajectory:
+  steps: 32
+  candidate_budget: 64
+  states_per_graph: 8
+  preserve_connectivity: true
+  ensure_connected_source: true
+  max_repair_trials: 10000
+  shared_relabel_augmentation: true
+
+endpoint_predictor:
+  checkpoint_path: outputs/hybrid_endpoint/sbm/checkpoint.pt
+  device: auto
+  hidden_dim: 128
+  edge_dim: 64
+  graph_dim: 128
+  num_layers: 4
+  dropout: 0.0
+  min_concentration: 0.05
+  max_concentration: 50.0
+  batch_size: 4
+  epochs: 100
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  no_edge_class_weight: 0.25
+  present_edge_class_weight: 1.0
+  target_epsilon: 0.00001
+  loss_weights:
+    # The node loss is automatically zero for the one-class generic case.
+    node: 1.0
+    edge: 1.0
+    graphlet_mean: 1.0
+    graphlet_distribution: 0.1
+    graphlet_mass: 0.25
+  progress_interval: 5
+
+# This remains separable from endpoint training. Use `learned` after training
+# the existing DegreeHistogramVAE; `empirical` is a runnable baseline.
+generation:
+  degree_source: empirical
+  num_generate: 40
+
+degree_generator:
+  enabled: false
+  type: degree_histogram_vae
+  checkpoint_path: outputs/degree_generators/sbm_target_refinement/checkpoint.pt
+  device: auto
+
+constructor:
+  type: havel_hakimi
+  ensure_connected: true
+  random_relabel: false
+  max_repair_trials: 10000
+
+# At every intermediate graph, resample a clean endpoint graph and graphlet
+# histogram. The sampled graph is guidance only; it is never installed.
+hybrid_refiner:
+  steps: 40
+  candidate_budget: 64
+  preserve_connectivity: true
+  selection: greedy
+  temperature: 0.1
+  categorical_weight: 1.0
+  probability_weight: 0.0
+  graphlet_weight: 1.0
+  graphlet_mass_weight: 0.25
+  graphlet_top_k: 8
+  accept_only_improving: true
+  min_improvement: 0.00000001
+  patience: 2
+  sample_endpoint: true
+  sample_graphlet: true
+  endpoint_temperature: 1.0
+  refresh_prediction_every: 1
+  infeasible_target_policy: guidance_only
+  report_guidance_consistency: false
+
+evaluation:
+  compute_orbit: false
+  compute_graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 4
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 2048
