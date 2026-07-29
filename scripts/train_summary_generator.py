@@ -66,6 +66,16 @@ def main() -> None:
 
     config = load_yaml(args.config)
     generator_cfg = require_config_section(config, "summary_generator")
+    generator_type = str(generator_cfg.get("type", "learned")).lower()
+    if generator_type in {
+        "kernel_residual",
+        "kernel_conditioned",
+        "weighted_kernel",
+    }:
+        raise SystemExit(
+            "The kernel-residual target sampler has no trainable parameters. "
+            "Run scripts/evaluate_target_summary_generator.py with this config."
+        )
     seed = int(require_config(config, "seed"))
     np.random.seed(seed)
     torch.manual_seed(seed)

@@ -205,7 +205,17 @@ class PythonCanonicalizer:
         best: bytes | None = None
         for order in itertools.permutations(nodes):
             position = {node: idx for idx, node in enumerate(order)}
-            relabeled = nx.relabel_nodes(graph, position, copy=True)
+            # Rebuild the graph so its insertion order is exactly 0..n-1.
+            # ``nx.relabel_nodes`` preserves the old insertion order, while
+            # NetworkX's graph6 writer follows insertion order even when a
+            # ``nodes`` iterable is supplied.  Rebuilding is therefore
+            # necessary for a genuinely label-invariant fallback.
+            relabeled = nx.Graph()
+            relabeled.add_nodes_from(range(n))
+            relabeled.add_edges_from(
+                (position[u], position[v])
+                for u, v in graph.edges()
+            )
             encoded = nx.to_graph6_bytes(
                 relabeled,
                 nodes=range(n),
@@ -222,6 +232,152 @@ def default_topology_canonicalizer() -> NautyCanonicalizer | PythonCanonicalizer
     if NAUTY_EXEC:
         return NautyCanonicalizer(NAUTY_EXEC)
     return PythonCanonicalizer()
+
+
+@lru_cache(maxsize=32)
+def _topology_graphlet_basis_cached(
+    k: int,
+    connected_only: bool,
+) -> tuple[tuple[str, bytes], ...]:
+    """Return every unlabeled topology graphlet of size ``k``.
+
+    NetworkX's graph atlas contains one representative of every unlabeled
+    simple graph with at most seven vertices.  Canonicalizing those
+    representatives gives a stable, complete basis instead of learning the
+    basis only from graphlet types observed in the training split.
+    """
+
+    k = int(k)
+    if k <= 0 or k > 7:
+        raise ValueError(
+            "The built-in complete topology graphlet basis supports 1 <= k <= 7."
+        )
+
+    representatives: list[nx.Graph] = []
+    for graph in nx.graph_atlas_g():
+        if graph.number_of_nodes() != k:
+            continue
+        graph = nx.convert_node_labels_to_integers(
+            nx.Graph(graph),
+            first_label=0,
+            ordering="sorted",
+        )
+        if connected_only and k > 1 and not nx.is_connected(graph):
+            continue
+        representatives.append(graph)
+
+    canonicalizer = default_topology_canonicalizer()
+    keys = canonicalizer.canonical_graph6_batch(representatives)
+    encoded = [
+        (
+            str(key),
+            nx.to_graph6_bytes(graph, header=False).strip(),
+        )
+        for key, graph in zip(keys, representatives)
+    ]
+    return tuple(sorted(encoded, key=lambda item: item[0]))
+
+
+def topology_graphlet_basis(
+    k: int,
+    *,
+    connected_only: bool = True,
+) -> list[tuple[str, nx.Graph]]:
+    """Return a complete canonical-key/representative basis for one size."""
+
+    return [
+        (key, nx.from_graph6_bytes(raw))
+        for key, raw in _topology_graphlet_basis_cached(
+            int(k),
+            bool(connected_only),
+        )
+    ]
+
+
+def topology_graphlet_keys_by_size(
+    k_min: int,
+    k_max: int,
+    *,
+    connected_only: bool = True,
+) -> dict[str, list[str]]:
+    """Return the complete canonical topology basis for every requested size."""
+
+    if int(k_min) <= 0 or int(k_max) < int(k_min):
+        raise ValueError("Require 1 <= k_min <= k_max.")
+    return {
+        str(k): [
+            key
+            for key, _ in topology_graphlet_basis(
+                k,
+                connected_only=connected_only,
+            )
+        ]
+        for k in range(int(k_min), int(k_max) + 1)
+    }
+
+
+def derive_k3_graphlet_distribution(
+    degree_sequence: Iterable[int],
+    triangle_count: float,
+    *,
+    connected_only: bool = True,
+) -> dict[str, float]:
+    """Derive the induced three-node graphlet law from degrees and triangles.
+
+    For connected graphlets this returns the path and triangle probabilities.
+    When ``connected_only`` is false it returns all four unlabeled induced
+    three-node graph types. Infeasible integer triangle counts raise.
+    """
+
+    sequence = [int(value) for value in degree_sequence]
+    n = len(sequence)
+    if n < 3:
+        return {}
+    if any(value < 0 or value >= n for value in sequence):
+        raise ValueError("Degree sequence contains an out-of-range degree.")
+    if sum(sequence) % 2:
+        raise ValueError("Degree sequence must have an even sum.")
+
+    triangles = round(float(triangle_count))
+    edges = int(sum(sequence) // 2)
+    wedges = int(sum(value * (value - 1) // 2 for value in sequence))
+    total_triples = comb(n, 3)
+
+    counts_by_edges = {
+        3: triangles,
+        2: wedges - 3 * triangles,
+        1: edges * (n - 2) - 2 * wedges + 3 * triangles,
+        0: total_triples + wedges - edges * (n - 2) - triangles,
+    }
+    materially_negative = {
+        edge_count: count
+        for edge_count, count in counts_by_edges.items()
+        if count < 0
+    }
+    if materially_negative:
+        raise ValueError(
+            "Triangle count is infeasible for the supplied degree sequence: "
+            f"{materially_negative}."
+        )
+    counts_by_edges = {
+        edge_count: max(int(count), 0)
+        for edge_count, count in counts_by_edges.items()
+    }
+
+    basis = topology_graphlet_basis(3, connected_only=connected_only)
+    counts: dict[str, float] = {}
+    for key, graph in basis:
+        edge_count = int(graph.number_of_edges())
+        counts[key] = float(counts_by_edges.get(edge_count, 0))
+
+    total = float(sum(counts.values()))
+    if total <= 0.0:
+        return {}
+    return {
+        key: value / total
+        for key, value in counts.items()
+        if value > 0.0
+    }
 
 
 # ============================================================

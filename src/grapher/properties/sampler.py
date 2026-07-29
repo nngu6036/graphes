@@ -7,6 +7,7 @@ from typing import Any
 import networkx as nx
 import numpy as np
 
+from grapher.construction.coarse import construct_coarse_graph
 from grapher.generators.degree_sampler import DegreeVAESampler, EmpiricalDegreeSampler
 from grapher.properties.summary import SummaryConfig, extract_summary
 
@@ -186,18 +187,12 @@ class HybridSummarySampler:
         self.structure_sampler = structure_sampler
         self.degree_sampler = degree_sampler
 
-    def sample(self, rng: np.random.Generator | None = None) -> dict[str, Any]:
-        generator = rng if rng is not None else np.random.default_rng(0)
-        degree_summary = self.degree_sampler.sample(generator)
-        if hasattr(self.structure_sampler, "sample_conditioned"):
-            summary = dict(
-                self.structure_sampler.sample_conditioned(
-                    degree_summary,
-                    generator,
-                )
-            )
-        else:
-            summary = dict(self.structure_sampler.sample(generator))
+    @staticmethod
+    def _merge_degree_condition(
+        summary: dict[str, Any],
+        degree_summary: dict[str, Any],
+    ) -> dict[str, Any]:
+        summary = dict(summary)
         n = int(degree_summary["num_nodes"])
         sequence = sorted(
             [int(d) for d in degree_summary["degree_sequence"]], reverse=True
@@ -211,6 +206,61 @@ class HybridSummarySampler:
         )
         summary["density"] = float((2.0 * m / (n * (n - 1))) if n > 1 else 0.0)
         return summary
+
+    def sample(self, rng: np.random.Generator | None = None) -> dict[str, Any]:
+        generator = rng if rng is not None else np.random.default_rng(0)
+        degree_summary = self.degree_sampler.sample(generator)
+        if hasattr(self.structure_sampler, "sample_conditioned"):
+            summary = dict(
+                self.structure_sampler.sample_conditioned(
+                    degree_summary,
+                    generator,
+                )
+            )
+        else:
+            summary = dict(self.structure_sampler.sample(generator))
+        return self._merge_degree_condition(summary, degree_summary)
+
+    def sample_with_source(
+        self,
+        constructor_config: dict[str, Any],
+        rng: np.random.Generator | None = None,
+    ) -> tuple[dict[str, Any], nx.Graph]:
+        """Sample degrees, build the actual source, then sample its target.
+
+        Source-relative samplers must encode the same Havel-Hakimi graph that
+        the refiner receives.  This method prevents a second stochastic
+        connectivity repair from silently producing a different source.
+        """
+
+        generator = rng if rng is not None else np.random.default_rng(0)
+        degree_summary = self.degree_sampler.sample(generator)
+        source_graph = construct_coarse_graph(
+            degree_summary,
+            constructor_config,
+            generator,
+        )
+        if (
+            hasattr(self.structure_sampler, "sample_conditioned")
+            and getattr(self.structure_sampler, "requires_source_graph", False)
+        ):
+            summary = dict(
+                self.structure_sampler.sample_conditioned(
+                    degree_summary,
+                    generator,
+                    source_graph=source_graph,
+                )
+            )
+        elif hasattr(self.structure_sampler, "sample_conditioned"):
+            summary = dict(
+                self.structure_sampler.sample_conditioned(
+                    degree_summary,
+                    generator,
+                )
+            )
+        else:
+            summary = dict(self.structure_sampler.sample(generator))
+        return self._merge_degree_condition(summary, degree_summary), source_graph
 
 
 def build_degree_sampler_from_config(

@@ -5,11 +5,26 @@ from typing import Callable, Sequence
 import networkx as nx
 import numpy as np
 
-from grapher.properties.summary import clustering_histogram, degree_histogram, motif_proxy_vector, orbit_count_vector, spectral_histogram
-from grapher.utils.motifs import flatten_graphlet_history, graphlet_history, graphlet_keys_by_size
+from grapher.properties.summary import (
+    SummaryConfig,
+    clustering_histogram,
+    degree_histogram,
+    graphlet_statistics_summary,
+    motif_proxy_vector,
+    orbit_count_vector,
+    spectral_histogram,
+)
+from grapher.utils.motifs import (
+    flatten_graphlet_history,
+    graphlet_history,
+    graphlet_keys_by_size,
+    topology_graphlet_keys_by_size,
+)
 
 
-def descriptor_matrix(graphs: Sequence[nx.Graph], fn: Callable[[nx.Graph], np.ndarray]) -> np.ndarray:
+def descriptor_matrix(
+    graphs: Sequence[nx.Graph], fn: Callable[[nx.Graph], np.ndarray]
+) -> np.ndarray:
     rows = [np.asarray(fn(g), dtype=np.float64).reshape(-1) for g in graphs]
     if not rows:
         return np.zeros((0, 1), dtype=np.float64)
@@ -70,7 +85,9 @@ def orbit_histogram_matrix(graphs: Sequence[nx.Graph]) -> np.ndarray:
     return descriptor_matrix(graphs, histogram)
 
 
-def mmd_orbit(reference: Sequence[nx.Graph], generated: Sequence[nx.Graph], sigma: float = 1.0) -> float:
+def mmd_orbit(
+    reference: Sequence[nx.Graph], generated: Sequence[nx.Graph], sigma: float = 1.0
+) -> float:
     h_ref = orbit_histogram_matrix(reference)
     h_gen = orbit_histogram_matrix(generated)
     if h_ref.size == 0 or h_gen.size == 0:
@@ -79,7 +96,6 @@ def mmd_orbit(reference: Sequence[nx.Graph], generated: Sequence[nx.Graph], sigm
     k_yy = gaussian_emd_kernel(h_gen, h_gen, sigma)
     k_xy = gaussian_emd_kernel(h_ref, h_gen, sigma)
     return float(k_xx.mean() + k_yy.mean() - 2.0 * k_xy.mean())
-
 
 
 def graphlet_history_matrix(
@@ -119,24 +135,93 @@ def mmd_graphlet_history(
     k_max: int = 5,
     connected_only: bool = True,
     num_samples: int | None = None,
+    backend: str = "sampled",
 ) -> float:
+    graphlet_mmd, _ = mmd_graphlet_statistics(
+        reference,
+        generated,
+        k_min=k_min,
+        k_max=k_max,
+        connected_only=connected_only,
+        num_samples=num_samples,
+        backend=backend,
+    )
+    return graphlet_mmd
+
+
+def mmd_graphlet_statistics(
+    reference: Sequence[nx.Graph],
+    generated: Sequence[nx.Graph],
+    *,
+    k_min: int = 3,
+    k_max: int = 5,
+    connected_only: bool = True,
+    num_samples: int | None = None,
+    backend: str = "sampled",
+) -> tuple[float, float]:
+    """MMD for graphlet composition and connected induced-subset mass."""
+
+    cfg = SummaryConfig(
+        graphlet_history=True,
+        graphlet_k_min=int(k_min),
+        graphlet_k_max=int(k_max),
+        graphlet_connected_only=bool(connected_only),
+        graphlet_num_samples=num_samples,
+        graphlet_backend=str(backend),
+    )
     # Build a shared basis from both sets. This is important because generated
     # graphs may contain graphlets unseen in the reference or vice versa.
-    histories = [
-        graphlet_history(g, k_min=k_min, k_max=k_max, connected_only=connected_only, num_samples=num_samples)
-        for g in list(reference) + list(generated)
+    statistics = [
+        graphlet_statistics_summary(graph, cfg)
+        for graph in list(reference) + list(generated)
     ]
-    keys_by_k = graphlet_keys_by_size(histories)
-    ref_rows = [flatten_graphlet_history(h, keys_by_k) for h in histories[: len(reference)]]
-    gen_rows = [flatten_graphlet_history(h, keys_by_k) for h in histories[len(reference) :]]
+    histories = [item[0] for item in statistics]
+    masses = [item[1] for item in statistics]
+    keys_by_k = topology_graphlet_keys_by_size(
+        int(k_min),
+        int(k_max),
+        connected_only=bool(connected_only),
+    )
+    ref_rows = [
+        flatten_graphlet_history(h, keys_by_k) for h in histories[: len(reference)]
+    ]
+    gen_rows = [
+        flatten_graphlet_history(h, keys_by_k) for h in histories[len(reference) :]
+    ]
     if not ref_rows or not gen_rows:
-        return float("nan")
-    return mmd_rbf(np.asarray(ref_rows, dtype=np.float64), np.asarray(gen_rows, dtype=np.float64))
+        return float("nan"), float("nan")
+    mass_keys = [str(k) for k in range(int(k_min), int(k_max) + 1)]
+    ref_mass = np.asarray(
+        [
+            [item.get(key, 0.0) for key in mass_keys]
+            for item in masses[: len(reference)]
+        ],
+        dtype=np.float64,
+    )
+    gen_mass = np.asarray(
+        [
+            [item.get(key, 0.0) for key in mass_keys]
+            for item in masses[len(reference) :]
+        ],
+        dtype=np.float64,
+    )
+    return (
+        mmd_rbf(
+            np.asarray(ref_rows, dtype=np.float64),
+            np.asarray(gen_rows, dtype=np.float64),
+        ),
+        mmd_rbf(ref_mass, gen_mass),
+    )
+
 
 def connectedness_rate(graphs: Sequence[nx.Graph]) -> float:
     if not graphs:
         return 0.0
-    return float(np.mean([nx.is_connected(g) if g.number_of_nodes() > 0 else False for g in graphs]))
+    return float(
+        np.mean(
+            [nx.is_connected(g) if g.number_of_nodes() > 0 else False for g in graphs]
+        )
+    )
 
 
 def simple_graph_validity_rate(graphs: Sequence[nx.Graph]) -> float:
@@ -163,7 +248,9 @@ def wl_novelty_rate(generated: Sequence[nx.Graph], train: Sequence[nx.Graph]) ->
     return float(np.mean([h not in train_hashes for h in gen_hashes]))
 
 
-def degree_preservation_rate(before: Sequence[nx.Graph], after: Sequence[nx.Graph]) -> float:
+def degree_preservation_rate(
+    before: Sequence[nx.Graph], after: Sequence[nx.Graph]
+) -> float:
     if not before:
         return 0.0
     vals = []
@@ -185,6 +272,7 @@ def evaluate_graph_sets(
     graphlet_k_max: int = 5,
     graphlet_connected_only: bool = True,
     graphlet_num_samples: int | None = None,
+    graphlet_backend: str = "sampled",
 ) -> dict[str, float]:
     max_degree = 0
     for g in list(reference) + list(generated):
@@ -198,6 +286,19 @@ def evaluate_graph_sets(
     spec_gen = descriptor_matrix(generated, lambda g: spectral_histogram(g, 20))
     motif_ref = descriptor_matrix(reference, motif_proxy_vector)
     motif_gen = descriptor_matrix(generated, motif_proxy_vector)
+    graphlet_mmd, connected_mass_mmd = (
+        mmd_graphlet_statistics(
+            reference,
+            generated,
+            k_min=graphlet_k_min,
+            k_max=graphlet_k_max,
+            connected_only=graphlet_connected_only,
+            num_samples=graphlet_num_samples,
+            backend=graphlet_backend,
+        )
+        if compute_graphlet_history
+        else (float("nan"), float("nan"))
+    )
     metrics = {
         "num_graphs": float(len(generated)),
         "degree_mmd": mmd_rbf(deg_ref, deg_gen),
@@ -205,14 +306,8 @@ def evaluate_graph_sets(
         "spectral_mmd": mmd_rbf(spec_ref, spec_gen),
         "motif_proxy_mmd": mmd_rbf(motif_ref, motif_gen),
         "orbit_mmd": mmd_orbit(reference, generated) if compute_orbit else float("nan"),
-        "graphlet_history_mmd": mmd_graphlet_history(
-            reference,
-            generated,
-            k_min=graphlet_k_min,
-            k_max=graphlet_k_max,
-            connected_only=graphlet_connected_only,
-            num_samples=graphlet_num_samples,
-        ) if compute_graphlet_history else float("nan"),
+        "graphlet_history_mmd": graphlet_mmd,
+        "graphlet_connected_mass_mmd": connected_mass_mmd,
         "connectedness_rate": connectedness_rate(generated),
         "validity_rate": simple_graph_validity_rate(generated),
         "uniqueness_rate": wl_uniqueness_rate(generated),

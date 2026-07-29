@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +14,7 @@ class ConstructorConfig:
     ensure_connected: bool = True
     random_relabel: bool = True
     max_repair_trials: int = 10000
+    deterministic_seed: int | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None = None) -> "ConstructorConfig":
@@ -22,6 +24,11 @@ class ConstructorConfig:
             ensure_connected=bool(data.get("ensure_connected", True)),
             random_relabel=bool(data.get("random_relabel", True)),
             max_repair_trials=int(data.get("max_repair_trials", 10000)),
+            deterministic_seed=(
+                None
+                if data.get("deterministic_seed") in {None, "", "none", "None"}
+                else int(data.get("deterministic_seed"))
+            ),
         )
 
 
@@ -82,10 +89,32 @@ def repair_connectivity_degree_preserving(graph: nx.Graph, rng: np.random.Genera
     return g
 
 
+def _deterministic_constructor_rng(
+    degree_sequence: list[int],
+    seed: int,
+) -> np.random.Generator:
+    """Create a stable RNG without relying on Python's randomized hash()."""
+
+    payload = (
+        int(seed).to_bytes(8, byteorder="little", signed=True)
+        + np.asarray(degree_sequence, dtype=np.int64).tobytes()
+    )
+    digest = hashlib.blake2b(payload, digest_size=8).digest()
+    stable_seed = int.from_bytes(digest, byteorder="little", signed=False)
+    return np.random.default_rng(stable_seed)
+
+
 def construct_coarse_graph(summary: dict[str, Any], config: ConstructorConfig | dict[str, Any] | None = None, rng: np.random.Generator | None = None) -> nx.Graph:
     cfg = config if isinstance(config, ConstructorConfig) else ConstructorConfig.from_dict(config)
-    generator = rng if rng is not None else np.random.default_rng(0)
-    degree_sequence = [int(d) for d in summary["degree_sequence"]]
+    degree_sequence = sorted(
+        [int(d) for d in summary["degree_sequence"]],
+        reverse=True,
+    )
+    generator = (
+        _deterministic_constructor_rng(degree_sequence, cfg.deterministic_seed)
+        if cfg.deterministic_seed is not None
+        else (rng if rng is not None else np.random.default_rng(0))
+    )
     if cfg.type != "havel_hakimi":
         raise ValueError(f"Unsupported coarse constructor {cfg.type!r}; expected 'havel_hakimi'.")
     if not nx.is_graphical(degree_sequence, method="eg"):

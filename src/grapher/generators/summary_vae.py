@@ -16,6 +16,7 @@ from grapher.utils.device import resolve_torch_device
 from grapher.utils.motifs import (
     flatten_graphlet_history,
     graphlet_keys_by_size,
+    topology_graphlet_keys_by_size,
     unflatten_graphlet_history,
 )
 
@@ -112,8 +113,15 @@ class SummaryVectorizer:
             else {}
         )
         if cfg.graphlet_history:
+            complete_basis = topology_graphlet_keys_by_size(
+                int(cfg.graphlet_k_min),
+                int(cfg.graphlet_k_max),
+                connected_only=bool(cfg.graphlet_connected_only),
+            )
             for k in range(int(cfg.graphlet_k_min), int(cfg.graphlet_k_max) + 1):
-                graphlet_keys.setdefault(str(k), [])
+                observed = set(graphlet_keys.get(str(k), []))
+                observed.update(complete_basis.get(str(k), []))
+                graphlet_keys[str(k)] = sorted(observed)
         graphlet_dim = int(sum(len(v) for v in graphlet_keys.values()))
 
         return cls(

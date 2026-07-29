@@ -5,19 +5,22 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from functools import lru_cache
+from math import comb
 from typing import Any
 
 import networkx as nx
 import numpy as np
 
-from grapher.utils.motifs import graphlet_history as compute_graphlet_history
-from grapher.utils.motifs import graphlet_history_l2_distance
-
+from grapher.utils.motifs import (
+    default_topology_canonicalizer,
+    graphlet_count_dict,
+    graphlet_history_l2_distance,
+    normalize_count_dict,
+    topology_graphlet_basis,
+)
 
 ORCA_EXEC = os.environ.get("ORCA_EXEC") or shutil.which("orca")
-ORBIT_MULTIPLICITY_4 = np.asarray(
-    [2, 2, 1, 6, 2, 1, 2, 4, 2, 1, 1, 2, 2, 4, 1], dtype=np.int64
-)
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,7 @@ class SummaryConfig:
     graphlet_k_max: int = 5
     graphlet_connected_only: bool = True
     graphlet_num_samples: int | None = None
+    graphlet_backend: str = "sampled"
 
     @classmethod
     def from_dict(
@@ -88,6 +92,9 @@ class SummaryConfig:
             graphlet_k_max=k_max,
             graphlet_connected_only=bool(data.get("graphlet_connected_only", True)),
             graphlet_num_samples=num_samples,
+            graphlet_backend=str(
+                data.get("graphlet_backend", "sampled")
+            ).lower(),
         )
 
 
@@ -214,19 +221,19 @@ def python_orbit_count_vector(graph: nx.Graph) -> np.ndarray:
                     if edge_count == 3:
                         if sorted(degrees.values()) == [1, 1, 1, 3]:
                             for degree in degrees.values():
-                                counts[5 if degree == 3 else 4] += 1.0
+                                counts[7 if degree == 3 else 6] += 1.0
                         elif sorted(degrees.values()) == [1, 1, 2, 2]:
                             for degree in degrees.values():
-                                counts[7 if degree == 2 else 6] += 1.0
+                                counts[5 if degree == 2 else 4] += 1.0
                     elif edge_count == 4:
                         if all(degree == 2 for degree in degrees.values()):
-                            counts[11] += 4.0
+                            counts[8] += 4.0
                         elif sorted(degrees.values()) == [1, 2, 2, 3]:
                             for degree in degrees.values():
                                 if degree == 1:
-                                    counts[8] += 1.0
-                                elif degree == 3:
                                     counts[9] += 1.0
+                                elif degree == 3:
+                                    counts[11] += 1.0
                                 else:
                                     counts[10] += 1.0
                     elif edge_count == 5:
@@ -238,18 +245,26 @@ def python_orbit_count_vector(graph: nx.Graph) -> np.ndarray:
     return counts / n
 
 
-def orca_orbit_count_vector(graph: nx.Graph, orbit_size: int = 4) -> np.ndarray:
-    """Connected graphlet orbit counts from ORCA.
+def orca_node_orbit_matrix(graph: nx.Graph, orbit_size: int = 4) -> np.ndarray:
+    """Return the raw per-node ORCA orbit-count matrix.
 
     Set ORCA_EXEC to the ORCA executable path, or put an ``orca`` executable on PATH.
     """
 
+    if graph.is_directed() or graph.is_multigraph():
+        raise ValueError("ORCA requires a simple undirected graph.")
+    if nx.number_of_selfloops(graph):
+        raise ValueError("ORCA requires a graph without self-loops.")
+    orbit_size = int(orbit_size)
+    if orbit_size not in {4, 5}:
+        raise ValueError("ORCA orbit_size must be 4 or 5.")
     if not ORCA_EXEC:
         raise RuntimeError(
             "ORCA module is not found. Set ORCA_EXEC or add orca to PATH."
         )
     if graph.number_of_nodes() == 0:
-        return np.zeros(15, dtype=np.float64)
+        width = 15 if orbit_size == 4 else 73
+        return np.zeros((0, width), dtype=np.int64)
 
     temp1_path: str | None = None
     temp2_path: str | None = None
@@ -261,7 +276,9 @@ def orca_orbit_count_vector(graph: nx.Graph, orbit_size: int = 4) -> np.ndarray:
             temp1_path = temp1.name
             temp2_path = temp2.name
 
-            nodes = sorted(graph.nodes())
+            # ORCA only needs a stable integer relabeling. Insertion order also
+            # supports graphs whose original node labels are not comparable.
+            nodes = list(graph.nodes())
             node_map = {node: idx for idx, node in enumerate(nodes)}
             temp1.write(f"{graph.number_of_nodes()} {graph.number_of_edges()}\n")
             for u, v in graph.edges():
@@ -282,16 +299,133 @@ def orca_orbit_count_vector(graph: nx.Graph, orbit_size: int = 4) -> np.ndarray:
             orbit_counts = [
                 list(map(int, line.strip().split())) for line in f if line.strip()
             ]
-        if not orbit_counts:
-            return np.zeros(15, dtype=np.float64)
-
-        total_counts = np.asarray(orbit_counts, dtype=np.int64).sum(axis=0)
-        multiplicity = ORBIT_MULTIPLICITY_4[: total_counts.size]
-        return (total_counts // multiplicity).astype(np.float64)
+        expected_width = 15 if orbit_size == 4 else 73
+        matrix = np.asarray(orbit_counts, dtype=np.int64)
+        expected_shape = (graph.number_of_nodes(), expected_width)
+        if matrix.shape != expected_shape:
+            raise RuntimeError(
+                "ORCA returned an invalid orbit matrix shape: "
+                f"expected {expected_shape}, got {matrix.shape}."
+            )
+        if np.any(matrix < 0):
+            raise RuntimeError("ORCA returned a negative orbit count.")
+        return matrix
     finally:
         for path in (temp1_path, temp2_path):
             if path and os.path.exists(path):
                 os.remove(path)
+
+
+def orca_orbit_count_vector(graph: nx.Graph, orbit_size: int = 4) -> np.ndarray:
+    """Mean per-node connected graphlet-orbit descriptor."""
+
+    orbit_counts = orca_node_orbit_matrix(graph, orbit_size=orbit_size)
+    if orbit_counts.size == 0:
+        width = 15 if int(orbit_size) == 4 else 73
+        return np.zeros(width, dtype=np.float64)
+    return orbit_counts.mean(axis=0, dtype=np.float64)
+
+
+@lru_cache(maxsize=4)
+def _orca_graphlet_orbit_mapping(
+    k: int,
+) -> tuple[tuple[str, tuple[tuple[int, int], ...]], ...]:
+    """Map each connected topology to all of its standard ORCA roles."""
+
+    k = int(k)
+    roles_by_signature = {
+        (2, 1, (1, 1)): ((0, 2),),
+        (3, 2, (1, 1, 2)): ((1, 2), (2, 1)),
+        (3, 3, (2, 2, 2)): ((3, 3),),
+        (4, 3, (1, 1, 2, 2)): ((4, 2), (5, 2)),
+        (4, 3, (1, 1, 1, 3)): ((6, 3), (7, 1)),
+        (4, 4, (2, 2, 2, 2)): ((8, 4),),
+        (4, 4, (1, 2, 2, 3)): ((9, 1), (10, 2), (11, 1)),
+        (4, 5, (2, 2, 3, 3)): ((12, 2), (13, 2)),
+        (4, 6, (3, 3, 3, 3)): ((14, 4),),
+    }
+    if k not in {2, 3, 4}:
+        raise ValueError("Exact ORCA graphlet history supports k in {2, 3, 4}.")
+
+    mapping: list[tuple[str, tuple[tuple[int, int], ...]]] = []
+    for key, representative in topology_graphlet_basis(k, connected_only=True):
+        signature = (
+            k,
+            representative.number_of_edges(),
+            tuple(sorted(int(degree) for _, degree in representative.degree())),
+        )
+        roles = roles_by_signature.get(signature)
+        if roles is None:
+            raise RuntimeError(
+                f"No standard ORCA role map for k={k} graphlet {key!r}."
+            )
+        mapping.append((str(key), roles))
+
+    return tuple(sorted(mapping, key=lambda item: item[0]))
+
+
+def orca_connected_graphlet_statistics(
+    graph: nx.Graph,
+    *,
+    k_min: int = 3,
+    k_max: int = 4,
+) -> tuple[dict[str, dict[str, float]], dict[str, float]]:
+    """Return exact connected graphlet laws and their induced-subset mass."""
+
+    if int(k_min) < 2 or int(k_max) > 4 or int(k_max) < int(k_min):
+        raise ValueError(
+            "Exact ORCA graphlet history requires 2 <= k_min <= k_max <= 4."
+        )
+    orbit_totals = orca_node_orbit_matrix(graph, orbit_size=4).sum(axis=0)
+    history: dict[str, dict[str, float]] = {}
+    connected_mass: dict[str, float] = {}
+    n = graph.number_of_nodes()
+    for k in range(int(k_min), int(k_max) + 1):
+        counts: dict[str, float] = {}
+        for key, roles in _orca_graphlet_orbit_mapping(k):
+            role_counts: list[int] = []
+            for orbit, multiplicity in roles:
+                total = int(orbit_totals[orbit])
+                value, remainder = divmod(total, int(multiplicity))
+                if remainder:
+                    raise RuntimeError(
+                        "ORCA orbit total is not divisible by its role "
+                        f"multiplicity for k={k}, graphlet={key!r}, "
+                        f"orbit={orbit}."
+                    )
+                role_counts.append(value)
+            if len(set(role_counts)) != 1:
+                raise RuntimeError(
+                    "ORCA roles disagree on the graphlet count for "
+                    f"k={k}, graphlet={key!r}: {role_counts}."
+                )
+            counts[key] = float(role_counts[0])
+        total = float(sum(counts.values()))
+        history[str(k)] = {
+            key: (value / total if total > 0.0 else 0.0)
+            for key, value in counts.items()
+        }
+        denominator = comb(n, k) if n >= k else 0
+        connected_mass[str(k)] = (
+            float(total / denominator) if denominator > 0 else 0.0
+        )
+    return history, connected_mass
+
+
+def orca_connected_graphlet_history(
+    graph: nx.Graph,
+    *,
+    k_min: int = 3,
+    k_max: int = 4,
+) -> dict[str, dict[str, float]]:
+    """Count connected induced graphlets exactly using one ORCA invocation."""
+
+    history, _ = orca_connected_graphlet_statistics(
+        graph,
+        k_min=k_min,
+        k_max=k_max,
+    )
+    return history
 
 
 def orbit_count_vector(graph: nx.Graph) -> np.ndarray:
@@ -302,18 +436,67 @@ def orbit_count_vector(graph: nx.Graph) -> np.ndarray:
     return python_orbit_count_vector(graph)
 
 
+def graphlet_statistics_summary(
+    graph: nx.Graph,
+    cfg: SummaryConfig,
+    *,
+    backend_override: str | None = None,
+    num_samples_override: int | None = None,
+) -> tuple[dict[str, dict[str, float]], dict[str, float]]:
+    if not cfg.graphlet_history:
+        return {}, {}
+    backend = str(backend_override or cfg.graphlet_backend).lower()
+    if backend in {"orca", "exact_orca", "exact"}:
+        if not cfg.graphlet_connected_only:
+            raise ValueError(
+                "The ORCA backend counts connected induced graphlets only. "
+                "Set graphlet_connected_only: true or use graphlet_backend: sampled."
+            )
+        return orca_connected_graphlet_statistics(
+            graph,
+            k_min=cfg.graphlet_k_min,
+            k_max=cfg.graphlet_k_max,
+        )
+    if backend not in {"sampled", "sampling", "enumerate", "enumeration"}:
+        raise ValueError(f"Unknown graphlet_backend: {backend!r}.")
+
+    num_samples = (
+        cfg.graphlet_num_samples
+        if num_samples_override is None
+        else int(num_samples_override)
+    )
+    canonicalizer = default_topology_canonicalizer()
+    history: dict[str, dict[str, float]] = {}
+    connected_mass: dict[str, float] = {}
+    n = graph.number_of_nodes()
+    for k in range(cfg.graphlet_k_min, cfg.graphlet_k_max + 1):
+        counts = graphlet_count_dict(
+            graph,
+            k,
+            connected_only=cfg.graphlet_connected_only,
+            num_samples=num_samples,
+            canonicalizer=canonicalizer,
+        )
+        history[str(k)] = normalize_count_dict(counts)
+        total_subsets = comb(n, k) if n >= k else 0
+        sampled_subsets = (
+            min(total_subsets, int(num_samples))
+            if num_samples is not None and int(num_samples) > 0
+            else total_subsets
+        )
+        connected_mass[str(k)] = (
+            float(sum(counts.values()) / sampled_subsets)
+            if sampled_subsets > 0 and cfg.graphlet_connected_only
+            else float(sampled_subsets > 0)
+        )
+    return history, connected_mass
+
+
 def graphlet_history_summary(
     graph: nx.Graph, cfg: SummaryConfig
 ) -> dict[str, dict[str, float]]:
-    if not cfg.graphlet_history:
-        return {}
-    return compute_graphlet_history(
-        graph,
-        k_min=cfg.graphlet_k_min,
-        k_max=cfg.graphlet_k_max,
-        connected_only=cfg.graphlet_connected_only,
-        num_samples=cfg.graphlet_num_samples,
-    )
+    history, _ = graphlet_statistics_summary(graph, cfg)
+    return history
 
 
 def extract_summary(
@@ -328,6 +511,10 @@ def extract_summary(
     m = int(graph.number_of_edges())
     degree_seq = sorted_degree_sequence(graph)
     triangles = float(sum(nx.triangles(graph).values()) / 3.0) if n else 0.0
+    graphlet_history, graphlet_connected_mass = graphlet_statistics_summary(
+        graph,
+        cfg,
+    )
     return {
         "num_nodes": n,
         "num_edges": m,
@@ -351,7 +538,8 @@ def extract_summary(
         "orbit_count": orbit_count_vector(graph)
         if cfg.orbit_count
         else np.zeros(0, dtype=np.float64),
-        "graphlet_history": graphlet_history_summary(graph, cfg),
+        "graphlet_history": graphlet_history,
+        "graphlet_connected_mass": graphlet_connected_mass,
     }
 
 
@@ -445,21 +633,45 @@ def distance_to_summary(
     graphlet_w = _weight(
         w, "graphlet_weight", _weight(w, "graphlet_history_weight", 0.0)
     )
-    if graphlet_w != 0.0 and cfg.graphlet_history:
-        current_history = compute_graphlet_history(
+    graphlet_mass_w = _weight(w, "graphlet_connected_mass_weight", 0.0)
+    if (graphlet_w != 0.0 or graphlet_mass_w != 0.0) and cfg.graphlet_history:
+        backend = str(w.get("graphlet_backend", cfg.graphlet_backend)).lower()
+        num_samples_raw = w.get(
+            "graphlet_num_samples",
+            cfg.graphlet_num_samples,
+        )
+        num_samples = (
+            None
+            if num_samples_raw in {None, "", "none", "None"}
+            else int(num_samples_raw)
+        )
+        current_history, current_connected_mass = graphlet_statistics_summary(
             graph,
-            k_min=cfg.graphlet_k_min,
-            k_max=cfg.graphlet_k_max,
-            connected_only=cfg.graphlet_connected_only,
-            num_samples=cfg.graphlet_num_samples,
+            cfg,
+            backend_override=backend,
+            num_samples_override=num_samples,
         )
-        size_weights = w.get("graphlet_size_weights", {}) or {}
-        energy += graphlet_w * graphlet_history_l2_distance(
-            current_history,
-            target.get("graphlet_history", {}) or {},
-            size_weights={str(k): float(v) for k, v in dict(size_weights).items()},
-            normalize_terms=normalize,
-        )
+        if graphlet_w != 0.0:
+            size_weights = w.get("graphlet_size_weights", {}) or {}
+            energy += graphlet_w * graphlet_history_l2_distance(
+                current_history,
+                target.get("graphlet_history", {}) or {},
+                size_weights={
+                    str(k): float(v) for k, v in dict(size_weights).items()
+                },
+                normalize_terms=normalize,
+            )
+        if graphlet_mass_w != 0.0:
+            target_mass = target.get("graphlet_connected_mass", {}) or {}
+            keys = [
+                str(k)
+                for k in range(cfg.graphlet_k_min, cfg.graphlet_k_max + 1)
+            ]
+            energy += graphlet_mass_w * _weighted_vector_distance(
+                [current_connected_mass.get(key, 0.0) for key in keys],
+                [target_mass.get(key, 0.0) for key in keys],
+                normalize=normalize,
+            )
 
     density_w = _weight(w, "density_weight", 0.0)
     if density_w != 0.0:

@@ -12,8 +12,17 @@ from grapher.construction.coarse import (
     construct_coarse_graph,
 )
 from grapher.data.io import load_dataset_splits
-from grapher.properties.sampler import EmpiricalSummarySampler, LearnedSummarySampler, maybe_wrap_with_degree_sampler
-from grapher.properties.summary import SummaryConfig, distance_to_summary, extract_summary
+from grapher.properties.kernel_residual import KernelResidualSummarySampler
+from grapher.properties.sampler import (
+    EmpiricalSummarySampler,
+    LearnedSummarySampler,
+    maybe_wrap_with_degree_sampler,
+)
+from grapher.properties.summary import (
+    SummaryConfig,
+    distance_to_summary,
+    extract_summary,
+)
 from grapher.refinement.grapher_opt import refine_graph
 from grapher.refinement.rewiring import (
     apply_action,
@@ -244,7 +253,7 @@ def verify_equivariance(config) -> None:
 
 
 def verify_summary_generator(config) -> None:
-    """Verify Stage 7 learned summary generator compatibility.
+    """Verify configured target-summary sampler compatibility.
 
     This checks whether sampled summaries contain graphical degree sequences
     and whether the coarse constructor can build valid graphs from them.
@@ -267,6 +276,17 @@ def verify_summary_generator(config) -> None:
     elif generator_type in {"learned", "summary_vae", "vae"}:
         sampler = LearnedSummarySampler.from_config(
             generator_cfg,
+            seed=int(config.get("seed", 0)),
+        )
+    elif generator_type in {
+        "kernel_residual",
+        "kernel_conditioned",
+        "weighted_kernel",
+    }:
+        sampler = KernelResidualSummarySampler.from_config(
+            graphs,
+            summary_cfg,
+            config,
             seed=int(config.get("seed", 0)),
         )
     else:

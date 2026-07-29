@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Evaluate p_phi(s* | D, z) before building GraphER teacher trajectories."""
+"""Evaluate learned or kernel target-summary generation before refinement."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from grapher.construction.coarse import construct_coarse_graph
 from grapher.data.io import load_dataset_splits
 from grapher.evaluation.target_summaries import (
     active_component_names,
@@ -22,8 +23,10 @@ from grapher.evaluation.target_summaries import (
 )
 from grapher.generators.summary_vae import (
     ConditionalSummaryVAE,
+    SummaryVectorizer,
     load_summary_vae_checkpoint,
 )
+from grapher.properties.kernel_residual import KernelResidualSummarySampler
 from grapher.properties.sampler import EmpiricalSummarySampler
 from grapher.properties.summary import (
     SummaryConfig,
@@ -245,11 +248,447 @@ def _latent_diagnostics(mu: np.ndarray, logvar: np.ndarray) -> dict[str, Any]:
     }
 
 
+def _kernel_residual_samples(
+    sampler: KernelResidualSummarySampler,
+    conditions: list[dict[str, Any]],
+    *,
+    samples_per_condition: int,
+    rng: np.random.Generator,
+    top_k: int,
+    bandwidth_multiplier: float,
+) -> tuple[list[list[dict[str, Any]]], list[dict[str, Any]]]:
+    groups: list[list[dict[str, Any]]] = []
+    metadata: list[dict[str, Any]] = []
+    for condition in conditions:
+        group: list[dict[str, Any]] = []
+        for _ in range(samples_per_condition):
+            sample, sample_metadata = sampler.sample_conditioned(
+                condition,
+                rng,
+                top_k=top_k,
+                bandwidth_multiplier=bandwidth_multiplier,
+                return_metadata=True,
+            )
+            group.append(sample)
+            metadata.append(sample_metadata)
+        groups.append(group)
+    return groups, metadata
+
+
+def _selection_score(
+    metrics: dict[str, Any],
+    metric_name: str,
+    *,
+    conditional_metrics: dict[str, float] | None = None,
+    evaluation_config: dict[str, Any] | None = None,
+) -> float:
+    metric_name = str(metric_name).lower()
+    evaluation_config = evaluation_config or {}
+    conditional_metrics = conditional_metrics or {}
+    if metric_name in {
+        "graphlet_conditional",
+        "graphlet_conditional_energy",
+        "guarded_graphlet",
+    }:
+        components = metrics.get("component_mmd", {}) or {}
+        score = float(components.get("graphlet", metrics["structural_mmd"]))
+        score += float(
+            evaluation_config.get("kernel_selection_connected_mass_weight", 0.5)
+        ) * float(components.get("connected_mass", 0.0))
+        score += float(
+            evaluation_config.get("kernel_selection_energy_weight", 0.25)
+        ) * float(
+            conditional_metrics.get("conditional_energy_score", 0.0)
+        )
+        diversity = float(
+            conditional_metrics.get("within_condition_diversity", 0.0)
+        )
+        diversity_floor = float(
+            evaluation_config.get("kernel_min_diversity", 0.0)
+        )
+        if diversity < diversity_floor:
+            score += float(
+                evaluation_config.get("kernel_diversity_penalty", 10.0)
+            ) * (diversity_floor - diversity)
+        return score
+    if metric_name in {"graphlet", "graphlet_mmd"}:
+        value = (metrics.get("component_mmd", {}) or {}).get("graphlet")
+        if value is not None:
+            return float(value)
+    if metric_name in {"clustering", "clustering_mmd"}:
+        value = (metrics.get("component_mmd", {}) or {}).get("clustering")
+        if value is not None:
+            return float(value)
+    return float(metrics["structural_mmd"])
+
+
+def _evaluate_kernel_residual(
+    config: dict[str, Any],
+    args: argparse.Namespace,
+    *,
+    seed: int,
+    rng: np.random.Generator,
+) -> None:
+    dataset_cfg = config.get("dataset", {}) or {}
+    generator_cfg = config.get("summary_generator", {}) or {}
+    evaluation_cfg = config.get("target_summary_evaluation", {}) or {}
+    splits = load_dataset_splits(
+        dataset_cfg.get("name", "sbm"),
+        root=dataset_cfg.get("root", "outputs/datasets"),
+        build_if_missing=bool(dataset_cfg.get("build_if_missing", True)),
+        config_path=dataset_cfg.get("config_path"),
+    )
+    train_graphs = list(splits["train"])
+    validation_graphs = list(splits.get("val", []))
+    test_graphs = list(splits["test"])
+    if not train_graphs or not test_graphs:
+        raise RuntimeError(
+            "Target-summary evaluation requires non-empty train and test splits."
+        )
+
+    train_limit = (
+        args.max_train_graphs
+        if args.max_train_graphs is not None
+        else evaluation_cfg.get("max_train_graphs", 512)
+    )
+    validation_limit = evaluation_cfg.get("max_val_graphs", 256)
+    test_limit = (
+        args.max_test_graphs
+        if args.max_test_graphs is not None
+        else evaluation_cfg.get("max_test_graphs", 256)
+    )
+    train_graphs = _subsample(train_graphs, train_limit, rng)
+    validation_graphs = _subsample(
+        validation_graphs,
+        validation_limit,
+        rng,
+    )
+    test_graphs = _subsample(test_graphs, test_limit, rng)
+
+    summary_cfg = SummaryConfig.from_dict(
+        config.get("summary", {}) or {},
+        train_graphs,
+    )
+    train_targets = [extract_summary(graph, summary_cfg) for graph in train_graphs]
+    validation_targets = [
+        extract_summary(graph, summary_cfg) for graph in validation_graphs
+    ]
+    test_targets = [extract_summary(graph, summary_cfg) for graph in test_graphs]
+    vectorizer = SummaryVectorizer.fit(train_targets, summary_cfg)
+    sampler = KernelResidualSummarySampler.from_config(
+        train_graphs,
+        summary_cfg,
+        config,
+        seed=seed,
+        target_summaries=train_targets,
+    )
+
+    samples_per_condition = int(
+        args.samples_per_condition
+        if args.samples_per_condition is not None
+        else evaluation_cfg.get("samples_per_condition", 8)
+    )
+    if samples_per_condition <= 0:
+        raise ValueError("samples_per_condition must be positive.")
+    loss_weights = dict(
+        generator_cfg.get(
+            "loss_weights",
+            evaluation_cfg.get("component_weights", {}),
+        )
+        or {}
+    )
+    components = active_component_names(vectorizer, loss_weights)
+
+    configured_top_k = int(generator_cfg.get("top_k", 10))
+    configured_bandwidth = float(
+        (generator_cfg.get("kernel", {}) or {}).get(
+            "bandwidth_multiplier",
+            1.0,
+        )
+    )
+    top_k_values = [
+        int(value)
+        for value in evaluation_cfg.get(
+            "kernel_top_k_values",
+            [configured_top_k],
+        )
+    ]
+    bandwidth_values = [
+        float(value)
+        for value in evaluation_cfg.get(
+            "kernel_bandwidth_multipliers",
+            [configured_bandwidth],
+        )
+    ]
+    selection_metric = str(
+        evaluation_cfg.get("kernel_selection_metric", "graphlet_mmd")
+    )
+    sweep: list[dict[str, Any]] = []
+    selected_top_k = configured_top_k
+    selected_bandwidth = configured_bandwidth
+
+    if validation_targets:
+        validation_bandwidths = fit_mmd_bandwidths(
+            validation_targets,
+            train_targets,
+            vectorizer,
+            component_names=components,
+            loss_weights=loss_weights,
+        )
+        best_score = float("inf")
+        for top_k in top_k_values:
+            for bandwidth_multiplier in bandwidth_values:
+                groups, _ = _kernel_residual_samples(
+                    sampler,
+                    validation_targets,
+                    samples_per_condition=samples_per_condition,
+                    # Reuse the same random stream for every candidate setting
+                    # so model selection is not driven by Monte Carlo luck.
+                    rng=np.random.default_rng(seed + 104729),
+                    top_k=top_k,
+                    bandwidth_multiplier=bandwidth_multiplier,
+                )
+                metrics = evaluate_summary_sets(
+                    validation_targets,
+                    _flatten(groups),
+                    vectorizer,
+                    component_names=components,
+                    bandwidths=validation_bandwidths,
+                    loss_weights=loss_weights,
+                )
+                conditional = conditional_sample_metrics(
+                    validation_targets,
+                    groups,
+                    vectorizer,
+                    component_names=components,
+                    loss_weights=loss_weights,
+                )
+                score = _selection_score(
+                    metrics,
+                    selection_metric,
+                    conditional_metrics=conditional,
+                    evaluation_config=evaluation_cfg,
+                )
+                sweep.append(
+                    {
+                        "top_k": int(top_k),
+                        "bandwidth_multiplier": float(bandwidth_multiplier),
+                        "selection_score": float(score),
+                        "metrics": metrics,
+                        "conditional_metrics": conditional,
+                    }
+                )
+                if score < best_score:
+                    best_score = score
+                    selected_top_k = int(top_k)
+                    selected_bandwidth = float(bandwidth_multiplier)
+
+    kernel_groups, kernel_metadata = _kernel_residual_samples(
+        sampler,
+        test_targets,
+        samples_per_condition=samples_per_condition,
+        rng=rng,
+        top_k=selected_top_k,
+        bandwidth_multiplier=selected_bandwidth,
+    )
+    empirical_groups = _empirical_conditioned_samples(
+        train_targets,
+        test_targets,
+        samples_per_condition=samples_per_condition,
+        rng=rng,
+    )
+    constructor_cfg = config.get("constructor", {}) or {}
+    source_targets = [
+        extract_summary(
+            construct_coarse_graph(target, constructor_cfg, rng),
+            summary_cfg,
+        )
+        for target in test_targets
+    ]
+
+    bandwidths = fit_mmd_bandwidths(
+        test_targets,
+        train_targets,
+        vectorizer,
+        component_names=components,
+        loss_weights=loss_weights,
+    )
+    candidates = {
+        "train_to_test": train_targets,
+        "hh_source_to_test": source_targets,
+        "empirical_conditioned_to_test": _flatten(empirical_groups),
+        "kernel_residual_to_test": _flatten(kernel_groups),
+    }
+    comparisons = {
+        name: evaluate_summary_sets(
+            test_targets,
+            candidate,
+            vectorizer,
+            component_names=components,
+            bandwidths=bandwidths,
+            loss_weights=loss_weights,
+        )
+        for name, candidate in candidates.items()
+    }
+    per_graphlet_bin = {
+        name: graphlet_bin_errors(test_targets, candidate, vectorizer)
+        for name, candidate in candidates.items()
+        if vectorizer.graphlet_dim > 0
+    }
+    conditional_metrics = {
+        "kernel_residual": conditional_sample_metrics(
+            test_targets,
+            kernel_groups,
+            vectorizer,
+            component_names=components,
+            loss_weights=loss_weights,
+        ),
+        "empirical_conditioned": conditional_sample_metrics(
+            test_targets,
+            empirical_groups,
+            vectorizer,
+            component_names=components,
+            loss_weights=loss_weights,
+        ),
+    }
+    repeated_targets = [
+        target
+        for target in test_targets
+        for _ in range(samples_per_condition)
+    ]
+    flat_kernel = _flatten(kernel_groups)
+    invariants = {
+        "kernel_degree_condition_match_rate": degree_condition_match_rate(
+            repeated_targets,
+            flat_kernel,
+        )
+    }
+    donor_diagnostics = {
+        "mean_donor_distance": float(
+            np.mean(
+                [
+                    float(item["donor_distance"])
+                    for item in kernel_metadata
+                ]
+            )
+        ),
+        "mean_effective_neighbor_count": float(
+            np.mean(
+                [
+                    float(item["effective_neighbor_count"])
+                    for item in kernel_metadata
+                ]
+            )
+        ),
+    }
+    report = {
+        "dataset": dataset_cfg.get("name", "sbm"),
+        "generator_type": "kernel_residual",
+        "seed": seed,
+        "num_train_summaries": len(train_targets),
+        "num_validation_summaries": len(validation_targets),
+        "num_test_summaries": len(test_targets),
+        "samples_per_condition": samples_per_condition,
+        "active_components": components,
+        "selected_kernel": {
+            "top_k": selected_top_k,
+            "bandwidth_multiplier": selected_bandwidth,
+            "selection_metric": selection_metric,
+            "selection_split": "validation" if validation_targets else "configured",
+        },
+        "validation_sweep": sweep,
+        "mmd_bandwidths_from_train_test": bandwidths,
+        "comparisons": comparisons,
+        "per_graphlet_bin_errors": per_graphlet_bin,
+        "conditional_metrics": conditional_metrics,
+        "invariants": invariants,
+        "donor_diagnostics": donor_diagnostics,
+    }
+
+    output_dir = ensure_dir(
+        args.output_dir
+        or evaluation_cfg.get(
+            "output_dir",
+            "outputs/target_summary_generators/kernel_residual/evaluation",
+        )
+    )
+    report_path = output_dir / "target_summary_evaluation.json"
+    sample_path = output_dir / "generated_target_summaries.json"
+    save_json(report, report_path)
+    save_json(
+        {
+            "test_targets": [
+                summary_to_jsonable(item) for item in test_targets
+            ],
+            "hh_source": [
+                summary_to_jsonable(item) for item in source_targets
+            ],
+            "kernel_residual_samples": [
+                [summary_to_jsonable(item) for item in group]
+                for group in kernel_groups
+            ],
+        },
+        sample_path,
+    )
+
+    print("\nSelected kernel residual configuration")
+    print(
+        f"top_k={selected_top_k} "
+        f"bandwidth_multiplier={selected_bandwidth:.6g} "
+        f"selection_metric={selection_metric}"
+    )
+    print("\nTarget-summary distribution matching (lower is better)")
+    print(
+        f"{'Comparison':38s} {'Structural MMD':>15s} "
+        + " ".join(f"{name[:10]:>12s}" for name in components)
+    )
+    for name, metrics in comparisons.items():
+        component_values = " ".join(
+            f"{metrics['component_mmd'][component]:12.6f}"
+            for component in components
+        )
+        print(
+            f"{name:38s} {metrics['structural_mmd']:15.6f} "
+            f"{component_values}"
+        )
+    print("\nHeld-out conditional diagnostics (lower is better)")
+    for name in ("kernel_residual", "empirical_conditioned"):
+        metrics = conditional_metrics[name]
+        print(
+            f"{name:24s} "
+            f"energy={metrics['conditional_energy_score']:.6f} "
+            f"mean_l2={metrics['conditional_mean_l2']:.6f} "
+            f"diversity={metrics['within_condition_diversity']:.6f}"
+        )
+    print("\nKernel donor diagnostics")
+    for key, value in donor_diagnostics.items():
+        print(f"{key}: {value:.6f}")
+    if "kernel_residual_to_test" in per_graphlet_bin:
+        print("\nLargest kernel-residual graphlet-bin errors")
+        print(
+            f"{'k':>2s} {'canonical key':>18s} {'reference':>11s} "
+            f"{'candidate':>11s} {'mean |error|':>13s}"
+        )
+        max_bins = int(evaluation_cfg.get("report_top_graphlet_bins", 10))
+        for row in per_graphlet_bin["kernel_residual_to_test"][:max_bins]:
+            print(
+                f"{row['k']:2d} {row['canonical_key'][:18]:>18s} "
+                f"{row['reference_mean']:11.6f} "
+                f"{row['candidate_mean']:11.6f} "
+                f"{row['mean_absolute_error']:13.6f}"
+            )
+    print("\nHard degree-condition invariants")
+    for key, value in invariants.items():
+        print(f"{key}: {value:.6f}")
+    print(f"\nSaved report to: {report_path}")
+    print(f"Saved generated summaries to: {sample_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate the conditional target-summary CVAE on held-out graphs "
-            "before GraphER teacher construction."
+            "Evaluate the configured conditional target-summary generator on "
+            "held-out graphs before GraphER refinement."
         )
     )
     parser.add_argument("--config", required=True)
@@ -270,6 +709,19 @@ def main() -> None:
     seed = int(args.seed if args.seed is not None else config.get("seed", 0))
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
+    generator_type = str(generator_cfg.get("type", "learned")).lower()
+    if generator_type in {
+        "kernel_residual",
+        "kernel_conditioned",
+        "weighted_kernel",
+    }:
+        _evaluate_kernel_residual(
+            config,
+            args,
+            seed=seed,
+            rng=rng,
+        )
+        return
 
     checkpoint_path = Path(
         args.checkpoint

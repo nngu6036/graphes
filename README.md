@@ -442,6 +442,75 @@ degree_condition_match_rate: 1.0
 
 Also inspect reconstruction error and `prior_structural_diversity`. Near-zero diversity suggests posterior collapse or an overly large KL weight.
 
+### Step 4b: use the weighted HH-residual target sampler
+
+If the conditional VAE has low reconstruction error but high graphlet MMD, use
+the kernel-residual configuration:
+
+```bash
+export ORCA_EXEC=/path/to/orca
+
+PYTHONPATH=src python scripts/evaluate_target_summary_generator.py \
+  --config configs/experiments/sbm_target_refinement_kernel.yaml
+```
+
+This sampler requires no target-summary training or checkpoint. It:
+
+1. builds the deterministic connected Havel-Hakimi source for every training
+   degree sequence;
+2. represents clustering and each free graphlet block in isometric log-ratio
+   coordinates;
+3. retains the connected-subgraph mass for every graphlet size instead of
+   normalizing that SBM signal away;
+4. stores one *joint* residual between each real graph and its HH source;
+5. retrieves the top-\(K\) training degree sequences using degree-histogram
+   Wasserstein distance plus normalized node/edge-count penalties;
+6. samples one complete residual with an adaptive Gaussian kernel and applies
+   it to the actual source graph used by the refiner;
+7. constrains triangle count to degree-derived necessary bounds, derives the
+   complete \(k=3\) graphlet distribution analytically, and lets the refiner
+   expose any tighter reachability limit.
+
+The validation split selects \(K\in\{5,10,20,40\}\) and the bandwidth
+multiplier in \(\{0.5,1,2\}\), with graphlet MMD, connected-mass MMD,
+conditional energy, and a diversity floor. The evaluation report is loaded
+automatically by later pipeline runs, so the selected setting is evaluated
+once on the test split and then reused for generation. The important rows are:
+
+```text
+train_to_test
+hh_source_to_test
+empirical_conditioned_to_test
+kernel_residual_to_test
+```
+
+and the required invariant is:
+
+```text
+kernel_degree_condition_match_rate = 1.0
+```
+
+`summary.graphlet_backend: exact_orca` removes the 2,048-subset noise from
+offline targets and held-out evaluation. Candidate scoring remains bounded by:
+
+```yaml
+energy:
+  graphlet_backend: sampled
+  graphlet_num_samples: 2048
+```
+
+Run the full direct-oracle refiner without training a selector:
+
+```bash
+PYTHONPATH=src python scripts/run_coarse_to_fine.py \
+  --config configs/experiments/sbm_target_refinement_kernel.yaml \
+  --output-dir outputs/coarse_to_fine/sbm_target_refinement_kernel
+```
+
+The source graph is constructed before target sampling and passed into the
+residual sampler, ensuring that the residual is relative to exactly the graph
+that GraphER-Opt will refine.
+
 ### Step 5: build oracle-guided teacher trajectories
 
 ```bash

@@ -12,7 +12,12 @@ from grapher.construction.coarse import (
 )
 from grapher.data.io import load_dataset_splits
 from grapher.evaluation.metrics import degree_preservation_rate, evaluate_graph_sets
-from grapher.properties.sampler import EmpiricalSummarySampler, LearnedSummarySampler, maybe_wrap_with_degree_sampler
+from grapher.properties.kernel_residual import KernelResidualSummarySampler
+from grapher.properties.sampler import (
+    EmpiricalSummarySampler,
+    LearnedSummarySampler,
+    maybe_wrap_with_degree_sampler,
+)
 from grapher.properties.summary import (
     SummaryConfig,
     distance_to_summary,
@@ -61,17 +66,27 @@ def _build_summary_sampler(
     seed: int,
     debug: bool = False,
 ):
-    """Build either the empirical sampler or the learned SummaryVAE sampler."""
+    """Build the configured empirical, learned, or kernel target sampler."""
 
     generator_cfg = config.get("summary_generator", {}) or {}
     generator_type = str(generator_cfg.get("type", "empirical")).lower()
 
     if generator_type in {"empirical", "empirical_sampler"}:
         _debug_print(debug, "summary_generator.type=empirical")
-        structure_sampler = EmpiricalSummarySampler.fit(train_graphs, summary_cfg, seed=seed)
+        structure_sampler = EmpiricalSummarySampler.fit(
+            train_graphs,
+            summary_cfg,
+            seed=seed,
+        )
     elif generator_type in {"learned", "summary_vae", "vae"}:
-        checkpoint_path = generator_cfg.get("checkpoint_path") or generator_cfg.get("checkpoint")
-        _debug_print(debug, f"summary_generator.type=learned checkpoint_path={checkpoint_path}")
+        checkpoint_path = generator_cfg.get(
+            "checkpoint_path"
+        ) or generator_cfg.get("checkpoint")
+        _debug_print(
+            debug,
+            "summary_generator.type=learned "
+            f"checkpoint_path={checkpoint_path}",
+        )
 
         if checkpoint_path is None:
             raise ValueError(
@@ -79,7 +94,26 @@ def _build_summary_sampler(
                 "summary_generator.checkpoint_path"
             )
 
-        structure_sampler = LearnedSummarySampler.from_config(generator_cfg, seed=seed)
+        structure_sampler = LearnedSummarySampler.from_config(
+            generator_cfg,
+            seed=seed,
+        )
+    elif generator_type in {
+        "kernel_residual",
+        "kernel_conditioned",
+        "weighted_kernel",
+    }:
+        _debug_print(
+            debug,
+            "summary_generator.type=kernel_residual "
+            f"top_k={generator_cfg.get('top_k', 10)}",
+        )
+        structure_sampler = KernelResidualSummarySampler.from_config(
+            train_graphs,
+            summary_cfg,
+            config,
+            seed=seed,
+        )
     else:
         raise ValueError(f"Unknown summary_generator.type: {generator_type!r}")
 
@@ -91,7 +125,12 @@ def _build_summary_sampler(
             f"type={degree_cfg.get('type', 'degree_histogram_vae')} "
             f"checkpoint_path={degree_cfg.get('checkpoint_path')}",
         )
-    return maybe_wrap_with_degree_sampler(structure_sampler, config, train_graphs, seed=seed)
+    return maybe_wrap_with_degree_sampler(
+        structure_sampler,
+        config,
+        train_graphs,
+        seed=seed,
+    )
 
 
 def _main_refiner_method_name(refiner_cfg: dict[str, Any]) -> str:
@@ -382,7 +421,14 @@ def run_coarse_to_fine(
             f"graph {graph_idx + 1}/{n_generate}: sampling target summary",
         )
 
-        target_summary = sampler.sample(rng)
+        if hasattr(sampler, "sample_with_source"):
+            target_summary, coarse = sampler.sample_with_source(
+                constructor_cfg,
+                rng,
+            )
+        else:
+            target_summary = sampler.sample(rng)
+            coarse = construct_coarse_graph(target_summary, constructor_cfg, rng)
         sampled_summaries.append(summary_to_jsonable(target_summary))
 
         _debug_print(
@@ -392,8 +438,6 @@ def run_coarse_to_fine(
             f"m={int(target_summary['num_edges'])} "
             f"density={float(target_summary['density']):.6f}",
         )
-
-        coarse = construct_coarse_graph(target_summary, constructor_cfg, rng)
 
         assert_constructor_validity(
             coarse,
@@ -535,6 +579,9 @@ def run_coarse_to_fine(
         "graphlet_k_max": int(eval_cfg.get("graphlet_k_max", summary_cfg.graphlet_k_max)),
         "graphlet_connected_only": bool(eval_cfg.get("graphlet_connected_only", summary_cfg.graphlet_connected_only)),
         "graphlet_num_samples": eval_cfg.get("graphlet_num_samples", summary_cfg.graphlet_num_samples),
+        "graphlet_backend": str(
+            eval_cfg.get("graphlet_backend", summary_cfg.graphlet_backend)
+        ),
     }
 
     metrics: dict[str, Any] = {}

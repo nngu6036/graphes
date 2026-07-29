@@ -12,6 +12,7 @@ import numpy as np
 
 from grapher.construction.coarse import construct_coarse_graph
 from grapher.data.io import load_dataset_splits
+from grapher.properties.kernel_residual import KernelResidualSummarySampler
 from grapher.properties.sampler import (
     EmpiricalSummarySampler,
     LearnedSummarySampler,
@@ -152,11 +153,30 @@ def _build_empirical_sampler(
 def _maybe_build_learned_sampler(
     config: dict[str, Any],
     train_graphs: list[nx.Graph],
+    summary_config: SummaryConfig,
     *,
     seed: int,
-) -> LearnedSummarySampler | None:
+) -> Any | None:
     generator_cfg = config.get("summary_generator", {}) or {}
     generator_type = str(generator_cfg.get("type", "empirical")).lower()
+
+    if generator_type in {
+        "kernel_residual",
+        "kernel_conditioned",
+        "weighted_kernel",
+    }:
+        sampler = KernelResidualSummarySampler.from_config(
+            train_graphs,
+            summary_config,
+            config,
+            seed=seed,
+        )
+        return maybe_wrap_with_degree_sampler(
+            sampler,
+            config,
+            train_graphs,
+            seed=seed,
+        )
 
     if generator_type not in {"learned", "summary_vae", "vae"}:
         return None
@@ -177,22 +197,32 @@ def _maybe_build_learned_sampler(
 def _sample_target_summary(
     *,
     empirical_sampler: EmpiricalSummarySampler,
-    learned_sampler: LearnedSummarySampler | None,
+    learned_sampler: Any | None,
     teacher_cfg: dict[str, Any],
+    constructor_cfg: dict[str, Any],
     rng: np.random.Generator,
-) -> tuple[dict[str, Any], str]:
+) -> tuple[dict[str, Any], str, nx.Graph | None]:
     target_source = str(teacher_cfg.get("target_source", "mixed")).lower()
 
     if target_source in {"empirical", "oracle", "ground_truth"}:
-        return empirical_sampler.sample(rng), "oracle"
+        return empirical_sampler.sample(rng), "oracle", None
 
-    if target_source in {"learned", "predicted", "model"}:
+    def sample_predicted() -> tuple[dict[str, Any], str, nx.Graph | None]:
         if learned_sampler is None:
             raise RuntimeError(
-                "teacher.target_source=predicted but no learned conditional "
-                "summary sampler is available."
+                "Predicted target requested but no conditional summary "
+                "sampler is available."
             )
-        return learned_sampler.sample(rng), "predicted"
+        if hasattr(learned_sampler, "sample_with_source"):
+            summary, source_graph = learned_sampler.sample_with_source(
+                constructor_cfg,
+                rng,
+            )
+            return summary, "predicted", source_graph
+        return learned_sampler.sample(rng), "predicted", None
+
+    if target_source in {"learned", "predicted", "model"}:
+        return sample_predicted()
 
     if target_source in {"mixed", "scheduled", "schedule"}:
         learned_prob = float(
@@ -206,9 +236,9 @@ def _sample_target_summary(
         learned_prob = learned_prob / total
 
         if learned_sampler is not None and float(rng.random()) < learned_prob:
-            return learned_sampler.sample(rng), "predicted"
+            return sample_predicted()
 
-        return empirical_sampler.sample(rng), "oracle"
+        return empirical_sampler.sample(rng), "oracle", None
 
     raise ValueError(f"Unknown teacher.target_source: {target_source!r}")
 
@@ -223,6 +253,7 @@ def build_one_trajectory(
     energy_cfg: dict[str, Any],
     teacher_cfg: dict[str, Any],
     rng: np.random.Generator,
+    source_graph: nx.Graph | None = None,
     rollout_selector: Any | None = None,
 ) -> list[dict[str, Any]]:
     steps = int(teacher_cfg.get("steps", 20))
@@ -234,7 +265,11 @@ def build_one_trajectory(
     min_improvement = float(teacher_cfg.get("min_improvement", 1.0e-12))
     include_stop_action = bool(teacher_cfg.get("include_stop_action", True))
 
-    graph = construct_coarse_graph(target_summary, constructor_cfg, rng)
+    graph = (
+        source_graph.copy()
+        if source_graph is not None
+        else construct_coarse_graph(target_summary, constructor_cfg, rng)
+    )
     records: list[dict[str, Any]] = []
 
     current_energy = distance_to_summary(
@@ -447,7 +482,12 @@ def build_teacher_cache(
         seed=seed,
     )
     _log("checking learned summary sampler")
-    learned_sampler = _maybe_build_learned_sampler(config, train_graphs, seed=seed)
+    learned_sampler = _maybe_build_learned_sampler(
+        config,
+        train_graphs,
+        summary_config,
+        seed=seed,
+    )
     if learned_sampler is None:
         _log("learned summary sampler unavailable; using empirical targets when needed")
     else:
@@ -501,10 +541,11 @@ def build_teacher_cache(
                     f"elapsed={elapsed:.1f}s"
                 )
 
-            target_summary, target_source = _sample_target_summary(
+            target_summary, target_source, source_graph = _sample_target_summary(
                 empirical_sampler=empirical_sampler,
                 learned_sampler=learned_sampler,
                 teacher_cfg=teacher_cfg,
+                constructor_cfg=constructor_cfg,
                 rng=rng,
             )
 
@@ -524,6 +565,7 @@ def build_teacher_cache(
                     energy_cfg=energy_cfg,
                     teacher_cfg=teacher_cfg,
                     rng=rng,
+                    source_graph=source_graph,
                     rollout_selector=rollout_selector,
                 )
             except Exception as exc:  # noqa: BLE001 - isolate failed trajectories

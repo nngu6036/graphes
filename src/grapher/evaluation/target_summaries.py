@@ -4,7 +4,6 @@ from typing import Any, Sequence
 
 import numpy as np
 
-
 EPS = 1.0e-12
 
 
@@ -143,6 +142,22 @@ def _component_arrays(
             graphlet[:, graphlet_slice] = _normalize_rows(
                 graphlet[:, graphlet_slice]
             )
+    graphlet_sizes = sorted(
+        (vectorizer.graphlet_keys_by_k or {}).keys(),
+        key=int,
+    )
+    connected_mass = np.asarray(
+        [
+            [
+                float(
+                    (item.get("graphlet_connected_mass", {}) or {}).get(k, 0.0)
+                )
+                for k in graphlet_sizes
+            ]
+            for item in summaries
+        ],
+        dtype=np.float64,
+    ).reshape(len(summaries), len(graphlet_sizes))
 
     triangle_scale = max(float(vectorizer.scalar_scale[1]), 1.0)
     triangle = np.asarray(
@@ -161,6 +176,7 @@ def _component_arrays(
         "motif": motif,
         "orbit": orbit,
         "graphlet": graphlet,
+        "connected_mass": connected_mass,
         "triangle": triangle,
     }
 
@@ -176,12 +192,18 @@ def active_component_names(
         ("motif", int(vectorizer.motif_dim)),
         ("orbit", int(vectorizer.orbit_dim)),
         ("graphlet", int(vectorizer.graphlet_dim)),
+        (
+            "connected_mass",
+            len(vectorizer.graphlet_keys_by_k or {}),
+        ),
         ("triangle", 1),
     ]
     active = []
     for name, width in candidates:
         if name == "triangle":
             weight = weights.get("triangle", weights.get("scalar", 1.0))
+        elif name == "connected_mass":
+            weight = weights.get("connected_mass", 0.0)
         else:
             weight = weights.get(name, 1.0)
         if width > 0 and float(weight) > 0.0:
@@ -203,6 +225,8 @@ def structural_matrix(
         block = arrays[name]
         if name == "triangle":
             raw_weight = weights.get("triangle", weights.get("scalar", 1.0))
+        elif name == "connected_mass":
+            raw_weight = weights.get("connected_mass", 0.0)
         else:
             raw_weight = weights.get(name, 1.0)
         weight = max(float(raw_weight), 0.0)
