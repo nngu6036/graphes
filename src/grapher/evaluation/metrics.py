@@ -253,12 +253,40 @@ def degree_preservation_rate(
 ) -> float:
     if not before:
         return 0.0
+    if len(before) != len(after):
+        raise ValueError(
+            "Degree-preservation inputs must contain the same number of graphs."
+        )
     vals = []
     for g0, g1 in zip(before, after):
         d0 = sorted([d for _, d in g0.degree()], reverse=True)
         d1 = sorted([d for _, d in g1.degree()], reverse=True)
         vals.append(d0 == d1)
     return float(np.mean(vals))
+
+
+def degree_target_match_rate(
+    graphs: Sequence[nx.Graph],
+    target_degree_sequences: Sequence[Sequence[int]],
+) -> float:
+    """Return the fraction of graphs matching target degree multisets.
+
+    Degree sequences are canonicalized before comparison, so the result is
+    invariant to node ordering and constructor relabeling.
+    """
+
+    if not graphs:
+        return 0.0
+    if len(graphs) != len(target_degree_sequences):
+        raise ValueError(
+            "Graphs and target degree sequences must have the same length."
+        )
+    matches = []
+    for graph, target in zip(graphs, target_degree_sequences):
+        actual = tuple(sorted((int(d) for _, d in graph.degree()), reverse=True))
+        expected = tuple(sorted((int(d) for d in target), reverse=True))
+        matches.append(actual == expected)
+    return float(np.mean(matches))
 
 
 def evaluate_graph_sets(

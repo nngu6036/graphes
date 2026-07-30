@@ -15,6 +15,7 @@ from grapher.construction.coarse import (
 from grapher.data.io import load_dataset_splits
 from grapher.evaluation.metrics import (
     degree_preservation_rate,
+    degree_target_match_rate,
     evaluate_graph_sets,
 )
 from grapher.generators.degree_sampler import EmpiricalDegreeSampler
@@ -123,6 +124,7 @@ def main() -> None:
     evaluation_cfg = config.get("evaluation", {}) or {}
     coarse_graphs: list[nx.Graph] = []
     refined_graphs: list[nx.Graph] = []
+    target_degree_sequences: list[list[int]] = []
     traces: list[list[dict[str, Any]]] = []
 
     for index in range(num_generate):
@@ -160,6 +162,9 @@ def main() -> None:
         )
         coarse_graphs.append(coarse)
         refined_graphs.append(refined)
+        target_degree_sequences.append(
+            [int(degree) for degree in degree_summary["degree_sequence"]]
+        )
         traces.append(trace)
         accepted = sum(bool(row.get("accepted")) for row in trace)
         print(
@@ -216,7 +221,7 @@ def main() -> None:
     accepted_steps = [
         sum(bool(row.get("accepted")) for row in trace) for trace in traces
     ]
-    sampled_degree_matches = [
+    predicted_endpoint_degree_matches = [
         float(row["sampled_target_degree_match"])
         for trace in traces
         for row in trace
@@ -226,6 +231,14 @@ def main() -> None:
         "degree_preservation_rate": degree_preservation_rate(
             coarse_graphs,
             refined_graphs,
+        ),
+        "constructor_target_degree_match_rate": degree_target_match_rate(
+            coarse_graphs,
+            target_degree_sequences,
+        ),
+        "final_target_degree_match_rate": degree_target_match_rate(
+            refined_graphs,
+            target_degree_sequences,
         ),
         "connectedness_rate": float(
             np.mean(
@@ -238,14 +251,14 @@ def main() -> None:
             )
         ),
         "mean_accepted_steps": float(np.mean(accepted_steps)),
-        "sampled_target_degree_match_rate": (
-            float(np.mean(sampled_degree_matches))
-            if sampled_degree_matches
+        "predictor_sampled_endpoint_degree_match_rate": (
+            float(np.mean(predicted_endpoint_degree_matches))
+            if predicted_endpoint_degree_matches
             else float("nan")
         ),
     }
     report = {
-        "format": "hybrid_endpoint_graphlet_generation_v1",
+        "format": "hybrid_endpoint_graphlet_generation_v2",
         "checkpoint_format": checkpoint.get("format"),
         "degree_source": degree_source,
         "num_generated": len(refined_graphs),

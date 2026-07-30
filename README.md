@@ -44,41 +44,240 @@ configured, connectivity.
 | `configs/experiments/sbm_hybrid_endpoint_graphlet.yaml` | Runnable SBM configuration |
 
 The old `summary_generator` and GraphER-Opt route remains available as a
-legacy baseline. The hybrid training script rejects a summary-generator block
-unless the configuration explicitly marks it as a legacy baseline.
+legacy baseline in [`LEGACY_PIPELINES.md`](LEGACY_PIPELINES.md). The hybrid
+training script rejects a summary-generator block unless the configuration
+explicitly marks it as a legacy baseline.
 
-## Training examples
+## Installation
+
+Use Python 3.10 or newer. From the repository root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+Install a PyTorch build appropriate for the machine, then install the remaining
+dependencies:
+
+```bash
+python -m pip install torch
+python -m pip install -r requirements.txt
+export PYTHONPATH=src
+```
+
+For a CUDA system, replace the generic PyTorch command with the command for the
+installed CUDA driver. PyTorch is intentionally not pinned in
+`requirements.txt`.
+
+All commands below assume that they are run from the repository root. Config,
+dataset, checkpoint, and output paths are relative to that directory.
+
+## Training procedure
+
+The hybrid route trains one shared endpoint-and-graphlet predictor. It does
+not train a rewiring-action selector and does not backpropagate through a
+generation-time rewiring rollout.
+
+### 1. Prepare the dataset
+
+```bash
+PYTHONPATH=src python scripts/prepare_generic_dataset.py \
+  --dataset sbm \
+  --root outputs/datasets
+```
+
+The default dataset configuration creates 500 connected SBM graphs and splits
+them into 400 training, 50 validation, and 50 test graphs. Because
+`dataset.build_if_missing: true`, training can build missing splits
+automatically. Explicit preparation is recommended because it prints and saves
+the dataset verification report.
+
+Existing split files are reused. Re-run the preparation command after changing
+`configs/datasets/sbm.yaml`.
+
+### 2. Construct endpoint-training examples
 
 For every training graph \(G_1\), the code constructs an aligned source
 \(G_0\) whose node \(i\) has the same degree as node \(i\) in \(G_1\).
-Target-aware valid swaps produce intermediate states. Each supervised example
-is
+The preprocessing stage then:
+
+1. records the labelled-node degree sequence \(D\);
+2. builds a connected Havel-Hakimi source satisfying
+   \(\deg_{G_0}(i)=\deg_{G_1}(i)\);
+3. constructs an offline path using valid degree- and
+   connectivity-preserving double-edge swaps that reduce edge disagreement
+   with \(G_1\);
+4. selects at most eight approximately evenly spaced intermediate states;
+5. applies the same random node permutation to \(G_t\) and \(G_1\).
+
+Each supervised example is
 
 \[
-(G_t,t,D)\longrightarrow(X(G_1),E(G_1),H(G_1)).
+(G_t,t,D)\longrightarrow
+\left(
+X(G_1),E(G_1),
+H_3(G_1),H_4(G_1),
+M_3(G_1),M_4(G_1)
+\right),
 \]
 
-Current and target graphs receive the same random relabeling. This preserves
-node correspondence while preventing the model from exploiting a fixed label
-order. Training and validation use their own dataset splits.
+where \(X\) and \(E\) are clean endpoint node and dense edge/no-edge
+categories, \(H_k\) is the normalized connected graphlet histogram, and
+\(M_k\) is the connected-subgraph mass. The shared relabeling preserves node
+correspondence while preventing the model from exploiting a fixed label order.
+
+By default, the teacher searches for at most 32 swaps, examines up to 64
+candidates per step, retains at most eight states per graph, and estimates each
+\(k=3,4\) target using 2,048 sampled node subsets. Trajectories are built
+before epoch 1, so this preprocessing can be the slowest part of a full run.
+
+If the offline path stalls before reaching \(G_1\), the code appends \(G_1\)
+only as the final \(t=1\) denoising example. It is not counted as an accepted
+teacher transition.
+
+### 3. Train the predictor
+
+Run the full configured experiment:
+
+```bash
+PYTHONPATH=src python scripts/train_hybrid_endpoint_grapher.py \
+  --config configs/experiments/sbm_hybrid_endpoint_graphlet.yaml
+```
+
+The training command reads these YAML blocks:
+
+| Configuration block | Training role |
+| --- | --- |
+| `dataset` | Dataset name, split location, build behavior, and optional graph limits |
+| `categorical_state` | Node categories and present-edge categories; index 0 is reserved for no-edge |
+| `graphlet_prediction` | Graphlet sizes, connected-only rule, backend, and sample count |
+| `endpoint_trajectory` | Aligned source construction and offline teacher-path settings |
+| `endpoint_predictor` | Architecture, optimizer, loss weights, device, epochs, and checkpoint path |
+
+`generation`, `degree_generator`, `constructor`, `hybrid_refiner`, and
+`evaluation` are generation-time blocks and do not change predictor training.
+The root `seed` defaults to 42 in the supplied experiment; a `--seed` argument
+overrides it.
+
+The default optimization settings are:
+
+| Setting | Default |
+| --- | ---: |
+| Epochs | 100 |
+| Batch size | 4 |
+| Optimizer | AdamW |
+| Learning rate | \(3\times10^{-4}\) |
+| Weight decay | \(10^{-5}\) |
+| Gradient-norm limit | 5 |
+| Hidden / edge / graph dimensions | 128 / 64 / 128 |
+| Message-passing layers | 4 |
+| Graphlet sizes | \(k=3,4\) |
+| Sampled subsets per graphlet size | 2,048 |
 
 The loss is
 
 \[
 \mathcal L=
-\lambda_X\mathcal L_X+
-\lambda_E\mathcal L_E+
-\lambda_H\mathcal L_{\text{graphlet mean}}+
-\lambda_D\mathcal L_{\text{Dirichlet}}+
-\lambda_M\mathcal L_{\text{connected mass}}.
+\mathcal L_{\mathrm{node}}+
+\mathcal L_{\mathrm{edge}}+
+\mathcal L_{\mathrm{graphlet\ mean}}+
+0.1\mathcal L_{\mathrm{Dirichlet}}+
+0.25\mathcal L_{\mathrm{connected\ mass}}.
 \]
 
-For featureless generic graphs, there is one node category, so the node loss
-is exactly zero. The node head becomes non-trivial only for attributed data.
+For the featureless SBM configuration, there is one node category, so
+\(\mathcal L_{\mathrm{node}}=0\). The edge cross-entropy uses class weights
+`0.25` for no-edge and `1.0` for a present edge. The graphlet heads learn
+Dirichlet distributions over the normalized histograms, while Beta heads learn
+their connected-subgraph masses.
 
-## Candidate score
+Validation runs after every epoch. The checkpoint with the smallest validation
+loss is saved. There is no early stopping, learning-rate scheduler, or resume
+option in the current training CLI.
 
-For a valid swap \(a\), the selector uses
+Default outputs:
+
+```text
+outputs/hybrid_endpoint/sbm/checkpoint.pt
+outputs/hybrid_endpoint/sbm/training_report.json
+```
+
+The checkpoint stores the model, categorical vocabulary, graphlet basis,
+summary configuration, experiment configuration, and best-epoch report.
+`training_report.json` stores the full epoch history and teacher-trajectory
+diagnostics.
+
+Monitor these validation metrics:
+
+- `loss`: weighted total validation loss used for checkpoint selection;
+- `present_edge_recall`: recall on target edges;
+- `edge_accuracy`: accuracy over all node pairs;
+- `graphlet_mae`: error of the predicted graphlet means;
+- `graphlet_mass_mae`: error of the connected-subgraph mass.
+
+Most node pairs are no-edges, so inspect `present_edge_recall` together with
+`edge_accuracy`.
+
+### 4. Run a smoke training check
+
+Use a small run before launching the full experiment:
+
+```bash
+PYTHONPATH=src python scripts/train_hybrid_endpoint_grapher.py \
+  --config configs/experiments/sbm_hybrid_endpoint_graphlet.yaml \
+  --max-train-graphs 4 \
+  --max-val-graphs 2 \
+  --epochs 1 \
+  --batch-size 2 \
+  --device cpu \
+  --output-dir outputs/hybrid_endpoint/sbm/smoke
+```
+
+This writes:
+
+```text
+outputs/hybrid_endpoint/sbm/smoke/checkpoint.pt
+outputs/hybrid_endpoint/sbm/smoke/training_report.json
+```
+
+If the dataset splits do not exist, the smoke command first builds the full
+500-graph dataset and only then applies the four/two-graph limits.
+
+Run the focused regression tests:
+
+```bash
+PYTHONPATH=src pytest -q \
+  tests/test_hybrid_endpoint_model.py \
+  tests/test_hybrid_rewiring_guidance.py
+```
+
+### 5. Training command-line overrides
+
+| Option | Effect |
+| --- | --- |
+| `--output-dir DIR` | Writes `checkpoint.pt` and `training_report.json` to `DIR` |
+| `--epochs N` | Overrides `endpoint_predictor.epochs` |
+| `--batch-size N` | Overrides `endpoint_predictor.batch_size` |
+| `--max-train-graphs N` | Limits training graphs for debugging |
+| `--max-val-graphs N` | Limits validation graphs for debugging |
+| `--seed N` | Overrides the experiment seed |
+| `--device auto\|cpu\|cuda\|cuda:0` | Selects the PyTorch device |
+
+Without `--output-dir`, the checkpoint is written to
+`endpoint_predictor.checkpoint_path` from the YAML file and
+`training_report.json` is written beside it. If a custom output directory is
+used, pass its checkpoint explicitly to the generation command.
+
+The predictor is independent of the degree generator during training. The
+default generation configuration samples empirical training degree sequences;
+a trained `DegreeHistogramVAE` is needed only after setting
+`generation.degree_source: learned`.
+
+## Generation-time candidate score
+
+For a valid swap \(a\), the fixed generation-time refiner uses
 
 \[
 s(a)=
@@ -93,46 +292,49 @@ the categorical/probability top-\(K\). If those pre-graphlet weights are zero,
 all candidates are evaluated so a tied shortlist cannot discard the best
 graphlet action.
 
-## Run
+## Generate and evaluate graphs
 
-From the repository root:
+Generate with the default checkpoint:
 
 ```bash
-export PYTHONPATH=src
-
-python scripts/prepare_generic_dataset.py \
-  --dataset sbm \
-  --root outputs/datasets
-
-python scripts/train_hybrid_endpoint_grapher.py \
-  --config configs/experiments/sbm_hybrid_endpoint_graphlet.yaml
-
-python scripts/run_hybrid_endpoint_grapher.py \
+PYTHONPATH=src python scripts/run_hybrid_endpoint_grapher.py \
   --config configs/experiments/sbm_hybrid_endpoint_graphlet.yaml \
   --output-dir outputs/hybrid_endpoint/sbm/generated
 ```
 
-Quick training check:
+Generate from the smoke-test checkpoint:
 
 ```bash
-python scripts/train_hybrid_endpoint_grapher.py \
-  --config configs/experiments/sbm_hybrid_endpoint_graphlet.yaml \
-  --max-train-graphs 4 \
-  --max-val-graphs 2 \
-  --epochs 1 \
-  --batch-size 2 \
-  --output-dir outputs/hybrid_endpoint/sbm/smoke
-
-python scripts/run_hybrid_endpoint_grapher.py \
+PYTHONPATH=src python scripts/run_hybrid_endpoint_grapher.py \
   --config configs/experiments/sbm_hybrid_endpoint_graphlet.yaml \
   --checkpoint outputs/hybrid_endpoint/sbm/smoke/checkpoint.pt \
   --num-generate 2 \
   --output-dir outputs/hybrid_endpoint/sbm/smoke_generated
 ```
 
-Check `degree_preservation_rate = 1.0` and
-`connectedness_rate = 1.0`. `sampled_target_degree_match_rate` is a
-diagnostic, not a validity requirement.
+Generation writes:
+
+```text
+outputs/hybrid_endpoint/sbm/generated/coarse_graphs.pkl
+outputs/hybrid_endpoint/sbm/generated/hybrid_refined_graphs.pkl
+outputs/hybrid_endpoint/sbm/generated/report.json
+```
+
+In `report.json`, require:
+
+```text
+degree_preservation_rate                 = 1.0
+constructor_target_degree_match_rate     = 1.0
+final_target_degree_match_rate           = 1.0
+connectedness_rate                       = 1.0
+```
+
+The target-degree rates compare sorted degree multisets, so they are invariant
+to node ordering and constructor relabeling. The separate
+`predictor_sampled_endpoint_degree_match_rate` is only a guidance diagnostic:
+the endpoint predictor may sample an infeasible graph, but that graph is never
+installed directly. The realized graph changes only through valid double-edge
+swaps.
 
 ## Scope
 
