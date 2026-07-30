@@ -302,6 +302,64 @@ PYTHONPATH=src python scripts/run_hybrid_endpoint_grapher.py \
   --output-dir outputs/hybrid_endpoint/sbm/generated
 ```
 
+Orbit MMD and exact connected graphlet evaluation use ORCA. Point
+`ORCA_EXEC` to the executable (or put `orca` on `PATH`) before generation:
+
+```bash
+export ORCA_EXEC=/absolute/path/to/orca
+"$ORCA_EXEC" --help >/dev/null 2>&1 || true
+
+PYTHONPATH=src python scripts/run_hybrid_endpoint_grapher.py \
+  --config configs/experiments/sbm_hybrid_endpoint_graphlet.yaml \
+  --output-dir outputs/hybrid_endpoint/sbm/generated
+```
+
+The generation script validates ORCA before constructing graphs whenever
+`evaluation.compute_orbit` is true or `evaluation.graphlet_backend` is
+`exact_orca`. The resolved executable is recorded in `report.json`.
+
+### Train the attributed hybrid model on QM9
+
+Prepare both topology and attributed heavy-atom splits if they do not already
+exist:
+
+```bash
+PYTHONPATH=src python scripts/prepare_qm9_topology_dataset.py \
+  --source auto \
+  --pyg-root data/pyg_qm9 \
+  --root outputs/datasets
+```
+
+Train the categorical atom/bond endpoint model:
+
+```bash
+PYTHONPATH=src python scripts/train_hybrid_endpoint_grapher.py \
+  --config configs/experiments/qm9_attributed_hybrid_endpoint_graphlet.yaml
+```
+
+The supplied QM9 configuration starts with 10,000 train and 1,000 validation
+molecules so the precomputed teacher examples fit comfortably in memory. For
+the full prepared splits:
+
+```bash
+PYTHONPATH=src python scripts/train_hybrid_endpoint_grapher.py \
+  --config configs/experiments/qm9_attributed_hybrid_endpoint_graphlet.yaml \
+  --max-train-graphs 0 \
+  --max-val-graphs 0
+```
+
+Evaluate an oracle-degree attributed rollout with ORCA:
+
+```bash
+export ORCA_EXEC=/absolute/path/to/orca
+
+PYTHONPATH=src python scripts/run_hybrid_endpoint_grapher.py \
+  --config configs/experiments/qm9_attributed_hybrid_endpoint_graphlet.yaml \
+  --output-dir outputs/hybrid_endpoint/qm9_attributed/generated_seed42 \
+  --num-generate 1024 \
+  --seed 42
+```
+
 Generate from the smoke-test checkpoint:
 
 ```bash
@@ -319,6 +377,39 @@ outputs/hybrid_endpoint/sbm/generated/coarse_graphs.pkl
 outputs/hybrid_endpoint/sbm/generated/hybrid_refined_graphs.pkl
 outputs/hybrid_endpoint/sbm/generated/report.json
 ```
+
+### Create the evaluation-report table and sample figure
+
+After generation, produce the three generic-graph metrics used in the paper
+(degree MMD, clustering MMD, and four-node ORCA orbit-count MMD) and plot
+representative generated graphs:
+
+```bash
+export ORCA_EXEC=/absolute/path/to/orca
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/sbm_hybrid_endpoint_graphlet.yaml \
+  --generated-dir outputs/hybrid_endpoint/sbm/generated \
+  --max-graphs 1024 \
+  --num-samples 8
+```
+
+The script compares the final hybrid samples against held-out test graphs. If
+`coarse_graphs.pkl` is present, it also reports the Havel--Hakimi source
+baseline. A same-sized train-versus-test row provides the natural data-split
+reference. It writes:
+
+```text
+outputs/hybrid_endpoint/sbm/generated/evaluation_report/graph_mmd_metrics.csv
+outputs/hybrid_endpoint/sbm/generated/evaluation_report/graph_evaluation_report.json
+outputs/hybrid_endpoint/sbm/generated/evaluation_report/generated_graph_samples.png
+outputs/hybrid_endpoint/sbm/generated/evaluation_report/generated_graph_samples.pdf
+```
+
+The default `stratified` sample selection covers the generated node/edge-size
+range. Use `--sample-selection random --sample-seed 42` for a reproducible
+random panel. The same command works with the QM9 attributed configuration;
+atom types are shown by color and label, and bond types by line width.
 
 In `report.json`, require:
 

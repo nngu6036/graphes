@@ -23,6 +23,56 @@ from grapher.utils.motifs import (
 ORCA_EXEC = os.environ.get("ORCA_EXEC") or shutil.which("orca")
 
 
+def configure_orca_executable(
+    executable: str | os.PathLike[str] | None = None,
+    *,
+    required: bool = True,
+) -> str | None:
+    """Resolve and validate the ORCA executable used by summary metrics.
+
+    ``executable`` may be an explicit file, a directory containing ``orca``,
+    a command name on ``PATH``, or a string containing an environment
+    variable such as ``${ORCA_EXEC}``.  Calling this function updates the
+    module-level executable used by all later ORCA orbit and graphlet calls.
+    """
+
+    global ORCA_EXEC
+
+    raw = str(executable).strip() if executable is not None else ""
+    if raw:
+        expanded = os.path.expandvars(os.path.expanduser(raw))
+        if "$" in expanded:
+            if required:
+                raise RuntimeError(
+                    "The configured ORCA executable contains an unresolved "
+                    f"environment variable: {raw!r}."
+                )
+            return None
+        candidate = expanded
+    else:
+        candidate = os.environ.get("ORCA_EXEC", "").strip() or "orca"
+
+    path = Path(candidate)
+    if path.is_dir():
+        path = path / "orca"
+        resolved = str(path)
+    else:
+        resolved = shutil.which(candidate) or str(path)
+
+    resolved_path = Path(resolved)
+    if not resolved_path.is_file() or not os.access(resolved_path, os.X_OK):
+        if required:
+            raise RuntimeError(
+                "ORCA evaluation is enabled, but the executable could not be "
+                f"resolved from {candidate!r}. Set evaluation.orca_exec, set "
+                "ORCA_EXEC, or add orca to PATH."
+            )
+        return None
+
+    ORCA_EXEC = str(resolved_path.resolve())
+    return ORCA_EXEC
+
+
 @dataclass(frozen=True)
 class SummaryConfig:
     degree_hist_max_degree: int | None = None

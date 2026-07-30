@@ -22,6 +22,7 @@ from grapher.generators.degree_sampler import EmpiricalDegreeSampler
 from grapher.hybrid.model import load_hybrid_endpoint_checkpoint
 from grapher.hybrid.refiner import refine_graph_with_hybrid_predictions
 from grapher.properties.sampler import build_degree_sampler_from_config
+from grapher.properties.summary import configure_orca_executable
 from grapher.utils.io import ensure_dir, load_yaml, save_json, save_pickle
 
 
@@ -65,6 +66,27 @@ def main() -> None:
     config = load_yaml(args.config)
     seed = int(args.seed if args.seed is not None else config.get("seed", 0))
     rng = np.random.default_rng(seed)
+    evaluation_cfg = config.get("evaluation", {}) or {}
+    compute_orbit = bool(evaluation_cfg.get("compute_orbit", True))
+    graphlet_backend = str(
+        evaluation_cfg.get("graphlet_backend", "sampled")
+    ).lower()
+    orca_required = compute_orbit or graphlet_backend in {
+        "orca",
+        "exact_orca",
+        "exact",
+    }
+    orca_exec = (
+        configure_orca_executable(
+            evaluation_cfg.get("orca_exec"),
+            required=True,
+        )
+        if orca_required
+        else None
+    )
+    if orca_exec:
+        print(f"ORCA evaluation enabled: {orca_exec}", flush=True)
+
     dataset_cfg = config.get("dataset", {}) or {}
     splits = load_dataset_splits(
         str(dataset_cfg.get("name", "sbm")),
@@ -121,7 +143,6 @@ def main() -> None:
     # permutation equivariant.
     constructor_cfg.setdefault("random_relabel", False)
     refiner_cfg = config.get("hybrid_refiner", {}) or {}
-    evaluation_cfg = config.get("evaluation", {}) or {}
     coarse_graphs: list[nx.Graph] = []
     refined_graphs: list[nx.Graph] = []
     target_degree_sequences: list[list[int]] = []
@@ -176,7 +197,7 @@ def main() -> None:
 
     references = reference_graphs[:num_generate] or reference_graphs
     metric_kwargs = {
-        "compute_orbit": bool(evaluation_cfg.get("compute_orbit", False)),
+        "compute_orbit": compute_orbit,
         "compute_graphlet_history": bool(
             evaluation_cfg.get("compute_graphlet_history", True)
         ),
@@ -202,9 +223,7 @@ def main() -> None:
             "graphlet_num_samples",
             summary_config.graphlet_num_samples,
         ),
-        "graphlet_backend": str(
-            evaluation_cfg.get("graphlet_backend", "sampled")
-        ),
+        "graphlet_backend": graphlet_backend,
     }
     coarse_metrics = evaluate_graph_sets(
         references,
@@ -261,6 +280,7 @@ def main() -> None:
         "format": "hybrid_endpoint_graphlet_generation_v2",
         "checkpoint_format": checkpoint.get("format"),
         "degree_source": degree_source,
+        "orca_exec": orca_exec,
         "num_generated": len(refined_graphs),
         "coarse": coarse_metrics,
         "hybrid_refined": refined_metrics,
