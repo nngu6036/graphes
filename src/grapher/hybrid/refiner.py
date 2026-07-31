@@ -351,6 +351,39 @@ def apply_hybrid_action(
     return candidate
 
 
+def apply_hybrid_attributes(
+    graph: nx.Graph,
+    prediction: HybridPrediction,
+    vocabulary: GraphCategoryVocabulary,
+) -> nx.Graph:
+    """Materialize predicted categories on a fixed generated topology.
+
+    The sampled endpoint is only guidance because its topology can violate the
+    requested degree sequence.  Its node and present-edge categories, however,
+    are the generated molecular attributes and must be installed on the
+    degree-preserving topology returned by the refiner.
+    """
+
+    attributed = graph.copy()
+    if vocabulary.node_attribute:
+        for node in attributed.nodes():
+            category = int(prediction.sampled_node_labels[int(node)])
+            attributed.nodes[node][vocabulary.node_attribute] = (
+                vocabulary.node_value(category)
+            )
+    if vocabulary.edge_attribute:
+        for u, v in attributed.edges():
+            category = _edge_after_category(
+                int(u),
+                int(v),
+                prediction,
+            )
+            attributed.edges[u, v][vocabulary.edge_attribute] = (
+                vocabulary.edge_value(category)
+            )
+    return attributed
+
+
 def _categorical_gain(
     graph: nx.Graph,
     action: Action,
@@ -712,6 +745,24 @@ def refine_graph_with_hybrid_predictions(
                 }
             )
             break
+
+    if vocabulary.node_attribute or vocabulary.edge_attribute:
+        # Refresh once at the realized endpoint, then attach categories to
+        # every node and edge.  Previously only edges introduced by accepted
+        # swaps received labels, leaving QM9 outputs unusable by RDKit.
+        prediction = predictor(
+            model,
+            current,
+            time=1.0,
+            vocabulary=vocabulary,
+            graphlet_basis=graphlet_basis,
+            device=device,
+            rng=generator,
+            sample_endpoint=cfg.sample_endpoint,
+            sample_graphlet=cfg.sample_graphlet,
+            endpoint_temperature=cfg.endpoint_temperature,
+        )
+        current = apply_hybrid_attributes(current, prediction, vocabulary)
 
     if return_trace:
         return current, trace
