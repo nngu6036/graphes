@@ -43,6 +43,18 @@ ATOM_COLORS = {
     9: "#16A34A",
 }
 ATOM_LABELS = {1: "H", 6: "C", 7: "N", 8: "O", 9: "F"}
+BOND_COLORS = {
+    1: "#64748B",
+    2: "#F59E0B",
+    3: "#DC2626",
+    4: "#7C3AED",
+}
+BOND_LABELS = {
+    1: "Single bond",
+    2: "Double bond",
+    3: "Triple bond",
+    4: "Aromatic bond",
+}
 
 
 def _load_graph_list(path: Path) -> list[nx.Graph]:
@@ -248,6 +260,20 @@ def _atomic_number(data: dict[str, Any]) -> int | None:
     return int(value) if value is not None else None
 
 
+def _bond_type(data: dict[str, Any]) -> int | None:
+    value = data.get("bond_type")
+    if value is not None:
+        return int(value)
+    order = data.get("bond_order")
+    if order is None:
+        return None
+    numeric_order = float(order)
+    if np.isclose(numeric_order, 1.5):
+        return 4
+    rounded = int(round(numeric_order))
+    return rounded if rounded in BOND_LABELS else None
+
+
 def _draw_graph(
     axis: Any,
     graph: nx.Graph,
@@ -278,9 +304,9 @@ def _draw_graph(
     edge_widths = []
     edge_colors = []
     for _, _, data in graph.edges(data=True):
-        bond_type = int(data.get("bond_type", 1))
+        bond_type = _bond_type(data)
         edge_widths.append({1: 1.4, 2: 2.4, 3: 3.4, 4: 2.0}.get(bond_type, 1.4))
-        edge_colors.append("#7C3AED" if bond_type == 4 else "#6B7280")
+        edge_colors.append(BOND_COLORS.get(bond_type, "#6B7280"))
 
     node_size = max(90, min(360, int(9000 / max(graph.number_of_nodes(), 1))))
     nx.draw_networkx_edges(
@@ -360,7 +386,15 @@ def plot_generated_graphs(
                 if (atomic_number := _atomic_number(data)) is not None
             }
         )
-        handles = [
+        bonds_present = sorted(
+            {
+                bond_type
+                for index in indices
+                for _, _, data in graphs[index].edges(data=True)
+                if (bond_type := _bond_type(data)) is not None
+            }
+        )
+        atom_handles = [
             Line2D(
                 [0],
                 [0],
@@ -368,20 +402,34 @@ def plot_generated_graphs(
                 color="none",
                 markerfacecolor=ATOM_COLORS.get(atomic_number, "#60A5FA"),
                 markeredgecolor="#111827",
-                label=ATOM_LABELS.get(atomic_number, str(atomic_number)),
+                label=f"Atom {ATOM_LABELS.get(atomic_number, atomic_number)}",
                 markersize=8,
             )
             for atomic_number in atoms_present
         ]
+        bond_handles = [
+            Line2D(
+                [0],
+                [0],
+                color=BOND_COLORS.get(bond_type, "#6B7280"),
+                linewidth={1: 1.4, 2: 2.4, 3: 3.4, 4: 2.0}.get(
+                    bond_type,
+                    1.4,
+                ),
+                label=BOND_LABELS.get(bond_type, f"Bond type {bond_type}"),
+            )
+            for bond_type in bonds_present
+        ]
+        handles = [*atom_handles, *bond_handles]
         figure.legend(
             handles=handles,
             loc="lower center",
-            ncol=max(1, len(handles)),
+            ncol=max(1, min(len(handles), 4)),
             frameon=False,
         )
-        figure.subplots_adjust(bottom=0.09)
+        figure.subplots_adjust(bottom=0.14)
     figure.suptitle("Representative generated graphs", fontsize=13)
-    figure.tight_layout(rect=(0, 0.04 if molecular else 0, 1, 0.96))
+    figure.tight_layout(rect=(0, 0.10 if molecular else 0, 1, 0.96))
     output_png.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output_png, dpi=dpi, bbox_inches="tight")
     figure.savefig(output_pdf, bbox_inches="tight")
@@ -422,7 +470,10 @@ def _print_table(rows: Sequence[dict[str, Any]]) -> None:
         )
 
 
-def _print_molecular_metrics(metrics: dict[str, Any]) -> None:
+def _print_molecular_metrics(
+    metrics: dict[str, Any],
+    conversion_errors: dict[str, int],
+) -> None:
     novelty = metrics["novelty_rate"]
     novelty_text = "not available" if novelty is None else f"{float(novelty):.6f}"
     print("\nMolecular quality (RDKit; higher is better)")
@@ -439,6 +490,25 @@ def _print_molecular_metrics(metrics: dict[str, Any]) -> None:
         f"{metrics['unique_valid_count']} unique valid, "
         f"{metrics['novel_unique_valid_count']} novel"
     )
+    if conversion_errors:
+        reasons = ", ".join(
+            f"{name}={count}"
+            for name, count in sorted(
+                conversion_errors.items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+        )
+        print(f"  Rejection reasons:           {reasons}")
+        if "MissingAtomType" in conversion_errors:
+            print(
+                "  Diagnostic: generated graphs have no atom labels; "
+                "RDKit was not given molecular graphs."
+            )
+        elif "MissingBondType" in conversion_errors:
+            print(
+                "  Diagnostic: generated graphs have no bond labels; "
+                "RDKit was not given fully attributed molecular graphs."
+            )
 
 
 def main() -> None:
@@ -614,7 +684,10 @@ def main() -> None:
     )
     _print_table(rows)
     if molecular_metrics is not None:
-        _print_molecular_metrics(molecular_metrics)
+        _print_molecular_metrics(
+            molecular_metrics,
+            conversion_error_counts,
+        )
     print(f"Saved metrics: {csv_path}")
     if molecular_metrics is not None:
         print(f"Saved metrics: {molecular_csv_path}")
