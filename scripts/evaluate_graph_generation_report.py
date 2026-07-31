@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+from collections import Counter
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -19,6 +20,7 @@ from matplotlib.lines import Line2D
 
 from grapher.data.io import load_dataset_splits
 from grapher.evaluation.metrics import descriptor_matrix, mmd_orbit, mmd_rbf
+from grapher.molecular.graph_io import nx_to_rdkit_mol, require_rdkit
 from grapher.properties.summary import (
     clustering_histogram,
     configure_orca_executable,
@@ -28,6 +30,11 @@ from grapher.utils.io import ensure_dir, load_pickle, load_yaml, save_json
 
 
 REPORT_METRICS = ("degree_mmd", "clustering_mmd", "orbit_mmd")
+MOLECULAR_METRICS = (
+    "validity_without_correction",
+    "uniqueness_rate",
+    "novelty_rate",
+)
 ATOM_COLORS = {
     1: "#F3F4F6",
     6: "#374151",
@@ -92,6 +99,116 @@ def _paper_mmd(
         ),
         "orbit_mmd": mmd_orbit(reference, candidate),
     }
+
+
+def is_molecular_evaluation(
+    dataset_config: dict[str, Any],
+    graphs: Sequence[nx.Graph],
+) -> bool:
+    """Detect an attributed molecular dataset without relying on its name alone."""
+
+    dataset_name = str(dataset_config.get("name", "")).lower()
+    if any(token in dataset_name for token in ("qm9", "zinc", "molecule")):
+        return True
+    return any(
+        "atomic_num" in data or "atom_type" in data
+        for graph in graphs
+        for _, data in graph.nodes(data=True)
+    )
+
+
+def _canonical_molecular_smiles(
+    graph: nx.Graph,
+) -> tuple[str | None, str | None]:
+    """Return an RDKit-sanitized canonical SMILES and any conversion error."""
+
+    if graph.number_of_nodes() == 0:
+        return None, "EmptyMolecule"
+    if any(
+        "atomic_num" not in data and "atom_type" not in data
+        for _, data in graph.nodes(data=True)
+    ):
+        return None, "MissingAtomType"
+    if any(
+        "bond_type" not in data and "bond_order" not in data
+        for _, _, data in graph.edges(data=True)
+    ):
+        return None, "MissingBondType"
+    Chem = require_rdkit()
+    try:
+        molecule = nx_to_rdkit_mol(graph, sanitize=True)
+        smiles = str(
+            Chem.MolToSmiles(
+                molecule,
+                canonical=True,
+                isomericSmiles=False,
+            )
+        )
+        if not smiles:
+            return None, "EmptySMILES"
+        return smiles, None
+    except Exception as exc:
+        return None, type(exc).__name__
+
+
+def molecular_quality_metrics(
+    generated_graphs: Sequence[nx.Graph],
+    train_graphs: Sequence[nx.Graph],
+) -> tuple[dict[str, Any], list[str], list[int], dict[str, int]]:
+    """Compute RDKit validity, canonical-SMILES uniqueness, and novelty."""
+
+    # Fail early with the existing installation guidance when RDKit is absent.
+    require_rdkit()
+
+    valid_smiles: list[str] = []
+    invalid_indices: list[int] = []
+    conversion_errors: Counter[str] = Counter()
+    for index, graph in enumerate(generated_graphs):
+        smiles, error = _canonical_molecular_smiles(graph)
+        if smiles is None:
+            invalid_indices.append(index)
+            conversion_errors[str(error or "InvalidMolecule")] += 1
+        else:
+            valid_smiles.append(smiles)
+
+    train_smiles = {
+        smiles
+        for graph in train_graphs
+        if (smiles := _canonical_molecular_smiles(graph)[0]) is not None
+    }
+    unique_valid_smiles = sorted(set(valid_smiles))
+    novel_smiles = [
+        smiles for smiles in unique_valid_smiles if smiles not in train_smiles
+    ]
+
+    num_generated = len(generated_graphs)
+    num_valid = len(valid_smiles)
+    num_unique = len(unique_valid_smiles)
+    novelty_rate: float | None
+    if not train_smiles:
+        novelty_rate = None
+    elif num_unique == 0:
+        novelty_rate = 0.0
+    else:
+        novelty_rate = len(novel_smiles) / num_unique
+
+    metrics = {
+        "num_generated_graphs": num_generated,
+        "num_valid_generated_molecules": num_valid,
+        "num_invalid_generated_molecules": num_generated - num_valid,
+        "validity_without_correction": num_valid / max(num_generated, 1),
+        "unique_valid_count": num_unique,
+        "uniqueness_rate": num_unique / max(num_valid, 1),
+        "num_valid_training_molecules": len(train_smiles),
+        "novel_unique_valid_count": len(novel_smiles),
+        "novelty_rate": novelty_rate,
+    }
+    return (
+        metrics,
+        valid_smiles,
+        invalid_indices,
+        dict(conversion_errors),
+    )
 
 
 def select_sample_indices(
@@ -281,6 +398,13 @@ def _write_csv(rows: Sequence[dict[str, Any]], path: Path) -> None:
         writer.writerows(rows)
 
 
+def _write_molecular_csv(metrics: dict[str, Any], path: Path) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=tuple(metrics))
+        writer.writeheader()
+        writer.writerow(metrics)
+
+
 def _print_table(rows: Sequence[dict[str, Any]]) -> None:
     print("Graph-distribution MMD against held-out test graphs (lower is better)")
     print(
@@ -296,6 +420,25 @@ def _print_table(rows: Sequence[dict[str, Any]]) -> None:
             f"{float(row['clustering_mmd']):18.6f}"
             f"{float(row['orbit_mmd']):14.6f}"
         )
+
+
+def _print_molecular_metrics(metrics: dict[str, Any]) -> None:
+    novelty = metrics["novelty_rate"]
+    novelty_text = "not available" if novelty is None else f"{float(novelty):.6f}"
+    print("\nMolecular quality (RDKit; higher is better)")
+    print(
+        f"  Validity without correction: "
+        f"{float(metrics['validity_without_correction']):.6f}"
+    )
+    print(f"  Uniqueness:                 {float(metrics['uniqueness_rate']):.6f}")
+    print(f"  Novelty:                    {novelty_text}")
+    print(
+        "  Counts: "
+        f"{metrics['num_valid_generated_molecules']}/"
+        f"{metrics['num_generated_graphs']} valid, "
+        f"{metrics['unique_valid_count']} unique valid, "
+        f"{metrics['novel_unique_valid_count']} novel"
+    )
 
 
 def main() -> None:
@@ -364,6 +507,7 @@ def main() -> None:
         raise ValueError("No common generated/test graph subset is available.")
     reference = test_graphs[:available]
     generated = generated_graphs[:available]
+    molecular = is_molecular_evaluation(dataset_cfg, generated_graphs)
 
     rows: list[dict[str, Any]] = []
     if train_graphs:
@@ -401,6 +545,8 @@ def main() -> None:
     pdf_path = output_dir / "generated_graph_samples.pdf"
     csv_path = output_dir / "graph_mmd_metrics.csv"
     json_path = output_dir / "graph_evaluation_report.json"
+    molecular_csv_path = output_dir / "molecular_quality_metrics.csv"
+    valid_smiles_path = output_dir / "valid_generated.smi"
     plot_generated_graphs(
         generated,
         indices,
@@ -411,13 +557,54 @@ def main() -> None:
         dpi=args.dpi,
     )
     _write_csv(rows, csv_path)
+    molecular_metrics: dict[str, Any] | None = None
+    invalid_molecule_indices: list[int] = []
+    conversion_error_counts: dict[str, int] = {}
+    if molecular:
+        (
+            molecular_metrics,
+            valid_smiles,
+            invalid_molecule_indices,
+            conversion_error_counts,
+        ) = molecular_quality_metrics(generated, train_graphs)
+        _write_molecular_csv(molecular_metrics, molecular_csv_path)
+        with valid_smiles_path.open("w", encoding="utf-8") as handle:
+            for smiles in valid_smiles:
+                handle.write(smiles + "\n")
+
     save_json(
         {
-            "format": "graph_generation_evaluation_report_v1",
+            "format": "graph_generation_evaluation_report_v2",
             "orca_exec": orca_exec,
             "generated_graphs": str(generated_path),
             "num_graphs_evaluated": available,
             "metrics": rows,
+            "molecular_evaluation": molecular,
+            "molecular_quality": molecular_metrics,
+            "molecular_protocol": (
+                {
+                    "validity_without_correction": (
+                        "RDKit molecule construction followed by "
+                        "Chem.SanitizeMol, without valency correction or "
+                        "edge resampling."
+                    ),
+                    "uniqueness": (
+                        "unique valid canonical SMILES / valid generated "
+                        "molecules"
+                    ),
+                    "novelty": (
+                        "unique valid generated canonical SMILES absent from "
+                        "the complete training split / unique valid generated "
+                        "canonical SMILES"
+                    ),
+                    "canonical_smiles": True,
+                    "isomeric_smiles": False,
+                }
+                if molecular
+                else None
+            ),
+            "invalid_molecule_indices_zero_based": invalid_molecule_indices,
+            "molecular_conversion_error_counts": conversion_error_counts,
             "sample_selection": args.sample_selection,
             "sample_indices_zero_based": indices,
             "sample_figure_png": str(png_path),
@@ -426,7 +613,12 @@ def main() -> None:
         json_path,
     )
     _print_table(rows)
+    if molecular_metrics is not None:
+        _print_molecular_metrics(molecular_metrics)
     print(f"Saved metrics: {csv_path}")
+    if molecular_metrics is not None:
+        print(f"Saved metrics: {molecular_csv_path}")
+        print(f"Saved SMILES:  {valid_smiles_path}")
     print(f"Saved report:  {json_path}")
     print(f"Saved figure:  {png_path}")
     print(f"Saved figure:  {pdf_path}")

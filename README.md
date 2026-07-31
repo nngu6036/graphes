@@ -409,7 +409,32 @@ outputs/hybrid_endpoint/sbm/generated/evaluation_report/generated_graph_samples.
 The default `stratified` sample selection covers the generated node/edge-size
 range. Use `--sample-selection random --sample-seed 42` for a reproducible
 random panel. The same command works with the QM9 attributed configuration;
-atom types are shown by color and label, and bond types by line width.
+atom types are shown by color and label, and bond types by line width. When the
+configured dataset is molecular, the report also uses RDKit to compute:
+
+- validity without correction: sanitized molecules / generated graphs;
+- uniqueness: unique valid canonical SMILES / valid generated molecules;
+- novelty: unique valid canonical SMILES absent from the complete training
+  split / unique valid canonical SMILES.
+
+The molecular run additionally writes:
+
+```text
+evaluation_report/molecular_quality_metrics.csv
+evaluation_report/valid_generated.smi
+```
+
+For example:
+
+```bash
+export ORCA_EXEC=/actual/path/to/orca
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/qm9_attributed_hybrid_endpoint_graphlet.yaml \
+  --generated-dir outputs/hybrid_endpoint/qm9_attributed/generated_seed42 \
+  --max-graphs 1024 \
+  --num-samples 8
+```
 
 In `report.json`, require:
 
