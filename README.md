@@ -348,7 +348,7 @@ PYTHONPATH=src python scripts/train_hybrid_endpoint_grapher.py \
   --max-val-graphs 0
 ```
 
-Evaluate an oracle-degree attributed rollout with ORCA:
+Generate an oracle-degree attributed rollout with ORCA:
 
 ```bash
 export ORCA_EXEC=/absolute/path/to/orca
@@ -359,6 +359,17 @@ PYTHONPATH=src python scripts/run_hybrid_endpoint_grapher.py \
   --num-generate 1024 \
   --seed 42
 ```
+
+For QM9, the generation runner now fits attribute priors from the training
+split only. Every Havel--Hakimi source receives atom types sampled conditional
+on node degree and bond types sampled subject to the remaining valence at both
+endpoints. Molecular rewiring removes two bonds of the same type and transfers
+that type to both new edges. Consequently, every affected node loses and gains
+the same bond order, so weighted valence is preserved in addition to ordinary
+degree. RDKit checks every initialized source and every final molecule. These
+checks are also applied to graphlet-shortlisted rewiring candidates before
+acceptance. These changes are generation-time constraints and do not require
+retraining an existing QM9 hybrid checkpoint.
 
 Generate from the smoke-test checkpoint:
 
@@ -423,6 +434,13 @@ The molecular run additionally writes:
 evaluation_report/molecular_quality_metrics.csv
 evaluation_report/valid_generated.smi
 ```
+
+`molecular_quality_metrics.csv` contains separate `real_test`, `hh_source`,
+and `hybrid_final` rows. This makes a failed conversion unambiguous:
+
+- invalid `real_test` graphs indicate an attribute mapping/conversion problem;
+- valid test graphs but invalid `hh_source` graphs indicate initialization;
+- valid sources but invalid final graphs indicate rewiring constraints.
 
 For example:
 

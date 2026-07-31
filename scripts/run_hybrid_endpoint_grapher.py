@@ -21,6 +21,12 @@ from grapher.evaluation.metrics import (
 from grapher.generators.degree_sampler import EmpiricalDegreeSampler
 from grapher.hybrid.model import load_hybrid_endpoint_checkpoint
 from grapher.hybrid.refiner import refine_graph_with_hybrid_predictions
+from grapher.molecular.constraints import (
+    fit_molecular_attribute_priors,
+    initialize_molecular_attributes,
+    molecular_valence_errors,
+)
+from grapher.molecular.graph_io import is_valid_molecular_graph
 from grapher.properties.sampler import build_degree_sampler_from_config
 from grapher.properties.summary import configure_orca_executable
 from grapher.utils.io import ensure_dir, load_yaml, save_json, save_pickle
@@ -119,6 +125,43 @@ def main() -> None:
     ) = load_hybrid_endpoint_checkpoint(checkpoint_path, device=device)
     model_device = next(model.parameters()).device
 
+    molecular_cfg = dict(config.get("molecular_generation", {}) or {})
+    molecular_mode = bool(
+        molecular_cfg.get(
+            "enabled",
+            vocabulary.node_attribute in {"atomic_num", "atom_type"}
+            and vocabulary.edge_attribute in {"bond_type", "bond_order"},
+        )
+    )
+    molecular_priors = None
+    molecular_atom_types: tuple[int, ...] = ()
+    molecular_bond_types: tuple[int, ...] = ()
+    if molecular_mode:
+        molecular_atom_types = tuple(
+            int(value)
+            for value in molecular_cfg.get(
+                "allowed_atom_types",
+                vocabulary.node_values,
+            )
+        )
+        molecular_bond_types = tuple(
+            int(value)
+            for value in molecular_cfg.get(
+                "allowed_bond_types",
+                [1, 2, 3],
+            )
+        )
+        molecular_priors = fit_molecular_attribute_priors(
+            train_graphs,
+            allowed_atom_types=molecular_atom_types,
+            allowed_bond_types=molecular_bond_types,
+        )
+        print(
+            "Molecular generation enabled: empirical degree-conditioned atoms, "
+            "valence-constrained bonds, and typed rewiring.",
+            flush=True,
+        )
+
     degree_source = str(generation_cfg.get("degree_source", "empirical")).lower()
     degree_sampler = None
     if degree_source in {"learned", "degree_vae"}:
@@ -147,6 +190,8 @@ def main() -> None:
     refined_graphs: list[nx.Graph] = []
     target_degree_sequences: list[list[int]] = []
     traces: list[list[dict[str, Any]]] = []
+    source_rdkit_valid: list[float] = []
+    final_rdkit_valid: list[float] = []
 
     for index in range(num_generate):
         if degree_source in {"oracle", "test_oracle"}:
@@ -170,6 +215,43 @@ def main() -> None:
                 constructor_cfg.get("ensure_connected", True)
             ),
         )
+        if molecular_mode:
+            assert molecular_priors is not None
+            max_attempts = max(
+                int(molecular_cfg.get("max_initialization_attempts", 16)),
+                1,
+            )
+            initialized = None
+            for attempt in range(max_attempts):
+                candidate = initialize_molecular_attributes(
+                    coarse,
+                    molecular_priors,
+                    rng=rng,
+                    allowed_atom_types=molecular_atom_types,
+                    allowed_bond_types=molecular_bond_types,
+                    sample=bool(molecular_cfg.get("sample_attributes", True)),
+                    smoothing=float(molecular_cfg.get("smoothing", 0.05)),
+                    force_single_bonds=attempt == max_attempts - 1,
+                )
+                if not bool(
+                    molecular_cfg.get("require_rdkit_source_validity", True)
+                ) or is_valid_molecular_graph(candidate):
+                    initialized = candidate
+                    break
+            if initialized is None:
+                errors = molecular_valence_errors(
+                    candidate,
+                    allowed_atom_types=molecular_atom_types,
+                    allowed_bond_types=molecular_bond_types,
+                )
+                raise RuntimeError(
+                    "Could not initialize an RDKit-valid molecular source graph. "
+                    f"Valence diagnostics: {errors[:3]}"
+                )
+            coarse = initialized
+            source_rdkit_valid.append(
+                float(is_valid_molecular_graph(coarse))
+            )
         refined, trace = refine_graph_with_hybrid_predictions(
             coarse,
             model=model,
@@ -181,6 +263,10 @@ def main() -> None:
             rng=rng,
             return_trace=True,
         )
+        if molecular_mode:
+            final_rdkit_valid.append(
+                float(is_valid_molecular_graph(refined))
+            )
         coarse_graphs.append(coarse)
         refined_graphs.append(refined)
         target_degree_sequences.append(
@@ -276,8 +362,31 @@ def main() -> None:
             else float("nan")
         ),
     }
+    if molecular_mode:
+        diagnostics.update(
+            {
+                "molecular_source_rdkit_validity": float(
+                    np.mean(source_rdkit_valid)
+                ),
+                "molecular_final_rdkit_validity": float(
+                    np.mean(final_rdkit_valid)
+                ),
+                "molecular_valence_preservation_rate": float(
+                    np.mean(
+                        [
+                            not molecular_valence_errors(
+                                graph,
+                                allowed_atom_types=molecular_atom_types,
+                                allowed_bond_types=molecular_bond_types,
+                            )
+                            for graph in refined_graphs
+                        ]
+                    )
+                ),
+            }
+        )
     report = {
-        "format": "hybrid_endpoint_graphlet_generation_v2",
+        "format": "hybrid_endpoint_graphlet_generation_v3",
         "checkpoint_format": checkpoint.get("format"),
         "degree_source": degree_source,
         "orca_exec": orca_exec,

@@ -84,6 +84,20 @@ constructor:
   random_relabel: false
   max_repair_trials: 10000
 
+# Initialize every topology-only HH source with complete molecular attributes.
+# Atom types are sampled from the training-set distribution conditional on
+# node degree. Bond types are sampled subject to the remaining valence at both
+# endpoints. Aromatic type 4 is deliberately excluded because the prepared
+# QM9 graphs are kekulized into single/double bonds.
+molecular_generation:
+  enabled: true
+  allowed_atom_types: [6, 7, 8, 9]
+  allowed_bond_types: [1, 2, 3]
+  sample_attributes: true
+  smoothing: 0.05
+  max_initialization_attempts: 16
+  require_rdkit_source_validity: true
+
 hybrid_refiner:
   steps: 10
   candidate_budget: 256
@@ -104,6 +118,18 @@ hybrid_refiner:
   refresh_prediction_every: 1
   infeasible_target_policy: guidance_only
   report_guidance_consistency: false
+  # Swap only edge pairs with the same bond type and transfer that type to
+  # both new edges. Each node therefore loses and gains the same bond order,
+  # preserving weighted valence exactly.
+  require_same_edge_type_pair: true
+  preserve_removed_edge_type: true
+  enforce_molecular_valence: true
+  molecular_allowed_bond_types: [1, 2, 3]
+  molecular_candidate_attempt_multiplier: 2
+  # Apply RDKit sanitization to the graphlet-shortlisted candidates. This is
+  # stricter than valence checking alone and guarantees that accepted swaps
+  # remain chemically valid under the evaluator's exact protocol.
+  rdkit_candidate_check: true
 
 evaluation:
   # Leave null to use ORCA_EXEC or an `orca` executable on PATH.

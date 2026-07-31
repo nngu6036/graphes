@@ -43,18 +43,6 @@ ATOM_COLORS = {
     9: "#16A34A",
 }
 ATOM_LABELS = {1: "H", 6: "C", 7: "N", 8: "O", 9: "F"}
-BOND_COLORS = {
-    1: "#64748B",
-    2: "#F59E0B",
-    3: "#DC2626",
-    4: "#7C3AED",
-}
-BOND_LABELS = {
-    1: "Single bond",
-    2: "Double bond",
-    3: "Triple bond",
-    4: "Aromatic bond",
-}
 
 
 def _load_graph_list(path: Path) -> list[nx.Graph]:
@@ -260,20 +248,6 @@ def _atomic_number(data: dict[str, Any]) -> int | None:
     return int(value) if value is not None else None
 
 
-def _bond_type(data: dict[str, Any]) -> int | None:
-    value = data.get("bond_type")
-    if value is not None:
-        return int(value)
-    order = data.get("bond_order")
-    if order is None:
-        return None
-    numeric_order = float(order)
-    if np.isclose(numeric_order, 1.5):
-        return 4
-    rounded = int(round(numeric_order))
-    return rounded if rounded in BOND_LABELS else None
-
-
 def _draw_graph(
     axis: Any,
     graph: nx.Graph,
@@ -304,9 +278,9 @@ def _draw_graph(
     edge_widths = []
     edge_colors = []
     for _, _, data in graph.edges(data=True):
-        bond_type = _bond_type(data)
+        bond_type = int(data.get("bond_type", 1))
         edge_widths.append({1: 1.4, 2: 2.4, 3: 3.4, 4: 2.0}.get(bond_type, 1.4))
-        edge_colors.append(BOND_COLORS.get(bond_type, "#6B7280"))
+        edge_colors.append("#7C3AED" if bond_type == 4 else "#6B7280")
 
     node_size = max(90, min(360, int(9000 / max(graph.number_of_nodes(), 1))))
     nx.draw_networkx_edges(
@@ -386,15 +360,7 @@ def plot_generated_graphs(
                 if (atomic_number := _atomic_number(data)) is not None
             }
         )
-        bonds_present = sorted(
-            {
-                bond_type
-                for index in indices
-                for _, _, data in graphs[index].edges(data=True)
-                if (bond_type := _bond_type(data)) is not None
-            }
-        )
-        atom_handles = [
+        handles = [
             Line2D(
                 [0],
                 [0],
@@ -402,34 +368,20 @@ def plot_generated_graphs(
                 color="none",
                 markerfacecolor=ATOM_COLORS.get(atomic_number, "#60A5FA"),
                 markeredgecolor="#111827",
-                label=f"Atom {ATOM_LABELS.get(atomic_number, atomic_number)}",
+                label=ATOM_LABELS.get(atomic_number, str(atomic_number)),
                 markersize=8,
             )
             for atomic_number in atoms_present
         ]
-        bond_handles = [
-            Line2D(
-                [0],
-                [0],
-                color=BOND_COLORS.get(bond_type, "#6B7280"),
-                linewidth={1: 1.4, 2: 2.4, 3: 3.4, 4: 2.0}.get(
-                    bond_type,
-                    1.4,
-                ),
-                label=BOND_LABELS.get(bond_type, f"Bond type {bond_type}"),
-            )
-            for bond_type in bonds_present
-        ]
-        handles = [*atom_handles, *bond_handles]
         figure.legend(
             handles=handles,
             loc="lower center",
-            ncol=max(1, min(len(handles), 4)),
+            ncol=max(1, len(handles)),
             frameon=False,
         )
-        figure.subplots_adjust(bottom=0.14)
+        figure.subplots_adjust(bottom=0.09)
     figure.suptitle("Representative generated graphs", fontsize=13)
-    figure.tight_layout(rect=(0, 0.10 if molecular else 0, 1, 0.96))
+    figure.tight_layout(rect=(0, 0.04 if molecular else 0, 1, 0.96))
     output_png.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output_png, dpi=dpi, bbox_inches="tight")
     figure.savefig(output_pdf, bbox_inches="tight")
@@ -446,11 +398,19 @@ def _write_csv(rows: Sequence[dict[str, Any]], path: Path) -> None:
         writer.writerows(rows)
 
 
-def _write_molecular_csv(metrics: dict[str, Any], path: Path) -> None:
+def _write_molecular_csv(
+    rows: Sequence[dict[str, Any]],
+    path: Path,
+) -> None:
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=tuple(metrics))
+        writer = csv.DictWriter(handle, fieldnames=tuple(fieldnames))
         writer.writeheader()
-        writer.writerow(metrics)
+        writer.writerows(rows)
 
 
 def _print_table(rows: Sequence[dict[str, Any]]) -> None:
@@ -470,45 +430,31 @@ def _print_table(rows: Sequence[dict[str, Any]]) -> None:
         )
 
 
-def _print_molecular_metrics(
-    metrics: dict[str, Any],
-    conversion_errors: dict[str, int],
-) -> None:
-    novelty = metrics["novelty_rate"]
-    novelty_text = "not available" if novelty is None else f"{float(novelty):.6f}"
-    print("\nMolecular quality (RDKit; higher is better)")
+def _print_molecular_metrics(rows: Sequence[dict[str, Any]]) -> None:
+    print("\nMolecular quality by stage (RDKit; higher is better)")
     print(
-        f"  Validity without correction: "
-        f"{float(metrics['validity_without_correction']):.6f}"
+        f"{'Stage':24s}"
+        f"{'Validity':>12s}"
+        f"{'Uniqueness':>14s}"
+        f"{'Novelty':>12s}"
+        f"{'Valid count':>16s}"
     )
-    print(f"  Uniqueness:                 {float(metrics['uniqueness_rate']):.6f}")
-    print(f"  Novelty:                    {novelty_text}")
-    print(
-        "  Counts: "
-        f"{metrics['num_valid_generated_molecules']}/"
-        f"{metrics['num_generated_graphs']} valid, "
-        f"{metrics['unique_valid_count']} unique valid, "
-        f"{metrics['novel_unique_valid_count']} novel"
-    )
-    if conversion_errors:
-        reasons = ", ".join(
-            f"{name}={count}"
-            for name, count in sorted(
-                conversion_errors.items(),
-                key=lambda item: (-item[1], item[0]),
-            )
+    for row in rows:
+        novelty = row["novelty_rate"]
+        novelty_text = (
+            "n/a" if novelty is None else f"{float(novelty):.6f}"
         )
-        print(f"  Rejection reasons:           {reasons}")
-        if "MissingAtomType" in conversion_errors:
-            print(
-                "  Diagnostic: generated graphs have no atom labels; "
-                "RDKit was not given molecular graphs."
-            )
-        elif "MissingBondType" in conversion_errors:
-            print(
-                "  Diagnostic: generated graphs have no bond labels; "
-                "RDKit was not given fully attributed molecular graphs."
-            )
+        count = (
+            f"{row['num_valid_generated_molecules']}/"
+            f"{row['num_generated_graphs']}"
+        )
+        print(
+            f"{str(row['stage']):24s}"
+            f"{float(row['validity_without_correction']):12.6f}"
+            f"{float(row['uniqueness_rate']):14.6f}"
+            f"{novelty_text:>12s}"
+            f"{count:>16s}"
+        )
 
 
 def main() -> None:
@@ -628,29 +574,59 @@ def main() -> None:
     )
     _write_csv(rows, csv_path)
     molecular_metrics: dict[str, Any] | None = None
+    molecular_stage_rows: list[dict[str, Any]] = []
+    molecular_stage_errors: dict[str, dict[str, int]] = {}
     invalid_molecule_indices: list[int] = []
     conversion_error_counts: dict[str, int] = {}
     if molecular:
-        (
-            molecular_metrics,
-            valid_smiles,
-            invalid_molecule_indices,
-            conversion_error_counts,
-        ) = molecular_quality_metrics(generated, train_graphs)
-        _write_molecular_csv(molecular_metrics, molecular_csv_path)
+        stage_graphs: list[tuple[str, Sequence[nx.Graph]]] = [
+            ("real_test", reference),
+        ]
+        if coarse_graphs:
+            coarse_count = min(available, len(coarse_graphs))
+            stage_graphs.append(
+                ("hh_source", coarse_graphs[:coarse_count])
+            )
+        stage_graphs.append(("hybrid_final", generated))
+        valid_smiles: list[str] = []
+        for stage, graphs in stage_graphs:
+            (
+                stage_metrics,
+                stage_smiles,
+                stage_invalid_indices,
+                stage_errors,
+            ) = molecular_quality_metrics(graphs, train_graphs)
+            molecular_stage_rows.append(
+                {"stage": stage, **stage_metrics}
+            )
+            molecular_stage_errors[stage] = stage_errors
+            if stage == "hybrid_final":
+                molecular_metrics = stage_metrics
+                valid_smiles = stage_smiles
+                invalid_molecule_indices = stage_invalid_indices
+                conversion_error_counts = stage_errors
+        _write_molecular_csv(molecular_stage_rows, molecular_csv_path)
         with valid_smiles_path.open("w", encoding="utf-8") as handle:
             for smiles in valid_smiles:
                 handle.write(smiles + "\n")
 
     save_json(
         {
-            "format": "graph_generation_evaluation_report_v2",
+            "format": "graph_generation_evaluation_report_v3",
             "orca_exec": orca_exec,
             "generated_graphs": str(generated_path),
             "num_graphs_evaluated": available,
             "metrics": rows,
             "molecular_evaluation": molecular,
             "molecular_quality": molecular_metrics,
+            "molecular_quality_by_stage": {
+                str(row["stage"]): {
+                    key: value
+                    for key, value in row.items()
+                    if key != "stage"
+                }
+                for row in molecular_stage_rows
+            },
             "molecular_protocol": (
                 {
                     "validity_without_correction": (
@@ -675,6 +651,9 @@ def main() -> None:
             ),
             "invalid_molecule_indices_zero_based": invalid_molecule_indices,
             "molecular_conversion_error_counts": conversion_error_counts,
+            "molecular_conversion_error_counts_by_stage": (
+                molecular_stage_errors if molecular else None
+            ),
             "sample_selection": args.sample_selection,
             "sample_indices_zero_based": indices,
             "sample_figure_png": str(png_path),
@@ -684,10 +663,7 @@ def main() -> None:
     )
     _print_table(rows)
     if molecular_metrics is not None:
-        _print_molecular_metrics(
-            molecular_metrics,
-            conversion_error_counts,
-        )
+        _print_molecular_metrics(molecular_stage_rows)
     print(f"Saved metrics: {csv_path}")
     if molecular_metrics is not None:
         print(f"Saved metrics: {molecular_csv_path}")

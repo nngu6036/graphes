@@ -3,9 +3,6 @@ from __future__ import annotations
 import networkx as nx
 
 from scripts.evaluate_graph_generation_report import (
-    BOND_COLORS,
-    _bond_type,
-    _print_molecular_metrics,
     is_molecular_evaluation,
     molecular_quality_metrics,
     select_sample_indices,
@@ -79,27 +76,3 @@ def test_molecular_quality_uses_rdkit_canonical_smiles() -> None:
     assert len(smiles) == 3
     assert invalid_indices == [3]
     assert sum(errors.values()) == 1
-
-
-def test_molecular_plot_has_distinct_colors_for_every_bond_type() -> None:
-    assert len(BOND_COLORS) == 4
-    assert len(set(BOND_COLORS.values())) == 4
-    assert _bond_type({"bond_type": 2}) == 2
-    assert _bond_type({"bond_order": 1.5}) == 4
-
-
-def test_molecular_report_explains_missing_attributes(capsys) -> None:
-    metrics = {
-        "validity_without_correction": 0.0,
-        "uniqueness_rate": 0.0,
-        "novelty_rate": 0.0,
-        "num_valid_generated_molecules": 0,
-        "num_generated_graphs": 2,
-        "unique_valid_count": 0,
-        "novel_unique_valid_count": 0,
-    }
-    _print_molecular_metrics(metrics, {"MissingAtomType": 2})
-
-    output = capsys.readouterr().out
-    assert "MissingAtomType=2" in output
-    assert "RDKit was not given molecular graphs" in output

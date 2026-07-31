@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
@@ -15,10 +16,17 @@ from grapher.hybrid.data import (
     graph_to_categorical_arrays,
 )
 from grapher.hybrid.model import HybridEndpointPredictor
+from grapher.molecular.constraints import (
+    DEFAULT_GENERATED_BOND_TYPES,
+    bond_order,
+    is_molecular_valence_feasible,
+)
 from grapher.properties.summary import SummaryConfig, extract_summary
 from grapher.refinement.rewiring import (
     Action,
+    candidate_actions_from_edge_pair,
     enumerate_valid_double_edge_swaps,
+    is_valid_action,
     sample_valid_double_edge_swaps,
 )
 
@@ -59,6 +67,14 @@ class HybridRefinerConfig:
     refresh_prediction_every: int = 1
     infeasible_target_policy: str = "guidance_only"
     report_guidance_consistency: bool = False
+    require_same_edge_type_pair: bool = False
+    preserve_removed_edge_type: bool = False
+    enforce_molecular_valence: bool = False
+    molecular_allowed_bond_types: tuple[int, ...] = (
+        DEFAULT_GENERATED_BOND_TYPES
+    )
+    molecular_candidate_attempt_multiplier: int = 2
+    rdkit_candidate_check: bool = False
 
     @classmethod
     def from_dict(
@@ -95,6 +111,34 @@ class HybridRefinerConfig:
             report_guidance_consistency=bool(
                 data.get("report_guidance_consistency", False)
             ),
+            require_same_edge_type_pair=bool(
+                data.get("require_same_edge_type_pair", False)
+            ),
+            preserve_removed_edge_type=bool(
+                data.get("preserve_removed_edge_type", False)
+            ),
+            enforce_molecular_valence=bool(
+                data.get("enforce_molecular_valence", False)
+            ),
+            molecular_allowed_bond_types=tuple(
+                int(value)
+                for value in data.get(
+                    "molecular_allowed_bond_types",
+                    DEFAULT_GENERATED_BOND_TYPES,
+                )
+            ),
+            molecular_candidate_attempt_multiplier=max(
+                int(
+                    data.get(
+                        "molecular_candidate_attempt_multiplier",
+                        data.get("molecular_candidate_oversample", 2),
+                    )
+                ),
+                1,
+            ),
+            rdkit_candidate_check=bool(
+                data.get("rdkit_candidate_check", False)
+            ),
         )
         if config.steps < 0:
             raise ValueError("hybrid_refiner.steps must be non-negative.")
@@ -111,6 +155,14 @@ class HybridRefinerConfig:
             raise ValueError(
                 "Only infeasible_target_policy='guidance_only' is implemented. "
                 "The sampled endpoint is never installed directly."
+            )
+        if (
+            config.preserve_removed_edge_type
+            and not config.require_same_edge_type_pair
+        ):
+            raise ValueError(
+                "preserve_removed_edge_type requires "
+                "require_same_edge_type_pair=true."
             )
         if (
             config.categorical_weight == 0.0
@@ -330,58 +382,121 @@ def _edge_after_category(
     return int(np.argmax(probabilities))
 
 
+def _removed_edge_category(
+    graph: nx.Graph,
+    action: Action,
+    vocabulary: GraphCategoryVocabulary,
+) -> int | None:
+    removed, _ = action
+    categories = [
+        int(vocabulary.edge_index(graph.edges[u, v]))
+        for u, v in removed
+    ]
+    if not categories or len(set(categories)) != 1:
+        return None
+    return categories[0]
+
+
+def _filter_same_edge_type_actions(
+    graph: nx.Graph,
+    actions: Sequence[Action],
+    vocabulary: GraphCategoryVocabulary,
+) -> list[Action]:
+    return [
+        action
+        for action in actions
+        if _removed_edge_category(graph, action, vocabulary) is not None
+    ]
+
+
+def _sample_same_edge_type_actions(
+    graph: nx.Graph,
+    budget: int,
+    rng: np.random.Generator,
+    vocabulary: GraphCategoryVocabulary,
+    *,
+    preserve_connectivity: bool,
+    attempt_multiplier: int,
+) -> list[Action]:
+    edge_groups: defaultdict[int, list[tuple[int, int]]] = defaultdict(list)
+    for u, v, data in graph.edges(data=True):
+        edge_groups[int(vocabulary.edge_index(data))].append(
+            (min(int(u), int(v)), max(int(u), int(v)))
+        )
+    groups = [edges for edges in edge_groups.values() if len(edges) >= 2]
+    if budget <= 0 or not groups:
+        return []
+    theoretical_max = sum(
+        len(edges) * (len(edges) - 1)
+        for edges in groups
+    )
+    target = min(int(budget), int(theoretical_max))
+    group_weights = np.asarray(
+        [len(edges) * (len(edges) - 1) / 2 for edges in groups],
+        dtype=np.float64,
+    )
+    group_weights /= float(group_weights.sum())
+    max_attempts = max(100, target * 25 * int(attempt_multiplier))
+    out: list[Action] = []
+    seen: set[Action] = set()
+    for _ in range(max_attempts):
+        edges = groups[int(rng.choice(len(groups), p=group_weights))]
+        indices = rng.choice(len(edges), size=2, replace=False)
+        actions = candidate_actions_from_edge_pair(
+            edges[int(indices[0])],
+            edges[int(indices[1])],
+        )
+        rng.shuffle(actions)
+        for action in actions:
+            if action in seen:
+                continue
+            if is_valid_action(
+                graph,
+                action,
+                preserve_connectivity=preserve_connectivity,
+            ):
+                out.append(action)
+                seen.add(action)
+                if len(out) >= target:
+                    return out
+    return out
+
+
 def apply_hybrid_action(
     graph: nx.Graph,
     action: Action,
     prediction: HybridPrediction,
     vocabulary: GraphCategoryVocabulary,
+    *,
+    preserve_removed_edge_type: bool = False,
 ) -> nx.Graph:
     removed, added = action
+    preserved_category = (
+        _removed_edge_category(graph, action, vocabulary)
+        if preserve_removed_edge_type
+        else None
+    )
+    if preserve_removed_edge_type and preserved_category is None:
+        raise ValueError(
+            "A typed molecular swap must remove two edges of the same type."
+        )
     candidate = graph.copy()
     for u, v in removed:
         candidate.remove_edge(u, v)
     for u, v in added:
-        category = _edge_after_category(u, v, prediction)
+        category = (
+            int(preserved_category)
+            if preserved_category is not None
+            else _edge_after_category(u, v, prediction)
+        )
         attributes = {}
         if vocabulary.edge_attribute:
-            attributes[vocabulary.edge_attribute] = vocabulary.edge_value(
-                category
-            )
+            value = vocabulary.edge_value(category)
+            attributes[vocabulary.edge_attribute] = value
+            if vocabulary.edge_attribute == "bond_type":
+                attributes["bond_order"] = bond_order(int(value))
         candidate.add_edge(u, v, **attributes)
     return candidate
-
-
-def apply_hybrid_attributes(
-    graph: nx.Graph,
-    prediction: HybridPrediction,
-    vocabulary: GraphCategoryVocabulary,
-) -> nx.Graph:
-    """Materialize predicted categories on a fixed generated topology.
-
-    The sampled endpoint is only guidance because its topology can violate the
-    requested degree sequence.  Its node and present-edge categories, however,
-    are the generated molecular attributes and must be installed on the
-    degree-preserving topology returned by the refiner.
-    """
-
-    attributed = graph.copy()
-    if vocabulary.node_attribute:
-        for node in attributed.nodes():
-            category = int(prediction.sampled_node_labels[int(node)])
-            attributed.nodes[node][vocabulary.node_attribute] = (
-                vocabulary.node_value(category)
-            )
-    if vocabulary.edge_attribute:
-        for u, v in attributed.edges():
-            category = _edge_after_category(
-                int(u),
-                int(v),
-                prediction,
-            )
-            attributed.edges[u, v][vocabulary.edge_attribute] = (
-                vocabulary.edge_value(category)
-            )
-    return attributed
 
 
 def _categorical_gain(
@@ -389,6 +504,8 @@ def _categorical_gain(
     action: Action,
     prediction: HybridPrediction,
     vocabulary: GraphCategoryVocabulary,
+    *,
+    preserve_removed_edge_type: bool = False,
 ) -> tuple[float, float]:
     _, current_edges = graph_to_categorical_arrays(graph, vocabulary)
     removed, added = action
@@ -396,12 +513,21 @@ def _categorical_gain(
     mismatch_before = 0.0
     mismatch_after = 0.0
     probability_gain = 0.0
+    preserved_category = (
+        _removed_edge_category(graph, action, vocabulary)
+        if preserve_removed_edge_type
+        else None
+    )
     for u, v in changed:
         before = int(current_edges[u, v])
         after = (
             0
             if (u, v) in removed
-            else _edge_after_category(u, v, prediction)
+            else (
+                int(preserved_category)
+                if preserved_category is not None
+                else _edge_after_category(u, v, prediction)
+            )
         )
         target = int(prediction.sampled_edge_labels[u, v])
         mismatch_before += float(before != target)
@@ -491,6 +617,7 @@ def score_hybrid_candidates(
             action,
             prediction,
             vocabulary,
+            preserve_removed_edge_type=cfg.preserve_removed_edge_type,
         )
         rows.append(
             {
@@ -542,6 +669,7 @@ def score_hybrid_candidates(
                 row["action"],
                 prediction,
                 vocabulary,
+                preserve_removed_edge_type=cfg.preserve_removed_edge_type,
             )
             candidate_distance = graphlet_guidance_distance(
                 candidate_graph,
@@ -563,7 +691,25 @@ def score_hybrid_candidates(
                 row["action"],
                 prediction,
                 vocabulary,
+                preserve_removed_edge_type=cfg.preserve_removed_edge_type,
             )
+    if cfg.enforce_molecular_valence:
+        for row in rows:
+            candidate_graph = row["candidate_graph"]
+            if not isinstance(candidate_graph, nx.Graph):
+                continue
+            molecular_valid = is_molecular_valence_feasible(
+                candidate_graph,
+                allowed_atom_types=vocabulary.node_values,
+                allowed_bond_types=cfg.molecular_allowed_bond_types,
+            )
+            if molecular_valid and cfg.rdkit_candidate_check:
+                from grapher.molecular.graph_io import is_valid_molecular_graph
+
+                molecular_valid = is_valid_molecular_graph(candidate_graph)
+            row["molecular_valid"] = bool(molecular_valid)
+            if not molecular_valid:
+                row["hybrid_score"] = float("-inf")
     return rows
 
 
@@ -642,19 +788,40 @@ def refine_graph_with_hybrid_predictions(
                 current,
                 preserve_connectivity=cfg.preserve_connectivity,
             )
+        elif cfg.require_same_edge_type_pair:
+            candidates = _sample_same_edge_type_actions(
+                current,
+                int(cfg.candidate_budget),
+                generator,
+                vocabulary,
+                preserve_connectivity=cfg.preserve_connectivity,
+                attempt_multiplier=cfg.molecular_candidate_attempt_multiplier,
+            )
         else:
             candidates = sample_valid_double_edge_swaps(
                 current,
-                cfg.candidate_budget,
+                int(cfg.candidate_budget),
                 generator,
                 preserve_connectivity=cfg.preserve_connectivity,
             )
+        if cfg.require_same_edge_type_pair:
+            candidates = _filter_same_edge_type_actions(
+                current,
+                candidates,
+                vocabulary,
+            )
+            if cfg.candidate_budget > 0:
+                candidates = candidates[: int(cfg.candidate_budget)]
         if not candidates:
             trace.append(
                 {
                     "step": step,
                     "accepted": False,
-                    "reason": "no_candidates",
+                    "reason": (
+                        "no_same_type_candidates"
+                        if cfg.require_same_edge_type_pair
+                        else "no_candidates"
+                    ),
                     "sampled_target_degree_match": prediction.sampled_degree_match,
                 }
             )
@@ -670,6 +837,9 @@ def refine_graph_with_hybrid_predictions(
             config=cfg,
         )
         chosen = _select_scored_candidate(rows, config=cfg, rng=generator)
+        rejected_molecular = sum(
+            row.get("molecular_valid") is False for row in rows
+        )
         if chosen is None:
             trace.append(
                 {
@@ -677,6 +847,7 @@ def refine_graph_with_hybrid_predictions(
                     "accepted": False,
                     "reason": "no_scored_candidate",
                     "sampled_target_degree_match": prediction.sampled_degree_match,
+                    "rejected_molecular_candidates": rejected_molecular,
                 }
             )
             break
@@ -694,6 +865,7 @@ def refine_graph_with_hybrid_predictions(
                     "graphlet_gain": float(chosen["graphlet_gain"]),
                     "hybrid_score": score,
                     "sampled_target_degree_match": prediction.sampled_degree_match,
+                    "rejected_molecular_candidates": rejected_molecular,
                 }
             )
             break
@@ -734,6 +906,7 @@ def refine_graph_with_hybrid_predictions(
                 "sampled_target_degree_match": prediction.sampled_degree_match,
                 "sampled_target_connected": prediction.sampled_connected,
                 "guidance_graphlet_disagreement": consistency,
+                "rejected_molecular_candidates": rejected_molecular,
             }
         )
         if stalled >= cfg.patience:
@@ -745,24 +918,6 @@ def refine_graph_with_hybrid_predictions(
                 }
             )
             break
-
-    if vocabulary.node_attribute or vocabulary.edge_attribute:
-        # Refresh once at the realized endpoint, then attach categories to
-        # every node and edge.  Previously only edges introduced by accepted
-        # swaps received labels, leaving QM9 outputs unusable by RDKit.
-        prediction = predictor(
-            model,
-            current,
-            time=1.0,
-            vocabulary=vocabulary,
-            graphlet_basis=graphlet_basis,
-            device=device,
-            rng=generator,
-            sample_endpoint=cfg.sample_endpoint,
-            sample_graphlet=cfg.sample_graphlet,
-            endpoint_temperature=cfg.endpoint_temperature,
-        )
-        current = apply_hybrid_attributes(current, prediction, vocabulary)
 
     if return_trace:
         return current, trace
