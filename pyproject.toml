@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "graph-er"
+version = "0.1.0"
+description = "Degree-constrained graph generation with endpoint and graphlet guidance"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "networkx>=3.2",
+  "numpy>=1.24",
+  "PyYAML>=6.0",
+  "torch>=2.1",
+]
+
+[project.optional-dependencies]
+molecular = ["rdkit>=2023.9"]
+qm9-pyg = ["torch-geometric>=2.5"]
+reports = ["matplotlib>=3.7"]
+fcd = ["fcd-torch>=1.0"]
+dev = ["pytest>=8.0", "ruff>=0.12"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

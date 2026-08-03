@@ -18,18 +18,16 @@ The built-in NSPDK is a deterministic approximation based on hashed rooted
 neighborhood-pair features. If you use it in a paper, report it as the
 "builtin NSPDK proxy" unless you replace it with an official NSPDK backend.
 """
+
 from __future__ import annotations
 
 import argparse
 import hashlib
-import json
-import math
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
 import networkx as nx
-import numpy as np
 
 from grapher.molecular.graph_io import (
     graph_to_smiles,
@@ -54,7 +52,9 @@ def _canonicalize_smiles(smiles: str) -> str | None:
         return None
 
 
-def _graph_to_canonical_smiles_and_error(graph: nx.Graph) -> tuple[str | None, str | None]:
+def _graph_to_canonical_smiles_and_error(
+    graph: nx.Graph,
+) -> tuple[str | None, str | None]:
     Chem = require_rdkit()
     try:
         mol = nx_to_rdkit_mol(graph, sanitize=True)
@@ -91,10 +91,16 @@ def _load_smiles_as_graphs(path: str | Path) -> tuple[list[nx.Graph], list[str]]
     return graphs, canonical
 
 
-def _resolve_generated_graphs(args: argparse.Namespace) -> tuple[list[nx.Graph], str, bool]:
+def _resolve_generated_graphs(
+    args: argparse.Namespace,
+) -> tuple[list[nx.Graph], str, bool]:
     """Return graphs, source description, whether invalid graphs can be counted."""
     if args.generated_graphs:
-        return _load_graphs_from_path(args.generated_graphs), str(args.generated_graphs), True
+        return (
+            _load_graphs_from_path(args.generated_graphs),
+            str(args.generated_graphs),
+            True,
+        )
 
     if args.generated_dir:
         d = Path(args.generated_dir)
@@ -113,7 +119,9 @@ def _resolve_generated_graphs(args: argparse.Namespace) -> tuple[list[nx.Graph],
         graphs, _ = _load_smiles_as_graphs(args.generated_smiles)
         return graphs, str(args.generated_smiles), False
 
-    raise ValueError("Provide --generated-dir, --generated-graphs, or --generated-smiles.")
+    raise ValueError(
+        "Provide --generated-dir, --generated-graphs, or --generated-smiles."
+    )
 
 
 def _load_reference_graphs_and_smiles(
@@ -173,7 +181,9 @@ def _validity_and_smiles(graphs: list[nx.Graph]) -> dict[str, Any]:
     }
 
 
-def _novelty(unique_valid_smiles: Iterable[str], train_smiles: Iterable[str]) -> tuple[float | None, int]:
+def _novelty(
+    unique_valid_smiles: Iterable[str], train_smiles: Iterable[str]
+) -> tuple[float | None, int]:
     unique = set(unique_valid_smiles)
     if not unique:
         return 0.0, 0
@@ -284,8 +294,14 @@ def builtin_nspdk_mmd(
 ) -> float | None:
     if not reference_graphs or not generated_graphs:
         return None
-    ref_features = [nspdk_feature_counter(g, radius=radius, distance=distance, normalize=normalize) for g in reference_graphs]
-    gen_features = [nspdk_feature_counter(g, radius=radius, distance=distance, normalize=normalize) for g in generated_graphs]
+    ref_features = [
+        nspdk_feature_counter(g, radius=radius, distance=distance, normalize=normalize)
+        for g in reference_graphs
+    ]
+    gen_features = [
+        nspdk_feature_counter(g, radius=radius, distance=distance, normalize=normalize)
+        for g in generated_graphs
+    ]
     return _sparse_l2_squared(_mean_sparse(ref_features), _mean_sparse(gen_features))
 
 
@@ -325,7 +341,9 @@ def compute_fcd(
             try:
                 from fcd_torch import get_fcd  # type: ignore
 
-                value = get_fcd(generated_smiles, reference_smiles, device=resolved_device)
+                value = get_fcd(
+                    generated_smiles, reference_smiles, device=resolved_device
+                )
                 return float(value), {"status": "ok", "backend": "fcd_torch.get_fcd"}
             except Exception as exc3:
                 return None, {
@@ -335,23 +353,33 @@ def compute_fcd(
                         "fcd_torch.fcd.FCD",
                         "fcd_torch.get_fcd",
                     ],
-                    "errors": [type(exc1).__name__, type(exc2).__name__, type(exc3).__name__],
+                    "errors": [
+                        type(exc1).__name__,
+                        type(exc2).__name__,
+                        type(exc3).__name__,
+                    ],
                     "message": "Install a compatible fcd_torch package to compute FCD, or pass --skip-fcd.",
                 }
 
 
-def _select_valid_graphs(graphs: list[nx.Graph], smiles: list[str | None]) -> list[nx.Graph]:
+def _select_valid_graphs(
+    graphs: list[nx.Graph], smiles: list[str | None]
+) -> list[nx.Graph]:
     return [g for g, smi in zip(graphs, smiles) if smi is not None]
 
 
 def evaluate(args: argparse.Namespace) -> dict[str, Any]:
-    generated_graphs, generated_source, validity_denominator_complete = _resolve_generated_graphs(args)
+    generated_graphs, generated_source, validity_denominator_complete = (
+        _resolve_generated_graphs(args)
+    )
 
-    reference_graphs, reference_smiles, reference_source = _load_reference_graphs_and_smiles(
-        dataset_root=args.dataset_root,
-        dataset_name=args.dataset,
-        split=args.reference_split,
-        smiles_file=args.reference_smiles,
+    reference_graphs, reference_smiles, reference_source = (
+        _load_reference_graphs_and_smiles(
+            dataset_root=args.dataset_root,
+            dataset_name=args.dataset,
+            split=args.reference_split,
+            smiles_file=args.reference_smiles,
+        )
     )
     train_graphs, train_smiles, train_source = _load_reference_graphs_and_smiles(
         dataset_root=args.dataset_root,
@@ -371,9 +399,13 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         train_smiles = train_smiles[: int(args.max_train)]
 
     valid_info = _validity_and_smiles(generated_graphs)
-    novelty_rate, novel_count = _novelty(valid_info["unique_valid_smiles"], train_smiles)
+    novelty_rate, novel_count = _novelty(
+        valid_info["unique_valid_smiles"], train_smiles
+    )
 
-    generated_valid_graphs = _select_valid_graphs(generated_graphs, valid_info["all_smiles"])
+    generated_valid_graphs = _select_valid_graphs(
+        generated_graphs, valid_info["all_smiles"]
+    )
 
     nspdk_all = builtin_nspdk_mmd(
         reference_graphs,
@@ -447,12 +479,26 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate generated molecular graphs from GraphER + mixture CatFlow.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate generated molecular graphs from GraphER + mixture CatFlow."
+    )
 
     source = parser.add_argument_group("Generated molecules")
-    source.add_argument("--generated-dir", default=None, help="Directory containing molecular_graphs.pkl and/or generated.smi.")
-    source.add_argument("--generated-graphs", default=None, help="Path to molecular_graphs.pkl. Preferred for validity.")
-    source.add_argument("--generated-smiles", default=None, help="Path to generated SMILES. Validity will only cover listed SMILES.")
+    source.add_argument(
+        "--generated-dir",
+        default=None,
+        help="Directory containing molecular_graphs.pkl and/or generated.smi.",
+    )
+    source.add_argument(
+        "--generated-graphs",
+        default=None,
+        help="Path to molecular_graphs.pkl. Preferred for validity.",
+    )
+    source.add_argument(
+        "--generated-smiles",
+        default=None,
+        help="Path to generated SMILES. Validity will only cover listed SMILES.",
+    )
 
     ref = parser.add_argument_group("Reference / train molecules")
     ref.add_argument("--dataset-root", default="outputs/datasets")
@@ -462,7 +508,11 @@ def main() -> None:
     ref.add_argument("--reference-smiles", default=None)
     ref.add_argument("--train-smiles", default=None)
 
-    parser.add_argument("--output-dir", default=None, help="Defaults to generated-dir/evaluation if --generated-dir is used.")
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Defaults to generated-dir/evaluation if --generated-dir is used.",
+    )
     parser.add_argument("--max-generated", type=int, default=None)
     parser.add_argument("--max-reference", type=int, default=None)
     parser.add_argument("--max-train", type=int, default=None)

@@ -33,14 +33,10 @@ from grapher.refinement.rewiring import (
 
 @dataclass
 class HybridPrediction:
-    node_probabilities: np.ndarray
     edge_probabilities: np.ndarray
-    sampled_node_labels: np.ndarray
     sampled_edge_labels: np.ndarray
     graphlet_history: dict[str, dict[str, float]]
     graphlet_connected_mass: dict[str, float]
-    graphlet_mean_history: dict[str, dict[str, float]]
-    graphlet_mean_connected_mass: dict[str, float]
     sampled_graph: nx.Graph
     sampled_degree_match: bool
     sampled_connected: bool
@@ -70,9 +66,7 @@ class HybridRefinerConfig:
     require_same_edge_type_pair: bool = False
     preserve_removed_edge_type: bool = False
     enforce_molecular_valence: bool = False
-    molecular_allowed_bond_types: tuple[int, ...] = (
-        DEFAULT_GENERATED_BOND_TYPES
-    )
+    molecular_allowed_bond_types: tuple[int, ...] = DEFAULT_GENERATED_BOND_TYPES
     molecular_candidate_attempt_multiplier: int = 2
     rdkit_candidate_check: bool = False
 
@@ -93,9 +87,7 @@ class HybridRefinerConfig:
             graphlet_weight=float(data.get("graphlet_weight", 1.0)),
             graphlet_mass_weight=float(data.get("graphlet_mass_weight", 0.25)),
             graphlet_top_k=int(data.get("graphlet_top_k", 8)),
-            accept_only_improving=bool(
-                data.get("accept_only_improving", True)
-            ),
+            accept_only_improving=bool(data.get("accept_only_improving", True)),
             min_improvement=float(data.get("min_improvement", 1.0e-8)),
             patience=max(int(data.get("patience", 2)), 1),
             sample_endpoint=bool(data.get("sample_endpoint", True)),
@@ -136,9 +128,7 @@ class HybridRefinerConfig:
                 ),
                 1,
             ),
-            rdkit_candidate_check=bool(
-                data.get("rdkit_candidate_check", False)
-            ),
+            rdkit_candidate_check=bool(data.get("rdkit_candidate_check", False)),
         )
         if config.steps < 0:
             raise ValueError("hybrid_refiner.steps must be non-negative.")
@@ -156,13 +146,10 @@ class HybridRefinerConfig:
                 "Only infeasible_target_policy='guidance_only' is implemented. "
                 "The sampled endpoint is never installed directly."
             )
-        if (
-            config.preserve_removed_edge_type
-            and not config.require_same_edge_type_pair
-        ):
+        if config.require_same_edge_type_pair != config.preserve_removed_edge_type:
             raise ValueError(
-                "preserve_removed_edge_type requires "
-                "require_same_edge_type_pair=true."
+                "Strict typed rewiring requires both require_same_edge_type_pair "
+                "and preserve_removed_edge_type to have the same value."
             )
         if (
             config.categorical_weight == 0.0
@@ -173,48 +160,6 @@ class HybridRefinerConfig:
         return config
 
 
-def _current_only_batch(
-    graph: nx.Graph,
-    *,
-    time: float,
-    vocabulary: GraphCategoryVocabulary,
-    graphlet_basis: GraphletBasis,
-):
-    example = HybridEndpointExample(
-        current_graph=graph,
-        target_graph=graph,
-        time=float(time),
-        graphlet_target=np.zeros(graphlet_basis.width, dtype=np.float32),
-        graphlet_mass_target=np.zeros(
-            len(graphlet_basis.sizes),
-            dtype=np.float32,
-        ),
-    )
-    return collate_endpoint_examples([example], vocabulary)
-
-
-def _sample_categorical_rows(
-    probabilities: np.ndarray,
-    rng: np.random.Generator,
-    *,
-    sample: bool,
-) -> np.ndarray:
-    probabilities = np.asarray(probabilities, dtype=np.float64)
-    if not sample:
-        return np.argmax(probabilities, axis=-1).astype(np.int64)
-    flat = probabilities.reshape(-1, probabilities.shape[-1])
-    values = np.zeros(flat.shape[0], dtype=np.int64)
-    for index, row in enumerate(flat):
-        row = np.maximum(row, 0.0)
-        total = float(row.sum())
-        if total <= 0.0:
-            row = np.full(row.size, 1.0 / max(row.size, 1))
-        else:
-            row = row / total
-        values[index] = int(rng.choice(row.size, p=row))
-    return values.reshape(probabilities.shape[:-1])
-
-
 def _sample_endpoint_labels(
     node_probabilities: np.ndarray,
     edge_probabilities: np.ndarray,
@@ -222,11 +167,23 @@ def _sample_endpoint_labels(
     *,
     sample: bool,
 ) -> tuple[np.ndarray, np.ndarray]:
-    node_labels = _sample_categorical_rows(
-        node_probabilities,
-        rng,
-        sample=sample,
-    )
+    node_probabilities = np.asarray(node_probabilities, dtype=np.float64)
+    if sample:
+        node_labels = np.zeros(node_probabilities.shape[0], dtype=np.int64)
+        for index, probabilities in enumerate(node_probabilities):
+            probabilities = np.maximum(probabilities, 0.0)
+            total = float(probabilities.sum())
+            probabilities = (
+                probabilities / total
+                if total > 0.0
+                else np.full(
+                    probabilities.size,
+                    1.0 / max(probabilities.size, 1),
+                )
+            )
+            node_labels[index] = int(rng.choice(probabilities.size, p=probabilities))
+    else:
+        node_labels = np.argmax(node_probabilities, axis=-1).astype(np.int64)
     node_count = node_labels.shape[0]
     edge_labels = np.zeros((node_count, node_count), dtype=np.int64)
     for u in range(node_count):
@@ -257,9 +214,7 @@ def graph_from_categorical_labels(
     for node, category in enumerate(node_labels):
         attributes = {}
         if vocabulary.node_attribute:
-            attributes[vocabulary.node_attribute] = vocabulary.node_value(
-                int(category)
-            )
+            attributes[vocabulary.node_attribute] = vocabulary.node_value(int(category))
         graph.add_node(int(node), **attributes)
     for u in range(node_labels.size):
         for v in range(u + 1, node_labels.size):
@@ -268,9 +223,7 @@ def graph_from_categorical_labels(
                 continue
             attributes = {}
             if vocabulary.edge_attribute:
-                attributes[vocabulary.edge_attribute] = vocabulary.edge_value(
-                    category
-                )
+                attributes[vocabulary.edge_attribute] = vocabulary.edge_value(category)
             graph.add_edge(u, v, **attributes)
     return graph
 
@@ -290,18 +243,29 @@ def predict_hybrid_target(
     endpoint_temperature: float = 1.0,
 ) -> HybridPrediction:
     model.eval()
-    batch = _current_only_batch(
-        graph,
-        time=time,
-        vocabulary=vocabulary,
-        graphlet_basis=graphlet_basis,
+    batch = collate_endpoint_examples(
+        [
+            HybridEndpointExample(
+                current_graph=graph,
+                target_graph=graph,
+                time=float(time),
+                graphlet_target=np.zeros(
+                    graphlet_basis.width,
+                    dtype=np.float32,
+                ),
+                graphlet_mass_target=np.zeros(
+                    len(graphlet_basis.sizes),
+                    dtype=np.float32,
+                ),
+            )
+        ],
+        vocabulary,
     ).to(device)
     outputs = model(batch)
     node_probabilities_t, edge_probabilities_t = model.endpoint_probabilities(
         outputs,
         temperature=endpoint_temperature,
     )
-    graphlet_mean_t, graphlet_mass_mean_t = model.graphlet_means(outputs)
     node_probabilities = node_probabilities_t[0].detach().cpu().numpy()
     edge_probabilities = edge_probabilities_t[0].detach().cpu().numpy()
     node_labels, edge_labels = _sample_endpoint_labels(
@@ -316,9 +280,7 @@ def predict_hybrid_target(
     for start, stop in graphlet_basis.slices:
         block = np.maximum(alpha[start:stop], 1.0e-12)
         graphlet_sample[start:stop] = (
-            rng.dirichlet(block)
-            if sample_graphlet
-            else block / float(block.sum())
+            rng.dirichlet(block) if sample_graphlet else block / float(block.sum())
         )
     mass_ab = outputs["graphlet_mass_ab"][0].detach().cpu().numpy()
     graphlet_mass = np.asarray(
@@ -340,24 +302,11 @@ def predict_hybrid_target(
         int(sampled_graph.degree(node)) for node in sorted(sampled_graph.nodes())
     ]
     return HybridPrediction(
-        node_probabilities=node_probabilities,
         edge_probabilities=edge_probabilities,
-        sampled_node_labels=node_labels,
         sampled_edge_labels=edge_labels,
         graphlet_history=graphlet_basis.unflatten_history(graphlet_sample),
         graphlet_connected_mass={
-            k: float(value)
-            for k, value in zip(graphlet_basis.sizes, graphlet_mass)
-        },
-        graphlet_mean_history=graphlet_basis.unflatten_history(
-            graphlet_mean_t[0].detach().cpu().numpy()
-        ),
-        graphlet_mean_connected_mass={
-            k: float(value)
-            for k, value in zip(
-                graphlet_basis.sizes,
-                graphlet_mass_mean_t[0].detach().cpu().numpy(),
-            )
+            k: float(value) for k, value in zip(graphlet_basis.sizes, graphlet_mass)
         },
         sampled_graph=sampled_graph,
         sampled_degree_match=current_degree == sampled_degree,
@@ -388,25 +337,10 @@ def _removed_edge_category(
     vocabulary: GraphCategoryVocabulary,
 ) -> int | None:
     removed, _ = action
-    categories = [
-        int(vocabulary.edge_index(graph.edges[u, v]))
-        for u, v in removed
-    ]
+    categories = [int(vocabulary.edge_index(graph.edges[u, v])) for u, v in removed]
     if not categories or len(set(categories)) != 1:
         return None
     return categories[0]
-
-
-def _filter_same_edge_type_actions(
-    graph: nx.Graph,
-    actions: Sequence[Action],
-    vocabulary: GraphCategoryVocabulary,
-) -> list[Action]:
-    return [
-        action
-        for action in actions
-        if _removed_edge_category(graph, action, vocabulary) is not None
-    ]
 
 
 def _sample_same_edge_type_actions(
@@ -426,10 +360,7 @@ def _sample_same_edge_type_actions(
     groups = [edges for edges in edge_groups.values() if len(edges) >= 2]
     if budget <= 0 or not groups:
         return []
-    theoretical_max = sum(
-        len(edges) * (len(edges) - 1)
-        for edges in groups
-    )
+    theoretical_max = sum(len(edges) * (len(edges) - 1) for edges in groups)
     target = min(int(budget), int(theoretical_max))
     group_weights = np.asarray(
         [len(edges) * (len(edges) - 1) / 2 for edges in groups],
@@ -544,19 +475,21 @@ def _categorical_gain(
     )
 
 
-def _graphlet_distance_from_summary(
-    summary: dict[str, Any],
+def graphlet_guidance_distance(
+    graph: nx.Graph,
     prediction: HybridPrediction,
-    graphlet_basis: GraphletBasis,
     *,
+    summary_config: SummaryConfig,
+    graphlet_basis: GraphletBasis,
     mass_weight: float,
 ) -> float:
+    summary = extract_summary(graph, summary_config)
     current = graphlet_basis.flatten_history(
         summary.get("graphlet_history", {}) or {}
     ).astype(np.float64)
-    target = graphlet_basis.flatten_history(
-        prediction.graphlet_history
-    ).astype(np.float64)
+    target = graphlet_basis.flatten_history(prediction.graphlet_history).astype(
+        np.float64
+    )
     block_distances = []
     for start, stop in graphlet_basis.slices:
         block_distances.append(
@@ -568,31 +501,11 @@ def _graphlet_distance_from_summary(
     target_mass = graphlet_basis.flatten_mass(
         prediction.graphlet_connected_mass
     ).astype(np.float64)
-    graphlet_distance = (
-        float(np.mean(block_distances)) if block_distances else 0.0
-    )
+    graphlet_distance = float(np.mean(block_distances)) if block_distances else 0.0
     mass_distance = (
-        float(np.mean(np.abs(current_mass - target_mass)))
-        if current_mass.size
-        else 0.0
+        float(np.mean(np.abs(current_mass - target_mass))) if current_mass.size else 0.0
     )
     return graphlet_distance + float(mass_weight) * mass_distance
-
-
-def graphlet_guidance_distance(
-    graph: nx.Graph,
-    prediction: HybridPrediction,
-    *,
-    summary_config: SummaryConfig,
-    graphlet_basis: GraphletBasis,
-    mass_weight: float,
-) -> float:
-    return _graphlet_distance_from_summary(
-        extract_summary(graph, summary_config),
-        prediction,
-        graphlet_basis,
-        mass_weight=mass_weight,
-    )
 
 
 def score_hybrid_candidates(
@@ -680,8 +593,7 @@ def score_hybrid_candidates(
             )
             row["graphlet_gain"] = float(current_distance - candidate_distance)
             row["hybrid_score"] = float(
-                row["hybrid_score"]
-                + cfg.graphlet_weight * row["graphlet_gain"]
+                row["hybrid_score"] + cfg.graphlet_weight * row["graphlet_gain"]
             )
             row["candidate_graph"] = candidate_graph
     for row in rows:
@@ -693,16 +605,18 @@ def score_hybrid_candidates(
                 vocabulary,
                 preserve_removed_edge_type=cfg.preserve_removed_edge_type,
             )
-    if cfg.enforce_molecular_valence:
+    if cfg.enforce_molecular_valence or cfg.rdkit_candidate_check:
         for row in rows:
             candidate_graph = row["candidate_graph"]
             if not isinstance(candidate_graph, nx.Graph):
                 continue
-            molecular_valid = is_molecular_valence_feasible(
-                candidate_graph,
-                allowed_atom_types=vocabulary.node_values,
-                allowed_bond_types=cfg.molecular_allowed_bond_types,
-            )
+            molecular_valid = True
+            if cfg.enforce_molecular_valence:
+                molecular_valid = is_molecular_valence_feasible(
+                    candidate_graph,
+                    allowed_atom_types=vocabulary.node_values,
+                    allowed_bond_types=cfg.molecular_allowed_bond_types,
+                )
             if molecular_valid and cfg.rdkit_candidate_check:
                 from grapher.molecular.graph_io import is_valid_molecular_graph
 
@@ -711,28 +625,6 @@ def score_hybrid_candidates(
             if not molecular_valid:
                 row["hybrid_score"] = float("-inf")
     return rows
-
-
-def _select_scored_candidate(
-    rows: list[dict[str, Any]],
-    *,
-    config: HybridRefinerConfig,
-    rng: np.random.Generator,
-) -> dict[str, Any] | None:
-    finite = [row for row in rows if np.isfinite(float(row["hybrid_score"]))]
-    if not finite:
-        return None
-    scores = np.asarray(
-        [float(row["hybrid_score"]) for row in finite],
-        dtype=np.float64,
-    )
-    if config.selection in {"greedy", "argmax"}:
-        return finite[int(np.argmax(scores))]
-    logits = scores / max(float(config.temperature), 1.0e-12)
-    logits -= float(np.max(logits))
-    probabilities = np.exp(logits)
-    probabilities /= float(probabilities.sum())
-    return finite[int(rng.choice(len(finite), p=probabilities))]
 
 
 def _nodewise_degrees(graph: nx.Graph) -> list[int]:
@@ -805,11 +697,11 @@ def refine_graph_with_hybrid_predictions(
                 preserve_connectivity=cfg.preserve_connectivity,
             )
         if cfg.require_same_edge_type_pair:
-            candidates = _filter_same_edge_type_actions(
-                current,
-                candidates,
-                vocabulary,
-            )
+            candidates = [
+                action
+                for action in candidates
+                if _removed_edge_category(current, action, vocabulary) is not None
+            ]
             if cfg.candidate_budget > 0:
                 candidates = candidates[: int(cfg.candidate_budget)]
         if not candidates:
@@ -836,10 +728,22 @@ def refine_graph_with_hybrid_predictions(
             summary_config=summary_config,
             config=cfg,
         )
-        chosen = _select_scored_candidate(rows, config=cfg, rng=generator)
-        rejected_molecular = sum(
-            row.get("molecular_valid") is False for row in rows
-        )
+        finite = [row for row in rows if np.isfinite(float(row["hybrid_score"]))]
+        chosen = None
+        if finite:
+            scores = np.asarray(
+                [float(row["hybrid_score"]) for row in finite],
+                dtype=np.float64,
+            )
+            if cfg.selection in {"greedy", "argmax"}:
+                chosen = finite[int(np.argmax(scores))]
+            else:
+                logits = scores / max(float(cfg.temperature), 1.0e-12)
+                logits -= float(np.max(logits))
+                probabilities = np.exp(logits)
+                probabilities /= float(probabilities.sum())
+                chosen = finite[int(generator.choice(len(finite), p=probabilities))]
+        rejected_molecular = sum(row.get("molecular_valid") is False for row in rows)
         if chosen is None:
             trace.append(
                 {

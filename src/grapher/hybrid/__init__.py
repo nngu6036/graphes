@@ -1,9 +1,4 @@
-"""CatFlow-inspired endpoint prediction with graphlet-guided rewiring.
-
-The hybrid package is intentionally separate from the legacy summary-only
-generator.  Its model predicts a complete categorical endpoint law together
-with a higher-order graphlet law from an intermediate, degree-preserving graph.
-"""
+"""Endpoint prediction and graphlet-guided degree-preserving rewiring."""
 
 from grapher.hybrid.data import (
     GraphCategoryVocabulary,

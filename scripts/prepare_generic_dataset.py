@@ -14,6 +14,7 @@ Run from the repository root with:
         --dataset sbm \
         --root outputs/datasets
 """
+
 from __future__ import annotations
 
 import argparse
@@ -23,12 +24,19 @@ from typing import Any
 import networkx as nx
 import numpy as np
 
-from grapher.data.builders import SPLIT_NAMES, build_graphs_from_config, infer_dataset_type, split_graphs
+from grapher.data.builders import (
+    SPLIT_NAMES,
+    build_graphs_from_config,
+    infer_dataset_type,
+    split_graphs,
+)
 from grapher.data.io import dataset_dir, save_dataset_splits
 from grapher.utils.io import load_yaml, save_json
 
 
-def _verify_graph(g: nx.Graph, *, require_connected: bool, reject_zero_degree: bool) -> list[str]:
+def _verify_graph(
+    g: nx.Graph, *, require_connected: bool, reject_zero_degree: bool
+) -> list[str]:
     errors: list[str] = []
     if g.is_directed():
         errors.append("graph is directed")
@@ -62,8 +70,13 @@ def _summarize_split(graphs: list[nx.Graph]) -> dict[str, Any]:
         }
     node_counts = np.asarray([g.number_of_nodes() for g in graphs], dtype=float)
     edge_counts = np.asarray([g.number_of_edges() for g in graphs], dtype=float)
-    connected = np.asarray([nx.is_connected(g) if g.number_of_nodes() > 0 else False for g in graphs], dtype=float)
-    no_self_loops = np.asarray([nx.number_of_selfloops(g) == 0 for g in graphs], dtype=float)
+    connected = np.asarray(
+        [nx.is_connected(g) if g.number_of_nodes() > 0 else False for g in graphs],
+        dtype=float,
+    )
+    no_self_loops = np.asarray(
+        [nx.number_of_selfloops(g) == 0 for g in graphs], dtype=float
+    )
     return {
         "num_graphs": len(graphs),
         "min_nodes": int(node_counts.min()),
@@ -77,7 +90,9 @@ def _summarize_split(graphs: list[nx.Graph]) -> dict[str, Any]:
     }
 
 
-def verify_splits(splits: dict[str, list[nx.Graph]], config: dict[str, Any]) -> dict[str, Any]:
+def verify_splits(
+    splits: dict[str, list[nx.Graph]], config: dict[str, Any]
+) -> dict[str, Any]:
     filters = config.get("filters", {}) or {}
     require_connected = bool(filters.get("require_connected", True))
     reject_zero_degree = bool(filters.get("reject_zero_degree", True))
@@ -109,7 +124,9 @@ def verify_splits(splits: dict[str, list[nx.Graph]], config: dict[str, Any]) -> 
     }
     if errors:
         preview = "\n".join(errors[:20])
-        raise AssertionError(f"Dataset verification failed with {len(errors)} error(s):\n{preview}")
+        raise AssertionError(
+            f"Dataset verification failed with {len(errors)} error(s):\n{preview}"
+        )
     return report
 
 
@@ -140,9 +157,17 @@ def _print_report(report: dict[str, Any], out_dir: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Prepare and verify SBM, grid, or ego graph datasets.")
-    parser.add_argument("--dataset", required=True, help="Dataset name; loads configs/datasets/<dataset>.yaml.")
-    parser.add_argument("--root", default="outputs/datasets", help="Output root for dataset splits.")
+    parser = argparse.ArgumentParser(
+        description="Prepare and verify SBM, grid, or ego graph datasets."
+    )
+    parser.add_argument(
+        "--dataset",
+        required=True,
+        help="Dataset name; loads configs/datasets/<dataset>.yaml.",
+    )
+    parser.add_argument(
+        "--root", default="outputs/datasets", help="Output root for dataset splits."
+    )
     args = parser.parse_args()
 
     config_path = Path("configs/datasets") / f"{args.dataset}.yaml"

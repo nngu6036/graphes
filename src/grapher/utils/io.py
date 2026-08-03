@@ -20,13 +20,17 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     return data or {}
 
 
-def require_config(mapping: dict[str, Any], key: str, *, context: str = "config") -> Any:
+def require_config(
+    mapping: dict[str, Any], key: str, *, context: str = "config"
+) -> Any:
     if key not in mapping:
         raise KeyError(f"Missing required config parameter: {context}.{key}")
     return mapping[key]
 
 
-def require_config_section(mapping: dict[str, Any], key: str, *, context: str = "config") -> dict[str, Any]:
+def require_config_section(
+    mapping: dict[str, Any], key: str, *, context: str = "config"
+) -> dict[str, Any]:
     value = require_config(mapping, key, context=context)
     if not isinstance(value, dict):
         raise TypeError(f"Config parameter {context}.{key} must be a mapping.")
@@ -45,11 +49,6 @@ def save_json(obj: Any, path: str | Path) -> None:
     ensure_dir(path.parent)
     with path.open("w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2, sort_keys=True)
-
-
-def load_json(path: str | Path) -> Any:
-    with Path(path).open("r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 def save_pickle(obj: Any, path: str | Path) -> None:

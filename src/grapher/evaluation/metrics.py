@@ -16,8 +16,6 @@ from grapher.properties.summary import (
 )
 from grapher.utils.motifs import (
     flatten_graphlet_history,
-    graphlet_history,
-    graphlet_keys_by_size,
     topology_graphlet_keys_by_size,
 )
 
@@ -96,57 +94,6 @@ def mmd_orbit(
     k_yy = gaussian_emd_kernel(h_gen, h_gen, sigma)
     k_xy = gaussian_emd_kernel(h_ref, h_gen, sigma)
     return float(k_xx.mean() + k_yy.mean() - 2.0 * k_xy.mean())
-
-
-def graphlet_history_matrix(
-    graphs: Sequence[nx.Graph],
-    *,
-    k_min: int = 3,
-    k_max: int = 5,
-    connected_only: bool = True,
-    num_samples: int | None = None,
-) -> np.ndarray:
-    histories = [
-        graphlet_history(
-            g,
-            k_min=k_min,
-            k_max=k_max,
-            connected_only=connected_only,
-            num_samples=num_samples,
-        )
-        for g in graphs
-    ]
-    keys_by_k = graphlet_keys_by_size(histories)
-    rows = [flatten_graphlet_history(h, keys_by_k) for h in histories]
-    if not rows:
-        return np.zeros((0, 1), dtype=np.float64)
-    width = max(max((row.size for row in rows), default=0), 1)
-    out = np.zeros((len(rows), width), dtype=np.float64)
-    for i, row in enumerate(rows):
-        out[i, : row.size] = row
-    return out
-
-
-def mmd_graphlet_history(
-    reference: Sequence[nx.Graph],
-    generated: Sequence[nx.Graph],
-    *,
-    k_min: int = 3,
-    k_max: int = 5,
-    connected_only: bool = True,
-    num_samples: int | None = None,
-    backend: str = "sampled",
-) -> float:
-    graphlet_mmd, _ = mmd_graphlet_statistics(
-        reference,
-        generated,
-        k_min=k_min,
-        k_max=k_max,
-        connected_only=connected_only,
-        num_samples=num_samples,
-        backend=backend,
-    )
-    return graphlet_mmd
 
 
 def mmd_graphlet_statistics(

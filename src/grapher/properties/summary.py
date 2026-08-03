@@ -143,9 +143,7 @@ class SummaryConfig:
             graphlet_k_max=k_max,
             graphlet_connected_only=bool(data.get("graphlet_connected_only", True)),
             graphlet_num_samples=num_samples,
-            graphlet_backend=str(
-                data.get("graphlet_backend", "sampled")
-            ).lower(),
+            graphlet_backend=str(data.get("graphlet_backend", "sampled")).lower(),
         )
 
 
@@ -407,9 +405,7 @@ def _orca_graphlet_orbit_mapping(
         )
         roles = roles_by_signature.get(signature)
         if roles is None:
-            raise RuntimeError(
-                f"No standard ORCA role map for k={k} graphlet {key!r}."
-            )
+            raise RuntimeError(f"No standard ORCA role map for k={k} graphlet {key!r}.")
         mapping.append((str(key), roles))
 
     return tuple(sorted(mapping, key=lambda item: item[0]))
@@ -457,26 +453,8 @@ def orca_connected_graphlet_statistics(
             for key, value in counts.items()
         }
         denominator = comb(n, k) if n >= k else 0
-        connected_mass[str(k)] = (
-            float(total / denominator) if denominator > 0 else 0.0
-        )
+        connected_mass[str(k)] = float(total / denominator) if denominator > 0 else 0.0
     return history, connected_mass
-
-
-def orca_connected_graphlet_history(
-    graph: nx.Graph,
-    *,
-    k_min: int = 3,
-    k_max: int = 4,
-) -> dict[str, dict[str, float]]:
-    """Count connected induced graphlets exactly using one ORCA invocation."""
-
-    history, _ = orca_connected_graphlet_statistics(
-        graph,
-        k_min=k_min,
-        k_max=k_max,
-    )
-    return history
 
 
 def orbit_count_vector(graph: nx.Graph) -> np.ndarray:
@@ -543,13 +521,6 @@ def graphlet_statistics_summary(
     return history, connected_mass
 
 
-def graphlet_history_summary(
-    graph: nx.Graph, cfg: SummaryConfig
-) -> dict[str, dict[str, float]]:
-    history, _ = graphlet_statistics_summary(graph, cfg)
-    return history
-
-
 def extract_summary(
     graph: nx.Graph, config: SummaryConfig | dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -594,24 +565,17 @@ def extract_summary(
     }
 
 
-def _l2(a: Any, b: Any) -> float:
-    av = np.asarray(a, dtype=np.float64).reshape(-1)
-    bv = np.asarray(b, dtype=np.float64).reshape(-1)
-    width = max(av.size, bv.size)
-    ap = np.zeros(width, dtype=np.float64)
-    bp = np.zeros(width, dtype=np.float64)
-    ap[: av.size] = av
-    bp[: bv.size] = bv
-    return float(np.linalg.norm(ap - bp))
-
-
 def _weighted_vector_distance(current: Any, target: Any, *, normalize: bool) -> float:
     """L2 distance with optional dimension normalization."""
 
     av = np.asarray(current, dtype=np.float64).reshape(-1)
     bv = np.asarray(target, dtype=np.float64).reshape(-1)
     width = max(av.size, bv.size, 1)
-    value = _l2(av, bv)
+    left = np.zeros(width, dtype=np.float64)
+    right = np.zeros(width, dtype=np.float64)
+    left[: av.size] = av
+    right[: bv.size] = bv
+    value = float(np.linalg.norm(left - right))
     return float(value / np.sqrt(width)) if normalize else float(value)
 
 
@@ -707,17 +671,12 @@ def distance_to_summary(
             energy += graphlet_w * graphlet_history_l2_distance(
                 current_history,
                 target.get("graphlet_history", {}) or {},
-                size_weights={
-                    str(k): float(v) for k, v in dict(size_weights).items()
-                },
+                size_weights={str(k): float(v) for k, v in dict(size_weights).items()},
                 normalize_terms=normalize,
             )
         if graphlet_mass_w != 0.0:
             target_mass = target.get("graphlet_connected_mass", {}) or {}
-            keys = [
-                str(k)
-                for k in range(cfg.graphlet_k_min, cfg.graphlet_k_max + 1)
-            ]
+            keys = [str(k) for k in range(cfg.graphlet_k_min, cfg.graphlet_k_max + 1)]
             energy += graphlet_mass_w * _weighted_vector_distance(
                 [current_connected_mass.get(key, 0.0) for key in keys],
                 [target_mass.get(key, 0.0) for key in keys],
@@ -739,19 +698,3 @@ def distance_to_summary(
         )
 
     return float(energy)
-
-
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, (np.integer, np.floating)):
-        return value.item()
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    return value
-
-
-def summary_to_jsonable(summary: dict[str, Any]) -> dict[str, Any]:
-    return {str(key): _jsonable(value) for key, value in summary.items()}

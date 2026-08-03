@@ -28,13 +28,7 @@ from grapher.properties.summary import (
 )
 from grapher.utils.io import ensure_dir, load_pickle, load_yaml, save_json
 
-
 REPORT_METRICS = ("degree_mmd", "clustering_mmd", "orbit_mmd")
-MOLECULAR_METRICS = (
-    "validity_without_correction",
-    "uniqueness_rate",
-    "novelty_rate",
-)
 ATOM_COLORS = {
     1: "#F3F4F6",
     6: "#374151",
@@ -224,8 +218,7 @@ def select_sample_indices(
     if selection == "random":
         rng = np.random.default_rng(seed)
         return sorted(
-            int(index)
-            for index in rng.choice(len(graphs), size=count, replace=False)
+            int(index) for index in rng.choice(len(graphs), size=count, replace=False)
         )
     if selection != "stratified":
         raise ValueError(f"Unknown sample selection: {selection!r}.")
@@ -268,9 +261,7 @@ def _draw_graph(
     for node, data in graph.nodes(data=True):
         atomic_number = _atomic_number(data)
         node_colors.append(
-            ATOM_COLORS.get(atomic_number, "#60A5FA")
-            if molecular
-            else "#4C78A8"
+            ATOM_COLORS.get(atomic_number, "#60A5FA") if molecular else "#4C78A8"
         )
         if molecular and atomic_number is not None:
             labels[node] = ATOM_LABELS.get(atomic_number, str(atomic_number))
@@ -441,13 +432,8 @@ def _print_molecular_metrics(rows: Sequence[dict[str, Any]]) -> None:
     )
     for row in rows:
         novelty = row["novelty_rate"]
-        novelty_text = (
-            "n/a" if novelty is None else f"{float(novelty):.6f}"
-        )
-        count = (
-            f"{row['num_valid_generated_molecules']}/"
-            f"{row['num_generated_graphs']}"
-        )
+        novelty_text = "n/a" if novelty is None else f"{float(novelty):.6f}"
+        count = f"{row['num_valid_generated_molecules']}/{row['num_generated_graphs']}"
         print(
             f"{str(row['stage']):24s}"
             f"{float(row['validity_without_correction']):12.6f}"
@@ -485,15 +471,10 @@ def main() -> None:
     config = load_yaml(args.config)
     generated_dir = Path(args.generated_dir)
     generated_path = Path(
-        args.generated_graphs
-        or generated_dir / "hybrid_refined_graphs.pkl"
+        args.generated_graphs or generated_dir / "hybrid_refined_graphs.pkl"
     )
-    coarse_path = Path(
-        args.coarse_graphs or generated_dir / "coarse_graphs.pkl"
-    )
-    output_dir = ensure_dir(
-        args.output_dir or generated_dir / "evaluation_report"
-    )
+    coarse_path = Path(args.coarse_graphs or generated_dir / "coarse_graphs.pkl")
+    output_dir = ensure_dir(args.output_dir or generated_dir / "evaluation_report")
 
     evaluation_cfg = config.get("evaluation", {}) or {}
     orca_exec = configure_orca_executable(
@@ -584,9 +565,7 @@ def main() -> None:
         ]
         if coarse_graphs:
             coarse_count = min(available, len(coarse_graphs))
-            stage_graphs.append(
-                ("hh_source", coarse_graphs[:coarse_count])
-            )
+            stage_graphs.append(("hh_source", coarse_graphs[:coarse_count]))
         stage_graphs.append(("hybrid_final", generated))
         valid_smiles: list[str] = []
         for stage, graphs in stage_graphs:
@@ -596,9 +575,7 @@ def main() -> None:
                 stage_invalid_indices,
                 stage_errors,
             ) = molecular_quality_metrics(graphs, train_graphs)
-            molecular_stage_rows.append(
-                {"stage": stage, **stage_metrics}
-            )
+            molecular_stage_rows.append({"stage": stage, **stage_metrics})
             molecular_stage_errors[stage] = stage_errors
             if stage == "hybrid_final":
                 molecular_metrics = stage_metrics
@@ -621,9 +598,7 @@ def main() -> None:
             "molecular_quality": molecular_metrics,
             "molecular_quality_by_stage": {
                 str(row["stage"]): {
-                    key: value
-                    for key, value in row.items()
-                    if key != "stage"
+                    key: value for key, value in row.items() if key != "stage"
                 }
                 for row in molecular_stage_rows
             },
@@ -635,8 +610,7 @@ def main() -> None:
                         "edge resampling."
                     ),
                     "uniqueness": (
-                        "unique valid canonical SMILES / valid generated "
-                        "molecules"
+                        "unique valid canonical SMILES / valid generated molecules"
                     ),
                     "novelty": (
                         "unique valid generated canonical SMILES absent from "

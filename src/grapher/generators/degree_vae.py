@@ -11,7 +11,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from grapher.generators.summary_vae import repair_degree_sequence
 from grapher.properties.summary import sorted_degree_sequence
 from grapher.utils.device import resolve_torch_device
 
@@ -61,7 +60,7 @@ def _integer_counts_from_probs(n: int, probs: np.ndarray) -> np.ndarray:
             counts[int(i)] += 1
     elif remaining < 0:
         order = np.argsort(raw - counts)
-        for i in order[: -remaining]:
+        for i in order[:-remaining]:
             if counts[int(i)] > 0:
                 counts[int(i)] -= 1
     return counts
@@ -94,7 +93,75 @@ def connected_feasible_degree_sequence(sequence: list[int]) -> bool:
         return False
     if sum(sequence) < 2 * (n - 1):
         return False
-    return nx.is_graphical(sorted([int(d) for d in sequence], reverse=True), method="eg")
+    return nx.is_graphical(
+        sorted([int(d) for d in sequence], reverse=True), method="eg"
+    )
+
+
+def repair_degree_sequence(
+    degree_sequence: list[int],
+    *,
+    n: int,
+    require_connected: bool = True,
+    rng: np.random.Generator | None = None,
+    max_iterations: int = 10000,
+) -> list[int]:
+    """Project a sampled sequence to a graphical fallback after rejection fails."""
+
+    generator = rng if rng is not None else np.random.default_rng(0)
+    min_degree = 1 if require_connected and n > 1 else 0
+    max_degree = max(n - 1, 0)
+    sequence = [
+        int(np.clip(degree, min_degree, max_degree)) for degree in degree_sequence[:n]
+    ]
+    sequence.extend([min_degree] * (n - len(sequence)))
+    if n <= 1:
+        return [0] * n
+
+    def fix_parity() -> None:
+        if sum(sequence) % 2 == 0:
+            return
+        order = generator.permutation(n)
+        for index in order:
+            if sequence[int(index)] < max_degree:
+                sequence[int(index)] += 1
+                return
+        for index in order:
+            if sequence[int(index)] > min_degree:
+                sequence[int(index)] -= 1
+                return
+
+    if require_connected:
+        while sum(sequence) < 2 * (n - 1):
+            candidates = [
+                index for index, degree in enumerate(sequence) if degree < max_degree
+            ]
+            if not candidates:
+                break
+            sequence[int(generator.choice(candidates))] += 1
+    fix_parity()
+
+    for _ in range(max_iterations):
+        if nx.is_graphical(sorted(sequence, reverse=True), method="eg"):
+            return sorted(sequence, reverse=True)
+        candidates = [
+            index for index, degree in enumerate(sequence) if degree > min_degree
+        ]
+        if candidates:
+            largest = max(sequence[index] for index in candidates)
+            largest_indices = [
+                index for index in candidates if sequence[index] == largest
+            ]
+            sequence[int(generator.choice(largest_indices))] -= 1
+        else:
+            sequence = [1] * n
+            sequence[0] = sequence[1] = 2 if n > 2 else 1
+        fix_parity()
+
+    if require_connected and n >= 2:
+        sequence = [2] * n
+        sequence[0] = sequence[-1] = 1
+    return sorted(sequence, reverse=True)
 
 
 @dataclass
@@ -131,7 +198,9 @@ class DegreeVectorizer:
             max_edges=int(max(max_edges, 1)),
             require_connected=bool(require_connected),
             empirical_node_counts=[int(x) for x in node_counts],
-            empirical_degree_sequences=[[int(d) for d in seq] for seq in degree_sequences],
+            empirical_degree_sequences=[
+                [int(d) for d in seq] for seq in degree_sequences
+            ],
         )
 
     @property
@@ -161,15 +230,15 @@ class DegreeVectorizer:
         return int(self.min_nodes + int(np.clip(idx, 0, self.node_count_classes - 1)))
 
     def degree_hist_from_sequence(self, sequence: list[int]) -> np.ndarray:
-        return _normalize(_degree_sequence_to_counts(sequence, self.degree_dim).astype(np.float64))
+        return _normalize(
+            _degree_sequence_to_counts(sequence, self.degree_dim).astype(np.float64)
+        )
 
     def to_feature_vector(self, graph: nx.Graph) -> np.ndarray:
         seq = sorted_degree_sequence(graph)
         n = int(graph.number_of_nodes())
         degree = self.degree_hist_from_sequence(seq)
-        size = np.asarray(
-            [n / max(float(self.max_nodes), 1.0)], dtype=np.float64
-        )
+        size = np.asarray([n / max(float(self.max_nodes), 1.0)], dtype=np.float64)
         return np.concatenate([size, degree]).astype(np.float32)
 
     def to_targets(self, graph: nx.Graph) -> dict[str, np.ndarray | np.int64]:
@@ -185,7 +254,9 @@ class DegreeVectorizer:
             ),
         }
 
-    def to_training_arrays(self, graphs: list[nx.Graph]) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    def to_training_arrays(
+        self, graphs: list[nx.Graph]
+    ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
         x = np.stack([self.to_feature_vector(g) for g in graphs]).astype(np.float32)
         items = [self.to_targets(g) for g in graphs]
         targets: dict[str, np.ndarray] = {}
@@ -204,7 +275,9 @@ class DegreeVectorizer:
         idx = int(rng.choice(np.arange(self.node_count_classes), p=probs))
         return self.node_count_from_index(idx)
 
-    def empirical_nearest_degree_sequence(self, n: int, rng: np.random.Generator | None = None) -> list[int]:
+    def empirical_nearest_degree_sequence(
+        self, n: int, rng: np.random.Generator | None = None
+    ) -> list[int]:
         generator = rng if rng is not None else np.random.default_rng(0)
         sequences = self.empirical_degree_sequences or []
         if not sequences:
@@ -214,7 +287,9 @@ class DegreeVectorizer:
             seq[0] = seq[-1] = 1
             return sorted(seq, reverse=True)
 
-        distances = np.asarray([abs(len(seq) - int(n)) for seq in sequences], dtype=np.int64)
+        distances = np.asarray(
+            [abs(len(seq) - int(n)) for seq in sequences], dtype=np.int64
+        )
         best = np.flatnonzero(distances == distances.min())
         chosen = sequences[int(generator.choice(best))]
         seq = [int(d) for d in chosen]
@@ -225,7 +300,9 @@ class DegreeVectorizer:
         else:
             min_degree = 1 if self.require_connected and n > 1 else 0
             seq = seq + [min_degree] * (int(n) - len(seq))
-        return repair_degree_sequence(seq, n=int(n), require_connected=self.require_connected, rng=generator)
+        return repair_degree_sequence(
+            seq, n=int(n), require_connected=self.require_connected, rng=generator
+        )
 
     def outputs_to_summaries(
         self,
@@ -260,7 +337,9 @@ class DegreeVectorizer:
                 if deterministic:
                     n_idx = int(np.argmax(n_probs))
                 else:
-                    n_idx = int(generator.choice(np.arange(self.node_count_classes), p=n_probs))
+                    n_idx = int(
+                        generator.choice(np.arange(self.node_count_classes), p=n_probs)
+                    )
                 n = self.node_count_from_index(n_idx)
 
             degree_probs = _softmax_np(arrays["degree_logits"][i]).astype(np.float64)
@@ -325,9 +404,8 @@ class DegreeVectorizer:
                         or connected_feasible_degree_sequence(repaired)
                     ):
                         degree_sequence = repaired
-                        repair_used = (
-                            sorted(last_raw_sequence, reverse=True)
-                            != sorted(repaired, reverse=True)
+                        repair_used = sorted(last_raw_sequence, reverse=True) != sorted(
+                            repaired, reverse=True
                         )
                 if degree_sequence is None:
                     if fallback == "error":
@@ -340,14 +418,18 @@ class DegreeVectorizer:
                     )
                     fallback_used = True
 
-            counts = _degree_sequence_to_counts(degree_sequence, self.degree_dim).astype(np.float64)
+            counts = _degree_sequence_to_counts(
+                degree_sequence, self.degree_dim
+            ).astype(np.float64)
             degree_hist = _normalize(counts)
             num_edges = int(sum(degree_sequence) // 2)
             density = (2.0 * num_edges / (int(n) * (int(n) - 1))) if int(n) > 1 else 0.0
             summary = {
                 "num_nodes": int(n),
                 "num_edges": int(num_edges),
-                "degree_sequence": sorted([int(d) for d in degree_sequence], reverse=True),
+                "degree_sequence": sorted(
+                    [int(d) for d in degree_sequence], reverse=True
+                ),
                 "degree_hist": degree_hist.astype(np.float64),
                 "density": float(density),
             }
@@ -357,12 +439,9 @@ class DegreeVectorizer:
                     raw_seq is not None and nx.is_graphical(raw_seq, method="eg")
                 )
                 raw_connected_feasible = bool(
-                    raw_seq is not None
-                    and connected_feasible_degree_sequence(raw_seq)
+                    raw_seq is not None and connected_feasible_degree_sequence(raw_seq)
                 )
-                raw_even_sum = bool(
-                    raw_seq is not None and sum(raw_seq) % 2 == 0
-                )
+                raw_even_sum = bool(raw_seq is not None and sum(raw_seq) % 2 == 0)
                 raw_degree_bounds = bool(
                     raw_seq is not None
                     and len(raw_seq) == int(n)
@@ -394,9 +473,7 @@ class DegreeVectorizer:
                     "fallback_used": bool(fallback_used),
                     "attempts_used": int(attempts_used),
                     "parity_draws": int(parity_draws_total),
-                    "parity_redraws": int(
-                        max(parity_draws_total - attempts_used, 0)
-                    ),
+                    "parity_redraws": int(max(parity_draws_total - attempts_used, 0)),
                     "accepted_without_postprocessing": bool(
                         accepted_without_postprocessing
                     ),
@@ -421,7 +498,14 @@ class DegreeVectorizer:
 
 
 class MLP(nn.Module):
-    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int | None = None, num_layers: int = 2, dropout: float = 0.0):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int | None = None,
+        num_layers: int = 2,
+        dropout: float = 0.0,
+    ):
         super().__init__()
         layers: list[nn.Module] = []
         dim = int(input_dim)
@@ -461,7 +545,11 @@ class DegreeHistogramVAE(nn.Module):
     ):
         super().__init__()
         prior_type = str(prior_type).lower()
-        if prior_type not in {"standard_normal", "conditional_gaussian", "conditional_gmm"}:
+        if prior_type not in {
+            "standard_normal",
+            "conditional_gaussian",
+            "conditional_gmm",
+        }:
             raise ValueError(
                 "prior_type must be standard_normal, conditional_gaussian, "
                 "or conditional_gmm."
@@ -486,7 +574,9 @@ class DegreeHistogramVAE(nn.Module):
         self.prior_logvar_max = float(prior_logvar_max)
         self.num_layers = int(num_layers)
         self.dropout = float(dropout)
-        self.encoder = MLP(input_dim, hidden_dim, num_layers=num_layers, dropout=dropout)
+        self.encoder = MLP(
+            input_dim, hidden_dim, num_layers=num_layers, dropout=dropout
+        )
         self.mu = nn.Linear(hidden_dim, latent_dim)
         self.logvar = nn.Linear(hidden_dim, latent_dim)
         self.prior_decoder = MLP(
@@ -548,29 +638,21 @@ class DegreeHistogramVAE(nn.Module):
     def _size_features(self, node_counts: torch.Tensor) -> torch.Tensor:
         n = node_counts.to(dtype=torch.float32).reshape(-1, 1)
         linear = n / max(float(self.max_nodes), 1.0)
-        logarithmic = torch.log1p(n) / max(
-            float(np.log1p(self.max_nodes)), 1.0
-        )
+        logarithmic = torch.log1p(n) / max(float(np.log1p(self.max_nodes)), 1.0)
         return torch.cat([linear, logarithmic], dim=-1)
 
-    def prior_parameters(
-        self, node_counts: torch.Tensor
-    ) -> dict[str, torch.Tensor]:
+    def prior_parameters(self, node_counts: torch.Tensor) -> dict[str, torch.Tensor]:
         node_counts = node_counts.to(
             device=next(self.parameters()).device, dtype=torch.long
         ).reshape(-1)
         batch = int(node_counts.shape[0])
         if self.prior_type == "standard_normal":
             logits = torch.zeros(batch, 1, device=node_counts.device)
-            means = torch.zeros(
-                batch, 1, self.latent_dim, device=node_counts.device
-            )
+            means = torch.zeros(batch, 1, self.latent_dim, device=node_counts.device)
             logvars = torch.zeros_like(means)
         else:
             raw = self.conditional_prior(self._size_features(node_counts))
-            raw = raw.reshape(
-                batch, self.prior_components, 1 + 2 * self.latent_dim
-            )
+            raw = raw.reshape(batch, self.prior_components, 1 + 2 * self.latent_dim)
             logits = raw[..., 0]
             means = raw[..., 1 : 1 + self.latent_dim]
             logvars = raw[..., 1 + self.latent_dim :].clamp(
@@ -690,9 +772,7 @@ class DegreeHistogramVAE(nn.Module):
                 indices = torch.distributions.Categorical(logits=logits).sample()
             node_counts = indices + self.min_nodes
         else:
-            node_counts = torch.as_tensor(
-                node_counts, dtype=torch.long, device=device
-            )
+            node_counts = torch.as_tensor(node_counts, dtype=torch.long, device=device)
         z = self.sample_prior(node_counts, prior_mode=prior_mode)
         return self.decode(z, node_counts)
 
@@ -793,9 +873,7 @@ def degree_vae_loss(
     total = (
         float(weights.get("num_nodes", 1.0)) * n_loss
         + float(weights.get("degree", 5.0)) * degree_loss
-        + float(
-            weights.get("degree_moment", weights.get("edge_scalar", 0.1))
-        )
+        + float(weights.get("degree_moment", weights.get("edge_scalar", 0.1)))
         * moment_loss
         + float(beta) * kld
     )
@@ -864,7 +942,9 @@ def save_degree_vae_checkpoint(
     )
 
 
-def load_degree_vae_checkpoint(path: str | Path, *, device: torch.device | str = "auto") -> tuple[DegreeHistogramVAE, DegreeVectorizer, dict[str, Any]]:
+def load_degree_vae_checkpoint(
+    path: str | Path, *, device: torch.device | str = "auto"
+) -> tuple[DegreeHistogramVAE, DegreeVectorizer, dict[str, Any]]:
     resolved_device = resolve_torch_device(device)
     checkpoint = torch.load(path, map_location=resolved_device)
     model_config = dict(checkpoint.get("model_config", {}))

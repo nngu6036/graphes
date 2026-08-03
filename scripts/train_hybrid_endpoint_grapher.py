@@ -30,10 +30,7 @@ from grapher.utils.io import ensure_dir, load_yaml, save_json
 def _mean_metrics(rows: list[dict[str, float]]) -> dict[str, float]:
     if not rows:
         return {}
-    return {
-        key: float(np.mean([row[key] for row in rows]))
-        for key in rows[0]
-    }
+    return {key: float(np.mean([row[key] for row in rows])) for key in rows[0]}
 
 
 def _run_epoch(
@@ -142,6 +139,13 @@ def main() -> None:
         train_graphs,
         config.get("categorical_state", {}) or {},
     )
+    if vocabulary.node_attribute or vocabulary.edge_attribute:
+        print(
+            "WARNING: attributed training currently uses an ordinary-degree "
+            "teacher and topology-only graphlets. Treat this run as a baseline, "
+            "not the paper's typed-invariant molecular model.",
+            flush=True,
+        )
 
     print(
         "Building aligned endpoint trajectories "
@@ -163,8 +167,7 @@ def main() -> None:
         seed=seed + 1,
     )
     print(
-        f"Endpoint examples: train={len(train_examples)} "
-        f"val={len(val_examples)}",
+        f"Endpoint examples: train={len(train_examples)} val={len(val_examples)}",
         flush=True,
     )
 
@@ -178,12 +181,8 @@ def main() -> None:
         graph_dim=int(predictor_cfg.get("graph_dim", 128)),
         num_layers=int(predictor_cfg.get("num_layers", 4)),
         dropout=float(predictor_cfg.get("dropout", 0.0)),
-        min_concentration=float(
-            predictor_cfg.get("min_concentration", 0.05)
-        ),
-        max_concentration=float(
-            predictor_cfg.get("max_concentration", 50.0)
-        ),
+        min_concentration=float(predictor_cfg.get("min_concentration", 0.05)),
+        max_concentration=float(predictor_cfg.get("max_concentration", 50.0)),
     ).to(device)
 
     batch_size = int(
@@ -216,17 +215,15 @@ def main() -> None:
     )
     loss_weights = {
         str(key): float(value)
-        for key, value in (
-            predictor_cfg.get("loss_weights", {}) or {}
-        ).items()
+        for key, value in (predictor_cfg.get("loss_weights", {}) or {}).items()
     }
     configured_class_weights = predictor_cfg.get("edge_class_weights")
     if configured_class_weights is None:
         edge_class_weights = [
             float(predictor_cfg.get("no_edge_class_weight", 0.25))
-        ] + [
-            float(predictor_cfg.get("present_edge_class_weight", 1.0))
-        ] * (vocabulary.num_edge_categories - 1)
+        ] + [float(predictor_cfg.get("present_edge_class_weight", 1.0))] * (
+            vocabulary.num_edge_categories - 1
+        )
     else:
         edge_class_weights = [float(value) for value in configured_class_weights]
     target_epsilon = float(predictor_cfg.get("target_epsilon", 1.0e-5))

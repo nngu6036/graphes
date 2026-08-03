@@ -8,14 +8,23 @@ import networkx as nx
 
 from grapher.data.io import save_dataset_splits
 from grapher.molecular.constants import QM9_ATOM_TYPES, QM9_BOND_TYPES
-from grapher.molecular.graph_io import graphs_from_smiles, nx_to_topology, read_smiles_file, split_graphs
+from grapher.molecular.graph_io import (
+    graphs_from_smiles,
+    nx_to_topology,
+    read_smiles_file,
+    split_graphs,
+)
 from grapher.utils.io import ensure_dir, save_json
 
 
 def _pyg_bond_type(edge_attr) -> int:
     values = edge_attr.detach().cpu().numpy().reshape(-1).tolist()
     if len(values) >= len(QM9_BOND_TYPES):
-        return int(QM9_BOND_TYPES[int(max(range(len(QM9_BOND_TYPES)), key=lambda i: values[i]))])
+        return int(
+            QM9_BOND_TYPES[
+                int(max(range(len(QM9_BOND_TYPES)), key=lambda i: values[i]))
+            ]
+        )
     if values:
         val = int(values[0])
         if val in QM9_BOND_TYPES:
@@ -32,7 +41,9 @@ def _pyg_data_to_nx(data, *, remove_h: bool = True) -> nx.Graph:
         if remove_h and int(atomic_num) == 1:
             continue
         if int(atomic_num) not in QM9_ATOM_TYPES:
-            raise ValueError(f"Atom {atomic_num} is outside allowed atom set {QM9_ATOM_TYPES}.")
+            raise ValueError(
+                f"Atom {atomic_num} is outside allowed atom set {QM9_ATOM_TYPES}."
+            )
         keep_old.append(idx)
 
     node_map = {old: new for new, old in enumerate(keep_old)}
@@ -57,13 +68,24 @@ def _pyg_data_to_nx(data, *, remove_h: bool = True) -> nx.Graph:
         if edge in seen:
             continue
         seen.add(edge)
-        bond_type = _pyg_bond_type(edge_attr[col]) if edge_attr is not None else int(QM9_BOND_TYPES[0])
-        graph.add_edge(edge[0], edge[1], bond_type=bond_type, bond_order=float(bond_type if bond_type != 4 else 1.5))
+        bond_type = (
+            _pyg_bond_type(edge_attr[col])
+            if edge_attr is not None
+            else int(QM9_BOND_TYPES[0])
+        )
+        graph.add_edge(
+            edge[0],
+            edge[1],
+            bond_type=bond_type,
+            bond_order=float(bond_type if bond_type != 4 else 1.5),
+        )
 
     return nx.convert_node_labels_to_integers(graph, ordering="sorted")
 
 
-def _graphs_from_pyg_qm9(root: str | Path, *, max_molecules: int | None = None, remove_h: bool = True) -> tuple[list[nx.Graph], dict[str, int]]:
+def _graphs_from_pyg_qm9(
+    root: str | Path, *, max_molecules: int | None = None, remove_h: bool = True
+) -> tuple[list[nx.Graph], dict[str, int]]:
     try:
         from torch_geometric.datasets.qm9 import QM9  # type: ignore
     except ModuleNotFoundError as exc:
@@ -89,7 +111,9 @@ def _graphs_from_pyg_qm9(root: str | Path, *, max_molecules: int | None = None, 
             "PyG stack rather than a missing SMILES/SDF file. Reinstall PyG for your "
             "PyTorch/CUDA version, or use --source sdf --sdf-file PATH."
         ) from exc
-    limit = len(dataset) if max_molecules is None else min(int(max_molecules), len(dataset))
+    limit = (
+        len(dataset) if max_molecules is None else min(int(max_molecules), len(dataset))
+    )
     graphs: list[nx.Graph] = []
     errors: dict[str, int] = {}
     for idx in range(limit):
@@ -152,7 +176,9 @@ def _rdkit_mol_to_nx(mol, *, remove_h: bool = True, kekulize: bool = True) -> nx
         if remove_h and atomic_num == 1:
             continue
         if atomic_num not in QM9_ATOM_TYPES:
-            raise ValueError(f"Atom {atomic_num} is outside allowed atom set {QM9_ATOM_TYPES}.")
+            raise ValueError(
+                f"Atom {atomic_num} is outside allowed atom set {QM9_ATOM_TYPES}."
+            )
         keep_old.append(old)
 
     node_map = {old: new for new, old in enumerate(keep_old)}
@@ -192,7 +218,9 @@ def _graphs_from_sdf_qm9(
     try:
         from rdkit import Chem  # type: ignore
     except ModuleNotFoundError as exc:
-        raise ImportError("RDKit is required for --source sdf. Install rdkit or use --source smiles.") from exc
+        raise ImportError(
+            "RDKit is required for --source sdf. Install rdkit or use --source smiles."
+        ) from exc
 
     sdf_file = Path(sdf_file)
     if not sdf_file.exists():
@@ -225,7 +253,9 @@ def _graphs_from_sdf_qm9(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Prepare QM9 heavy-atom topology and attributed graph splits.")
+    parser = argparse.ArgumentParser(
+        description="Prepare QM9 heavy-atom topology and attributed graph splits."
+    )
     parser.add_argument(
         "--source",
         choices=["auto", "pyg", "sdf", "smiles"],
@@ -235,10 +265,22 @@ def main() -> None:
             "<pyg-root>/raw/gdb9.sdf when present, otherwise PyG QM9."
         ),
     )
-    parser.add_argument("--smiles-file", default=None, help="Path to .smi/.txt/.csv containing SMILES.")
-    parser.add_argument("--smiles-column", default=None, help="Optional CSV/TSV column name for SMILES.")
-    parser.add_argument("--sdf-file", default=None, help="Path to QM9 gdb9.sdf. Defaults to <pyg-root>/raw/gdb9.sdf for --source sdf.")
-    parser.add_argument("--pyg-root", default="data/pyg_qm9", help="Root directory for torch_geometric.datasets.QM9.")
+    parser.add_argument(
+        "--smiles-file", default=None, help="Path to .smi/.txt/.csv containing SMILES."
+    )
+    parser.add_argument(
+        "--smiles-column", default=None, help="Optional CSV/TSV column name for SMILES."
+    )
+    parser.add_argument(
+        "--sdf-file",
+        default=None,
+        help="Path to QM9 gdb9.sdf. Defaults to <pyg-root>/raw/gdb9.sdf for --source sdf.",
+    )
+    parser.add_argument(
+        "--pyg-root",
+        default="data/pyg_qm9",
+        help="Root directory for torch_geometric.datasets.QM9.",
+    )
     parser.add_argument("--root", default="outputs/datasets")
     parser.add_argument("--topology-name", default="qm9_topology")
     parser.add_argument("--attributed-name", default="qm9_attributed")
@@ -291,10 +333,14 @@ def main() -> None:
         source_path = f"torch_geometric.datasets.QM9:{args.pyg_root}"
 
     if not graphs:
-        raise RuntimeError(f"No valid molecules parsed from {source_path}; errors={errors}")
+        raise RuntimeError(
+            f"No valid molecules parsed from {source_path}; errors={errors}"
+        )
 
     attributed_splits = split_graphs(graphs, seed=args.seed)
-    topology_splits = {k: [nx_to_topology(g) for g in v] for k, v in attributed_splits.items()}
+    topology_splits = {
+        k: [nx_to_topology(g) for g in v] for k, v in attributed_splits.items()
+    }
 
     root = Path(args.root)
     config_top = {

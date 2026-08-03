@@ -39,7 +39,9 @@ class DegreeVAESampler:
         self._load()
 
     def _load(self) -> None:
-        model, vectorizer, _ = load_degree_vae_checkpoint(self.checkpoint_path, device=self.device)
+        model, vectorizer, _ = load_degree_vae_checkpoint(
+            self.checkpoint_path, device=self.device
+        )
         self._model = model
         self._vectorizer = vectorizer
 
@@ -47,7 +49,9 @@ class DegreeVAESampler:
     def from_config(cls, data: dict[str, Any], *, seed: int = 0) -> "DegreeVAESampler":
         checkpoint_path = data.get("checkpoint_path") or data.get("checkpoint")
         if not checkpoint_path:
-            raise ValueError("DegreeVAESampler requires degree_generator.checkpoint_path.")
+            raise ValueError(
+                "DegreeVAESampler requires degree_generator.checkpoint_path."
+            )
         return cls(
             checkpoint_path,
             device=str(data.get("device", "auto")),
@@ -68,9 +72,7 @@ class DegreeVAESampler:
         generator = rng if rng is not None else np.random.default_rng(self.seed)
         node_counts = None
         if self.sample_num_nodes.lower() == "empirical":
-            node_counts = [
-                self._vectorizer.sample_empirical_node_count(generator)
-            ]
+            node_counts = [self._vectorizer.sample_empirical_node_count(generator)]
         with torch.no_grad():
             outputs = self._model.sample_outputs(
                 1,
@@ -93,17 +95,26 @@ class DegreeVAESampler:
 class EmpiricalDegreeSampler:
     def __init__(self, degree_sequences: list[list[int]], seed: int = 0):
         if not degree_sequences:
-            raise ValueError("EmpiricalDegreeSampler requires at least one degree sequence.")
+            raise ValueError(
+                "EmpiricalDegreeSampler requires at least one degree sequence."
+            )
         self.degree_sequences = [[int(d) for d in seq] for seq in degree_sequences]
         self.seed = int(seed)
 
     @classmethod
     def fit_from_graphs(cls, graphs, seed: int = 0) -> "EmpiricalDegreeSampler":
-        return cls([sorted([int(d) for _, d in g.degree()], reverse=True) for g in graphs], seed=seed)
+        return cls(
+            [sorted([int(d) for _, d in g.degree()], reverse=True) for g in graphs],
+            seed=seed,
+        )
 
     def sample(self, rng: np.random.Generator | None = None) -> dict[str, Any]:
         generator = rng if rng is not None else np.random.default_rng(self.seed)
-        seq = list(self.degree_sequences[int(generator.integers(0, len(self.degree_sequences)))])
+        seq = list(
+            self.degree_sequences[
+                int(generator.integers(0, len(self.degree_sequences)))
+            ]
+        )
         n = len(seq)
         m = int(sum(seq) // 2)
         max_degree = max(max(seq) if seq else 0, 1)
@@ -117,3 +128,26 @@ class EmpiricalDegreeSampler:
             "degree_hist": hist,
             "density": float(density),
         }
+
+
+def build_degree_sampler(
+    config: dict[str, Any],
+    train_graphs: list[Any],
+    *,
+    seed: int = 0,
+) -> DegreeVAESampler | EmpiricalDegreeSampler | None:
+    """Build the degree prior used by the maintained Graph-ER generation CLI."""
+
+    if not config or not bool(config.get("enabled", False)):
+        return None
+    sampler_type = str(config.get("type", "degree_histogram_vae")).lower()
+    if sampler_type in {
+        "degree_histogram_vae",
+        "degree_vae",
+        "vae",
+        "learned",
+    }:
+        return DegreeVAESampler.from_config(config, seed=seed)
+    if sampler_type in {"empirical", "empirical_degree"}:
+        return EmpiricalDegreeSampler.fit_from_graphs(train_graphs, seed=seed)
+    raise ValueError(f"Unknown degree_generator.type: {sampler_type!r}")

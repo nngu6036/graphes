@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 from typing import Any
 
 import networkx as nx
@@ -18,7 +17,10 @@ from grapher.evaluation.metrics import (
     degree_target_match_rate,
     evaluate_graph_sets,
 )
-from grapher.generators.degree_sampler import EmpiricalDegreeSampler
+from grapher.generators.degree_sampler import (
+    EmpiricalDegreeSampler,
+    build_degree_sampler,
+)
 from grapher.hybrid.model import load_hybrid_endpoint_checkpoint
 from grapher.hybrid.refiner import refine_graph_with_hybrid_predictions
 from grapher.molecular.constraints import (
@@ -27,31 +29,8 @@ from grapher.molecular.constraints import (
     molecular_valence_errors,
 )
 from grapher.molecular.graph_io import is_valid_molecular_graph
-from grapher.properties.sampler import build_degree_sampler_from_config
 from grapher.properties.summary import configure_orca_executable
 from grapher.utils.io import ensure_dir, load_yaml, save_json, save_pickle
-
-
-def _degree_summary_from_graph(graph: nx.Graph) -> dict[str, Any]:
-    sequence = sorted([int(degree) for _, degree in graph.degree()], reverse=True)
-    node_count = len(sequence)
-    edge_count = int(sum(sequence) // 2)
-    histogram = np.bincount(
-        sequence,
-        minlength=max(max(sequence, default=0) + 1, 1),
-    ).astype(np.float64)
-    histogram /= max(float(histogram.sum()), 1.0)
-    return {
-        "num_nodes": node_count,
-        "num_edges": edge_count,
-        "degree_sequence": sequence,
-        "degree_hist": histogram,
-        "density": (
-            2.0 * edge_count / (node_count * (node_count - 1))
-            if node_count > 1
-            else 0.0
-        ),
-    }
 
 
 def main() -> None:
@@ -74,9 +53,7 @@ def main() -> None:
     rng = np.random.default_rng(seed)
     evaluation_cfg = config.get("evaluation", {}) or {}
     compute_orbit = bool(evaluation_cfg.get("compute_orbit", True))
-    graphlet_backend = str(
-        evaluation_cfg.get("graphlet_backend", "sampled")
-    ).lower()
+    graphlet_backend = str(evaluation_cfg.get("graphlet_backend", "sampled")).lower()
     orca_required = compute_orbit or graphlet_backend in {
         "orca",
         "exact_orca",
@@ -157,8 +134,10 @@ def main() -> None:
             allowed_bond_types=molecular_bond_types,
         )
         print(
-            "Molecular generation enabled: empirical degree-conditioned atoms, "
-            "valence-constrained bonds, and typed rewiring.",
+            "WARNING: molecular baseline mode samples attributes after an "
+            "ordinary-degree constructor. It applies valence-constrained bond "
+            "initialization and same-type rewiring, but does not realize the "
+            "paper's joint typed-signature prior.",
             flush=True,
         )
 
@@ -167,7 +146,7 @@ def main() -> None:
     if degree_source in {"learned", "degree_vae"}:
         degree_cfg = dict(config.get("degree_generator", {}) or {})
         degree_cfg["enabled"] = True
-        degree_sampler = build_degree_sampler_from_config(
+        degree_sampler = build_degree_sampler(
             degree_cfg,
             train_graphs,
             seed=seed,
@@ -197,9 +176,29 @@ def main() -> None:
         if degree_source in {"oracle", "test_oracle"}:
             if not reference_graphs:
                 raise ValueError("Oracle degree generation requires test graphs.")
-            degree_summary = _degree_summary_from_graph(
-                reference_graphs[index % len(reference_graphs)]
+            oracle_graph = reference_graphs[index % len(reference_graphs)]
+            sequence = sorted(
+                [int(degree) for _, degree in oracle_graph.degree()],
+                reverse=True,
             )
+            node_count = len(sequence)
+            edge_count = int(sum(sequence) // 2)
+            histogram = np.bincount(
+                sequence,
+                minlength=max(max(sequence, default=0) + 1, 1),
+            ).astype(np.float64)
+            histogram /= max(float(histogram.sum()), 1.0)
+            degree_summary = {
+                "num_nodes": node_count,
+                "num_edges": edge_count,
+                "degree_sequence": sequence,
+                "degree_hist": histogram,
+                "density": (
+                    2.0 * edge_count / (node_count * (node_count - 1))
+                    if node_count > 1
+                    else 0.0
+                ),
+            }
         else:
             assert degree_sampler is not None
             degree_summary = degree_sampler.sample(rng)
@@ -211,9 +210,7 @@ def main() -> None:
         assert_constructor_validity(
             coarse,
             degree_summary,
-            require_connected=bool(
-                constructor_cfg.get("ensure_connected", True)
-            ),
+            require_connected=bool(constructor_cfg.get("ensure_connected", True)),
         )
         if molecular_mode:
             assert molecular_priors is not None
@@ -249,9 +246,7 @@ def main() -> None:
                     f"Valence diagnostics: {errors[:3]}"
                 )
             coarse = initialized
-            source_rdkit_valid.append(
-                float(is_valid_molecular_graph(coarse))
-            )
+            source_rdkit_valid.append(float(is_valid_molecular_graph(coarse)))
         refined, trace = refine_graph_with_hybrid_predictions(
             coarse,
             model=model,
@@ -264,9 +259,7 @@ def main() -> None:
             return_trace=True,
         )
         if molecular_mode:
-            final_rdkit_valid.append(
-                float(is_valid_molecular_graph(refined))
-            )
+            final_rdkit_valid.append(float(is_valid_molecular_graph(refined)))
         coarse_graphs.append(coarse)
         refined_graphs.append(refined)
         target_degree_sequences.append(
@@ -348,9 +341,7 @@ def main() -> None:
         "connectedness_rate": float(
             np.mean(
                 [
-                    nx.is_connected(graph)
-                    if graph.number_of_nodes() > 0
-                    else False
+                    nx.is_connected(graph) if graph.number_of_nodes() > 0 else False
                     for graph in refined_graphs
                 ]
             )
@@ -365,12 +356,8 @@ def main() -> None:
     if molecular_mode:
         diagnostics.update(
             {
-                "molecular_source_rdkit_validity": float(
-                    np.mean(source_rdkit_valid)
-                ),
-                "molecular_final_rdkit_validity": float(
-                    np.mean(final_rdkit_valid)
-                ),
+                "molecular_source_rdkit_validity": float(np.mean(source_rdkit_valid)),
+                "molecular_final_rdkit_validity": float(np.mean(final_rdkit_valid)),
                 "molecular_valence_preservation_rate": float(
                     np.mean(
                         [

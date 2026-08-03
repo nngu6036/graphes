@@ -186,9 +186,7 @@ def main() -> None:
             batch_targets = {
                 key: value[batch_idx.to(device)] for key, value in all_targets.items()
             }
-            outputs, mu, logvar = model(
-                batch_x, batch_targets["num_nodes_count"]
-            )
+            outputs, mu, logvar = model(batch_x, batch_targets["num_nodes_count"])
             effective_beta = kl_loss_weight
             if kl_warmup_epochs > 0:
                 effective_beta *= min(float(epoch) / kl_warmup_epochs, 1.0)

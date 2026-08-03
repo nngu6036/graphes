@@ -1,1 +1,1 @@
-"""GraphES package."""
+"""Graph-ER degree-constrained graph generation."""

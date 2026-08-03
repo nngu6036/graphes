@@ -11,11 +11,10 @@ from grapher.hybrid.data import (
     GraphletBasis,
     HybridEndpointBatch,
 )
-from grapher.molecular.attribute_flow import EdgeAwareMPNNLayer
+from grapher.hybrid.layers import EdgeAwareMPNNLayer
 from grapher.properties.summary import SummaryConfig
 from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir
-
 
 CHECKPOINT_FORMAT = "hybrid_endpoint_graphlet_v1"
 
@@ -96,6 +95,7 @@ class HybridEndpointPredictor(nn.Module):
             self.graph_dim,
             2 * len(self.graphlet_slices),
         )
+
     def _bounded_concentration(self, raw: torch.Tensor) -> torch.Tensor:
         """Bound density sharpness so likelihood cannot improve without limit."""
 
@@ -203,9 +203,7 @@ class HybridEndpointPredictor(nn.Module):
             dim=-1,
         )
         edge_hidden = self.edge_in(edge_features)
-        edge_hidden = 0.5 * (
-            edge_hidden + edge_hidden.transpose(1, 2)
-        )
+        edge_hidden = 0.5 * (edge_hidden + edge_hidden.transpose(1, 2))
         edge_hidden = edge_hidden * pair_mask.unsqueeze(-1).float()
 
         for layer in self.layers:
@@ -238,11 +236,9 @@ class HybridEndpointPredictor(nn.Module):
             if alpha_blocks
             else graph_hidden.new_zeros((batch_size, 0))
         )
-        graphlet_mass_ab = (
-            self._bounded_concentration(
-                self.graphlet_mass_head(graph_hidden)
-            ).view(batch_size, len(self.graphlet_slices), 2)
-        )
+        graphlet_mass_ab = self._bounded_concentration(
+            self.graphlet_mass_head(graph_hidden)
+        ).view(batch_size, len(self.graphlet_slices), 2)
         return {
             "node_logits": node_logits,
             "edge_logits": edge_logits,
@@ -363,9 +359,7 @@ class HybridEndpointPredictor(nn.Module):
             else zero
         )
         graphlet_mean_loss = (
-            torch.stack(graphlet_mean_terms).mean()
-            if graphlet_mean_terms
-            else zero
+            torch.stack(graphlet_mean_terms).mean() if graphlet_mean_terms else zero
         )
 
         mass_terms: list[torch.Tensor] = []
@@ -379,19 +373,15 @@ class HybridEndpointPredictor(nn.Module):
             ab = outputs["graphlet_mass_ab"][valid, block_index]
             distribution = torch.distributions.Beta(ab[:, 0], ab[:, 1])
             mass_terms.append(-distribution.log_prob(target_mass).mean())
-        graphlet_mass_loss = (
-            torch.stack(mass_terms).mean() if mass_terms else zero
-        )
+        graphlet_mass_loss = torch.stack(mass_terms).mean() if mass_terms else zero
 
         total = (
             float(weights.get("node", 1.0)) * node_loss
             + float(weights.get("edge", 1.0)) * edge_loss
             + float(weights.get("graphlet_mean", weights.get("graphlet", 1.0)))
             * graphlet_mean_loss
-            + float(weights.get("graphlet_distribution", 0.1))
-            * graphlet_dirichlet_loss
-            + float(weights.get("graphlet_mass", 0.25))
-            * graphlet_mass_loss
+            + float(weights.get("graphlet_distribution", 0.1)) * graphlet_dirichlet_loss
+            + float(weights.get("graphlet_mass", 0.25)) * graphlet_mass_loss
         )
 
         with torch.no_grad():
@@ -423,9 +413,7 @@ class HybridEndpointPredictor(nn.Module):
             "node_loss": float(node_loss.detach().cpu()),
             "edge_loss": float(edge_loss.detach().cpu()),
             "graphlet_mean_loss": float(graphlet_mean_loss.detach().cpu()),
-            "graphlet_distribution_loss": float(
-                graphlet_dirichlet_loss.detach().cpu()
-            ),
+            "graphlet_distribution_loss": float(graphlet_dirichlet_loss.detach().cpu()),
             "graphlet_mass_loss": float(graphlet_mass_loss.detach().cpu()),
             "edge_accuracy": float(edge_accuracy.detach().cpu()),
             "present_edge_recall": float(present_recall.detach().cpu()),
@@ -469,8 +457,7 @@ def save_hybrid_endpoint_checkpoint(
             "vocabulary": vocabulary.to_dict(),
             "graphlet_basis": graphlet_basis.to_dict(),
             "summary_config": {
-                key: value
-                for key, value in summary_config.__dict__.items()
+                key: value for key, value in summary_config.__dict__.items()
             },
             "config": config or {},
             "report": report or {},
@@ -491,9 +478,7 @@ def load_hybrid_endpoint_checkpoint(
     dict[str, Any],
 ]:
     resolved_device = (
-        resolve_torch_device(device)
-        if isinstance(device, str)
-        else device
+        resolve_torch_device(device) if isinstance(device, str) else device
     )
     checkpoint = torch.load(Path(path), map_location=resolved_device)
     if checkpoint.get("format") != CHECKPOINT_FORMAT:
@@ -506,8 +491,7 @@ def load_hybrid_endpoint_checkpoint(
     model_cfg = dict(checkpoint["model_config"])
     expected_slices = tuple(graphlet_basis.slices)
     stored_slices = tuple(
-        (int(value[0]), int(value[1]))
-        for value in model_cfg.get("graphlet_slices", [])
+        (int(value[0]), int(value[1])) for value in model_cfg.get("graphlet_slices", [])
     )
     if stored_slices != expected_slices:
         raise ValueError(
@@ -520,7 +504,5 @@ def load_hybrid_endpoint_checkpoint(
     model = HybridEndpointPredictor(**model_cfg).to(resolved_device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
-    summary_config = SummaryConfig.from_dict(
-        checkpoint.get("summary_config", {}) or {}
-    )
+    summary_config = SummaryConfig.from_dict(checkpoint.get("summary_config", {}) or {})
     return model, vocabulary, graphlet_basis, summary_config, checkpoint

@@ -94,8 +94,7 @@ def jensen_shannon_divergence(
     q = _normalise(q)
     middle = 0.5 * (p + q)
     return float(
-        0.5 * np.sum(p * np.log(p / middle))
-        + 0.5 * np.sum(q * np.log(q / middle))
+        0.5 * np.sum(p * np.log(p / middle)) + 0.5 * np.sum(q * np.log(q / middle))
     )
 
 
@@ -170,12 +169,8 @@ def evaluate_degree_sequence_sets(
             train_hist if train_hist is not None else candidate_hist,
         )
 
-    ref_marginal = aggregate_degree_distribution(
-        reference, max_degree=max_degree
-    )
-    candidate_marginal = aggregate_degree_distribution(
-        candidate, max_degree=max_degree
-    )
+    ref_marginal = aggregate_degree_distribution(reference, max_degree=max_degree)
+    candidate_marginal = aggregate_degree_distribution(candidate, max_degree=max_degree)
     node_reference = [len(sequence) for sequence in reference]
     node_candidate = [len(sequence) for sequence in candidate]
     edge_reference = [sum(sequence) // 2 for sequence in reference]
@@ -237,7 +232,9 @@ def evaluate_degree_sequence_sets(
         else 0.0,
     }
     if train is not None:
-        metrics["sequence_novelty_rate"] = float(
-            np.mean([key not in train_keys for key in candidate_keys])
-        ) if candidate_keys else 0.0
+        metrics["sequence_novelty_rate"] = (
+            float(np.mean([key not in train_keys for key in candidate_keys]))
+            if candidate_keys
+            else 0.0
+        )
     return metrics

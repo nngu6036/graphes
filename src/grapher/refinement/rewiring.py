@@ -22,7 +22,9 @@ def canonical_edges(edges: Iterable[tuple[int, int]]) -> tuple[Edge, Edge]:
     return canonical  # type: ignore[return-value]
 
 
-def make_action(removed: Iterable[tuple[int, int]], added: Iterable[tuple[int, int]]) -> Action:
+def make_action(
+    removed: Iterable[tuple[int, int]], added: Iterable[tuple[int, int]]
+) -> Action:
     return (canonical_edges(removed), canonical_edges(added))
 
 
@@ -36,7 +38,9 @@ def apply_action(graph: nx.Graph, action: Action) -> nx.Graph:
     return g
 
 
-def is_valid_action(graph: nx.Graph, action: Action, preserve_connectivity: bool = True) -> bool:
+def is_valid_action(
+    graph: nx.Graph, action: Action, preserve_connectivity: bool = True
+) -> bool:
     removed, added = action
     if len(set(removed)) != 2 or len(set(added)) != 2:
         return False
@@ -61,7 +65,11 @@ def is_valid_action(graph: nx.Graph, action: Action, preserve_connectivity: bool
         return False
     if nx.number_of_selfloops(candidate) != 0:
         return False
-    if preserve_connectivity and candidate.number_of_nodes() > 1 and not nx.is_connected(candidate):
+    if (
+        preserve_connectivity
+        and candidate.number_of_nodes() > 1
+        and not nx.is_connected(candidate)
+    ):
         return False
     return True
 
@@ -79,7 +87,9 @@ def candidate_actions_from_edge_pair(e1: Edge, e2: Edge) -> list[Action]:
     return list(dict.fromkeys(raw))
 
 
-def enumerate_valid_double_edge_swaps(graph: nx.Graph, preserve_connectivity: bool = True) -> list[Action]:
+def enumerate_valid_double_edge_swaps(
+    graph: nx.Graph, preserve_connectivity: bool = True
+) -> list[Action]:
     edges = [canonical_edge(u, v) for u, v in graph.edges()]
     out: list[Action] = []
     seen: set[Action] = set()
@@ -88,7 +98,9 @@ def enumerate_valid_double_edge_swaps(graph: nx.Graph, preserve_connectivity: bo
             for action in candidate_actions_from_edge_pair(edges[i], edges[j]):
                 if action in seen:
                     continue
-                if is_valid_action(graph, action, preserve_connectivity=preserve_connectivity):
+                if is_valid_action(
+                    graph, action, preserve_connectivity=preserve_connectivity
+                ):
                     out.append(action)
                     seen.add(action)
     return out
@@ -118,14 +130,11 @@ def sample_valid_double_edge_swaps(
         for action in actions:
             if action in seen:
                 continue
-            if is_valid_action(graph, action, preserve_connectivity=preserve_connectivity):
+            if is_valid_action(
+                graph, action, preserve_connectivity=preserve_connectivity
+            ):
                 out.append(action)
                 seen.add(action)
                 if len(out) >= budget:
                     break
     return out
-
-
-def permute_action(action: Action, mapping: dict[int, int]) -> Action:
-    removed, added = action
-    return make_action([(mapping[u], mapping[v]) for u, v in removed], [(mapping[u], mapping[v]) for u, v in added])

@@ -1,6 +1,10 @@
 experiment: qm9_attributed_hybrid_endpoint_graphlet
 seed: 42
 
+# NON-CONFORMANT BASELINE: this route constructs an ordinary-degree topology
+# and attaches molecular attributes afterward. It is retained to benchmark the
+# existing code, not as the paper's joint typed-signature implementation.
+
 dataset:
   name: qm9_attributed
   config_path: configs/datasets/qm9_attributed.yaml
@@ -104,16 +108,18 @@ hybrid_refiner:
   preserve_connectivity: true
   selection: greedy
   temperature: 0.1
-  categorical_weight: 1.0
-  probability_weight: 0.0
+  # Score the candidate directly against the predicted all-pairs law. The
+  # sampled-endpoint Hamming term is retained only as an explicit ablation.
+  categorical_weight: 0.0
+  probability_weight: 1.0
   graphlet_weight: 1.0
-  graphlet_mass_weight: 0.25
+  graphlet_mass_weight: 0.0
   graphlet_top_k: 8
   accept_only_improving: true
   min_improvement: 0.00000001
   patience: 2
-  sample_endpoint: true
-  sample_graphlet: true
+  sample_endpoint: false
+  sample_graphlet: false
   endpoint_temperature: 1.0
   refresh_prediction_every: 1
   infeasible_target_policy: guidance_only

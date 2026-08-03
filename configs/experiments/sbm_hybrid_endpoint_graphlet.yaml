@@ -85,24 +85,25 @@ constructor:
   random_relabel: false
   max_repair_trials: 10000
 
-# At every intermediate graph, resample a clean endpoint graph and graphlet
-# histogram. The sampled graph is guidance only; it is never installed.
+# At every intermediate graph, use one fixed set of endpoint probabilities and
+# graphlet means while comparing candidates. Any endpoint graph is diagnostic
+# only and is never installed.
 hybrid_refiner:
   steps: 40
   candidate_budget: 64
   preserve_connectivity: true
   selection: greedy
   temperature: 0.1
-  categorical_weight: 1.0
-  probability_weight: 0.0
+  categorical_weight: 0.0
+  probability_weight: 1.0
   graphlet_weight: 1.0
-  graphlet_mass_weight: 0.25
+  graphlet_mass_weight: 0.0
   graphlet_top_k: 8
   accept_only_improving: true
   min_improvement: 0.00000001
   patience: 2
-  sample_endpoint: true
-  sample_graphlet: true
+  sample_endpoint: false
+  sample_graphlet: false
   endpoint_temperature: 1.0
   refresh_prediction_every: 1
   infeasible_target_policy: guidance_only

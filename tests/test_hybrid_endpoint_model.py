@@ -21,7 +21,6 @@ from grapher.hybrid.model import (
 from grapher.properties.summary import SummaryConfig, extract_summary
 from grapher.refinement.rewiring import apply_action, make_action
 
-
 CUBE_EDGES = [
     (0, 1),
     (0, 3),
@@ -78,9 +77,7 @@ def _example(
         current_graph=current,
         target_graph=target,
         time=time,
-        graphlet_target=graphlet_basis.flatten_history(
-            summary["graphlet_history"]
-        ),
+        graphlet_target=graphlet_basis.flatten_history(summary["graphlet_history"]),
         graphlet_mass_target=graphlet_basis.flatten_mass(
             summary["graphlet_connected_mass"]
         ),
@@ -105,10 +102,7 @@ def _small_model(
 
 
 def _edge_set(graph: nx.Graph) -> set[tuple[int, int]]:
-    return {
-        (min(int(u), int(v)), max(int(u), int(v)))
-        for u, v in graph.edges()
-    }
+    return {(min(int(u), int(v)), max(int(u), int(v))) for u, v in graph.edges()}
 
 
 def test_aligned_source_and_batch_require_per_node_degree_alignment():
@@ -170,12 +164,8 @@ def test_teacher_examples_share_clean_endpoint_and_graphlet_targets():
     )
 
     target_summary = extract_summary(target, cfg)
-    expected_graphlets = basis.flatten_history(
-        target_summary["graphlet_history"]
-    )
-    expected_mass = basis.flatten_mass(
-        target_summary["graphlet_connected_mass"]
-    )
+    expected_graphlets = basis.flatten_history(target_summary["graphlet_history"])
+    expected_mass = basis.flatten_mass(target_summary["graphlet_connected_mass"])
 
     assert diagnostics["num_graphs"] == 1
     assert len(examples) >= 2
@@ -207,9 +197,7 @@ def test_forward_simplexes_symmetry_equivariance_and_loss():
     model.eval()
 
     outputs = model(batch)
-    node_probabilities, edge_probabilities = model.endpoint_probabilities(
-        outputs
-    )
+    node_probabilities, edge_probabilities = model.endpoint_probabilities(outputs)
     graphlet_means, mass_means = model.graphlet_means(outputs)
 
     assert outputs["node_logits"].shape == (1, 8, 1)
@@ -360,10 +348,7 @@ def test_hybrid_checkpoint_roundtrip(tmp_path):
     assert loaded_basis == basis
     assert loaded_summary_config.graphlet_k_min == cfg.graphlet_k_min
     assert loaded_summary_config.graphlet_k_max == cfg.graphlet_k_max
-    assert (
-        loaded_summary_config.graphlet_connected_only
-        == cfg.graphlet_connected_only
-    )
+    assert loaded_summary_config.graphlet_connected_only == cfg.graphlet_connected_only
     assert checkpoint["config"]["experiment"] == "unit_test"
     assert checkpoint["report"]["status"] == "ok"
     for key in expected:

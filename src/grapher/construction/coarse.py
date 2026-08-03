@@ -40,7 +40,13 @@ def _random_relabel(graph: nx.Graph, rng: np.random.Generator) -> nx.Graph:
     return nx.convert_node_labels_to_integers(out, first_label=0, ordering="sorted")
 
 
-def _try_connect_two_components(graph: nx.Graph, c1: set[int], c2: set[int], rng: np.random.Generator, max_trials: int) -> bool:
+def _try_connect_two_components(
+    graph: nx.Graph,
+    c1: set[int],
+    c2: set[int],
+    rng: np.random.Generator,
+    max_trials: int,
+) -> bool:
     edges1 = list(graph.subgraph(c1).edges())
     edges2 = list(graph.subgraph(c2).edges())
     if not edges1 or not edges2:
@@ -67,7 +73,9 @@ def _try_connect_two_components(graph: nx.Graph, c1: set[int], c2: set[int], rng
     return False
 
 
-def repair_connectivity_degree_preserving(graph: nx.Graph, rng: np.random.Generator, max_trials: int = 10000) -> nx.Graph:
+def repair_connectivity_degree_preserving(
+    graph: nx.Graph, rng: np.random.Generator, max_trials: int = 10000
+) -> nx.Graph:
     """Connect components using degree-preserving switches.
 
     This cannot repair isolated zero-degree components because no degree-
@@ -82,10 +90,14 @@ def repair_connectivity_degree_preserving(graph: nx.Graph, rng: np.random.Genera
         components = [set(c) for c in nx.connected_components(g)]
         components = sorted(components, key=len, reverse=True)
         c1, c2 = components[0], components[1]
-        success = _try_connect_two_components(g, c1, c2, rng, max_trials=max(1, max_trials // max(len(components), 1)))
+        success = _try_connect_two_components(
+            g, c1, c2, rng, max_trials=max(1, max_trials // max(len(components), 1))
+        )
         attempts += 1
         if not success or attempts > len(components) + max_trials:
-            raise RuntimeError("Could not connect graph with degree-preserving switches.")
+            raise RuntimeError(
+                "Could not connect graph with degree-preserving switches."
+            )
     return g
 
 
@@ -104,8 +116,16 @@ def _deterministic_constructor_rng(
     return np.random.default_rng(stable_seed)
 
 
-def construct_coarse_graph(summary: dict[str, Any], config: ConstructorConfig | dict[str, Any] | None = None, rng: np.random.Generator | None = None) -> nx.Graph:
-    cfg = config if isinstance(config, ConstructorConfig) else ConstructorConfig.from_dict(config)
+def construct_coarse_graph(
+    summary: dict[str, Any],
+    config: ConstructorConfig | dict[str, Any] | None = None,
+    rng: np.random.Generator | None = None,
+) -> nx.Graph:
+    cfg = (
+        config
+        if isinstance(config, ConstructorConfig)
+        else ConstructorConfig.from_dict(config)
+    )
     degree_sequence = sorted(
         [int(d) for d in summary["degree_sequence"]],
         reverse=True,
@@ -116,21 +136,35 @@ def construct_coarse_graph(summary: dict[str, Any], config: ConstructorConfig | 
         else (rng if rng is not None else np.random.default_rng(0))
     )
     if cfg.type != "havel_hakimi":
-        raise ValueError(f"Unsupported coarse constructor {cfg.type!r}; expected 'havel_hakimi'.")
+        raise ValueError(
+            f"Unsupported coarse constructor {cfg.type!r}; expected 'havel_hakimi'."
+        )
     if not nx.is_graphical(degree_sequence, method="eg"):
         raise ValueError("Target degree sequence is not graphical.")
     graph = nx.havel_hakimi_graph(degree_sequence)
-    graph = nx.convert_node_labels_to_integers(nx.Graph(graph), first_label=0, ordering="sorted")
-    if cfg.ensure_connected and graph.number_of_nodes() > 1 and not nx.is_connected(graph):
-        graph = repair_connectivity_degree_preserving(graph, generator, cfg.max_repair_trials)
+    graph = nx.convert_node_labels_to_integers(
+        nx.Graph(graph), first_label=0, ordering="sorted"
+    )
+    if (
+        cfg.ensure_connected
+        and graph.number_of_nodes() > 1
+        and not nx.is_connected(graph)
+    ):
+        graph = repair_connectivity_degree_preserving(
+            graph, generator, cfg.max_repair_trials
+        )
     if cfg.random_relabel:
         graph = _random_relabel(graph, generator)
     graph.graph["constructor"] = cfg.type
     return graph
 
 
-def assert_constructor_validity(graph: nx.Graph, summary: dict[str, Any], require_connected: bool = True) -> None:
-    expected_degrees = sorted([int(d) for d in summary["degree_sequence"]], reverse=True)
+def assert_constructor_validity(
+    graph: nx.Graph, summary: dict[str, Any], require_connected: bool = True
+) -> None:
+    expected_degrees = sorted(
+        [int(d) for d in summary["degree_sequence"]], reverse=True
+    )
     actual_degrees = sorted([int(d) for _, d in graph.degree()], reverse=True)
     if graph.number_of_nodes() != int(summary["num_nodes"]):
         raise AssertionError("Node count mismatch.")

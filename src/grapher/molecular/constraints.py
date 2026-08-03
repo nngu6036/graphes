@@ -15,7 +15,6 @@ from grapher.molecular.constants import (
     QM9_ATOM_TYPES,
 )
 
-
 # Neutral heavy-atom valences used by the hydrogen-suppressed QM9 graphs.
 DEFAULT_MAX_VALENCE = {
     1: 1.0,
@@ -114,13 +113,11 @@ def fit_molecular_attribute_priors(
         bond_global[BOND_SINGLE] = 1
     return MolecularAttributePriors(
         atom_by_degree={
-            int(degree): dict(counts)
-            for degree, counts in atom_by_degree.items()
+            int(degree): dict(counts) for degree, counts in atom_by_degree.items()
         },
         atom_global=dict(atom_global),
         bond_by_atom_pair={
-            tuple(pair): dict(counts)
-            for pair, counts in bond_by_pair.items()
+            tuple(pair): dict(counts) for pair, counts in bond_by_pair.items()
         },
         bond_global=dict(bond_global),
     )
@@ -188,9 +185,7 @@ def initialize_molecular_attributes(
         for key, value in (max_valence or DEFAULT_MAX_VALENCE).items()
     }
     atom_types = tuple(
-        int(value)
-        for value in allowed_atom_types
-        if int(value) in valence
+        int(value) for value in allowed_atom_types if int(value) in valence
     )
     bond_types = tuple(
         int(value)
@@ -228,10 +223,7 @@ def initialize_molecular_attributes(
 
     # Every edge starts as a single bond. The degree-compatible atom sampling
     # above makes this base assignment valence feasible.
-    used_valence = {
-        int(node): float(out.degree(node))
-        for node in out.nodes()
-    }
+    used_valence = {int(node): float(out.degree(node)) for node in out.nodes()}
     for u, v in out.edges():
         out.edges[u, v]["bond_type"] = BOND_SINGLE
         out.edges[u, v]["bond_order"] = 1.0

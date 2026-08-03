@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 import networkx as nx
 import numpy as np
@@ -223,10 +223,7 @@ class GraphletBasis:
             total = float(block.sum())
             if total > 0.0:
                 block = block / total
-            out[k] = {
-                key: float(value)
-                for key, value in zip(self.keys_by_k[k], block)
-            }
+            out[k] = {key: float(value) for key, value in zip(self.keys_by_k[k], block)}
         return out
 
     def flatten_mass(self, mass: dict[str, Any]) -> np.ndarray:
@@ -278,10 +275,7 @@ class HybridEndpointBatch:
 
     def to(self, device: torch.device | str) -> "HybridEndpointBatch":
         return HybridEndpointBatch(
-            **{
-                key: value.to(device)
-                for key, value in self.__dict__.items()
-            }
+            **{key: value.to(device) for key, value in self.__dict__.items()}
         )
 
 
@@ -398,13 +392,21 @@ def aligned_havel_hakimi_source(
         raise RuntimeError("Havel-Hakimi did not preserve labelled-node degrees.")
 
     generator = rng if rng is not None else np.random.default_rng(0)
-    if ensure_connected and source.number_of_nodes() > 1 and not nx.is_connected(source):
+    if (
+        ensure_connected
+        and source.number_of_nodes() > 1
+        and not nx.is_connected(source)
+    ):
         source = repair_connectivity_degree_preserving(
             source,
             generator,
             max_trials=max_repair_trials,
         )
-    if ensure_connected and source.number_of_nodes() > 1 and not nx.is_connected(source):
+    if (
+        ensure_connected
+        and source.number_of_nodes() > 1
+        and not nx.is_connected(source)
+    ):
         raise RuntimeError("Could not construct a connected aligned HH source.")
     for node, data in target.nodes(data=True):
         source.nodes[int(node)].update(dict(data))
@@ -414,10 +416,7 @@ def aligned_havel_hakimi_source(
 
 
 def _edge_set(graph: nx.Graph) -> set[tuple[int, int]]:
-    return {
-        (min(int(u), int(v)), max(int(u), int(v)))
-        for u, v in graph.edges()
-    }
+    return {(min(int(u), int(v)), max(int(u), int(v))) for u, v in graph.edges()}
 
 
 def _edge_disagreement(graph: nx.Graph, target: nx.Graph) -> float:
@@ -539,9 +538,7 @@ def build_aligned_teacher_states(
         states.append(target.copy())
     report = {
         "initial_edge_disagreement": float(initial),
-        "final_teacher_edge_disagreement": float(
-            _edge_disagreement(graph, target)
-        ),
+        "final_teacher_edge_disagreement": float(_edge_disagreement(graph, target)),
         "accepted_teacher_steps": int(accepted),
         "reached_target": bool(reached),
     }
@@ -561,20 +558,6 @@ def _shared_permutation(
     left = nx.convert_node_labels_to_integers(left, ordering="sorted")
     right = nx.convert_node_labels_to_integers(right, ordering="sorted")
     return left, right
-
-
-def _select_state_indices(num_states: int, states_per_graph: int) -> list[int]:
-    if num_states <= 0:
-        return []
-    count = min(max(int(states_per_graph), 1), num_states)
-    if count == num_states:
-        return list(range(num_states))
-    return sorted(
-        set(
-            int(round(value))
-            for value in np.linspace(0, num_states - 1, num=count)
-        )
-    )
 
 
 def build_endpoint_examples(
@@ -613,9 +596,24 @@ def build_endpoint_examples(
         graphlet_mass = graphlet_basis.flatten_mass(
             summary.get("graphlet_connected_mass", {}) or {}
         )
-        indices = _select_state_indices(
-            len(states),
-            int(cfg.get("states_per_graph", 8)),
+        state_count = len(states)
+        selected_count = min(
+            max(int(cfg.get("states_per_graph", 8)), 1),
+            state_count,
+        )
+        indices = (
+            list(range(state_count))
+            if selected_count == state_count
+            else sorted(
+                {
+                    int(round(value))
+                    for value in np.linspace(
+                        0,
+                        state_count - 1,
+                        num=selected_count,
+                    )
+                }
+            )
         )
         denominator = max(len(states) - 1, 1)
         for step in indices:

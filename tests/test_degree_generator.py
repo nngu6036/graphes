@@ -16,7 +16,11 @@ from grapher.generators.degree_vae import (
 
 
 def test_degree_vectorizer_outputs_graphical_summaries():
-    graphs = [nx.cycle_graph(12), nx.path_graph(12), nx.watts_strogatz_graph(20, 4, 0.2, seed=1)]
+    graphs = [
+        nx.cycle_graph(12),
+        nx.path_graph(12),
+        nx.watts_strogatz_graph(20, 4, 0.2, seed=1),
+    ]
     vectorizer = DegreeVectorizer.fit(graphs, require_connected=True)
     model = build_degree_vae(vectorizer, latent_dim=4, hidden_dim=16)
     torch.manual_seed(0)
@@ -96,9 +100,7 @@ def test_size_conditioned_vae_loss_and_checkpoint_round_trip(tmp_path):
         key: torch.as_tensor(
             value,
             dtype=(
-                torch.long
-                if key in {"num_nodes", "num_nodes_count"}
-                else torch.float32
+                torch.long if key in {"num_nodes", "num_nodes_count"} else torch.float32
             ),
         )
         for key, value in targets_np.items()
@@ -118,18 +120,13 @@ def test_size_conditioned_vae_loss_and_checkpoint_round_trip(tmp_path):
     assert model.prior_type == "conditional_gmm"
     assert model.prior_components == 4
     assert any(
-        parameter.grad is not None
-        for parameter in model.conditional_prior.parameters()
+        parameter.grad is not None for parameter in model.conditional_prior.parameters()
     )
 
     checkpoint = tmp_path / "degree_vae.pt"
     save_degree_vae_checkpoint(checkpoint, model, vectorizer)
-    loaded, loaded_vectorizer, _ = load_degree_vae_checkpoint(
-        checkpoint, device="cpu"
-    )
-    sampled = loaded.sample_outputs(
-        2, node_counts=[8, 12], device="cpu"
-    )
+    loaded, loaded_vectorizer, _ = load_degree_vae_checkpoint(checkpoint, device="cpu")
+    sampled = loaded.sample_outputs(2, node_counts=[8, 12], device="cpu")
     assert sampled["conditioned_num_nodes"].tolist() == [8, 12]
     assert loaded_vectorizer.input_dim == vectorizer.input_dim
     assert loaded.prior_type == "conditional_gmm"
@@ -176,9 +173,7 @@ def test_conditional_gmm_prior_shapes_and_standard_normal_override():
     assert params["prior_means"].shape == (2, 3, 5)
     assert params["prior_logvars"].shape == (2, 3, 5)
     learned_z = model.sample_prior(node_counts, prior_mode="model")
-    standard_z = model.sample_prior(
-        node_counts, prior_mode="standard_normal"
-    )
+    standard_z = model.sample_prior(node_counts, prior_mode="standard_normal")
     assert learned_z.shape == standard_z.shape == (2, 5)
 
 
@@ -190,9 +185,7 @@ def test_degree_sequence_evaluation_is_zero_for_identical_sets():
         train=sequences,
     )
     assert np.isclose(metrics["degree_histogram_mmd"], 0.0)
-    assert np.isclose(
-        metrics["degree_marginal_kl_reference_to_candidate"], 0.0
-    )
+    assert np.isclose(metrics["degree_marginal_kl_reference_to_candidate"], 0.0)
     assert np.isclose(metrics["node_count_total_variation"], 0.0)
     assert np.isclose(metrics["edge_count_total_variation"], 0.0)
     assert metrics["sequence_novelty_rate"] == 0.0

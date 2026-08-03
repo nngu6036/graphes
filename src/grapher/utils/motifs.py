@@ -24,6 +24,7 @@ NAUTY_EXEC = os.environ.get("NAUTY_EXEC") or shutil.which("labelg")
 # Validation
 # ============================================================
 
+
 def _validate_simple_undirected(G: nx.Graph) -> None:
     if G.is_directed():
         raise ValueError("G must be undirected.")
@@ -34,9 +35,11 @@ def _validate_simple_undirected(G: nx.Graph) -> None:
     if nx.number_of_selfloops(G) > 0:
         raise ValueError("G must be simple: no self-loops.")
 
+
 # ============================================================
 # Nauty canonicalization utility
 # ============================================================
+
 
 @dataclass(frozen=True)
 class NautyCanonicalizer:
@@ -103,13 +106,6 @@ class NautyCanonicalizer:
         """
         return self.canonical_graph6_batch([G])[0]
 
-    def canonical_graph(self, G: nx.Graph) -> tuple[str, nx.Graph]:
-        """
-        Return both canonical graph6 string and the canonical NetworkX graph.
-        """
-        key = self.canonical_graph6(G)
-        return key, nx.from_graph6_bytes(key.encode("ascii"))
-
     def canonical_graph6_batch(self, graphs: Iterable[nx.Graph]) -> list[str]:
         """
         Canonicalize many graphs in one labelg subprocess call.
@@ -175,10 +171,6 @@ class PythonCanonicalizer:
     def canonical_graph6(self, graph: nx.Graph) -> str:
         return self.canonical_graph6_batch([graph])[0]
 
-    def canonical_graph(self, graph: nx.Graph) -> tuple[str, nx.Graph]:
-        key = self.canonical_graph6(graph)
-        return key, nx.from_graph6_bytes(key.encode("ascii"))
-
     def canonical_graph6_batch(
         self,
         graphs: Iterable[nx.Graph],
@@ -213,8 +205,7 @@ class PythonCanonicalizer:
             relabeled = nx.Graph()
             relabeled.add_nodes_from(range(n))
             relabeled.add_edges_from(
-                (position[u], position[v])
-                for u, v in graph.edges()
+                (position[u], position[v]) for u, v in graph.edges()
             )
             encoded = nx.to_graph6_bytes(
                 relabeled,
@@ -316,73 +307,10 @@ def topology_graphlet_keys_by_size(
     }
 
 
-def derive_k3_graphlet_distribution(
-    degree_sequence: Iterable[int],
-    triangle_count: float,
-    *,
-    connected_only: bool = True,
-) -> dict[str, float]:
-    """Derive the induced three-node graphlet law from degrees and triangles.
-
-    For connected graphlets this returns the path and triangle probabilities.
-    When ``connected_only`` is false it returns all four unlabeled induced
-    three-node graph types. Infeasible integer triangle counts raise.
-    """
-
-    sequence = [int(value) for value in degree_sequence]
-    n = len(sequence)
-    if n < 3:
-        return {}
-    if any(value < 0 or value >= n for value in sequence):
-        raise ValueError("Degree sequence contains an out-of-range degree.")
-    if sum(sequence) % 2:
-        raise ValueError("Degree sequence must have an even sum.")
-
-    triangles = round(float(triangle_count))
-    edges = int(sum(sequence) // 2)
-    wedges = int(sum(value * (value - 1) // 2 for value in sequence))
-    total_triples = comb(n, 3)
-
-    counts_by_edges = {
-        3: triangles,
-        2: wedges - 3 * triangles,
-        1: edges * (n - 2) - 2 * wedges + 3 * triangles,
-        0: total_triples + wedges - edges * (n - 2) - triangles,
-    }
-    materially_negative = {
-        edge_count: count
-        for edge_count, count in counts_by_edges.items()
-        if count < 0
-    }
-    if materially_negative:
-        raise ValueError(
-            "Triangle count is infeasible for the supplied degree sequence: "
-            f"{materially_negative}."
-        )
-    counts_by_edges = {
-        edge_count: max(int(count), 0)
-        for edge_count, count in counts_by_edges.items()
-    }
-
-    basis = topology_graphlet_basis(3, connected_only=connected_only)
-    counts: dict[str, float] = {}
-    for key, graph in basis:
-        edge_count = int(graph.number_of_edges())
-        counts[key] = float(counts_by_edges.get(edge_count, 0))
-
-    total = float(sum(counts.values()))
-    if total <= 0.0:
-        return {}
-    return {
-        key: value / total
-        for key, value in counts.items()
-        if value > 0.0
-    }
-
-
 # ============================================================
 # Subset sampling
 # ============================================================
+
 
 def _sample_node_subsets(
     nodes: list[Any],
@@ -483,48 +411,6 @@ def _iter_k_induced_subgraphs(
         yield H
 
 
-# ============================================================
-# Improved motif / graphlet functions
-# ============================================================
-
-def k_induced_subgraph_canonical_strings(
-    G: nx.Graph,
-    k: int,
-    *,
-    connected_only: bool = True,
-    unique: bool = False,
-    num_samples: int | None = None,
-    rng: np.random.Generator | None = None,
-    canonicalizer: NautyCanonicalizer | None = None,
-    batch_size: int = 4096,
-) -> list[str]:
-    """
-    Return canonical graph6 strings of k-node induced subgraphs.
-
-    If unique=False, returns one key per accepted k-subset.
-    If unique=True, returns unique canonical keys only.
-    """
-    canonicalizer = canonicalizer or default_topology_canonicalizer()
-
-    keys: list[str] = []
-
-    subgraphs = _iter_k_induced_subgraphs(
-        G,
-        k,
-        connected_only=connected_only,
-        num_samples=num_samples,
-        rng=rng,
-    )
-
-    for batch in _batched(subgraphs, batch_size=batch_size):
-        keys.extend(canonicalizer.canonical_graph6_batch(batch))
-
-    if unique:
-        return sorted(set(keys))
-
-    return keys
-
-
 def graphlet_count_dict(
     G: nx.Graph,
     k: int,
@@ -557,122 +443,16 @@ def graphlet_count_dict(
     return {str(key): int(value) for key, value in counts.items()}
 
 
-def list_motifs(
-    G: nx.Graph,
-    k: int,
-    *,
-    canonicalizer: NautyCanonicalizer | None = None,
-    connected_only: bool = True,
-    batch_size: int = 4096,
-) -> list[nx.Graph]:
-    """
-    Return all unique induced k-node motif types appearing in G.
-
-    Representatives are returned as canonical NetworkX graphs with labels 0..k-1.
-    """
-    keys = k_induced_subgraph_canonical_strings(
-        G,
-        k,
-        connected_only=connected_only,
-        unique=True,
-        canonicalizer=canonicalizer,
-        batch_size=batch_size,
-    )
-
-    return [nx.from_graph6_bytes(key.encode("ascii")) for key in keys]
-
-
-def aggregate_unique_motifs(
-    graphs: list[nx.Graph],
-    k: int,
-    *,
-    canonicalizer: NautyCanonicalizer | None = None,
-    connected_only: bool = True,
-    batch_size: int = 4096,
-) -> list[nx.Graph]:
-    """
-    Return unique induced k-node motif types appearing in any graph.
-    """
-    canonicalizer = canonicalizer or default_topology_canonicalizer()
-
-    seen_keys: set[str] = set()
-
-    for G in graphs:
-        keys = k_induced_subgraph_canonical_strings(
-            G,
-            k,
-            connected_only=connected_only,
-            unique=True,
-            canonicalizer=canonicalizer,
-            batch_size=batch_size,
-        )
-        seen_keys.update(keys)
-
-    return [nx.from_graph6_bytes(key.encode("ascii")) for key in sorted(seen_keys)]
-
-
-def aggregate_unique_motifs_with_counts(
-    graphs: list[nx.Graph],
-    k: int,
-    *,
-    canonicalizer: NautyCanonicalizer | None = None,
-    connected_only: bool = True,
-    batch_size: int = 4096,
-    progress_interval: int = 0,
-    log_fn=None,
-) -> list[tuple[nx.Graph, int]]:
-    """
-    Return unique induced k-node motif types and their total occurrence counts
-    across all input graphs.
-    """
-    canonicalizer = canonicalizer or default_topology_canonicalizer()
-
-    counts: Counter[str] = Counter()
-
-    total_graphs = len(graphs)
-    for graph_idx, G in enumerate(graphs, start=1):
-        counts.update(
-            graphlet_count_dict(
-                G,
-                k,
-                connected_only=connected_only,
-                canonicalizer=canonicalizer,
-                batch_size=batch_size,
-            )
-        )
-        if progress_interval and (
-            graph_idx == 1
-            or graph_idx % int(progress_interval) == 0
-            or graph_idx == total_graphs
-        ):
-            message = (
-                f"k={k} graph={graph_idx}/{total_graphs} "
-                f"unique_motifs={len(counts)} total_occurrences={sum(counts.values())}"
-            )
-            if log_fn is not None:
-                log_fn(message)
-            else:
-                print(message, flush=True)
-
-    return [
-        (nx.from_graph6_bytes(key.encode("ascii")), int(counts[key]))
-        for key in sorted(counts.keys())
-    ]
-
-
 # ============================================================
 # Frequency / history utilities
 # ============================================================
+
 
 def normalize_count_dict(counts: dict[str, int | float]) -> dict[str, float]:
     total = float(sum(float(v) for v in counts.values()))
     if total <= 0.0:
         return {}
-    return {
-        str(k): float(v) / total
-        for k, v in counts.items()
-        if float(v) > 0.0
-    }
+    return {str(k): float(v) / total for k, v in counts.items() if float(v) > 0.0}
 
 
 def graphlet_frequency_dict(
@@ -732,24 +512,6 @@ def graphlet_history(
     }
 
 
-def graphlet_keys_by_size(
-    histories: list[dict[str, dict[str, float]]],
-) -> dict[str, list[str]]:
-    """
-    Collect a stable key basis for a list of graphlet histories.
-    """
-    keys: dict[str, set[str]] = {}
-
-    for history in histories:
-        for k, hist in (history or {}).items():
-            keys.setdefault(str(k), set()).update(str(key) for key in hist.keys())
-
-    return {
-        str(k): sorted(vals)
-        for k, vals in sorted(keys.items(), key=lambda item: int(item[0]))
-    }
-
-
 def flatten_graphlet_history(
     history: dict[str, dict[str, float]] | None,
     keys_by_k: dict[str, list[str]] | None,
@@ -776,42 +538,6 @@ def flatten_graphlet_history(
         return np.zeros(0, dtype=np.float64)
 
     return np.concatenate(parts, axis=0)
-
-
-def unflatten_graphlet_history(
-    vector: np.ndarray,
-    keys_by_k: dict[str, list[str]] | None,
-) -> dict[str, dict[str, float]]:
-    """
-    Turn a flat vector back into a size-indexed graphlet history.
-    """
-    if not keys_by_k:
-        return {}
-
-    vec = np.asarray(vector, dtype=np.float64).reshape(-1)
-    history: dict[str, dict[str, float]] = {}
-    pos = 0
-
-    for k in sorted(keys_by_k.keys(), key=lambda x: int(x)):
-        keys = list(keys_by_k[k])
-        width = len(keys)
-
-        raw = np.maximum(vec[pos : pos + width], 0.0)
-        pos += width
-
-        total = float(raw.sum())
-
-        if width == 0 or total <= 0.0:
-            history[str(k)] = {}
-        else:
-            vals = raw / total
-            history[str(k)] = {
-                key: float(vals[i])
-                for i, key in enumerate(keys)
-                if float(vals[i]) > 0.0
-            }
-
-    return history
 
 
 def graphlet_history_l2_distance(
@@ -854,51 +580,10 @@ def graphlet_history_l2_distance(
     return float(total)
 
 
-def attributed_to_colored_incidence_graph(
-    G: nx.Graph,
-    *,
-    node_label_attr: str = "node_label",
-    edge_label_attr: str = "edge_label",
-) -> nx.Graph:
-    """
-    Convert a node/edge-attributed graph into a vertex-coloured incidence graph.
-
-    Original nodes become coloured vertices.
-    Original labelled edges become auxiliary coloured vertices.
-
-    The output graph is simple, undirected, and suitable for nauty-style
-    vertex-colour canonicalization.
-    """
-    H = nx.Graph()
-
-    # Add original nodes.
-    for v, data in G.nodes(data=True):
-        node_label = data.get(node_label_attr, "__missing_node_label__")
-        H.add_node(
-            ("node", v),
-            color=("node", node_label),
-            original_node=v,
-        )
-
-    # Add one auxiliary vertex per edge.
-    for edge_id, (u, v, data) in enumerate(G.edges(data=True)):
-        edge_label = data.get(edge_label_attr, "__missing_edge_label__")
-
-        aux = ("edge", edge_id, u, v)
-        H.add_node(
-            aux,
-            color=("edge", edge_label),
-            original_edge=(u, v),
-        )
-
-        H.add_edge(("node", u), aux)
-        H.add_edge(aux, ("node", v))
-
-    return H
-
 # ============================================================
-# Data classes
+# Attributed graphlet data classes
 # ============================================================
+
 
 @dataclass(frozen=True)
 class ColoredIncidenceTransform:
@@ -917,6 +602,7 @@ class AttributedMotifOccurrence:
 # ============================================================
 # Basic helpers
 # ============================================================
+
 
 def _resolve_labelg(nauty_exec: str | os.PathLike[str]) -> str:
     """
@@ -943,20 +629,6 @@ def _resolve_labelg(nauty_exec: str | os.PathLike[str]) -> str:
     return str(path)
 
 
-def _validate_simple_undirected(G: nx.Graph) -> None:
-    """
-    Validate that G is a simple undirected NetworkX graph.
-    """
-    if G.is_directed():
-        raise ValueError("Expected an undirected nx.Graph.")
-
-    if G.is_multigraph():
-        raise ValueError("Expected a simple nx.Graph, not a MultiGraph.")
-
-    if nx.number_of_selfloops(G) > 0:
-        raise ValueError("Self-loops are not supported in this graph6 workflow.")
-
-
 def _stable_label_token(label: Any) -> str:
     """
     Convert a Python label value into a stable string token.
@@ -978,11 +650,7 @@ def _safe_colour_alphabet() -> list[str]:
       - '^' because x^N has repetition meaning in labelg -f.
       - whitespace.
     """
-    chars = (
-        string.ascii_letters
-        + string.digits
-        + "!#$%&()*+,./:;<=>?@[]_{}~"
-    )
+    chars = string.ascii_letters + string.digits + "!#$%&()*+,./:;<=>?@[]_{}~"
     return list(dict.fromkeys(chars))
 
 
@@ -1006,6 +674,7 @@ def _make_colour_map(colour_tokens: list[str]) -> dict[str, str]:
 # ============================================================
 # Attributed graph -> coloured incidence graph
 # ============================================================
+
 
 def attributed_to_colored_incidence_graph(
     G: nx.Graph,
@@ -1095,6 +764,7 @@ def attributed_to_colored_incidence_graph(
 # Coloured graph canonicalization using nauty labelg -f
 # ============================================================
 
+
 def canonicalize_colored_graph_nauty(
     H: nx.Graph,
     *,
@@ -1175,6 +845,7 @@ def canonicalize_colored_graph_nauty(
 # Coloured incidence subgraph -> attributed nx.Graph
 # ============================================================
 
+
 def colored_incidence_subgraph_to_attributed_graph(
     H_sub: nx.Graph,
     *,
@@ -1194,8 +865,7 @@ def colored_incidence_subgraph_to_attributed_graph(
     G_out = nx.Graph()
 
     node_vertices = [
-        v for v, data in H_sub.nodes(data=True)
-        if data.get("kind") == "node"
+        v for v, data in H_sub.nodes(data=True) if data.get("kind") == "node"
     ]
 
     # Relabel output motif nodes to 0..k-1.
@@ -1216,7 +886,8 @@ def colored_incidence_subgraph_to_attributed_graph(
             continue
 
         nbrs = [
-            nbr for nbr in H_sub.neighbors(aux)
+            nbr
+            for nbr in H_sub.neighbors(aux)
             if H_sub.nodes[nbr].get("kind") == "node"
         ]
 
@@ -1239,104 +910,9 @@ def colored_incidence_subgraph_to_attributed_graph(
 
 
 # ============================================================
-# Single graph: list unique attributed k-induced motifs
-# ============================================================
-
-def list_unique_attributed_k_motifs_nauty(
-    G: nx.Graph,
-    k: int,
-    *,
-    node_label_attr: str = "node_label",
-    edge_label_attr: str = "edge_label",
-    connected_only: bool = True,
-    nauty_exec: str | os.PathLike[str] = NAUTY_EXEC,
-    use_traces: bool = False,
-    label_normalizer: Callable[[Any], str] = _stable_label_token,
-    missing_ok: bool = False,
-    preserve_original_attrs: bool = True,
-) -> list[nx.Graph]:
-    """
-    Return unique attributed k-induced subgraphs of one attributed graph.
-
-    Here k means k original graph nodes, not k vertices in the transformed
-    coloured incidence graph.
-
-    Steps:
-      1. Transform G into a coloured incidence graph.
-      2. For each k-subset of original nodes:
-           - include those k original-node vertices
-           - include auxiliary edge vertices for edges among them
-      3. Canonicalize the coloured incidence subgraph with nauty labelg -f.
-      4. Keep one representative per canonical string.
-      5. Convert representatives back to attributed nx.Graph objects.
-
-    Returns
-    -------
-    list[nx.Graph]
-        Unique attributed motif representatives.
-        Nodes are relabelled to 0..k-1.
-    """
-    _validate_simple_undirected(G)
-
-    if k <= 0:
-        raise ValueError("k must be positive.")
-
-    if k > G.number_of_nodes():
-        return []
-
-    transform = attributed_to_colored_incidence_graph(
-        G,
-        node_label_attr=node_label_attr,
-        edge_label_attr=edge_label_attr,
-        label_normalizer=label_normalizer,
-        missing_ok=missing_ok,
-    )
-
-    H_full = transform.colored_graph
-    seen: dict[str, nx.Graph] = {}
-
-    original_nodes = list(G.nodes())
-
-    for subset in itertools.combinations(original_nodes, k):
-        original_subgraph = G.subgraph(subset)
-
-        if connected_only and not nx.is_connected(original_subgraph):
-            continue
-
-        # Include selected original-node vertices in the coloured graph.
-        coloured_nodes = [
-            transform.original_to_colored_node[v]
-            for v in subset
-        ]
-
-        # Include edge-label auxiliary vertices for edges induced by the subset.
-        for u, v in original_subgraph.edges():
-            aux = transform.edge_to_aux_node[frozenset((u, v))]
-            coloured_nodes.append(aux)
-
-        H_sub = H_full.subgraph(coloured_nodes).copy()
-
-        key = canonicalize_colored_graph_nauty(
-            H_sub,
-            color_attr="color_token",
-            nauty_exec=nauty_exec,
-            use_traces=use_traces,
-        )
-
-        if key not in seen:
-            seen[key] = colored_incidence_subgraph_to_attributed_graph(
-                H_sub,
-                node_label_attr=node_label_attr,
-                edge_label_attr=edge_label_attr,
-                preserve_original_attrs=preserve_original_attrs,
-            )
-
-    return list(seen.values())
-
-
-# ============================================================
 # Graph list: aggregate unique attributed k-induced motifs + counts
 # ============================================================
+
 
 def aggregate_unique_attributed_k_motifs_with_counts_nauty(
     graphs: list[nx.Graph],
@@ -1407,10 +983,7 @@ def aggregate_unique_attributed_k_motifs_with_counts_nauty(
                 continue
 
             # Include selected original-node vertices in the coloured graph.
-            coloured_nodes = [
-                transform.original_to_colored_node[v]
-                for v in subset
-            ]
+            coloured_nodes = [transform.original_to_colored_node[v] for v in subset]
 
             # Include edge-label auxiliary vertices for edges induced by the subset.
             for u, v in original_subgraph.edges():
@@ -1457,22 +1030,3 @@ def aggregate_unique_attributed_k_motifs_with_counts_nauty(
         )
         for key in sorted(counts.keys())
     ]
-
-
-def aggregate_unique_attributed_k_motifs_with_counts_as_tuples(
-    graphs: list[nx.Graph],
-    k: int,
-    **kwargs,
-) -> list[tuple[nx.Graph, int]]:
-    """
-    Convenience wrapper.
-
-    Returns exactly:
-        list[(motif_graph, occurrence_count)]
-    """
-    results = aggregate_unique_attributed_k_motifs_with_counts_nauty(
-        graphs,
-        k,
-        **kwargs,
-    )
-    return [(item.motif, item.count) for item in results]

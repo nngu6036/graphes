@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import networkx as nx
 import numpy as np
+import pytest
 
-from grapher.hybrid.data import GraphCategoryVocabulary
+from grapher.hybrid.data import GraphCategoryVocabulary, GraphletBasis
 from grapher.hybrid.refiner import (
     HybridPrediction,
+    HybridRefinerConfig,
     apply_hybrid_action,
+    score_hybrid_candidates,
 )
 from grapher.molecular.constraints import (
     fit_molecular_attribute_priors,
     initialize_molecular_attributes,
     molecular_valence_errors,
 )
+from grapher.properties.summary import SummaryConfig
 
 
 def _molecule(
@@ -72,14 +76,10 @@ def test_same_type_swap_preserves_bond_order_valence() -> None:
         edge_attribute="bond_type",
     )
     prediction = HybridPrediction(
-        node_probabilities=np.zeros((4, 4)),
         edge_probabilities=np.full((4, 4, 5), 0.2),
-        sampled_node_labels=np.zeros(4, dtype=np.int64),
         sampled_edge_labels=np.zeros((4, 4), dtype=np.int64),
         graphlet_history={},
         graphlet_connected_mass={},
-        graphlet_mean_history={},
-        graphlet_mean_connected_mass={},
         sampled_graph=nx.Graph(),
         sampled_degree_match=False,
         sampled_connected=False,
@@ -94,3 +94,53 @@ def test_same_type_swap_preserves_bond_order_valence() -> None:
 
     assert {data["bond_type"] for _, _, data in swapped.edges(data=True)} == {2}
     assert molecular_valence_errors(swapped) == []
+
+
+def test_strict_typed_rewiring_flags_must_be_enabled_together() -> None:
+    with pytest.raises(ValueError, match="Strict typed rewiring"):
+        HybridRefinerConfig.from_dict({"require_same_edge_type_pair": True})
+    with pytest.raises(ValueError, match="Strict typed rewiring"):
+        HybridRefinerConfig.from_dict({"preserve_removed_edge_type": True})
+
+
+def test_rdkit_filter_does_not_depend_on_valence_filter(monkeypatch) -> None:
+    graph = _molecule([6, 6, 6, 6], [(0, 1, 1), (2, 3, 1)])
+    vocabulary = GraphCategoryVocabulary(
+        node_values=(6, 7, 8, 9),
+        edge_values=(1, 2, 3),
+        node_attribute="atomic_num",
+        edge_attribute="bond_type",
+    )
+    prediction = HybridPrediction(
+        edge_probabilities=np.full((4, 4, 4), 0.25),
+        sampled_edge_labels=np.zeros((4, 4), dtype=np.int64),
+        graphlet_history={},
+        graphlet_connected_mass={},
+        sampled_graph=nx.Graph(),
+        sampled_degree_match=False,
+        sampled_connected=False,
+    )
+    monkeypatch.setattr(
+        "grapher.molecular.graph_io.is_valid_molecular_graph",
+        lambda _graph: False,
+    )
+
+    rows = score_hybrid_candidates(
+        graph,
+        [(((0, 1), (2, 3)), ((0, 2), (1, 3)))],
+        prediction,
+        vocabulary=vocabulary,
+        graphlet_basis=GraphletBasis(keys_by_k={}),
+        summary_config=SummaryConfig(),
+        config={
+            "categorical_weight": 1.0,
+            "graphlet_weight": 0.0,
+            "require_same_edge_type_pair": True,
+            "preserve_removed_edge_type": True,
+            "enforce_molecular_valence": False,
+            "rdkit_candidate_check": True,
+        },
+    )
+
+    assert rows[0]["molecular_valid"] is False
+    assert rows[0]["hybrid_score"] == float("-inf")

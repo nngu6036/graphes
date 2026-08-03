@@ -78,9 +78,7 @@ def _sample_degree_sequences(
             outputs = model.sample_outputs(
                 current_batch,
                 node_counts=node_counts,
-                deterministic_node_count=bool(
-                    degree_cfg.get("deterministic", False)
-                ),
+                deterministic_node_count=bool(degree_cfg.get("deterministic", False)),
                 prior_mode=prior_mode,
                 device=next(model.parameters()).device,
             )
@@ -88,17 +86,11 @@ def _sample_degree_sequences(
             outputs,
             rng=rng,
             deterministic=bool(degree_cfg.get("deterministic", False)),
-            sample_num_nodes=str(
-                degree_cfg.get("sample_num_nodes", "empirical")
-            ),
+            sample_num_nodes=str(degree_cfg.get("sample_num_nodes", "empirical")),
             max_resample=int(degree_cfg.get("max_resample", 200)),
             fallback=str(degree_cfg.get("fallback", "empirical_nearest_n")),
-            parity_conditioned=bool(
-                degree_cfg.get("parity_conditioned", True)
-            ),
-            max_parity_resample=int(
-                degree_cfg.get("max_parity_resample", 32)
-            ),
+            parity_conditioned=bool(degree_cfg.get("parity_conditioned", True)),
+            max_parity_resample=int(degree_cfg.get("max_parity_resample", 32)),
             include_diagnostics=True,
         )
         for summary in batch:
@@ -151,12 +143,8 @@ def _aggregate_posterior_sequences(
             sample_num_nodes="conditioned",
             max_resample=1,
             fallback="empirical_nearest_n",
-            parity_conditioned=bool(
-                degree_cfg.get("parity_conditioned", True)
-            ),
-            max_parity_resample=int(
-                degree_cfg.get("max_parity_resample", 32)
-            ),
+            parity_conditioned=bool(degree_cfg.get("parity_conditioned", True)),
+            max_parity_resample=int(degree_cfg.get("max_parity_resample", 32)),
             include_diagnostics=True,
         )
         for summary in decoded:
@@ -200,9 +188,7 @@ def _posterior_reconstruction_sequences(
             device=model_device,
         )
         with torch.no_grad():
-            outputs = model.reconstruct_outputs(
-                batch_x, node_counts, use_mean=True
-            )
+            outputs = model.reconstruct_outputs(batch_x, node_counts, use_mean=True)
         decoded = vectorizer.outputs_to_summaries(
             outputs,
             rng=rng,
@@ -216,10 +202,7 @@ def _posterior_reconstruction_sequences(
         for summary in decoded:
             diagnostic = summary["sampling_diagnostics"]
             reconstructed.append(
-                [
-                    int(degree)
-                    for degree in diagnostic["first_raw_degree_sequence"]
-                ]
+                [int(degree) for degree in diagnostic["first_raw_degree_sequence"]]
             )
     return reconstructed
 
@@ -233,12 +216,9 @@ def _quality_metrics(
     check_constructor: bool,
 ) -> dict[str, float]:
     sequences = [
-        [int(degree) for degree in summary["degree_sequence"]]
-        for summary in summaries
+        [int(degree) for degree in summary["degree_sequence"]] for summary in summaries
     ]
-    graphical = [
-        nx.is_graphical(sequence, method="eg") for sequence in sequences
-    ]
+    graphical = [nx.is_graphical(sequence, method="eg") for sequence in sequences]
     connected_feasible = [
         connected_feasible_degree_sequence(sequence) for sequence in sequences
     ]
@@ -266,18 +246,12 @@ def _quality_metrics(
                 constructor_success.append(False)
 
     return {
-        "raw_graphicality_rate": _mean_bool(
-            diagnostics, "raw_graphical"
-        ),
+        "raw_graphicality_rate": _mean_bool(diagnostics, "raw_graphical"),
         "raw_connected_feasible_rate": _mean_bool(
             diagnostics, "raw_connected_feasible"
         ),
-        "raw_even_degree_sum_rate": _mean_bool(
-            diagnostics, "raw_even_degree_sum"
-        ),
-        "raw_degree_bounds_rate": _mean_bool(
-            diagnostics, "raw_degree_bounds_valid"
-        ),
+        "raw_even_degree_sum_rate": _mean_bool(diagnostics, "raw_even_degree_sum"),
+        "raw_degree_bounds_rate": _mean_bool(diagnostics, "raw_degree_bounds_valid"),
         "repair_usage_rate": _mean_bool(diagnostics, "repair_used"),
         "fallback_usage_rate": _mean_bool(diagnostics, "fallback_used"),
         "accepted_without_postprocessing_rate": _mean_bool(
@@ -285,48 +259,27 @@ def _quality_metrics(
         ),
         "mean_repair_l1_adjustment": float(
             np.mean(
-                [
-                    float(item.get("repair_l1_adjustment", 0.0))
-                    for item in diagnostics
-                ]
+                [float(item.get("repair_l1_adjustment", 0.0)) for item in diagnostics]
             )
         )
         if diagnostics
         else 0.0,
         "mean_sampling_attempts": float(
-            np.mean(
-                [
-                    float(item.get("attempts_used", 0.0))
-                    for item in diagnostics
-                ]
-            )
+            np.mean([float(item.get("attempts_used", 0.0)) for item in diagnostics])
         )
         if diagnostics
         else 0.0,
         "mean_parity_redraws": float(
-            np.mean(
-                [
-                    float(item.get("parity_redraws", 0.0))
-                    for item in diagnostics
-                ]
-            )
+            np.mean([float(item.get("parity_redraws", 0.0)) for item in diagnostics])
         )
         if diagnostics
         else 0.0,
-        "accepted_graphicality_rate": float(np.mean(graphical))
-        if graphical
-        else 0.0,
-        "accepted_connected_feasible_rate": float(
-            np.mean(connected_feasible)
-        )
+        "accepted_graphicality_rate": float(np.mean(graphical)) if graphical else 0.0,
+        "accepted_connected_feasible_rate": float(np.mean(connected_feasible))
         if connected_feasible
         else 0.0,
-        "accepted_even_degree_sum_rate": float(np.mean(even_sum))
-        if even_sum
-        else 0.0,
-        "accepted_degree_bounds_rate": float(np.mean(bounds))
-        if bounds
-        else 0.0,
+        "accepted_even_degree_sum_rate": float(np.mean(even_sum)) if even_sum else 0.0,
+        "accepted_degree_bounds_rate": float(np.mean(bounds)) if bounds else 0.0,
         "constructor_success_rate": float(np.mean(constructor_success))
         if constructor_success
         else float("nan"),
@@ -335,9 +288,7 @@ def _quality_metrics(
 
 def _compact_comparison(metrics: dict[str, Any]) -> dict[str, float]:
     return {
-        "degree_kl": float(
-            metrics["degree_marginal_kl_reference_to_candidate"]
-        ),
+        "degree_kl": float(metrics["degree_marginal_kl_reference_to_candidate"]),
         "degree_mmd": float(metrics["degree_histogram_mmd"]),
         "node_count_tv": float(metrics["node_count_total_variation"]),
         "edge_count_tv": float(metrics["edge_count_total_variation"]),
@@ -384,19 +335,17 @@ def main() -> None:
     train_graphs = list(splits["train"])
     test_graphs = list(splits["test"])
     if not train_graphs or not test_graphs:
-        raise RuntimeError("Degree evaluation requires non-empty train and test splits.")
+        raise RuntimeError(
+            "Degree evaluation requires non-empty train and test splits."
+        )
 
     reference_limit = (
         args.max_reference_sequences
         if args.max_reference_sequences is not None
         else eval_cfg.get("max_reference_sequences", 1024)
     )
-    train_sequences = _subsample(
-        _degree_sequences(train_graphs), reference_limit, rng
-    )
-    test_sequences = _subsample(
-        _degree_sequences(test_graphs), reference_limit, rng
-    )
+    train_sequences = _subsample(_degree_sequences(train_graphs), reference_limit, rng)
+    test_sequences = _subsample(_degree_sequences(test_graphs), reference_limit, rng)
 
     checkpoint_path = Path(
         args.checkpoint
@@ -406,7 +355,9 @@ def main() -> None:
         )
     )
     if not checkpoint_path.exists():
-        raise FileNotFoundError(f"Missing degree-generator checkpoint: {checkpoint_path}")
+        raise FileNotFoundError(
+            f"Missing degree-generator checkpoint: {checkpoint_path}"
+        )
 
     num_samples = int(
         args.num_samples
@@ -437,8 +388,7 @@ def main() -> None:
         prior_mode="model",
     )
     generated_sequences = [
-        [int(degree) for degree in summary["degree_sequence"]]
-        for summary in summaries
+        [int(degree) for degree in summary["degree_sequence"]] for summary in summaries
     ]
     raw_prior_sequences = [
         [int(degree) for degree in item["first_raw_degree_sequence"]]
@@ -542,19 +492,13 @@ def main() -> None:
         },
         "comparison_table": {
             "train_to_test": _compact_comparison(train_test),
-            "posterior_reconstruction_to_test": _compact_comparison(
-                posterior_test
-            ),
+            "posterior_reconstruction_to_test": _compact_comparison(posterior_test),
             "aggregate_posterior_to_test": _compact_comparison(
                 aggregate_posterior_test
             ),
-            "standard_normal_prior_to_test": _compact_comparison(
-                standard_normal_test
-            ),
+            "standard_normal_prior_to_test": _compact_comparison(standard_normal_test),
             "learned_prior_raw_to_test": _compact_comparison(raw_prior_test),
-            "learned_prior_accepted_to_test": _compact_comparison(
-                generated_test
-            ),
+            "learned_prior_accepted_to_test": _compact_comparison(generated_test),
         },
         "dh_vae_quality": quality,
         "posterior_reconstruction_distribution": posterior_test,
@@ -573,9 +517,7 @@ def main() -> None:
             "accepted_degree_sequences": generated_sequences,
             "raw_prior_degree_sequences": raw_prior_sequences,
             "standard_normal_prior_degree_sequences": standard_normal_sequences,
-            "aggregate_posterior_degree_sequences": (
-                aggregate_posterior_sequences
-            ),
+            "aggregate_posterior_degree_sequences": (aggregate_posterior_sequences),
             "posterior_reconstruction_degree_sequences": posterior_sequences,
         },
         output_dir / "generated_degree_sequences.json",

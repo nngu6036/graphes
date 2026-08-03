@@ -18,7 +18,6 @@ from grapher.hybrid.refiner import (
 from grapher.properties.summary import SummaryConfig, extract_summary
 from grapher.refinement.rewiring import apply_action, make_action
 
-
 CUBE_EDGES = [
     (0, 1),
     (0, 3),
@@ -68,10 +67,7 @@ def _summary_config() -> SummaryConfig:
 
 
 def _edge_set(graph: nx.Graph) -> set[tuple[int, int]]:
-    return {
-        (min(int(u), int(v)), max(int(u), int(v)))
-        for u, v in graph.edges()
-    }
+    return {(min(int(u), int(v)), max(int(u), int(v))) for u, v in graph.edges()}
 
 
 def _prediction(
@@ -82,20 +78,11 @@ def _prediction(
     vocabulary: GraphCategoryVocabulary,
     summary_config: SummaryConfig,
 ) -> HybridPrediction:
-    node_labels, edge_labels = graph_to_categorical_arrays(
+    _, edge_labels = graph_to_categorical_arrays(
         endpoint_graph,
         vocabulary,
     )
     node_count = endpoint_graph.number_of_nodes()
-    node_probabilities = np.ones(
-        (node_count, vocabulary.num_node_categories),
-        dtype=np.float64,
-    )
-    node_probabilities /= node_probabilities.sum(
-        axis=-1,
-        keepdims=True,
-    )
-
     edge_probabilities = np.full(
         (
             node_count,
@@ -112,24 +99,15 @@ def _prediction(
             edge_probabilities[u, v] /= edge_probabilities[u, v].sum()
 
     summary = extract_summary(graphlet_graph, summary_config)
-    current_degrees = [
-        int(current.degree(node)) for node in sorted(current.nodes())
-    ]
+    current_degrees = [int(current.degree(node)) for node in sorted(current.nodes())]
     sampled_degrees = [
-        int(endpoint_graph.degree(node))
-        for node in sorted(endpoint_graph.nodes())
+        int(endpoint_graph.degree(node)) for node in sorted(endpoint_graph.nodes())
     ]
     return HybridPrediction(
-        node_probabilities=node_probabilities,
         edge_probabilities=edge_probabilities,
-        sampled_node_labels=node_labels,
         sampled_edge_labels=edge_labels,
         graphlet_history=summary["graphlet_history"],
         graphlet_connected_mass=summary["graphlet_connected_mass"],
-        graphlet_mean_history=summary["graphlet_history"],
-        graphlet_mean_connected_mass=summary[
-            "graphlet_connected_mass"
-        ],
         sampled_graph=endpoint_graph.copy(),
         sampled_degree_match=current_degrees == sampled_degrees,
         sampled_connected=(
@@ -141,9 +119,7 @@ def _prediction(
 
 
 def _best_action(rows: list[dict[str, Any]]):
-    return max(rows, key=lambda row: float(row["hybrid_score"]))[
-        "action"
-    ]
+    return max(rows, key=lambda row: float(row["hybrid_score"]))["action"]
 
 
 def test_cube_weights_switch_between_categorical_and_graphlet_guidance():
@@ -193,9 +169,7 @@ def test_cube_weights_switch_between_categorical_and_graphlet_guidance():
 
     assert _best_action(categorical_rows) == ACTION_A
     assert _best_action(graphlet_rows) == ACTION_B
-    categorical_by_action = {
-        row["action"]: row for row in categorical_rows
-    }
+    categorical_by_action = {row["action"]: row for row in categorical_rows}
     graphlet_by_action = {row["action"]: row for row in graphlet_rows}
     assert (
         categorical_by_action[ACTION_A]["categorical_gain"]
@@ -309,6 +283,4 @@ def test_infeasible_sample_is_guidance_only_and_preserves_invariants():
     assert _edge_set(refined) != _edge_set(infeasible_endpoint)
     assert len(trace) == 3
     assert all(item["accepted"] is True for item in trace)
-    assert all(
-        item["sampled_target_degree_match"] is False for item in trace
-    )
+    assert all(item["sampled_target_degree_match"] is False for item in trace)

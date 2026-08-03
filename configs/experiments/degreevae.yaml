@@ -18,4 +18,3 @@ degree_generator:
   kl_loss_weight: 0.005
   node_count_loss_weight: 1.0
   degree_histogram_loss_weight: 5.0
-  edge_count_loss_weight: 0.1
