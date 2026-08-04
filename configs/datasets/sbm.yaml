@@ -1,21 +1,29 @@
+# Historical filename: this is the Community-small benchmark used by the
+# manuscript, not the variable-block SPECTRE SBM benchmark.
 name: sbm
 type: sbm
+
+# Keep the dataset/split seed fixed across all model-training seeds.
 seed: 0
 num_graphs: 500
+
 split:
   train: 0.8
   val: 0.1
   test: 0.1
+
 communities:
   min_blocks: 2
   max_blocks: 2
   min_nodes_per_block: 30
   max_nodes_per_block: 80
   equal_block_sizes: true
+
 edge_probs:
   p_in: 0.30
   p_out: 0.0
   inter_edges_per_node_fraction: 0.05
+
 filters:
   require_connected: true
   reject_zero_degree: true

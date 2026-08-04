@@ -1,27 +1,37 @@
+# Research-scale Community-small experiment retained under the historical
+# `sbm` dataset name. The implemented selector is energy-guided; this is not a
+# learned policy/STOP-selector configuration.
 experiment: sbm_hybrid_endpoint_graphlet
+benchmark: community_small
 seed: 42
+
+# Protocol metadata; aggregation fields are documentary.
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  max_reference_graphs: 1024
+  tune_on_split: val
+  final_split: test
 
 dataset:
   name: sbm
   config_path: configs/datasets/sbm.yaml
   root: outputs/datasets
-  build_if_missing: true
+  build_if_missing: false
   max_train_graphs: null
   max_val_graphs: null
 
-# Generic featureless graphs have one node category and two dense edge states:
-# no-edge (reserved index 0) and edge (index 1).
 categorical_state:
   node_attribute: null
   node_categories: [0]
   edge_attribute: null
   edge_categories: [1]
 
-# These are clean-endpoint targets H(G_1), not a replacement for G_1.
 graphlet_prediction:
   graphlet_history: true
   graphlet_k_min: 3
-  graphlet_k_max: 4
+  graphlet_k_max: 5
   graphlet_connected_only: true
   graphlet_backend: sampled
   graphlet_num_samples: 2048
@@ -30,11 +40,9 @@ graphlet_prediction:
   motif_proxy: false
   orbit_count: false
 
-# Build G_0 with the degree of target node i assigned to source node i.
-# Shared relabel augmentation permutes G_t and G_1 together.
 endpoint_trajectory:
-  steps: 32
-  candidate_budget: 64
+  steps: 40
+  candidate_budget: 128
   states_per_graph: 8
   preserve_connectivity: true
   ensure_connected_source: true
@@ -42,7 +50,7 @@ endpoint_trajectory:
   shared_relabel_augmentation: true
 
 endpoint_predictor:
-  checkpoint_path: outputs/hybrid_endpoint/sbm/checkpoint.pt
+  checkpoint_path: outputs/hybrid_endpoint/sbm/seed_42/checkpoint.pt
   device: auto
   hidden_dim: 128
   edge_dim: 64
@@ -52,45 +60,45 @@ endpoint_predictor:
   min_concentration: 0.05
   max_concentration: 50.0
   batch_size: 4
-  epochs: 100
+  epochs: 200
   learning_rate: 0.0003
   weight_decay: 0.00001
   no_edge_class_weight: 0.25
   present_edge_class_weight: 1.0
   target_epsilon: 0.00001
   loss_weights:
-    # The node loss is automatically zero for the one-class generic case.
-    node: 1.0
+    node: 0.0
     edge: 1.0
     graphlet_mean: 1.0
     graphlet_distribution: 0.1
     graphlet_mass: 0.25
   progress_interval: 5
 
-# This remains separable from endpoint training. Use `learned` after training
-# the existing DegreeHistogramVAE; `empirical` is a runnable baseline.
 generation:
-  degree_source: empirical
-  num_generate: 40
+  degree_source: learned
+  num_generate: 1024
 
 degree_generator:
-  enabled: false
+  enabled: true
   type: degree_histogram_vae
-  checkpoint_path: outputs/degree_generators/sbm_target_refinement/checkpoint.pt
+  checkpoint_path: outputs/degree_generators/sbm/seed_42/checkpoint.pt
   device: auto
+  deterministic: false
+  sample_num_nodes: empirical
+  max_resample: 500
+  parity_conditioned: true
+  max_parity_resample: 64
+  fallback: error
 
 constructor:
   type: havel_hakimi
   ensure_connected: true
-  random_relabel: false
+  random_relabel: true
   max_repair_trials: 10000
 
-# At every intermediate graph, use one fixed set of endpoint probabilities and
-# graphlet means while comparing candidates. Any endpoint graph is diagnostic
-# only and is never installed.
 hybrid_refiner:
-  steps: 40
-  candidate_budget: 64
+  steps: 80
+  candidate_budget: 128
   preserve_connectivity: true
   selection: greedy
   temperature: 0.1
@@ -110,13 +118,11 @@ hybrid_refiner:
   report_guidance_consistency: false
 
 evaluation:
-  # Leave null to use ORCA_EXEC or an `orca` executable on PATH.
   orca_exec: null
   compute_orbit: true
   compute_graphlet_history: true
   graphlet_k_min: 3
-  graphlet_k_max: 4
+  graphlet_k_max: 5
   graphlet_connected_only: true
-  # ORCA gives exact connected induced graphlet counts for k <= 4.
-  graphlet_backend: exact_orca
-  graphlet_num_samples: null
+  graphlet_backend: sampled
+  graphlet_num_samples: 8192
