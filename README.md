@@ -34,14 +34,14 @@ python scripts/prepare_generic_dataset.py \
 Train the endpoint/graphlet predictor:
 
 ```bash
-python scripts/train_hybrid_endpoint_grapher.py \
+PYTHONPATH=src python scripts/train_hybrid_endpoint_grapher.py \
   --config configs/experiments/sbm_hybrid_endpoint_graphlet.yaml
 ```
 
 Generate and evaluate graphs:
 
 ```bash
-python scripts/run_hybrid_endpoint_grapher.py \
+PYTHONPATH=src python scripts/run_hybrid_endpoint_grapher.py \
   --config configs/experiments/sbm_hybrid_endpoint_graphlet.yaml \
   --output-dir outputs/hybrid_endpoint/sbm/generated
 ```
@@ -49,16 +49,28 @@ python scripts/run_hybrid_endpoint_grapher.py \
 Train or evaluate the optional degree VAE:
 
 ```bash
-python scripts/train_degree_generator.py \
+PYTHONPATH=src python scripts/train_degree_generator.py \
   --config configs/experiments/degreevae.yaml
-python scripts/evaluate_degree_generator.py \
+PYTHONPATH=src python scripts/evaluate_degree_generator.py \
   --config configs/experiments/degreevae.yaml
 ```
 
 ## Molecular baseline
 
-Prepare attributed QM9 graphs from PyG, SDF, or SMILES with
-`scripts/prepare_qm9_topology_dataset.py`, then use
+Prepare the QM9 topology and attributed dataset splits directly from the QM9
+SDF file (the PyG download places it at the path below):
+
+```bash
+PYTHONPATH=src python scripts/prepare_qm9_topology_dataset.py \
+  --source sdf \
+  --sdf-file data/pyg_qm9/raw/gdb9.sdf \
+  --root outputs/datasets
+```
+
+The direct SDF loader skips individual records that RDKit cannot parse, unlike
+PyG's QM9 preprocessing, which may stop at the first invalid record. The script
+can also read SMILES input; run it with `--help` for all options. It writes both
+`qm9_topology` and `qm9_attributed` splits. Then use
 `configs/experiments/qm9_attributed_hybrid_endpoint_graphlet.yaml`. Both train
 and generation commands print a warning because the current teacher,
 constructor, and graphlet targets do not preserve the paper's typed invariant.
@@ -70,24 +82,6 @@ Molecular evaluation utilities are:
 python scripts/evaluate_generated_molecules.py --help
 python scripts/evaluate_graph_generation_report.py --help
 ```
-
-## Maintained layout
-
-| Path | Purpose |
-| --- | --- |
-| `src/grapher/construction/` | Ordinary-degree source construction |
-| `src/grapher/generators/` | Empirical and learned degree sampling |
-| `src/grapher/hybrid/` | Endpoint model, teacher data, and energy refiner |
-| `src/grapher/refinement/` | Valid double-edge-swap primitives |
-| `src/grapher/properties/` | Graph summaries and graphlet extraction |
-| `src/grapher/molecular/` | Attribute initialization and chemical checks |
-| `src/grapher/evaluation/` | Graph-set metrics |
-
-Legacy summary-only generation, disconnected learned selectors, alternative
-CatFlow attribute models, forwarding scripts, plotting scripts, and generated
-bytecode were removed from this refactor. Reusable correctness boundaries such
-as action validation, molecular checks, and graphlet canonicalization remain
-factored rather than being inlined into callers.
 
 ## Verification
 

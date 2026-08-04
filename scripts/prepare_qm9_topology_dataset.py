@@ -105,11 +105,13 @@ def _graphs_from_pyg_qm9(
     try:
         dataset = QM9(str(root))
     except Exception as exc:
+        downloaded_sdf = Path(root) / "raw" / "gdb9.sdf"
         raise RuntimeError(
-            "Could not initialize torch_geometric.datasets.QM9. If the failure mentions "
-            "TorchScript source access, it is an environment/package issue in the installed "
-            "PyG stack rather than a missing SMILES/SDF file. Reinstall PyG for your "
-            "PyTorch/CUDA version, or use --source sdf --sdf-file PATH."
+            "Could not initialize torch_geometric.datasets.QM9. PyG preprocessing may "
+            "stop when RDKit cannot parse an individual molecule. If the raw download "
+            f"exists, retry with --source sdf --sdf-file {downloaded_sdf}; the direct "
+            "SDF loader skips invalid records. For import or TorchScript errors, reinstall "
+            "a PyG build matching your PyTorch/CUDA version."
         ) from exc
     limit = (
         len(dataset) if max_molecules is None else min(int(max_molecules), len(dataset))
