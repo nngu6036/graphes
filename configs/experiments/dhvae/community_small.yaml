@@ -1,0 +1,55 @@
+experiment: sbm_degree_histogram_vae
+benchmark: community_small
+seed: 42
+
+dataset:
+  name: sbm
+  benchmark: community_small
+  config_path: configs/datasets/sbm.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+
+summary:
+  degree_hist_max_degree: auto
+
+constructor:
+  ensure_connected: true
+
+degree_generator:
+  checkpoint_path: outputs/degree_generators/sbm/seed_42/checkpoint.pt
+  device: auto
+  epochs: 300
+  batch_size: 32
+  latent_dim: 32
+  hidden_dim: 128
+  size_condition_dim: 16
+  prior_type: conditional_gmm
+  prior_components: 4
+  prior_hidden_dim: 128
+  prior_logvar_min: -6.0
+  prior_logvar_max: 4.0
+  num_layers: 2
+  dropout: 0.0
+  learning_rate: 0.002
+  weight_decay: 0.00001
+  kl_loss_weight: 0.005
+  kl_warmup_epochs: 50
+  node_count_loss_weight: 1.0
+  degree_histogram_loss_weight: 5.0
+  degree_moment_loss_weight: 0.1
+  progress_interval: 10
+
+  # Sampling/feasibility settings used by evaluation and end-to-end generation.
+  deterministic: false
+  sample_num_nodes: empirical
+  max_resample: 500
+  parity_conditioned: true
+  max_parity_resample: 64
+  fallback: error
+
+degree_evaluation:
+  num_samples: 1024
+  max_reference_sequences: 20
+  batch_size: 256
+  output_dir: outputs/degree_generators/sbm/seed_42/evaluation

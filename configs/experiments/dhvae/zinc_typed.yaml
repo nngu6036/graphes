@@ -1,0 +1,93 @@
+# SPECIFICATION-ONLY until the typed-signature DH-VAE and constructor are
+# implemented. train_degree_generator.py intentionally rejects this type.
+experiment: zinc_typed_degree_histogram_vae
+benchmark: zinc_12k_heavy_atom
+implementation_status: requires_typed_dhvae
+seed: 42
+
+dataset:
+  name: zinc
+  config_path: configs/datasets/zinc.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+
+summary:
+  invariant: typed_degree_signature_histogram
+  signature_vocabulary: training_split
+  overflow_policy: reject
+
+typed_signature:
+  node_attribute: atomic_num
+  node_categories: [6, 7, 8, 9, 15, 16, 17, 35, 53]
+  edge_attribute: bond_type
+  edge_categories: [1, 2, 3, 4]
+  fields:
+    [atomic_num, single_degree, double_degree, triple_degree, aromatic_degree]
+  hydrogens: implicit
+  max_ordinary_degree: 6
+  bond_orders:
+    1: 1.0
+    2: 2.0
+    3: 3.0
+    4: 1.5
+  size_mask: true
+  domain_mask: true
+
+feasibility:
+  require_even_incidence_per_edge_type: true
+  require_graphical_aggregate_degree: true
+  require_connected_realization: true
+  require_endpoint_compatibility: true
+  # ZINC contains variable valence/aromatic cases; admissible signatures are
+  # learned from the training vocabulary and final realizations require RDKit.
+  require_training_signature: true
+  require_rdkit_sanitization: true
+  reject_invalid_sample: true
+
+constructor:
+  type: typed_backtracking
+  ensure_connected: true
+  require_simple_graph: true
+  max_restarts: 256
+  max_backtracks: 200000
+
+degree_generator:
+  enabled: true
+  type: typed_degree_histogram_vae
+  checkpoint_path: outputs/degree_generators/zinc_typed/seed_42/checkpoint.pt
+  device: auto
+  epochs: 300
+  batch_size: 128
+  latent_dim: 64
+  hidden_dim: 256
+  size_condition_dim: 32
+  prior_type: conditional_gmm
+  prior_components: 8
+  prior_hidden_dim: 256
+  prior_logvar_min: -6.0
+  prior_logvar_max: 4.0
+  num_layers: 3
+  dropout: 0.0
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  kl_loss_weight: 0.005
+  kl_warmup_epochs: 50
+  node_count_loss_weight: 1.0
+  signature_histogram_loss_weight: 5.0
+  incidence_moment_loss_weight: 0.1
+  progress_interval: 10
+
+  deterministic: false
+  sample_num_nodes: empirical
+  max_resample: 2000
+  fallback: error
+
+degree_evaluation:
+  num_samples: 1024
+  max_reference_sequences: 1000
+  batch_size: 256
+  output_dir: outputs/degree_generators/zinc_typed/seed_42/evaluation
+  report_per_edge_type_incidence: true
+  report_rdkit_feasibility: true
+  report_constructor_success: true

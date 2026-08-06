@@ -137,8 +137,14 @@ per community, within-community probability 0.30, and approximately
 
 ```bash
 PYTHONPATH=src python scripts/prepare_generic_dataset.py \
-  --dataset sbm \
+  --dataset community_small \
   --root outputs/datasets
+
+PYTHONPATH=src python scripts/prepare_generic_dataset.py \
+  --dataset ego_small --root outputs/datasets
+
+PYTHONPATH=src python scripts/prepare_generic_dataset.py \
+  --dataset grid --root outputs/datasets
 ```
 
 The command writes `train.pkl`, `val.pkl`, `test.pkl`,
@@ -150,10 +156,26 @@ The configured split contains 400/50/50 graphs.
 
 ```bash
 PYTHONPATH=src python scripts/train_degree_generator.py \
-  --config configs/experiments/degreevae.yaml
+  --config configs/experiments/dhvae/community_small.yaml
+
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/ego_small.yaml
+
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/grid.yaml
 
 PYTHONPATH=src python scripts/evaluate_degree_generator.py \
-  --config configs/experiments/degreevae.yaml \
+  --config configs/experiments/community_small.yaml \
+  --num-samples 1024 \
+  --max-reference-sequences 1024
+
+PYTHONPATH=src python scripts/evaluate_degree_generator.py \
+  --config configs/experiments/ego_small.yaml \
+  --num-samples 1024 \
+  --max-reference-sequences 1024
+
+  PYTHONPATH=src python scripts/evaluate_degree_generator.py \
+  --config configs/experiments/grid.yaml \
   --num-samples 1024 \
   --max-reference-sequences 1024
 ```
@@ -169,7 +191,7 @@ to convert such exceptions into an end-to-end yield statistic.
 
 ```bash
 PYTHONPATH=src python scripts/train_hybrid_endpoint_grapher.py \
-  --config configs/experiments/sbm_hybrid_endpoint_graphlet.yaml \
+  --config configs/experiments/grapher/community_small_hybrid_endpoint_graphlet.yaml \
   --output-dir outputs/hybrid_endpoint/sbm/seed_42 \
   --seed 42
 ```
@@ -269,16 +291,26 @@ trainer materializes every trajectory example in memory before optimization;
 therefore, full-split training requires sufficient host RAM. A streaming or
 sharded trajectory dataset is still needed for memory-bounded full-QM9 runs.
 
-### 2. Smoke-test QM9 training
+
+
+### 2. Train and evaluate DH-VAE
 
 ```bash
-PYTHONPATH=src python scripts/train_hybrid_endpoint_grapher.py \
-  --config configs/experiments/qm9_attributed_hybrid_endpoint_graphlet.yaml \
-  --max-train-graphs 256 \
-  --max-val-graphs 64 \
-  --epochs 2 \
-  --output-dir outputs/hybrid_endpoint/qm9_attributed/smoke \
-  --seed 42
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/qm9_typed.yaml
+
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/zinc_typed.yaml
+
+PYTHONPATH=src python scripts/evaluate_degree_generator.py \
+  --config configs/experiments/qm9_typed.yaml \
+  --num-samples 1024 \
+  --max-reference-sequences 1024
+
+  PYTHONPATH=src python scripts/evaluate_degree_generator.py \
+  --config configs/experiments/zinc_typed.yaml \
+  --num-samples 1024 \
+  --max-reference-sequences 1024
 ```
 
 ### 3. Train QM9 on the full prepared split

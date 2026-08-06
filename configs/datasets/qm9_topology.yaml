@@ -1,5 +1,0 @@
-name: qm9_topology
-kind: prepared_molecular_topology
-root: outputs/datasets
-# Build this dataset with scripts/prepare_qm9_topology_dataset.py.
-# The generic data loader will read train.pkl/val.pkl/test.pkl once prepared.
