@@ -15,11 +15,23 @@ from grapher.construction.coarse import (
     assert_constructor_validity,
     construct_coarse_graph,
 )
+from grapher.construction.typed import (
+    TypedConstructionError,
+    construct_typed_graph,
+)
 from grapher.data.io import load_dataset_splits
 from grapher.evaluation.degree_sequences import evaluate_degree_sequence_sets
+from grapher.evaluation.metrics import mmd_gaussian_emd
 from grapher.generators.degree_vae import (
     connected_feasible_degree_sequence,
     load_degree_vae_checkpoint,
+)
+from grapher.molecular.typed_invariants import (
+    TypedInvariant,
+    TypedSignatureVectorizer,
+    extract_typed_invariant,
+    load_typed_signature_checkpoint,
+    typed_invariant_errors,
 )
 from grapher.utils.io import ensure_dir, load_yaml, save_json
 
@@ -295,6 +307,220 @@ def _compact_comparison(metrics: dict[str, Any]) -> dict[str, float]:
     }
 
 
+def _typed_histogram_matrix(
+    invariants: list[TypedInvariant],
+    vectorizer: TypedSignatureVectorizer,
+) -> np.ndarray:
+    if not invariants:
+        return np.zeros((0, vectorizer.signature_dim), dtype=np.float64)
+    return np.stack(
+        [vectorizer.invariant_histogram(invariant) for invariant in invariants]
+    ).astype(np.float64)
+
+
+def _evaluate_typed_prior(
+    *,
+    checkpoint_path: Path,
+    degree_cfg: dict[str, Any],
+    constructor_cfg: dict[str, Any],
+    train_graphs: list[nx.Graph],
+    test_graphs: list[nx.Graph],
+    reference_limit: int | None,
+    num_samples: int,
+    batch_size: int,
+    seed: int,
+    device: str,
+    output_dir: Path,
+    check_constructor: bool,
+) -> None:
+    """Evaluate the joint typed-signature prior and exact constructor."""
+
+    model, vectorizer, checkpoint = load_typed_signature_checkpoint(
+        checkpoint_path,
+        device=device,
+    )
+    rng = np.random.default_rng(seed)
+    torch.manual_seed(seed)
+    model_device = next(model.parameters()).device
+    summaries: list[dict[str, Any]] = []
+    sampling_diagnostics: list[dict[str, Any]] = []
+    remaining = int(num_samples)
+    while remaining > 0:
+        current_batch = min(max(int(batch_size), 1), remaining)
+        node_counts = None
+        if str(degree_cfg.get("sample_num_nodes", "empirical")).lower() == "empirical":
+            node_counts = [
+                vectorizer.sample_empirical_node_count(rng)
+                for _ in range(current_batch)
+            ]
+        with torch.no_grad():
+            outputs = model.sample_outputs(
+                current_batch,
+                node_counts=node_counts,
+                device=model_device,
+            )
+        decoded = vectorizer.outputs_to_summaries(
+            outputs,
+            rng=rng,
+            deterministic=bool(degree_cfg.get("deterministic", False)),
+            max_resample=int(degree_cfg.get("max_resample", 1000)),
+            fallback=str(degree_cfg.get("fallback", "error")),
+            include_diagnostics=True,
+        )
+        for summary in decoded:
+            sampling_diagnostics.append(dict(summary.pop("sampling_diagnostics")))
+            summaries.append(summary)
+        remaining -= current_batch
+
+    generated_invariants = [
+        TypedInvariant.from_dict(summary["typed_invariant"]) for summary in summaries
+    ]
+    train_reference = _subsample(train_graphs, reference_limit, rng)
+    test_reference = _subsample(test_graphs, reference_limit, rng)
+    train_invariants = [
+        extract_typed_invariant(
+            graph,
+            edge_types=vectorizer.vocabulary.edge_types,
+            node_attribute=vectorizer.vocabulary.node_attribute,
+            edge_attribute=vectorizer.vocabulary.edge_attribute,
+        )
+        for graph in train_reference
+    ]
+    test_invariants = [
+        extract_typed_invariant(
+            graph,
+            edge_types=vectorizer.vocabulary.edge_types,
+            node_attribute=vectorizer.vocabulary.node_attribute,
+            edge_attribute=vectorizer.vocabulary.edge_attribute,
+        )
+        for graph in test_reference
+    ]
+    generated_histograms = _typed_histogram_matrix(generated_invariants, vectorizer)
+    train_histograms = _typed_histogram_matrix(train_invariants, vectorizer)
+    test_histograms = _typed_histogram_matrix(test_invariants, vectorizer)
+
+    constructor_diagnostics: list[dict[str, Any]] = []
+    construction_success: list[bool] = []
+    if check_constructor:
+        for invariant in generated_invariants:
+            try:
+                _graph, diagnostic = construct_typed_graph(
+                    invariant,
+                    constructor_cfg,
+                    rng,
+                )
+                construction_success.append(True)
+                constructor_diagnostics.append(dict(diagnostic))
+            except TypedConstructionError as exc:
+                construction_success.append(False)
+                constructor_diagnostics.append(dict(exc.diagnostics))
+
+    feasibility_errors = [
+        typed_invariant_errors(
+            invariant,
+            require_connected=vectorizer.require_connected,
+            max_ordinary_degree=vectorizer.max_ordinary_degree,
+            max_weighted_valence=vectorizer.max_weighted_valence,
+        )
+        for invariant in generated_invariants
+    ]
+    generated_sequences = [
+        invariant.degree_sequence for invariant in generated_invariants
+    ]
+    train_sequences = [invariant.degree_sequence for invariant in train_invariants]
+    test_sequences = [invariant.degree_sequence for invariant in test_invariants]
+    degree_baseline = evaluate_degree_sequence_sets(test_sequences, train_sequences)
+    degree_distribution = evaluate_degree_sequence_sets(
+        test_sequences,
+        generated_sequences,
+        train=train_sequences,
+        degree_mmd_sigma=float(degree_baseline["degree_mmd_sigma"]),
+    )
+
+    failure_reasons: dict[str, int] = {}
+    for diagnostic in constructor_diagnostics:
+        reason = diagnostic.get("failure_reason")
+        if reason:
+            failure_reasons[str(reason)] = failure_reasons.get(str(reason), 0) + 1
+    attempts = [float(item.get("attempts_used", 0.0)) for item in sampling_diagnostics]
+    report = {
+        "format": "typed_signature_prior_evaluation_v1",
+        "dataset": checkpoint.get("config", {}).get("dataset", {}).get("name"),
+        "checkpoint": str(checkpoint_path),
+        "seed": int(seed),
+        "protocol": {
+            "num_generated_invariants": len(generated_invariants),
+            "num_train_invariants": len(train_invariants),
+            "num_test_invariants": len(test_invariants),
+            "signature_vocabulary_source": "training_split_checkpoint",
+            "typed_histogram_kernel": "Gaussian Earth-Mover",
+            "constructor_check": bool(check_constructor),
+        },
+        "typed_signature_distribution": {
+            "train_to_test_mmd": mmd_gaussian_emd(test_histograms, train_histograms),
+            "generated_to_test_mmd": mmd_gaussian_emd(
+                test_histograms,
+                generated_histograms,
+            ),
+        },
+        "aggregate_degree_distribution": degree_distribution,
+        "feasibility": {
+            "first_draw_feasible_rate": _mean_bool(
+                sampling_diagnostics,
+                "first_raw_feasible",
+            ),
+            "accepted_necessary_feasibility_rate": float(
+                np.mean([not errors for errors in feasibility_errors])
+            )
+            if feasibility_errors
+            else 0.0,
+            "fallback_usage_rate": _mean_bool(
+                sampling_diagnostics,
+                "fallback_used",
+            ),
+            "mean_sampling_attempts": float(np.mean(attempts)) if attempts else 0.0,
+            "constructor_success_rate": float(np.mean(construction_success))
+            if construction_success
+            else (float("nan") if not check_constructor else 0.0),
+            "mean_constructor_restarts": float(
+                np.mean(
+                    [
+                        float(item.get("restarts", 0.0))
+                        for item in constructor_diagnostics
+                    ]
+                )
+            )
+            if constructor_diagnostics
+            else 0.0,
+            "mean_constructor_backtracks": float(
+                np.mean(
+                    [
+                        float(item.get("backtracks", 0.0))
+                        for item in constructor_diagnostics
+                    ]
+                )
+            )
+            if constructor_diagnostics
+            else 0.0,
+            "constructor_failure_reasons": failure_reasons,
+        },
+        "sampling_diagnostics": sampling_diagnostics,
+        "constructor_diagnostics": constructor_diagnostics,
+    }
+    save_json(report, output_dir / "degree_evaluation.json")
+    save_json(
+        {
+            "typed_invariants": [value.to_dict() for value in generated_invariants],
+            "aggregate_degree_sequences": generated_sequences,
+        },
+        output_dir / "generated_typed_invariants.json",
+    )
+    print("Typed-signature prior evaluation", flush=True)
+    for key, value in report["feasibility"].items():
+        print(f"  {key}: {value}", flush=True)
+    print(f"Saved report to: {output_dir / 'degree_evaluation.json'}", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -377,6 +603,35 @@ def main() -> None:
             checkpoint_path.parent / "evaluation",
         )
     )
+
+    generator_type = str(degree_cfg.get("type", "degree_histogram_vae")).lower()
+    if generator_type in {
+        "typed_degree_histogram_vae",
+        "typed_signature_histogram_vae",
+        "typed_signature_vae",
+    }:
+        _evaluate_typed_prior(
+            checkpoint_path=checkpoint_path,
+            degree_cfg=degree_cfg,
+            constructor_cfg=constructor_cfg,
+            train_graphs=train_graphs,
+            test_graphs=test_graphs,
+            reference_limit=reference_limit,
+            num_samples=num_samples,
+            batch_size=batch_size,
+            seed=seed,
+            device=device,
+            output_dir=output_dir,
+            check_constructor=not args.skip_constructor_check,
+        )
+        return
+    if generator_type not in {
+        "degree_histogram_vae",
+        "degree_vae",
+        "vae",
+        "learned",
+    }:
+        raise ValueError(f"Unknown degree_generator.type: {generator_type!r}")
 
     summaries, diagnostics = _sample_degree_sequences(
         checkpoint_path=checkpoint_path,
@@ -476,7 +731,8 @@ def main() -> None:
             "num_test_sequences": len(test_sequences),
             "degree_kl_direction": "KL(test || candidate)",
             "degree_mmd_descriptor": (
-                "per-graph normalized degree histogram with an RBF kernel"
+                "per-graph normalized degree histogram with a Gaussian "
+                "Earth-Mover kernel"
             ),
             "degree_mmd_sigma": float(train_test["degree_mmd_sigma"]),
             "constructor_check": not args.skip_constructor_check,

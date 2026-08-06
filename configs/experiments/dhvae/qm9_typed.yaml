@@ -1,13 +1,12 @@
-# SPECIFICATION-ONLY until the typed-signature DH-VAE and constructor are
-# implemented. train_degree_generator.py intentionally rejects this type.
+# Joint typed-signature DH-VAE configuration for QM9 heavy-atom graphs.
 experiment: qm9_typed_degree_histogram_vae
 benchmark: qm9_heavy_atom
-implementation_status: requires_typed_dhvae
+implementation_status: implemented
 seed: 42
 
 dataset:
   name: qm9_attributed
-  config_path: configs/datasets/qm9_attributed.yaml
+  config_path: configs/datasets/qm9.yaml
   root: outputs/datasets
   build_if_missing: false
   max_train_graphs: null

@@ -5,7 +5,7 @@ seed: 42
 dataset:
   name: sbm
   benchmark: community_small
-  config_path: configs/datasets/sbm.yaml
+  config_path: configs/datasets/community_small.yaml
   root: outputs/datasets
   build_if_missing: false
   max_train_graphs: null

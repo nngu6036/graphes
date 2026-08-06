@@ -19,7 +19,11 @@ import numpy as np
 from matplotlib.lines import Line2D
 
 from grapher.data.io import load_dataset_splits
-from grapher.evaluation.metrics import descriptor_matrix, mmd_orbit, mmd_rbf
+from grapher.evaluation.metrics import (
+    descriptor_matrix,
+    mmd_gaussian_emd,
+    mmd_orbit,
+)
 from grapher.molecular.graph_io import nx_to_rdkit_mol, require_rdkit
 from grapher.properties.summary import (
     clustering_histogram,
@@ -86,8 +90,8 @@ def _paper_mmd(
         lambda graph: clustering_histogram(graph, 20),
     )
     return {
-        "degree_mmd": mmd_rbf(degree_reference, degree_candidate),
-        "clustering_mmd": mmd_rbf(
+        "degree_mmd": mmd_gaussian_emd(degree_reference, degree_candidate),
+        "clustering_mmd": mmd_gaussian_emd(
             clustering_reference,
             clustering_candidate,
         ),

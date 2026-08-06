@@ -1,5 +1,5 @@
-experiment: qm9_attributed_hybrid_endpoint_graphlet
-benchmark: qm9_heavy_atom
+experiment: zinc_attributed_hybrid_endpoint_graphlet
+benchmark: zinc_12k_heavy_atom
 implementation_status: implemented
 seed: 42
 
@@ -11,33 +11,28 @@ protocol:
   final_split: test
 
 dataset:
-  name: qm9_attributed
-  config_path: configs/datasets/qm9.yaml
+  name: zinc
+  config_path: configs/datasets/zinc.yaml
   root: outputs/datasets
   build_if_missing: false
   max_train_graphs: null
   max_val_graphs: null
 
-# Heavy-atom QM9 categories. Edge index zero remains reserved for no edge.
 categorical_state:
   node_attribute: atomic_num
-  node_categories: [6, 7, 8, 9]
+  node_categories: [6, 7, 8, 9, 15, 16, 17, 35, 53]
   edge_attribute: bond_type
-  edge_categories: [1, 2, 3]
+  edge_categories: [1, 2, 3, 4]
 
 graphlet_prediction:
   graphlet_history: true
   graphlet_k_min: 3
   graphlet_k_max: 5
   graphlet_connected_only: true
-  attributed: true
-  attributed_backend: auto
   graphlet_backend: sampled
   graphlet_num_samples: 2048
-  clustering_summary: false
-  spectral_summary: false
-  motif_proxy: false
-  orbit_count: false
+  attributed: true
+  attributed_backend: auto
 
 endpoint_trajectory:
   storage: streaming
@@ -55,33 +50,26 @@ endpoint_trajectory:
   teacher_min_improvement: 0.00000001
   preserve_connectivity: true
   ensure_connected_source: true
-  max_repair_trials: 50000
   shared_relabel_augmentation: true
   typed_constructor:
     type: typed_backtracking
     ensure_connected: true
     randomize_assignment: false
-    max_restarts: 32
-    max_backtracks: 50000
-    max_ordinary_degree: 4
-    max_weighted_valence:
-      6: 4.0
-      7: 3.0
-      8: 2.0
-      9: 1.0
+    max_restarts: 64
+    max_backtracks: 200000
 
 endpoint_predictor:
-  checkpoint_path: outputs/hybrid_endpoint/qm9_attributed/checkpoint.pt
+  checkpoint_path: outputs/hybrid_endpoint/zinc_attributed/seed_42/checkpoint.pt
   device: auto
-  hidden_dim: 128
-  edge_dim: 64
-  graph_dim: 128
+  hidden_dim: 192
+  edge_dim: 96
+  graph_dim: 192
   num_layers: 4
   dropout: 0.0
   min_concentration: 0.05
   max_concentration: 50.0
   fixed_node_categories: true
-  batch_size: 64
+  batch_size: 32
   epochs: 200
   learning_rate: 0.0003
   weight_decay: 0.00001
@@ -99,7 +87,7 @@ endpoint_predictor:
 
 candidate_selector:
   enabled: true
-  checkpoint_path: outputs/hybrid_endpoint/qm9_attributed/seed_42/selector.pt
+  checkpoint_path: outputs/hybrid_endpoint/zinc_attributed/seed_42/selector.pt
   hidden_dim: 128
   dropout: 0.0
   epochs: 25
@@ -114,44 +102,38 @@ generation:
 degree_generator:
   enabled: true
   type: typed_degree_histogram_vae
-  checkpoint_path: outputs/degree_generators/qm9_typed/seed_42/checkpoint.pt
+  checkpoint_path: outputs/degree_generators/zinc_typed/seed_42/checkpoint.pt
   device: auto
   deterministic: false
   sample_num_nodes: empirical
-  max_resample: 1000
+  max_resample: 2000
   fallback: error
 
 typed_signature:
   node_attribute: atomic_num
-  node_categories: [6, 7, 8, 9]
   edge_attribute: bond_type
-  edge_categories: [1, 2, 3]
-  max_ordinary_degree: 4
-  max_weighted_valence:
-    6: 4.0
-    7: 3.0
-    8: 2.0
-    9: 1.0
+  edge_categories: [1, 2, 3, 4]
+  max_ordinary_degree: 6
 
 constructor:
   type: typed_backtracking
   ensure_connected: true
   randomize_assignment: true
-  max_restarts: 128
-  max_backtracks: 50000
+  max_restarts: 256
+  max_backtracks: 200000
   candidate_ranking: uniform
 
 molecular_generation:
   enabled: true
-  allowed_atom_types: [6, 7, 8, 9]
-  allowed_bond_types: [1, 2, 3]
+  allowed_atom_types: [6, 7, 8, 9, 15, 16, 17, 35, 53]
+  allowed_bond_types: [1, 2, 3, 4]
   sample_attributes: false
   require_rdkit_source_validity: true
 
 hybrid_refiner:
   mode: hybrid
   steps: 40
-  proposal_budget: 1024
+  proposal_budget: 2048
   valid_candidate_budget: 256
   policy_shortlist: 32
   selector_policy_weight: 1.0
@@ -159,35 +141,24 @@ hybrid_refiner:
   preserve_connectivity: true
   selection: greedy
   temperature: 0.1
-  # Score the candidate directly against the predicted all-pairs law. The
-  # sampled-endpoint Hamming term is retained only as an explicit ablation.
   categorical_weight: 0.0
   probability_weight: 1.0
   graphlet_weight: 1.0
   graphlet_mass_weight: 0.0
-  graphlet_top_k: 8
   accept_only_improving: true
   min_improvement: 0.00000001
-  patience: 2
   sample_endpoint: false
   sample_graphlet: false
-  endpoint_temperature: 1.0
   refresh_prediction_every: 1
   infeasible_target_policy: guidance_only
-  report_guidance_consistency: false
-  # Swap only edge pairs with the same bond type and transfer that type to
-  # both new edges. Each node therefore loses and gains the same bond order,
-  # preserving weighted valence exactly.
   require_same_edge_type_pair: true
   preserve_removed_edge_type: true
   enforce_molecular_valence: true
-  molecular_allowed_bond_types: [1, 2, 3]
-  molecular_candidate_attempt_multiplier: 2
-  # Domain checks run before expensive attributed-graphlet scoring.
+  molecular_allowed_bond_types: [1, 2, 3, 4]
+  molecular_candidate_attempt_multiplier: 4
   rdkit_candidate_check: true
 
 evaluation:
-  # Leave null to use ORCA_EXEC or an `orca` executable on PATH.
   orca_exec: null
   compute_orbit: true
   compute_graphlet_history: true

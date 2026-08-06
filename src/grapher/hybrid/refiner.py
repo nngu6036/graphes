@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Sequence
 
 import networkx as nx
@@ -16,18 +16,23 @@ from grapher.hybrid.data import (
     graph_to_categorical_arrays,
 )
 from grapher.hybrid.model import HybridEndpointPredictor
+from grapher.hybrid.selector import (
+    LearnedCandidateSelector,
+    build_selector_features,
+    combine_selector_scores,
+    select_action,
+)
 from grapher.molecular.constraints import (
     DEFAULT_GENERATED_BOND_TYPES,
     bond_order,
     is_molecular_valence_feasible,
 )
-from grapher.properties.summary import SummaryConfig, extract_summary
+from grapher.properties.summary import SummaryConfig
 from grapher.refinement.rewiring import (
     Action,
     candidate_actions_from_edge_pair,
-    enumerate_valid_double_edge_swaps,
+    canonical_edge,
     is_valid_action,
-    sample_valid_double_edge_swaps,
 )
 
 
@@ -45,14 +50,18 @@ class HybridPrediction:
 @dataclass(frozen=True)
 class HybridRefinerConfig:
     steps: int = 40
+    mode: str = "energy"
     candidate_budget: int = 64
+    proposal_budget: int | None = None
+    valid_candidate_budget: int | None = None
+    policy_shortlist: int = 16
     preserve_connectivity: bool = True
     selection: str = "greedy"
     temperature: float = 0.1
     categorical_weight: float = 1.0
     probability_weight: float = 0.0
     graphlet_weight: float = 1.0
-    graphlet_mass_weight: float = 0.25
+    graphlet_mass_weight: float = 0.0
     graphlet_top_k: int = 8
     accept_only_improving: bool = True
     min_improvement: float = 1.0e-8
@@ -69,6 +78,8 @@ class HybridRefinerConfig:
     molecular_allowed_bond_types: tuple[int, ...] = DEFAULT_GENERATED_BOND_TYPES
     molecular_candidate_attempt_multiplier: int = 2
     rdkit_candidate_check: bool = False
+    selector_policy_weight: float = 1.0
+    selector_energy_weight: float = 1.0
 
     @classmethod
     def from_dict(
@@ -76,16 +87,34 @@ class HybridRefinerConfig:
         data: dict[str, Any] | None = None,
     ) -> "HybridRefinerConfig":
         data = data or {}
+        legacy_budget = int(data.get("candidate_budget", 64))
+        default_proposal_budget = (
+            legacy_budget if legacy_budget < 0 else max(legacy_budget, 1) * 4
+        )
         config = cls(
             steps=int(data.get("steps", 40)),
-            candidate_budget=int(data.get("candidate_budget", 64)),
+            mode=str(data.get("mode", "energy")).lower(),
+            candidate_budget=legacy_budget,
+            proposal_budget=int(
+                data.get(
+                    "proposal_budget",
+                    default_proposal_budget,
+                )
+            ),
+            valid_candidate_budget=int(
+                data.get(
+                    "valid_candidate_budget",
+                    data.get("candidate_budget", 64),
+                )
+            ),
+            policy_shortlist=max(int(data.get("policy_shortlist", 16)), 1),
             preserve_connectivity=bool(data.get("preserve_connectivity", True)),
             selection=str(data.get("selection", "greedy")).lower(),
             temperature=float(data.get("temperature", 0.1)),
             categorical_weight=float(data.get("categorical_weight", 1.0)),
             probability_weight=float(data.get("probability_weight", 0.0)),
             graphlet_weight=float(data.get("graphlet_weight", 1.0)),
-            graphlet_mass_weight=float(data.get("graphlet_mass_weight", 0.25)),
+            graphlet_mass_weight=float(data.get("graphlet_mass_weight", 0.0)),
             graphlet_top_k=int(data.get("graphlet_top_k", 8)),
             accept_only_improving=bool(data.get("accept_only_improving", True)),
             min_improvement=float(data.get("min_improvement", 1.0e-8)),
@@ -129,13 +158,22 @@ class HybridRefinerConfig:
                 1,
             ),
             rdkit_candidate_check=bool(data.get("rdkit_candidate_check", False)),
+            selector_policy_weight=float(data.get("selector_policy_weight", 1.0)),
+            selector_energy_weight=float(data.get("selector_energy_weight", 1.0)),
         )
         if config.steps < 0:
             raise ValueError("hybrid_refiner.steps must be non-negative.")
-        if config.candidate_budget == 0:
+        if config.mode not in {"energy", "policy", "hybrid"}:
+            raise ValueError("hybrid_refiner.mode must be energy, policy, or hybrid.")
+        if config.effective_valid_candidate_budget == 0:
             raise ValueError(
-                "hybrid_refiner.candidate_budget must be positive, or negative "
+                "hybrid_refiner.valid_candidate_budget must be positive, or negative "
                 "to request complete enumeration."
+            )
+        if config.effective_proposal_budget == 0:
+            raise ValueError(
+                "hybrid_refiner.proposal_budget must be positive, or negative for "
+                "complete enumeration."
             )
         if config.temperature <= 0.0 or config.endpoint_temperature <= 0.0:
             raise ValueError("Hybrid temperatures must be positive.")
@@ -158,6 +196,21 @@ class HybridRefinerConfig:
         ):
             raise ValueError("At least one hybrid guidance weight must be non-zero.")
         return config
+
+    @property
+    def effective_valid_candidate_budget(self) -> int:
+        return int(
+            self.candidate_budget
+            if self.valid_candidate_budget is None
+            else self.valid_candidate_budget
+        )
+
+    @property
+    def effective_proposal_budget(self) -> int:
+        if self.proposal_budget is not None:
+            return int(self.proposal_budget)
+        valid = self.effective_valid_candidate_budget
+        return valid if valid < 0 else max(valid, 1) * 4
 
 
 def _sample_endpoint_labels(
@@ -483,10 +536,11 @@ def graphlet_guidance_distance(
     graphlet_basis: GraphletBasis,
     mass_weight: float,
 ) -> float:
-    summary = extract_summary(graph, summary_config)
-    current = graphlet_basis.flatten_history(
-        summary.get("graphlet_history", {}) or {}
-    ).astype(np.float64)
+    history, connected_mass = graphlet_basis.statistics_for_graph(
+        graph,
+        summary_config,
+    )
+    current = graphlet_basis.flatten_history(history).astype(np.float64)
     target = graphlet_basis.flatten_history(prediction.graphlet_history).astype(
         np.float64
     )
@@ -495,9 +549,7 @@ def graphlet_guidance_distance(
         block_distances.append(
             float(np.linalg.norm(current[start:stop] - target[start:stop]))
         )
-    current_mass = graphlet_basis.flatten_mass(
-        summary.get("graphlet_connected_mass", {}) or {}
-    ).astype(np.float64)
+    current_mass = graphlet_basis.flatten_mass(connected_mass).astype(np.float64)
     target_mass = graphlet_basis.flatten_mass(
         prediction.graphlet_connected_mass
     ).astype(np.float64)
@@ -517,6 +569,7 @@ def score_hybrid_candidates(
     graphlet_basis: GraphletBasis,
     summary_config: SummaryConfig,
     config: HybridRefinerConfig | dict[str, Any] | None = None,
+    candidate_graphs: dict[Action, nx.Graph] | None = None,
 ) -> list[dict[str, Any]]:
     cfg = (
         config
@@ -532,6 +585,17 @@ def score_hybrid_candidates(
             vocabulary,
             preserve_removed_edge_type=cfg.preserve_removed_edge_type,
         )
+        candidate_graph = (
+            candidate_graphs.get(action)
+            if candidate_graphs is not None
+            else apply_hybrid_action(
+                graph,
+                action,
+                prediction,
+                vocabulary,
+                preserve_removed_edge_type=cfg.preserve_removed_edge_type,
+            )
+        )
         rows.append(
             {
                 "action": action,
@@ -543,75 +607,19 @@ def score_hybrid_candidates(
                     cfg.categorical_weight * categorical_gain
                     + cfg.probability_weight * probability_gain
                 ),
-                "candidate_graph": None,
+                "candidate_graph": candidate_graph,
+                "molecular_valid": True,
             }
         )
 
-    if cfg.graphlet_weight != 0.0 and rows:
-        has_pre_graphlet_signal = (
-            cfg.categorical_weight != 0.0 or cfg.probability_weight != 0.0
-        )
-        if (
-            not has_pre_graphlet_signal
-            or cfg.graphlet_top_k <= 0
-            or cfg.graphlet_top_k >= len(rows)
-        ):
-            graphlet_indices = list(range(len(rows)))
-        else:
-            preliminary = np.asarray(
-                [float(row["hybrid_score"]) for row in rows],
-                dtype=np.float64,
-            )
-            graphlet_indices = np.argsort(-preliminary)[
-                : int(cfg.graphlet_top_k)
-            ].tolist()
-        current_distance = graphlet_guidance_distance(
-            graph,
-            prediction,
-            summary_config=summary_config,
-            graphlet_basis=graphlet_basis,
-            mass_weight=cfg.graphlet_mass_weight,
-        )
-        shortlisted = set(int(index) for index in graphlet_indices)
-        for index, row in enumerate(rows):
-            if index not in shortlisted:
-                row["hybrid_score"] = float("-inf")
-                continue
-            candidate_graph = apply_hybrid_action(
-                graph,
-                row["action"],
-                prediction,
-                vocabulary,
-                preserve_removed_edge_type=cfg.preserve_removed_edge_type,
-            )
-            candidate_distance = graphlet_guidance_distance(
-                candidate_graph,
-                prediction,
-                summary_config=summary_config,
-                graphlet_basis=graphlet_basis,
-                mass_weight=cfg.graphlet_mass_weight,
-            )
-            row["graphlet_gain"] = float(current_distance - candidate_distance)
-            row["hybrid_score"] = float(
-                row["hybrid_score"] + cfg.graphlet_weight * row["graphlet_gain"]
-            )
-            row["candidate_graph"] = candidate_graph
-    for row in rows:
-        if row["candidate_graph"] is None and np.isfinite(row["hybrid_score"]):
-            row["candidate_graph"] = apply_hybrid_action(
-                graph,
-                row["action"],
-                prediction,
-                vocabulary,
-                preserve_removed_edge_type=cfg.preserve_removed_edge_type,
-            )
+    # Domain masks precede expensive graphlet extraction (Algorithm 2).  This
+    # function performs the checks itself for direct callers; the refiner may
+    # pass already validated materializations through ``candidate_graphs``.
     if cfg.enforce_molecular_valence or cfg.rdkit_candidate_check:
         for row in rows:
             candidate_graph = row["candidate_graph"]
-            if not isinstance(candidate_graph, nx.Graph):
-                continue
-            molecular_valid = True
-            if cfg.enforce_molecular_valence:
+            molecular_valid = isinstance(candidate_graph, nx.Graph)
+            if molecular_valid and cfg.enforce_molecular_valence:
                 molecular_valid = is_molecular_valence_feasible(
                     candidate_graph,
                     allowed_atom_types=vocabulary.node_values,
@@ -624,11 +632,207 @@ def score_hybrid_candidates(
             row["molecular_valid"] = bool(molecular_valid)
             if not molecular_valid:
                 row["hybrid_score"] = float("-inf")
+
+    if cfg.graphlet_weight != 0.0 and rows:
+        current_distance = graphlet_guidance_distance(
+            graph,
+            prediction,
+            summary_config=summary_config,
+            graphlet_basis=graphlet_basis,
+            mass_weight=cfg.graphlet_mass_weight,
+        )
+        for row in rows:
+            if not np.isfinite(float(row["hybrid_score"])):
+                continue
+            candidate_graph = row["candidate_graph"]
+            if not isinstance(candidate_graph, nx.Graph):
+                row["hybrid_score"] = float("-inf")
+                continue
+            candidate_distance = graphlet_guidance_distance(
+                candidate_graph,
+                prediction,
+                summary_config=summary_config,
+                graphlet_basis=graphlet_basis,
+                mass_weight=cfg.graphlet_mass_weight,
+            )
+            row["graphlet_gain"] = float(current_distance - candidate_distance)
+            row["hybrid_score"] = float(
+                row["hybrid_score"] + cfg.graphlet_weight * row["graphlet_gain"]
+            )
     return rows
+
+
+def _propose_domain_valid_candidates(
+    graph: nx.Graph,
+    prediction: HybridPrediction,
+    *,
+    vocabulary: GraphCategoryVocabulary,
+    config: HybridRefinerConfig,
+    rng: np.random.Generator,
+) -> tuple[list[Action], dict[Action, nx.Graph], dict[str, Any]]:
+    """Build C_t under separate raw-proposal and valid-candidate budgets."""
+
+    edges = [canonical_edge(u, v) for u, v in graph.edges()]
+    proposal_budget = config.effective_proposal_budget
+    valid_budget = config.effective_valid_candidate_budget
+    seen: set[Action] = set()
+
+    def raw_actions():
+        if len(edges) < 2:
+            return
+        if proposal_budget < 0:
+            for left in range(len(edges)):
+                for right in range(left + 1, len(edges)):
+                    for action in candidate_actions_from_edge_pair(
+                        edges[left], edges[right]
+                    ):
+                        if action not in seen:
+                            seen.add(action)
+                            yield action
+            return
+        attempts = 0
+        max_attempts = max(100, int(proposal_budget) * 50)
+        while len(seen) < int(proposal_budget) and attempts < max_attempts:
+            attempts += 1
+            indices = rng.choice(len(edges), size=2, replace=False)
+            actions = candidate_actions_from_edge_pair(
+                edges[int(indices[0])],
+                edges[int(indices[1])],
+            )
+            rng.shuffle(actions)
+            for action in actions:
+                if action in seen:
+                    continue
+                seen.add(action)
+                yield action
+                if len(seen) >= int(proposal_budget):
+                    break
+
+    candidates: list[Action] = []
+    materialized: dict[Action, nx.Graph] = {}
+    rejections: defaultdict[str, int] = defaultdict(int)
+    topology_valid = 0
+    for action in raw_actions():
+        if (
+            config.require_same_edge_type_pair
+            and _removed_edge_category(
+                graph,
+                action,
+                vocabulary,
+            )
+            is None
+        ):
+            rejections["edge_type_pair"] += 1
+            continue
+        if not is_valid_action(
+            graph,
+            action,
+            preserve_connectivity=config.preserve_connectivity,
+        ):
+            rejections["topology_or_connectivity"] += 1
+            continue
+        topology_valid += 1
+        try:
+            candidate = apply_hybrid_action(
+                graph,
+                action,
+                prediction,
+                vocabulary,
+                preserve_removed_edge_type=config.preserve_removed_edge_type,
+            )
+        except (KeyError, TypeError, ValueError):
+            rejections["attribute_assignment"] += 1
+            continue
+        if config.enforce_molecular_valence and not is_molecular_valence_feasible(
+            candidate,
+            allowed_atom_types=vocabulary.node_values,
+            allowed_bond_types=config.molecular_allowed_bond_types,
+        ):
+            rejections["molecular_valence"] += 1
+            continue
+        if config.rdkit_candidate_check:
+            from grapher.molecular.graph_io import is_valid_molecular_graph
+
+            if not is_valid_molecular_graph(candidate):
+                rejections["rdkit_sanitization"] += 1
+                continue
+        candidates.append(action)
+        materialized[action] = candidate
+        if valid_budget > 0 and len(candidates) >= int(valid_budget):
+            break
+    diagnostics = {
+        "proposal_budget": int(proposal_budget),
+        "valid_candidate_budget": int(valid_budget),
+        "num_proposals": len(seen),
+        "num_topology_valid": int(topology_valid),
+        "num_valid_candidates": len(candidates),
+        "candidate_pass_rate": float(len(candidates) / max(len(seen), 1)),
+        "candidate_rejection_reasons": dict(sorted(rejections.items())),
+    }
+    return candidates, materialized, diagnostics
 
 
 def _nodewise_degrees(graph: nx.Graph) -> list[int]:
     return [int(graph.degree(node)) for node in sorted(graph.nodes())]
+
+
+def _selector_features_for_rows(
+    graph: nx.Graph,
+    rows: Sequence[dict[str, Any]],
+    *,
+    step: int,
+    total_steps: int,
+    device: torch.device | str,
+    preserve_connectivity: bool,
+):
+    return build_selector_features(
+        graph,
+        [row["action"] for row in rows],
+        rows,
+        graph_diagnostics={
+            "time": float(step / max(total_steps, 1)),
+            "remaining_step_fraction": float(
+                max(total_steps - step, 0) / max(total_steps, 1)
+            ),
+            "current_energy": 0.0,
+        },
+        preserve_connectivity=preserve_connectivity,
+        validate_actions=True,
+        device=device,
+    )
+
+
+@torch.no_grad()
+def _policy_shortlist_rows(
+    selector: LearnedCandidateSelector,
+    graph: nx.Graph,
+    rows: list[dict[str, Any]],
+    *,
+    step: int,
+    total_steps: int,
+    shortlist_size: int,
+    preserve_connectivity: bool,
+) -> list[dict[str, Any]]:
+    if len(rows) <= int(shortlist_size):
+        return rows
+    selector_device = next(selector.parameters()).device
+    features = _selector_features_for_rows(
+        graph,
+        rows,
+        step=step,
+        total_steps=total_steps,
+        device=selector_device,
+        preserve_connectivity=preserve_connectivity,
+    )
+    selector.eval()
+    policy_logits = selector(
+        features.candidate_features,
+        features.graph_context,
+    )[:-1]
+    k = min(int(shortlist_size), policy_logits.numel())
+    threshold = torch.topk(policy_logits, k=k).values[-1]
+    indices = torch.nonzero(policy_logits >= threshold, as_tuple=False).reshape(-1)
+    return [rows[int(index)] for index in indices.detach().cpu().tolist()]
 
 
 def refine_graph_with_hybrid_predictions(
@@ -643,6 +847,7 @@ def refine_graph_with_hybrid_predictions(
     rng: np.random.Generator | None = None,
     return_trace: bool = False,
     prediction_fn: Callable[..., HybridPrediction] | None = None,
+    selector: LearnedCandidateSelector | None = None,
 ) -> nx.Graph | tuple[nx.Graph, list[dict[str, Any]]]:
     cfg = (
         refiner_config
@@ -675,76 +880,76 @@ def refine_graph_with_hybrid_predictions(
                 sample_graphlet=cfg.sample_graphlet,
                 endpoint_temperature=cfg.endpoint_temperature,
             )
-        if cfg.candidate_budget < 0:
-            candidates = enumerate_valid_double_edge_swaps(
+        candidates, candidate_graphs, proposal_diagnostics = (
+            _propose_domain_valid_candidates(
                 current,
-                preserve_connectivity=cfg.preserve_connectivity,
+                prediction,
+                vocabulary=vocabulary,
+                config=cfg,
+                rng=generator,
             )
-        elif cfg.require_same_edge_type_pair:
-            candidates = _sample_same_edge_type_actions(
-                current,
-                int(cfg.candidate_budget),
-                generator,
-                vocabulary,
-                preserve_connectivity=cfg.preserve_connectivity,
-                attempt_multiplier=cfg.molecular_candidate_attempt_multiplier,
-            )
-        else:
-            candidates = sample_valid_double_edge_swaps(
-                current,
-                int(cfg.candidate_budget),
-                generator,
-                preserve_connectivity=cfg.preserve_connectivity,
-            )
-        if cfg.require_same_edge_type_pair:
-            candidates = [
-                action
-                for action in candidates
-                if _removed_edge_category(current, action, vocabulary) is not None
-            ]
-            if cfg.candidate_budget > 0:
-                candidates = candidates[: int(cfg.candidate_budget)]
+        )
         if not candidates:
             trace.append(
                 {
                     "step": step,
                     "accepted": False,
                     "reason": (
-                        "no_same_type_candidates"
+                        "explicit_stop_no_same_type_candidates"
                         if cfg.require_same_edge_type_pair
-                        else "no_candidates"
+                        else "explicit_stop_no_candidates"
                     ),
                     "sampled_target_degree_match": prediction.sampled_degree_match,
+                    **proposal_diagnostics,
                 }
             )
             break
 
+        if cfg.mode in {"policy", "hybrid"} and selector is None:
+            raise NotImplementedError(
+                f"{cfg.mode} inference requires a trained learned-selector "
+                "checkpoint; energy mode remains available without one."
+            )
+        scored_candidates = candidates
+        if cfg.mode == "hybrid":
+            assert selector is not None
+            preliminary_rows = score_hybrid_candidates(
+                current,
+                candidates,
+                prediction,
+                vocabulary=vocabulary,
+                graphlet_basis=graphlet_basis,
+                summary_config=summary_config,
+                config=replace(
+                    cfg,
+                    graphlet_weight=0.0,
+                    graphlet_mass_weight=0.0,
+                ),
+                candidate_graphs=candidate_graphs,
+            )
+            shortlisted_rows = _policy_shortlist_rows(
+                selector,
+                current,
+                preliminary_rows,
+                step=step,
+                total_steps=cfg.steps,
+                shortlist_size=cfg.policy_shortlist,
+                preserve_connectivity=cfg.preserve_connectivity,
+            )
+            scored_candidates = [row["action"] for row in shortlisted_rows]
         rows = score_hybrid_candidates(
             current,
-            candidates,
+            scored_candidates,
             prediction,
             vocabulary=vocabulary,
             graphlet_basis=graphlet_basis,
             summary_config=summary_config,
             config=cfg,
+            candidate_graphs=candidate_graphs,
         )
         finite = [row for row in rows if np.isfinite(float(row["hybrid_score"]))]
-        chosen = None
-        if finite:
-            scores = np.asarray(
-                [float(row["hybrid_score"]) for row in finite],
-                dtype=np.float64,
-            )
-            if cfg.selection in {"greedy", "argmax"}:
-                chosen = finite[int(np.argmax(scores))]
-            else:
-                logits = scores / max(float(cfg.temperature), 1.0e-12)
-                logits -= float(np.max(logits))
-                probabilities = np.exp(logits)
-                probabilities /= float(probabilities.sum())
-                chosen = finite[int(generator.choice(len(finite), p=probabilities))]
         rejected_molecular = sum(row.get("molecular_valid") is False for row in rows)
-        if chosen is None:
+        if not finite:
             trace.append(
                 {
                     "step": step,
@@ -752,27 +957,77 @@ def refine_graph_with_hybrid_predictions(
                     "reason": "no_scored_candidate",
                     "sampled_target_degree_match": prediction.sampled_degree_match,
                     "rejected_molecular_candidates": rejected_molecular,
+                    **proposal_diagnostics,
                 }
             )
             break
-        score = float(chosen["hybrid_score"])
-        if cfg.accept_only_improving and score <= cfg.min_improvement:
+
+        actions = [row["action"] for row in finite]
+        energy_improvements = torch.tensor(
+            [float(row["hybrid_score"]) for row in finite],
+            dtype=torch.float32,
+            device=(
+                next(selector.parameters()).device
+                if selector is not None
+                else torch.device("cpu")
+            ),
+        )
+        policy_logits = None
+        if cfg.mode in {"policy", "hybrid"}:
+            assert selector is not None
+            selector_device = next(selector.parameters()).device
+            features = _selector_features_for_rows(
+                current,
+                finite,
+                step=step,
+                total_steps=cfg.steps,
+                device=selector_device,
+                preserve_connectivity=cfg.preserve_connectivity,
+            )
+            selector.eval()
+            with torch.no_grad():
+                policy_logits = selector(
+                    features.candidate_features,
+                    features.graph_context,
+                )
+        combined_scores = combine_selector_scores(
+            mode=cfg.mode,
+            policy_logits=policy_logits,
+            energy_improvements=(
+                energy_improvements if cfg.mode in {"energy", "hybrid"} else None
+            ),
+            policy_weight=cfg.selector_policy_weight,
+            energy_weight=cfg.selector_energy_weight,
+            policy_shortlist_size=(
+                None if cfg.mode == "hybrid" else cfg.policy_shortlist
+            ),
+            positive_improvement_only=bool(cfg.accept_only_improving),
+            positive_epsilon=float(cfg.min_improvement),
+        )
+        decision = select_action(
+            actions,
+            combined_scores,
+            mode=cfg.mode,
+            temperature=cfg.temperature,
+            deterministic=cfg.selection in {"greedy", "argmax"},
+        )
+        if decision.stopped:
             trace.append(
                 {
                     "step": step,
                     "accepted": False,
-                    "reason": "no_improving_candidate",
-                    "best_score": score,
-                    "categorical_gain": float(chosen["categorical_gain"]),
-                    "probability_gain": float(chosen["probability_gain"]),
-                    "node_guidance_gain": 0.0,
-                    "graphlet_gain": float(chosen["graphlet_gain"]),
-                    "hybrid_score": score,
+                    "reason": "explicit_stop",
+                    "selector_mode": cfg.mode,
+                    "stop_probability": float(decision.probabilities[-1].cpu()),
+                    "selector_scores": decision.scores.cpu().tolist(),
                     "sampled_target_degree_match": prediction.sampled_degree_match,
                     "rejected_molecular_candidates": rejected_molecular,
+                    **proposal_diagnostics,
                 }
             )
             break
+        chosen = finite[decision.index]
+        score = float(chosen["hybrid_score"])
 
         candidate_graph = chosen["candidate_graph"]
         if not isinstance(candidate_graph, nx.Graph):
@@ -807,10 +1062,16 @@ def refine_graph_with_hybrid_predictions(
                 "node_guidance_gain": 0.0,
                 "graphlet_gain": float(chosen["graphlet_gain"]),
                 "hybrid_score": score,
+                "selector_mode": cfg.mode,
+                "selected_action_probability": float(
+                    decision.probabilities[decision.index].cpu()
+                ),
+                "stop_probability": float(decision.probabilities[-1].cpu()),
                 "sampled_target_degree_match": prediction.sampled_degree_match,
                 "sampled_target_connected": prediction.sampled_connected,
                 "guidance_graphlet_disagreement": consistency,
                 "rejected_molecular_candidates": rejected_molecular,
+                **proposal_diagnostics,
             }
         )
         if stalled >= cfg.patience:

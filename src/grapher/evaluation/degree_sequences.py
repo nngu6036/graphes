@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from grapher.evaluation.metrics import mmd_rbf
+from grapher.evaluation.metrics import mmd_gaussian_emd
 
 
 def _normalise(values: np.ndarray) -> np.ndarray:
@@ -135,6 +135,33 @@ def median_rbf_bandwidth(*matrices: np.ndarray) -> float:
     return float(np.sqrt(0.5 * np.median(upper))) or 1.0
 
 
+def median_emd_bandwidth(*matrices: np.ndarray) -> float:
+    """Return one median Earth-Mover bandwidth shared by all comparisons."""
+
+    nonempty = [
+        np.asarray(matrix, dtype=np.float64)
+        for matrix in matrices
+        if np.asarray(matrix).size
+    ]
+    if not nonempty:
+        return 1.0
+    values = np.vstack(nonempty)
+    if values.shape[0] < 2:
+        return 1.0
+    distances = np.sum(
+        np.abs(
+            np.cumsum(
+                values[:, None, :] - values[None, :, :],
+                axis=-1,
+            )
+        ),
+        axis=-1,
+    )
+    upper = distances[np.triu_indices(values.shape[0], k=1)]
+    upper = upper[upper > 0.0]
+    return float(np.median(upper)) if upper.size else 1.0
+
+
 def evaluate_degree_sequence_sets(
     reference: Sequence[Sequence[int]],
     candidate: Sequence[Sequence[int]],
@@ -164,7 +191,7 @@ def evaluate_degree_sequence_sets(
     )
 
     if degree_mmd_sigma is None:
-        degree_mmd_sigma = median_rbf_bandwidth(
+        degree_mmd_sigma = median_emd_bandwidth(
             ref_hist,
             train_hist if train_hist is not None else candidate_hist,
         )
@@ -183,7 +210,7 @@ def evaluate_degree_sequence_sets(
     metrics: dict[str, Any] = {
         "num_candidate_sequences": len(candidate),
         "num_reference_sequences": len(reference),
-        "degree_histogram_mmd": mmd_rbf(
+        "degree_histogram_mmd": mmd_gaussian_emd(
             ref_hist, candidate_hist, sigma=degree_mmd_sigma
         ),
         "degree_marginal_kl_reference_to_candidate": (

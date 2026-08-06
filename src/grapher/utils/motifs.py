@@ -641,6 +641,127 @@ def _stable_label_token(label: Any) -> str:
     return f"{type(label).__module__}.{type(label).__qualname__}:{label!r}"
 
 
+def canonicalize_attributed_graph_python(
+    graph: nx.Graph,
+    *,
+    node_label_attr: str = "node_label",
+    edge_label_attr: str = "edge_label",
+    missing_ok: bool = False,
+    max_nodes: int = 7,
+) -> str:
+    """Return an exact node/edge-label-preserving canonical key.
+
+    The implementation enumerates node orders and is therefore intended for
+    graphlets, not whole molecular graphs.  It provides a dependency-free
+    counterpart to the nauty coloured-incidence implementation and keeps
+    attributed graphlet training usable when ``labelg`` is unavailable.
+    """
+
+    _validate_simple_undirected(graph)
+    nodes = list(graph.nodes())
+    if len(nodes) > int(max_nodes):
+        raise RuntimeError(
+            "The Python attributed canonicalizer supports at most "
+            f"{max_nodes} nodes; install nauty labelg for larger motifs."
+        )
+
+    node_tokens: dict[Any, str] = {}
+    for node, data in graph.nodes(data=True):
+        if node_label_attr not in data and not missing_ok:
+            raise KeyError(f"Node {node!r} is missing {node_label_attr!r}")
+        node_tokens[node] = _stable_label_token(
+            data.get(node_label_attr, "__MISSING__")
+        )
+
+    edge_tokens: dict[frozenset[Any], str] = {}
+    for u, v, data in graph.edges(data=True):
+        if edge_label_attr not in data and not missing_ok:
+            raise KeyError(f"Edge {(u, v)!r} is missing {edge_label_attr!r}")
+        edge_tokens[frozenset((u, v))] = _stable_label_token(
+            data.get(edge_label_attr, "__MISSING__")
+        )
+
+    best: str | None = None
+    for order in itertools.permutations(nodes):
+        encoded_nodes = [node_tokens[node] for node in order]
+        encoded_edges: list[str | None] = []
+        for left in range(len(order)):
+            for right in range(left + 1, len(order)):
+                encoded_edges.append(
+                    edge_tokens.get(frozenset((order[left], order[right])))
+                )
+        candidate = json.dumps(
+            [encoded_nodes, encoded_edges],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        if best is None or candidate < best:
+            best = candidate
+    if best is None:
+        best = "[[],[]]"
+    return f"ATTR_PY_V1|{best}"
+
+
+def attributed_graphlet_count_dict(
+    graph: nx.Graph,
+    k: int,
+    *,
+    node_label_attr: str = "node_label",
+    edge_label_attr: str = "edge_label",
+    connected_only: bool = True,
+    num_samples: int | None = None,
+    rng: np.random.Generator | None = None,
+    missing_ok: bool = False,
+    backend: str = "auto",
+    nauty_exec: str | os.PathLike[str] | None = NAUTY_EXEC,
+) -> dict[str, int]:
+    """Count connected induced attributed graphlets of one size.
+
+    ``backend='auto'`` uses nauty when available and otherwise uses exact
+    permutation enumeration.  Node and edge labels are both part of every
+    key, so two graphlets with the same topology but different chemistry are
+    distinct classes.
+    """
+
+    backend = str(backend).lower()
+    if backend not in {"auto", "python", "nauty"}:
+        raise ValueError("backend must be 'auto', 'python', or 'nauty'.")
+    use_nauty = backend == "nauty" or (backend == "auto" and bool(nauty_exec))
+    if use_nauty and not nauty_exec:
+        raise FileNotFoundError(
+            "Attributed graphlet backend 'nauty' requires NAUTY_EXEC or labelg."
+        )
+
+    counts: Counter[str] = Counter()
+    for subgraph in _iter_k_induced_subgraphs(
+        graph,
+        int(k),
+        connected_only=bool(connected_only),
+        num_samples=num_samples,
+        rng=rng,
+    ):
+        if use_nauty:
+            transformed = attributed_to_colored_incidence_graph(
+                subgraph,
+                node_label_attr=node_label_attr,
+                edge_label_attr=edge_label_attr,
+                missing_ok=missing_ok,
+            )
+            key = canonicalize_colored_graph_nauty(
+                transformed.colored_graph,
+                nauty_exec=nauty_exec,
+            )
+        else:
+            key = canonicalize_attributed_graph_python(
+                subgraph,
+                node_label_attr=node_label_attr,
+                edge_label_attr=edge_label_attr,
+                missing_ok=missing_ok,
+            )
+        counts[str(key)] += 1
+    return dict(counts)
+
+
 def _safe_colour_alphabet() -> list[str]:
     """
     Single-character colour alphabet for labelg -f.

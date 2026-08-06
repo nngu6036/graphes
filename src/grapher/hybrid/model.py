@@ -16,7 +16,7 @@ from grapher.properties.summary import SummaryConfig
 from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir
 
-CHECKPOINT_FORMAT = "hybrid_endpoint_graphlet_v1"
+CHECKPOINT_FORMAT = "hybrid_endpoint_graphlet_v2"
 
 
 class HybridEndpointPredictor(nn.Module):
@@ -41,6 +41,7 @@ class HybridEndpointPredictor(nn.Module):
         dropout: float = 0.0,
         min_concentration: float = 0.05,
         max_concentration: float = 50.0,
+        fixed_node_categories: bool = False,
     ):
         super().__init__()
         if int(num_node_categories) <= 0:
@@ -60,15 +61,23 @@ class HybridEndpointPredictor(nn.Module):
         self.dropout_p = float(dropout)
         self.min_concentration = float(min_concentration)
         self.max_concentration = float(max_concentration)
+        self.fixed_node_categories = bool(fixed_node_categories)
         if self.max_concentration <= self.min_concentration:
             raise ValueError(
                 "max_concentration must be greater than min_concentration."
             )
 
-        # node one-hot, fixed labelled degree, time, real-node mask
-        self.node_in = nn.Linear(self.num_node_categories + 3, self.hidden_dim)
-        # edge one-hot, adjacency, pair mask, time, degree sum, degree difference
-        self.edge_in = nn.Linear(self.num_edge_categories + 5, self.edge_dim)
+        typed_width = self.num_edge_categories - 1
+        # Current node category, indexed invariant, graph size, time, and mask.
+        self.node_in = nn.Linear(
+            self.num_node_categories + typed_width + 4,
+            self.hidden_dim,
+        )
+        # Current pair state plus symmetric ordinary/typed invariant features.
+        self.edge_in = nn.Linear(
+            self.num_edge_categories + 6 + 2 * typed_width,
+            self.edge_dim,
+        )
         self.layers = nn.ModuleList(
             [
                 EdgeAwareMPNNLayer(self.hidden_dim, self.edge_dim)
@@ -77,10 +86,25 @@ class HybridEndpointPredictor(nn.Module):
         )
         self.dropout = nn.Dropout(self.dropout_p)
         self.node_head = nn.Linear(self.hidden_dim, self.num_node_categories)
+        self.edge_conditioner = nn.Sequential(
+            nn.Linear(
+                self.edge_dim + 2 * self.num_node_categories,
+                self.edge_dim,
+            ),
+            nn.SiLU(),
+        )
         self.edge_head = nn.Linear(self.edge_dim, self.num_edge_categories)
 
         self.graph_encoder = nn.Sequential(
-            nn.Linear(self.hidden_dim + self.edge_dim + 1, self.graph_dim),
+            nn.Linear(
+                self.hidden_dim
+                + self.edge_dim
+                + self.num_node_categories
+                + self.num_edge_categories
+                + typed_width
+                + 2,
+                self.graph_dim,
+            ),
             nn.SiLU(),
             nn.Linear(self.graph_dim, self.graph_dim),
             nn.SiLU(),
@@ -114,6 +138,10 @@ class HybridEndpointPredictor(nn.Module):
         node_mask: torch.Tensor,
         pair_mask: torch.Tensor,
         time: torch.Tensor,
+        node_probabilities: torch.Tensor,
+        edge_probabilities: torch.Tensor,
+        graph_size: torch.Tensor,
+        typed_degrees: torch.Tensor,
     ) -> torch.Tensor:
         node_weight = node_mask.unsqueeze(-1).float()
         node_pool = (node_hidden * node_weight).sum(dim=1) / node_weight.sum(
@@ -134,8 +162,31 @@ class HybridEndpointPredictor(nn.Module):
         edge_pool = (edge_hidden * edge_weight).sum(dim=(1, 2)) / edge_weight.sum(
             dim=(1, 2)
         ).clamp_min(1.0)
+        node_probability_pool = (node_probabilities * node_weight).sum(
+            dim=1
+        ) / node_weight.sum(dim=1).clamp_min(1.0)
+        edge_probability_pool = (edge_probabilities * edge_weight).sum(
+            dim=(1, 2)
+        ) / edge_weight.sum(dim=(1, 2)).clamp_min(1.0)
+        typed_pool = (typed_degrees * node_weight).sum(dim=1) / node_weight.sum(
+            dim=1
+        ).clamp_min(1.0)
+        size_feature = graph_size.view(-1, 1) / (
+            graph_size.view(-1, 1) + 1.0
+        ).clamp_min(1.0)
         return self.graph_encoder(
-            torch.cat([node_pool, edge_pool, time.view(-1, 1)], dim=-1)
+            torch.cat(
+                [
+                    node_pool,
+                    edge_pool,
+                    node_probability_pool,
+                    edge_probability_pool,
+                    typed_pool,
+                    time.view(-1, 1),
+                    size_feature,
+                ],
+                dim=-1,
+            )
         )
 
     def forward(self, batch: HybridEndpointBatch) -> dict[str, torch.Tensor]:
@@ -150,6 +201,14 @@ class HybridEndpointPredictor(nn.Module):
             max=self.num_edge_categories - 1,
         )
         batch_size, node_count = current_nodes.shape
+        typed_width = self.num_edge_categories - 1
+        if batch.typed_degrees.shape[-1] != typed_width:
+            raise ValueError(
+                "Batch typed-degree width does not match present edge categories."
+            )
+        graph_size_feature = batch.graph_size / (batch.graph_size + 1.0).clamp_min(1.0)
+        typed_scale = (batch.graph_size - 1.0).clamp_min(1.0).view(-1, 1, 1)
+        typed_degrees = batch.typed_degrees / typed_scale
 
         node_onehot = torch.nn.functional.one_hot(
             current_nodes,
@@ -159,6 +218,12 @@ class HybridEndpointPredictor(nn.Module):
             [
                 node_onehot,
                 batch.degrees.unsqueeze(-1),
+                typed_degrees,
+                graph_size_feature.view(batch_size, 1, 1).expand(
+                    batch_size,
+                    node_count,
+                    1,
+                ),
                 batch.time.view(batch_size, 1, 1).expand(
                     batch_size,
                     node_count,
@@ -186,6 +251,18 @@ class HybridEndpointPredictor(nn.Module):
             node_count,
             node_count,
         )
+        typed_i = typed_degrees.unsqueeze(2).expand(
+            batch_size,
+            node_count,
+            node_count,
+            typed_width,
+        )
+        typed_j = typed_degrees.unsqueeze(1).expand(
+            batch_size,
+            node_count,
+            node_count,
+            typed_width,
+        )
         edge_features = torch.cat(
             [
                 edge_onehot,
@@ -199,6 +276,14 @@ class HybridEndpointPredictor(nn.Module):
                 ),
                 (0.5 * (degree_i + degree_j)).unsqueeze(-1),
                 torch.abs(degree_i - degree_j).unsqueeze(-1),
+                typed_i + typed_j,
+                torch.abs(typed_i - typed_j),
+                graph_size_feature.view(batch_size, 1, 1, 1).expand(
+                    batch_size,
+                    node_count,
+                    node_count,
+                    1,
+                ),
             ],
             dim=-1,
         )
@@ -217,8 +302,21 @@ class HybridEndpointPredictor(nn.Module):
             edge_hidden = self.dropout(edge_hidden)
 
         node_logits = self.node_head(node_hidden)
-        edge_logits = self.edge_head(edge_hidden)
+        predicted_node_probabilities = torch.softmax(node_logits, dim=-1)
+        node_probabilities = (
+            node_onehot if self.fixed_node_categories else predicted_node_probabilities
+        )
+        endpoint_sum = node_probabilities.unsqueeze(2) + node_probabilities.unsqueeze(1)
+        endpoint_difference = torch.abs(
+            node_probabilities.unsqueeze(2) - node_probabilities.unsqueeze(1)
+        )
+        edge_logits = self.edge_head(
+            self.edge_conditioner(
+                torch.cat([edge_hidden, endpoint_sum, endpoint_difference], dim=-1)
+            )
+        )
         edge_logits = 0.5 * (edge_logits + edge_logits.transpose(1, 2))
+        edge_probabilities = torch.softmax(edge_logits, dim=-1)
 
         graph_hidden = self._pool_graph(
             node_hidden,
@@ -226,6 +324,10 @@ class HybridEndpointPredictor(nn.Module):
             node_mask,
             pair_mask,
             batch.time,
+            node_probabilities,
+            edge_probabilities,
+            batch.graph_size,
+            typed_degrees,
         )
         alpha_blocks = [
             self._bounded_concentration(head(graph_hidden))
@@ -241,6 +343,7 @@ class HybridEndpointPredictor(nn.Module):
         ).view(batch_size, len(self.graphlet_slices), 2)
         return {
             "node_logits": node_logits,
+            "node_probabilities": node_probabilities,
             "edge_logits": edge_logits,
             "graphlet_alpha": graphlet_alpha,
             "graphlet_mass_ab": graphlet_mass_ab,
@@ -253,10 +356,12 @@ class HybridEndpointPredictor(nn.Module):
         temperature: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         temperature = max(float(temperature), 1.0e-8)
-        node_probabilities = torch.softmax(
-            outputs["node_logits"] / temperature,
-            dim=-1,
-        )
+        node_probabilities = outputs.get("node_probabilities")
+        if node_probabilities is None or not self.fixed_node_categories:
+            node_probabilities = torch.softmax(
+                outputs["node_logits"] / temperature,
+                dim=-1,
+            )
         edge_probabilities = torch.softmax(
             outputs["edge_logits"] / temperature,
             dim=-1,
@@ -308,7 +413,7 @@ class HybridEndpointPredictor(nn.Module):
         weights = loss_weights or {}
         outputs = self.forward(batch)
 
-        if self.num_node_categories > 1:
+        if self.num_node_categories > 1 and not self.fixed_node_categories:
             node_loss = torch.nn.functional.cross_entropy(
                 outputs["node_logits"][batch.node_mask.bool()],
                 batch.target_node_labels[batch.node_mask.bool()],
@@ -328,10 +433,35 @@ class HybridEndpointPredictor(nn.Module):
                 dtype=outputs["edge_logits"].dtype,
                 device=outputs["edge_logits"].device,
             )
-        edge_loss = torch.nn.functional.cross_entropy(
-            outputs["edge_logits"][upper],
-            batch.target_edge_labels[upper],
-            weight=class_weight_tensor,
+        zero = outputs["edge_logits"].sum() * 0.0
+        if torch.any(upper):
+            edge_loss = torch.nn.functional.cross_entropy(
+                outputs["edge_logits"][upper],
+                batch.target_edge_labels[upper],
+                weight=class_weight_tensor,
+            )
+            edge_nll = torch.nn.functional.cross_entropy(
+                outputs["edge_logits"][upper],
+                batch.target_edge_labels[upper],
+            )
+        else:
+            edge_loss = zero
+            edge_nll = zero
+
+        edge_probabilities = torch.softmax(outputs["edge_logits"], dim=-1)
+        expected_typed_degrees = (
+            edge_probabilities[..., 1:]
+            * batch.pair_mask.unsqueeze(-1).to(edge_probabilities.dtype)
+        ).sum(dim=2)
+        scale = (batch.graph_size - 1.0).clamp_min(1.0).view(-1, 1, 1)
+        typed_degree_residual = (expected_typed_degrees - batch.typed_degrees) / scale
+        consistency_mask = batch.node_mask.unsqueeze(-1).expand_as(
+            typed_degree_residual
+        )
+        consistency_loss = (
+            torch.mean(typed_degree_residual[consistency_mask].square())
+            if torch.any(consistency_mask)
+            else zero
         )
 
         graphlet_dirichlet_terms: list[torch.Tensor] = []
@@ -352,7 +482,6 @@ class HybridEndpointPredictor(nn.Module):
             graphlet_mean_terms.append(
                 -(smoothed * torch.log(mean.clamp_min(1.0e-12))).sum(dim=-1).mean()
             )
-        zero = outputs["edge_logits"].sum() * 0.0
         graphlet_dirichlet_loss = (
             torch.stack(graphlet_dirichlet_terms).mean()
             if graphlet_dirichlet_terms
@@ -382,36 +511,79 @@ class HybridEndpointPredictor(nn.Module):
             * graphlet_mean_loss
             + float(weights.get("graphlet_distribution", 0.1)) * graphlet_dirichlet_loss
             + float(weights.get("graphlet_mass", 0.25)) * graphlet_mass_loss
+            + float(weights.get("consistency", 0.0)) * consistency_loss
         )
 
         with torch.no_grad():
             edge_prediction = torch.argmax(outputs["edge_logits"], dim=-1)
-            edge_accuracy = (
-                (edge_prediction[upper] == batch.target_edge_labels[upper])
-                .float()
-                .mean()
-            )
-            present = batch.target_edge_labels[upper] > 0
-            present_recall = (
-                (edge_prediction[upper][present] > 0).float().mean()
-                if torch.any(present)
-                else edge_accuracy.new_tensor(1.0)
-            )
+            if torch.any(upper):
+                predictions = edge_prediction[upper]
+                targets = batch.target_edge_labels[upper]
+                edge_accuracy = (predictions == targets).float().mean()
+                present = targets > 0
+                present_recall = (
+                    (predictions[present] > 0).float().mean()
+                    if torch.any(present)
+                    else edge_accuracy.new_tensor(1.0)
+                )
+                f1_values = []
+                for category in range(self.num_edge_categories):
+                    true_positive = torch.sum(
+                        (predictions == category) & (targets == category)
+                    ).float()
+                    false_positive = torch.sum(
+                        (predictions == category) & (targets != category)
+                    ).float()
+                    false_negative = torch.sum(
+                        (predictions != category) & (targets == category)
+                    ).float()
+                    denominator = 2.0 * true_positive + false_positive + false_negative
+                    f1_values.append(
+                        (2.0 * true_positive / denominator)
+                        if denominator > 0
+                        else edge_accuracy.new_tensor(0.0)
+                    )
+                edge_macro_f1 = torch.stack(f1_values).mean()
+            else:
+                edge_accuracy = zero.detach().new_tensor(1.0)
+                present_recall = zero.detach().new_tensor(1.0)
+                edge_macro_f1 = zero.detach().new_tensor(1.0)
             graphlet_mean, mass_mean = self.graphlet_means(outputs)
+            graphlet_errors = []
+            mass_errors = []
+            for block_index, ((start, stop), valid) in enumerate(
+                zip(self.graphlet_slices, graphlet_valid_masks)
+            ):
+                if torch.any(valid):
+                    graphlet_errors.append(
+                        torch.abs(
+                            graphlet_mean[valid, start:stop]
+                            - batch.graphlet_target[valid, start:stop]
+                        ).mean()
+                    )
+                    mass_errors.append(
+                        torch.abs(
+                            mass_mean[valid, block_index]
+                            - batch.graphlet_mass_target[valid, block_index]
+                        ).mean()
+                    )
             graphlet_mae = (
-                torch.abs(graphlet_mean - batch.graphlet_target).mean()
-                if graphlet_mean.numel()
+                torch.stack(graphlet_errors).mean()
+                if graphlet_errors
                 else edge_accuracy.new_tensor(0.0)
             )
             graphlet_mass_mae = (
-                torch.abs(mass_mean - batch.graphlet_mass_target).mean()
-                if mass_mean.numel()
+                torch.stack(mass_errors).mean()
+                if mass_errors
                 else edge_accuracy.new_tensor(0.0)
             )
         metrics = {
             "loss": float(total.detach().cpu()),
             "node_loss": float(node_loss.detach().cpu()),
             "edge_loss": float(edge_loss.detach().cpu()),
+            "edge_nll": float(edge_nll.detach().cpu()),
+            "edge_macro_f1": float(edge_macro_f1.detach().cpu()),
+            "consistency_loss": float(consistency_loss.detach().cpu()),
             "graphlet_mean_loss": float(graphlet_mean_loss.detach().cpu()),
             "graphlet_distribution_loss": float(graphlet_dirichlet_loss.detach().cpu()),
             "graphlet_mass_loss": float(graphlet_mass_loss.detach().cpu()),
@@ -434,6 +606,7 @@ class HybridEndpointPredictor(nn.Module):
             "dropout": self.dropout_p,
             "min_concentration": self.min_concentration,
             "max_concentration": self.max_concentration,
+            "fixed_node_categories": self.fixed_node_categories,
         }
 
 

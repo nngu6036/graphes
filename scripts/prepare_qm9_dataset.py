@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 
 import networkx as nx
@@ -15,6 +16,50 @@ from grapher.molecular.graph_io import (
     split_graphs,
 )
 from grapher.utils.io import ensure_dir, save_json
+
+TOPOLOGY_SCHEMA = {
+    "node_attributes": [],
+    "edge_attributes": [],
+}
+ATTRIBUTED_SCHEMA = {
+    "node_attributes": ["atomic_num", "atom_type"],
+    "edge_attributes": ["bond_type", "bond_order"],
+}
+
+
+def _dataset_output_paths(
+    root: str | Path, dataset_names: tuple[str, str]
+) -> tuple[Path, Path]:
+    """Resolve two distinct dataset directories directly beneath the output root."""
+    if len(set(dataset_names)) != len(dataset_names):
+        raise ValueError("Topology and attributed dataset names must be different.")
+
+    resolved_root = Path(root).resolve()
+    targets: list[Path] = []
+    for name in dataset_names:
+        relative = Path(name)
+        if not name or relative.is_absolute() or len(relative.parts) != 1:
+            raise ValueError(
+                f"Dataset name must be one directory name, not a path: {name!r}"
+            )
+        target = (resolved_root / relative).resolve()
+        if target == resolved_root or target.parent != resolved_root:
+            raise ValueError(f"Unsafe dataset output path: {target}")
+        targets.append(target)
+    return targets[0], targets[1]
+
+
+def _clear_dataset_outputs(paths: tuple[Path, Path]) -> list[Path]:
+    """Remove old dataset directories after new graph splits are ready to save."""
+    removed: list[Path] = []
+    for path in paths:
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+            removed.append(path)
+        elif path.exists():
+            shutil.rmtree(path)
+            removed.append(path)
+    return removed
 
 
 def _pyg_bond_type(edge_attr) -> int:
@@ -284,13 +329,30 @@ def main() -> None:
         help="Root directory for torch_geometric.datasets.QM9.",
     )
     parser.add_argument("--root", default="outputs/datasets")
-    parser.add_argument("--topology-name", default="qm9_topology")
-    parser.add_argument("--attributed-name", default="qm9_attributed")
+    parser.add_argument(
+        "--topology-name",
+        default="qm9_topology",
+        help="Output dataset name for the topology-only representation (always written).",
+    )
+    parser.add_argument(
+        "--attributed-name",
+        default="qm9_attributed",
+        help=(
+            "Output dataset name for topology with atom and bond attributes "
+            "(always written)."
+        ),
+    )
     parser.add_argument("--max-molecules", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--keep-hydrogens", action="store_true")
     parser.add_argument("--no-kekulize", action="store_true")
     args = parser.parse_args()
+
+    root = Path(args.root)
+    output_paths = _dataset_output_paths(
+        root,
+        (args.topology_name, args.attributed_name),
+    )
 
     source = args.source
     default_sdf = Path(args.pyg_root) / "raw" / "gdb9.sdf"
@@ -344,7 +406,6 @@ def main() -> None:
         k: [nx_to_topology(g) for g in v] for k, v in attributed_splits.items()
     }
 
-    root = Path(args.root)
     config_top = {
         "name": args.topology_name,
         "source": source_path,
@@ -358,22 +419,32 @@ def main() -> None:
     config_attr["name"] = args.attributed_name
     config_attr["kind"] = "qm9_attributed"
 
+    removed_paths = _clear_dataset_outputs(output_paths)
+    for path in removed_paths:
+        print(f"Removed old dataset artifacts: {path}")
+
     save_dataset_splits(args.topology_name, topology_splits, config_top, root=root)
     save_dataset_splits(args.attributed_name, attributed_splits, config_attr, root=root)
-    save_json(
-        {
-            "source_type": source,
-            "source": source_path,
-            "num_input_smiles": len(smiles) if smiles is not None else None,
-            "num_input_records": num_input_records,
-            "num_valid_graphs": len(graphs),
-            "errors": errors,
-            "topology_dataset": args.topology_name,
-            "attributed_dataset": args.attributed_name,
-            "split_sizes": {k: len(v) for k, v in topology_splits.items()},
+    prep_report = {
+        "source_type": source,
+        "source": source_path,
+        "num_input_smiles": len(smiles) if smiles is not None else None,
+        "num_input_records": num_input_records,
+        "num_valid_graphs": len(graphs),
+        "errors": errors,
+        "topology_dataset": args.topology_name,
+        "attributed_dataset": args.attributed_name,
+        "split_sizes": {k: len(v) for k, v in topology_splits.items()},
+        "representations": {
+            "topology": TOPOLOGY_SCHEMA,
+            "topology_and_attributes": ATTRIBUTED_SCHEMA,
         },
-        ensure_dir(root / args.topology_name) / "qm9_prep_report.json",
-    )
+    }
+    for dataset_name in (args.topology_name, args.attributed_name):
+        save_json(
+            prep_report,
+            ensure_dir(root / dataset_name) / "qm9_prep_report.json",
+        )
     print("Prepared QM9 datasets")
     print(f"  source: {source_path}")
     if smiles is not None:
@@ -383,8 +454,14 @@ def main() -> None:
     else:
         print(f"  valid molecules: {len(graphs)}")
     print(f"  errors: {errors}")
-    print(f"  topology:   {root / args.topology_name}")
-    print(f"  attributed: {root / args.attributed_name}")
+    print(
+        f"  topology only:         {root / args.topology_name} "
+        "(node attributes: none; edge attributes: none)"
+    )
+    print(
+        f"  topology + attributes: {root / args.attributed_name} "
+        "(node: atomic_num, atom_type; edge: bond_type, bond_order)"
+    )
 
 
 if __name__ == "__main__":

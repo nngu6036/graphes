@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 from grapher.generators.degree_vae import load_degree_vae_checkpoint
+from grapher.molecular.typed_invariants import load_typed_signature_checkpoint
 from grapher.utils.device import resolve_torch_device
 
 
@@ -130,12 +131,77 @@ class EmpiricalDegreeSampler:
         }
 
 
+class TypedDegreeVAESampler:
+    """Sampler for the joint atom/edge-type-degree invariant prior."""
+
+    def __init__(
+        self,
+        checkpoint_path: str | Path,
+        *,
+        device: str = "auto",
+        deterministic: bool = False,
+        seed: int = 0,
+        sample_num_nodes: str = "empirical",
+        max_resample: int = 1000,
+        fallback: str = "error",
+    ) -> None:
+        self.checkpoint_path = str(checkpoint_path)
+        self.device = resolve_torch_device(device)
+        self.deterministic = bool(deterministic)
+        self.seed = int(seed)
+        self.sample_num_nodes = str(sample_num_nodes)
+        self.max_resample = int(max_resample)
+        self.fallback = str(fallback)
+        self._model, self._vectorizer, _ = load_typed_signature_checkpoint(
+            self.checkpoint_path,
+            device=self.device,
+        )
+
+    @classmethod
+    def from_config(
+        cls, data: dict[str, Any], *, seed: int = 0
+    ) -> "TypedDegreeVAESampler":
+        checkpoint_path = data.get("checkpoint_path") or data.get("checkpoint")
+        if not checkpoint_path:
+            raise ValueError("TypedDegreeVAESampler requires checkpoint_path.")
+        return cls(
+            checkpoint_path,
+            device=str(data.get("device", "auto")),
+            deterministic=bool(data.get("deterministic", False)),
+            seed=int(data.get("seed", seed)),
+            sample_num_nodes=str(data.get("sample_num_nodes", "empirical")),
+            max_resample=int(data.get("max_resample", 1000)),
+            fallback=str(data.get("fallback", "error")),
+        )
+
+    def sample(self, rng: np.random.Generator | None = None) -> dict[str, Any]:
+        import torch
+
+        generator = rng if rng is not None else np.random.default_rng(self.seed)
+        node_counts = None
+        if self.sample_num_nodes.lower() == "empirical":
+            node_counts = [self._vectorizer.sample_empirical_node_count(generator)]
+        with torch.no_grad():
+            outputs = self._model.sample_outputs(
+                1,
+                node_counts=node_counts,
+                device=self.device,
+            )
+        return self._vectorizer.outputs_to_summaries(
+            outputs,
+            rng=generator,
+            deterministic=self.deterministic,
+            max_resample=self.max_resample,
+            fallback=self.fallback,
+        )[0]
+
+
 def build_degree_sampler(
     config: dict[str, Any],
     train_graphs: list[Any],
     *,
     seed: int = 0,
-) -> DegreeVAESampler | EmpiricalDegreeSampler | None:
+) -> DegreeVAESampler | TypedDegreeVAESampler | EmpiricalDegreeSampler | None:
     """Build the degree prior used by the maintained Graph-ER generation CLI."""
 
     if not config or not bool(config.get("enabled", False)):
@@ -148,6 +214,12 @@ def build_degree_sampler(
         "learned",
     }:
         return DegreeVAESampler.from_config(config, seed=seed)
+    if sampler_type in {
+        "typed_degree_histogram_vae",
+        "typed_signature_histogram_vae",
+        "typed_signature_vae",
+    }:
+        return TypedDegreeVAESampler.from_config(config, seed=seed)
     if sampler_type in {"empirical", "empirical_degree"}:
         return EmpiricalDegreeSampler.fit_from_graphs(train_graphs, seed=seed)
     raise ValueError(f"Unknown degree_generator.type: {sampler_type!r}")

@@ -125,11 +125,16 @@ def nx_to_rdkit_mol(graph: nx.Graph, *, sanitize: bool = True):
     mol = Chem.RWMol()
     node_map: dict[int, int] = {}
     for node, data in sorted(graph.nodes(data=True)):
-        atomic_num = int(data.get("atomic_num", data.get("atom_type", 6)))
+        raw_atomic_num = data.get("atomic_num", data.get("atom_type"))
+        if raw_atomic_num is None:
+            raise ValueError(f"Node {node!r} is missing atomic_num/atom_type.")
+        atomic_num = int(raw_atomic_num)
         atom = Chem.Atom(atomic_num)
         node_map[int(node)] = int(mol.AddAtom(atom))
     for u, v, data in graph.edges(data=True):
-        bond_type = int(data.get("bond_type", BOND_SINGLE))
+        if "bond_type" not in data:
+            raise ValueError(f"Edge {(u, v)!r} is missing bond_type.")
+        bond_type = int(data["bond_type"])
         mol.AddBond(
             node_map[int(u)], node_map[int(v)], _internal_bond_to_rdkit(bond_type)
         )

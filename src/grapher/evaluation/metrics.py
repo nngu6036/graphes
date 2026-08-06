@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from math import comb
 from typing import Callable, Sequence
 
 import networkx as nx
@@ -15,7 +16,9 @@ from grapher.properties.summary import (
     spectral_histogram,
 )
 from grapher.utils.motifs import (
+    attributed_graphlet_count_dict,
     flatten_graphlet_history,
+    normalize_count_dict,
     topology_graphlet_keys_by_size,
 )
 
@@ -74,6 +77,51 @@ def gaussian_emd_kernel(x: np.ndarray, y: np.ndarray, sigma: float = 1.0) -> np.
     return np.exp(-(emd * emd) / (2.0 * float(sigma) * float(sigma)))
 
 
+def mmd_gaussian_emd(
+    x: np.ndarray,
+    y: np.ndarray,
+    sigma: float | None = None,
+) -> float:
+    """Biased MMD with one common Gaussian Earth-Mover kernel protocol."""
+
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    if x.size == 0 or y.size == 0:
+        return float("nan")
+    if x.ndim == 1:
+        x = x.reshape(1, -1)
+    if y.ndim == 1:
+        y = y.reshape(1, -1)
+    width = max(x.shape[1], y.shape[1])
+    if x.shape[1] != width:
+        padded = np.zeros((x.shape[0], width), dtype=np.float64)
+        padded[:, : x.shape[1]] = x
+        x = padded
+    if y.shape[1] != width:
+        padded = np.zeros((y.shape[0], width), dtype=np.float64)
+        padded[:, : y.shape[1]] = y
+        y = padded
+    if sigma is None:
+        combined = np.vstack([x, y])
+        pairwise = np.sum(
+            np.abs(
+                np.cumsum(
+                    combined[:, None, :] - combined[None, :, :],
+                    axis=-1,
+                )
+            ),
+            axis=-1,
+        )
+        values = pairwise[np.triu_indices(combined.shape[0], k=1)]
+        values = values[values > 0.0]
+        sigma = float(np.median(values)) if values.size else 1.0
+    sigma = max(float(sigma), 1.0e-12)
+    k_xx = gaussian_emd_kernel(x, x, sigma)
+    k_yy = gaussian_emd_kernel(y, y, sigma)
+    k_xy = gaussian_emd_kernel(x, y, sigma)
+    return float(k_xx.mean() + k_yy.mean() - 2.0 * k_xy.mean())
+
+
 def orbit_histogram_matrix(graphs: Sequence[nx.Graph]) -> np.ndarray:
     def histogram(g: nx.Graph) -> np.ndarray:
         counts = np.asarray(orbit_count_vector(g), dtype=np.float64).reshape(-1)
@@ -105,6 +153,9 @@ def mmd_graphlet_statistics(
     connected_only: bool = True,
     num_samples: int | None = None,
     backend: str = "sampled",
+    node_label_attr: str | None = None,
+    edge_label_attr: str | None = None,
+    attributed_backend: str = "auto",
 ) -> tuple[float, float]:
     """MMD for graphlet composition and connected induced-subset mass."""
 
@@ -118,17 +169,63 @@ def mmd_graphlet_statistics(
     )
     # Build a shared basis from both sets. This is important because generated
     # graphs may contain graphlets unseen in the reference or vice versa.
-    statistics = [
-        graphlet_statistics_summary(graph, cfg)
-        for graph in list(reference) + list(generated)
-    ]
-    histories = [item[0] for item in statistics]
-    masses = [item[1] for item in statistics]
-    keys_by_k = topology_graphlet_keys_by_size(
-        int(k_min),
-        int(k_max),
-        connected_only=bool(connected_only),
-    )
+    combined = list(reference) + list(generated)
+    attributed = node_label_attr is not None or edge_label_attr is not None
+    if attributed and (not node_label_attr or not edge_label_attr):
+        raise ValueError(
+            "Attributed graphlet evaluation requires both node_label_attr and "
+            "edge_label_attr."
+        )
+    if attributed:
+        histories: list[dict[str, dict[str, float]]] = []
+        masses: list[dict[str, float]] = []
+        keys_by_k: dict[str, list[str]] = {
+            str(k): [] for k in range(int(k_min), int(k_max) + 1)
+        }
+        rng = np.random.default_rng(0)
+        for graph in combined:
+            history: dict[str, dict[str, float]] = {}
+            mass: dict[str, float] = {}
+            for k in range(int(k_min), int(k_max) + 1):
+                counts = attributed_graphlet_count_dict(
+                    graph,
+                    k,
+                    node_label_attr=str(node_label_attr),
+                    edge_label_attr=str(edge_label_attr),
+                    connected_only=bool(connected_only),
+                    num_samples=num_samples,
+                    rng=rng,
+                    backend=str(attributed_backend),
+                )
+                history[str(k)] = normalize_count_dict(counts)
+                keys_by_k[str(k)].extend(str(key) for key in counts)
+                total = (
+                    comb(graph.number_of_nodes(), k)
+                    if graph.number_of_nodes() >= k
+                    else 0
+                )
+                sampled = (
+                    min(total, int(num_samples))
+                    if num_samples is not None and int(num_samples) > 0
+                    else total
+                )
+                mass[str(k)] = (
+                    float(sum(counts.values()) / sampled)
+                    if sampled > 0 and connected_only
+                    else float(sampled > 0)
+                )
+            histories.append(history)
+            masses.append(mass)
+        keys_by_k = {key: sorted(set(values)) for key, values in keys_by_k.items()}
+    else:
+        statistics = [graphlet_statistics_summary(graph, cfg) for graph in combined]
+        histories = [item[0] for item in statistics]
+        masses = [item[1] for item in statistics]
+        keys_by_k = topology_graphlet_keys_by_size(
+            int(k_min),
+            int(k_max),
+            connected_only=bool(connected_only),
+        )
     ref_rows = [
         flatten_graphlet_history(h, keys_by_k) for h in histories[: len(reference)]
     ]
@@ -153,11 +250,11 @@ def mmd_graphlet_statistics(
         dtype=np.float64,
     )
     return (
-        mmd_rbf(
+        mmd_gaussian_emd(
             np.asarray(ref_rows, dtype=np.float64),
             np.asarray(gen_rows, dtype=np.float64),
         ),
-        mmd_rbf(ref_mass, gen_mass),
+        mmd_gaussian_emd(ref_mass, gen_mass),
     )
 
 
@@ -176,7 +273,12 @@ def simple_graph_validity_rate(graphs: Sequence[nx.Graph]) -> float:
         return 0.0
     vals = []
     for g in graphs:
-        vals.append(nx.number_of_selfloops(g) == 0 and isinstance(g, nx.Graph))
+        vals.append(
+            isinstance(g, nx.Graph)
+            and not g.is_directed()
+            and not g.is_multigraph()
+            and nx.number_of_selfloops(g) == 0
+        )
     return float(np.mean(vals))
 
 
@@ -206,9 +308,12 @@ def degree_preservation_rate(
         )
     vals = []
     for g0, g1 in zip(before, after):
-        d0 = sorted([d for _, d in g0.degree()], reverse=True)
-        d1 = sorted([d for _, d in g1.degree()], reverse=True)
-        vals.append(d0 == d1)
+        if set(g0.nodes()) != set(g1.nodes()):
+            vals.append(False)
+            continue
+        vals.append(
+            all(int(g0.degree(node)) == int(g1.degree(node)) for node in g0.nodes())
+        )
     return float(np.mean(vals))
 
 
@@ -248,6 +353,9 @@ def evaluate_graph_sets(
     graphlet_connected_only: bool = True,
     graphlet_num_samples: int | None = None,
     graphlet_backend: str = "sampled",
+    graphlet_node_label_attr: str | None = None,
+    graphlet_edge_label_attr: str | None = None,
+    attributed_graphlet_backend: str = "auto",
 ) -> dict[str, float]:
     max_degree = 0
     for g in list(reference) + list(generated):
@@ -270,16 +378,19 @@ def evaluate_graph_sets(
             connected_only=graphlet_connected_only,
             num_samples=graphlet_num_samples,
             backend=graphlet_backend,
+            node_label_attr=graphlet_node_label_attr,
+            edge_label_attr=graphlet_edge_label_attr,
+            attributed_backend=attributed_graphlet_backend,
         )
         if compute_graphlet_history
         else (float("nan"), float("nan"))
     )
     metrics = {
         "num_graphs": float(len(generated)),
-        "degree_mmd": mmd_rbf(deg_ref, deg_gen),
-        "clustering_mmd": mmd_rbf(clus_ref, clus_gen),
-        "spectral_mmd": mmd_rbf(spec_ref, spec_gen),
-        "motif_proxy_mmd": mmd_rbf(motif_ref, motif_gen),
+        "degree_mmd": mmd_gaussian_emd(deg_ref, deg_gen),
+        "clustering_mmd": mmd_gaussian_emd(clus_ref, clus_gen),
+        "spectral_mmd": mmd_gaussian_emd(spec_ref, spec_gen),
+        "motif_proxy_mmd": mmd_gaussian_emd(motif_ref, motif_gen),
         "orbit_mmd": mmd_orbit(reference, generated) if compute_orbit else float("nan"),
         "graphlet_history_mmd": graphlet_mmd,
         "graphlet_connected_mass_mmd": connected_mass_mmd,

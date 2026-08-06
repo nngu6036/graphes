@@ -15,6 +15,12 @@ from grapher.generators.degree_vae import (
     degree_vae_loss,
     save_degree_vae_checkpoint,
 )
+from grapher.molecular.typed_invariants import (
+    TypedSignatureVectorizer,
+    build_typed_signature_vae,
+    save_typed_signature_checkpoint,
+    typed_signature_vae_loss,
+)
 from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import (
     ensure_dir,
@@ -41,6 +47,127 @@ def _targets_to_tensors(
             tensor = tensor.float()
         out[key] = tensor
     return out
+
+
+def _train_typed_signature_vae(
+    *,
+    config: dict,
+    degree_cfg: dict,
+    train_graphs: list,
+    checkpoint_path: Path,
+    device: torch.device,
+    dataset_record: dict,
+) -> None:
+    typed_cfg = require_config_section(config, "typed_signature")
+    constructor_cfg = require_config_section(config, "constructor")
+    edge_types = list(
+        require_config(
+            typed_cfg,
+            "edge_categories",
+            context="config.typed_signature",
+        )
+    )
+    max_valence_raw = typed_cfg.get("max_weighted_valence") or None
+    max_valence = (
+        {int(key): float(value) for key, value in max_valence_raw.items()}
+        if max_valence_raw
+        else None
+    )
+    vectorizer = TypedSignatureVectorizer.fit(
+        train_graphs,
+        edge_types=edge_types,
+        node_attribute=str(typed_cfg.get("node_attribute", "atomic_num")),
+        edge_attribute=str(typed_cfg.get("edge_attribute", "bond_type")),
+        require_connected=bool(constructor_cfg.get("ensure_connected", True)),
+        max_ordinary_degree=(
+            int(typed_cfg["max_ordinary_degree"])
+            if typed_cfg.get("max_ordinary_degree") is not None
+            else None
+        ),
+        max_weighted_valence=max_valence,
+    )
+    inputs_np, targets_np = vectorizer.to_training_arrays(train_graphs)
+    inputs = torch.as_tensor(inputs_np, dtype=torch.float32)
+    dataset = TensorDataset(inputs, torch.arange(inputs.shape[0]))
+    loader = DataLoader(
+        dataset,
+        batch_size=int(degree_cfg.get("batch_size", 128)),
+        shuffle=True,
+        drop_last=False,
+    )
+    all_targets = _targets_to_tensors(targets_np, device)
+    model = build_typed_signature_vae(
+        vectorizer,
+        latent_dim=int(degree_cfg.get("latent_dim", 64)),
+        hidden_dim=int(degree_cfg.get("hidden_dim", 256)),
+        size_condition_dim=int(degree_cfg.get("size_condition_dim", 32)),
+        prior_type=str(degree_cfg.get("prior_type", "conditional_gmm")),
+        prior_components=int(degree_cfg.get("prior_components", 8)),
+        num_layers=int(degree_cfg.get("num_layers", 3)),
+        dropout=float(degree_cfg.get("dropout", 0.0)),
+    ).to(device)
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=float(degree_cfg.get("learning_rate", 1.0e-3)),
+        weight_decay=float(degree_cfg.get("weight_decay", 1.0e-5)),
+    )
+    weights = {
+        "num_nodes": float(degree_cfg.get("node_count_loss_weight", 1.0)),
+        "signature": float(degree_cfg.get("signature_histogram_loss_weight", 5.0)),
+        "incidence": float(degree_cfg.get("incidence_moment_loss_weight", 0.1)),
+    }
+    epochs = int(degree_cfg.get("epochs", 300))
+    beta = float(degree_cfg.get("kl_loss_weight", 0.005))
+    warmup = int(degree_cfg.get("kl_warmup_epochs", 0))
+    interval = max(int(degree_cfg.get("progress_interval", PROGRESS_INTERVAL)), 1)
+    history: list[dict[str, float]] = []
+    for epoch in range(1, epochs + 1):
+        model.train()
+        rows: dict[str, list[float]] = {}
+        effective_beta = beta * (min(float(epoch) / warmup, 1.0) if warmup else 1.0)
+        for batch_inputs, batch_indices in loader:
+            batch_inputs = batch_inputs.to(device)
+            indices = batch_indices.to(device)
+            targets = {key: value[indices] for key, value in all_targets.items()}
+            outputs, mu, logvar = model(batch_inputs, targets["num_nodes_count"])
+            loss, metrics = typed_signature_vae_loss(
+                outputs,
+                targets,
+                mu,
+                logvar,
+                beta=effective_beta,
+                weights=weights,
+            )
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            optimizer.step()
+            for key, value in metrics.items():
+                rows.setdefault(key, []).append(float(value))
+        mean = {key: float(np.mean(values)) for key, values in rows.items()}
+        mean["epoch"] = float(epoch)
+        history.append(mean)
+        if epoch == 1 or epoch % interval == 0 or epoch == epochs:
+            print(
+                f"epoch={epoch:04d} loss={mean['loss']:.4f} "
+                f"signature={mean['signature_loss']:.4f} "
+                f"incidence={mean['incidence_loss']:.4f} "
+                f"kl={mean['kl_loss']:.4f}",
+                flush=True,
+            )
+    save_typed_signature_checkpoint(
+        checkpoint_path,
+        model,
+        vectorizer,
+        config={"experiment_config": config, "dataset": dataset_record},
+        metrics={"history": history, "final": history[-1] if history else {}},
+    )
+    vectorizer.save(checkpoint_path.parent / "typed_signature_vectorizer.json")
+    save_json(
+        {"history": history, "final": history[-1] if history else {}},
+        checkpoint_path.parent / "training_metrics.json",
+    )
+    print(f"Saved typed checkpoint to: {checkpoint_path}")
 
 
 def main() -> None:
@@ -88,6 +215,34 @@ def main() -> None:
         train_graphs = train_graphs[: int(max_train)]
     if not train_graphs:
         raise RuntimeError(f"Dataset {dataset_name!r} has an empty training split.")
+    generator_type = str(degree_cfg.get("type", "degree_histogram_vae")).lower()
+    if generator_type in {
+        "typed_degree_histogram_vae",
+        "typed_signature_histogram_vae",
+        "typed_signature_vae",
+    }:
+        _train_typed_signature_vae(
+            config=config,
+            degree_cfg=degree_cfg,
+            train_graphs=train_graphs,
+            checkpoint_path=checkpoint_path,
+            device=device,
+            dataset_record={
+                "name": dataset_name,
+                "root": dataset_root,
+                "config_path": str(dataset_config_path),
+                "build_if_missing": bool(dataset_cfg.get("build_if_missing", False)),
+                "num_train_graphs": len(train_graphs),
+            },
+        )
+        return
+    if generator_type not in {
+        "degree_histogram_vae",
+        "degree_vae",
+        "vae",
+        "learned",
+    }:
+        raise ValueError(f"Unknown degree_generator.type: {generator_type!r}")
     constructor_cfg = require_config_section(config, "constructor")
     summary_cfg = require_config_section(config, "summary")
     require_connected = bool(

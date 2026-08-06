@@ -11,7 +11,7 @@ datasets. It writes split files to:
 Run from the repository root with:
 
     PYTHONPATH=src python scripts/prepare_generic_dataset.py \
-        --dataset sbm \
+        --dataset community_small \
         --root outputs/datasets
 """
 
@@ -156,6 +156,18 @@ def _print_report(report: dict[str, Any], out_dir: Path) -> None:
         )
 
 
+def load_requested_dataset_config(
+    dataset: str,
+) -> tuple[dict[str, Any], Path, str]:
+    """Load a named config while preserving its serialized-dataset alias."""
+
+    config_path = Path("configs/datasets") / f"{dataset}.yaml"
+    config = dict(load_yaml(config_path))
+    dataset_name = str(config.get("name", dataset))
+    config["name"] = dataset_name
+    return config, config_path, dataset_name
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Prepare and verify SBM, grid, or ego graph datasets."
@@ -170,10 +182,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    config_path = Path("configs/datasets") / f"{args.dataset}.yaml"
-    config = dict(load_yaml(config_path))
-    config["name"] = args.dataset
-    dataset_name = str(config["name"])
+    config, _config_path, dataset_name = load_requested_dataset_config(args.dataset)
     out_dir = dataset_dir(dataset_name, args.root)
     graphs = build_graphs_from_config(config)
     splits = split_graphs(graphs, config)
