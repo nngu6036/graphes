@@ -1,8 +1,8 @@
 # GraphER: Decoupled Topology Generation
 
-GraphER is a constraint-preserving graph generator that combines a learned
-degree-sequence prior, connected graph construction, state-conditioned
-graphlet prediction, and valid double-edge rewiring.
+GraphER is a constraint-preserving graph generator/refiner. The maintained
+generic routes either construct a graph from a learned degree sequence or use
+a frozen DeFoG sample as the base, then apply valid double-edge rewiring.
 
 This release implements the first part of the decoupled design: generic graph
 topology generation. It does not predict node labels, edge labels, edge
@@ -34,6 +34,7 @@ p_{\mathrm{top}}(A,d)
 | Route | Status | Active implementation |
 | --- | --- | --- |
 | Generic topology | Current | DH-VAE + connected Havel-Hakimi + graphlet-only GraphER |
+| Generic post-hoc correction | Current baseline | frozen DeFoG + graphlet-only GraphER |
 | Attributed endpoint model | Legacy compatibility | Existing QM9/ZINC code under `grapher.hybrid` |
 | Decoupled attribute stage | Planned | Attribute-only CatFlow/DeFoG-style process conditioned on generated topology |
 
@@ -215,11 +216,13 @@ docs/
   TOPOLOGY_GENERATOR.md        Detailed topology data flow and guarantees
   DESIGN_CONTRACT.md           Proposal-to-implementation contract
 scripts/
+  defog_export_worker.py
   prepare_generic_dataset.py
   train_degree_generator.py
   evaluate_degree_generator.py
   train_topology_grapher.py
   run_topology_grapher.py
+  run_defog_grapher.py
   evaluate_graph_generation_report.py
 src/grapher/topology/           Decoupled generic topology implementation
 src/grapher/generators/         DH-VAE and invariant samplers
@@ -337,6 +340,55 @@ also writes representative graph figures. It does not currently report
 graphlet-history MMD; graphlet discrepancy appears in training/generation
 diagnostics.
 
+## DeFoG base + GraphER correction
+
+The DeFoG adapter runs in a subprocess so DeFoG can retain its own legacy
+Python/Lightning/PyG environment. Set `DEFOG` to the DeFoG repository root. If
+that environment uses a different interpreter, also set `DEFOG_PYTHON`:
+
+```bash
+export DEFOG=/absolute/path/to/DeFoG
+export DEFOG_PYTHON=/absolute/path/to/defog/environment/bin/python
+
+PYTHONPATH=src python scripts/run_defog_grapher.py \
+  --config configs/experiments/grapher/community_small_defog_corrector.yaml \
+  --defog-checkpoint /absolute/path/to/comm20.ckpt \
+  --checkpoint outputs/topology_grapher/community_small/seed_42/checkpoint.pt \
+  --output-dir outputs/defog_grapher/community_small/seed_42 \
+  --num-generate 1024 \
+  --seed 42
+```
+
+The child calls DeFoG's `GraphDiscreteFlowModel.sample_batch()` directly. It
+does not run DeFoG's expensive test metrics or visualization path. Samples are
+exported as numeric `defog_samples.npz` arrays with `allow_pickle=False`, then
+strictly checked for a square symmetric binary adjacency, zero diagonal, one
+generic node class, and preserved sample order before conversion to NetworkX.
+
+To reuse identical DeFoG samples across correction ablations, set
+`base_generator.generated_path` to a previous `defog_samples.npz`. A raw DeFoG
+`.pkl` is also accepted through the isolated worker, but it must be trusted in
+the same way as a model checkpoint because Pickle loading can execute code.
+
+Disconnected DeFoG samples are retained unchanged under
+`disconnected_policy: no_op_and_report`; they are not dropped, connected, or
+replaced by their largest component. The supplied DeFoG source exposes generic
+`comm20`, `sbm`, `planar`, and `tree` routes only. It has no ready-made
+Ego-small or Grid entry point.
+
+Evaluate the paired source/final sets with the same report script:
+
+```bash
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_defog_corrector.yaml \
+  --generated-dir outputs/defog_grapher/community_small/seed_42
+```
+
+This reports `defog_base_to_test` rather than mislabelling the base set as a
+Havel-Hakimi source. A released DeFoG `comm20` checkpoint uses DeFoG's own
+SPECTRE split; the run report records this provenance and must not claim an
+identical GraphER training split unless DeFoG was retrained accordingly.
+
 ## Other generic datasets
 
 Use the same five-stage workflow with the corresponding names:
@@ -371,6 +423,7 @@ graphs.
 | `constructor` | Initial realization | connected Havel-Hakimi |
 | `topology_refiner` | Candidate selection | 24 steps, 128 proposals, 32 valid candidates, greedy positive-gain selection |
 | `evaluation` | Saved-set metrics | degree/clustering/orbit MMD and sample figures |
+| `base_generator` | Optional external base | isolated DeFoG checkpoint/export and sampling settings |
 
 ### Degree-source ablations
 
@@ -405,6 +458,7 @@ loaded.
 | DH-VAE evaluation | Configured evaluation directory | `degree_evaluation.json`, `generated_degree_sequences.json` |
 | Topology training | `--output-dir` or checkpoint parent | `checkpoint.pt`, `training_report.json` |
 | Generation | `--output-dir` | `coarse_graphs.pkl`, `topology_refined_graphs.pkl`, `report.json` |
+| DeFoG correction | `--output-dir` | `defog_samples.npz`, `defog_manifest.json`, `defog.log`, `defog_base_graphs.pkl`, `topology_refined_graphs.pkl`, `report.json` |
 | Standalone evaluation | `--output-dir` | `graph_mmd_metrics.csv`, `graph_evaluation_report.json`, `generated_graph_samples.png`, `generated_graph_samples.pdf` |
 
 Maintained topology configurations do not write the old
@@ -501,6 +555,7 @@ Generic-path checks:
 
 ```bash
 PYTHONPATH=src python -m pytest -q \
+  tests/test_defog_wrapper.py \
   tests/test_topology_grapher.py \
   tests/test_degree_generator.py \
   tests/test_generic_dataset_builders.py \

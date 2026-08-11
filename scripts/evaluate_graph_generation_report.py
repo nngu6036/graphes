@@ -65,6 +65,33 @@ def _load_graph_list(path: Path) -> list[nx.Graph]:
     return graphs
 
 
+def resolve_base_graph_path(
+    generated_dir: Path,
+    *,
+    base_graphs: str | Path | None = None,
+    coarse_graphs: str | Path | None = None,
+) -> tuple[Path | None, str | None]:
+    """Resolve a saved source stage without mislabelling DeFoG as HH."""
+
+    if base_graphs is not None and coarse_graphs is not None:
+        raise ValueError("Use --base-graphs or --coarse-graphs, not both.")
+    if base_graphs is not None:
+        path = Path(base_graphs)
+        stage = "defog_base" if "defog" in path.name.lower() else "base"
+        return path, stage
+    if coarse_graphs is not None:
+        return Path(coarse_graphs), "hh_source"
+    candidates = (
+        (generated_dir / "defog_base_graphs.pkl", "defog_base"),
+        (generated_dir / "base_graphs.pkl", "base"),
+        (generated_dir / "coarse_graphs.pkl", "hh_source"),
+    )
+    for path, stage in candidates:
+        if path.is_file():
+            return path, stage
+    return None, None
+
+
 def _paper_mmd(
     reference: Sequence[nx.Graph],
     candidate: Sequence[nx.Graph],
@@ -467,6 +494,7 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--generated-dir", required=True)
     parser.add_argument("--generated-graphs", default=None)
+    parser.add_argument("--base-graphs", default=None)
     parser.add_argument("--coarse-graphs", default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--max-graphs", type=int, default=None)
@@ -493,7 +521,11 @@ def main() -> None:
             if topology_path.is_file()
             else generated_dir / "hybrid_refined_graphs.pkl"
         )
-    coarse_path = Path(args.coarse_graphs or generated_dir / "coarse_graphs.pkl")
+    base_path, base_stage = resolve_base_graph_path(
+        generated_dir,
+        base_graphs=args.base_graphs,
+        coarse_graphs=args.coarse_graphs,
+    )
     output_dir = ensure_dir(args.output_dir or generated_dir / "evaluation_report")
 
     evaluation_cfg = config.get("evaluation", {}) or {}
@@ -532,7 +564,11 @@ def main() -> None:
     train_graphs = list(splits.get("train", []))
     test_graphs = list(splits.get("test", []))
     generated_graphs = _load_graph_list(generated_path)
-    coarse_graphs = _load_graph_list(coarse_path) if coarse_path.is_file() else []
+    base_graphs = (
+        _load_graph_list(base_path)
+        if base_path is not None and base_path.is_file()
+        else []
+    )
     if not test_graphs:
         raise ValueError("The configured dataset has no test graphs.")
 
@@ -558,7 +594,10 @@ def main() -> None:
     pipeline_stage = str(
         (config.get("pipeline", {}) or {}).get("stage", "endpoint")
     ).lower()
-    final_stage = "topology_final" if pipeline_stage == "topology" else "hybrid_final"
+    topology_stages = {"topology", "posthoc_correction", "topology_correction"}
+    final_stage = (
+        "topology_final" if pipeline_stage in topology_stages else "hybrid_final"
+    )
 
     rows: list[dict[str, Any]] = []
     if train_graphs:
@@ -572,16 +611,16 @@ def main() -> None:
                 ),
             }
         )
-    if coarse_graphs:
-        coarse_count = len(coarse_graphs)
+    if base_graphs:
+        base_count = len(base_graphs)
         if args.max_graphs is not None:
-            coarse_count = min(coarse_count, int(args.max_graphs))
+            base_count = min(base_count, int(args.max_graphs))
         rows.append(
             {
-                "comparison": "hh_source_to_test",
+                "comparison": f"{base_stage}_to_test",
                 **_paper_mmd(
                     reference,
-                    coarse_graphs[:coarse_count],
+                    base_graphs[:base_count],
                     compute_orbit=compute_orbit,
                 ),
             }
@@ -628,11 +667,11 @@ def main() -> None:
         stage_graphs: list[tuple[str, Sequence[nx.Graph]]] = [
             ("real_test", reference),
         ]
-        if coarse_graphs:
-            coarse_count = len(coarse_graphs)
+        if base_graphs:
+            base_count = len(base_graphs)
             if args.max_graphs is not None:
-                coarse_count = min(coarse_count, int(args.max_graphs))
-            stage_graphs.append(("hh_source", coarse_graphs[:coarse_count]))
+                base_count = min(base_count, int(args.max_graphs))
+            stage_graphs.append((str(base_stage), base_graphs[:base_count]))
         stage_graphs.append((final_stage, generated))
         valid_smiles: list[str] = []
         for stage, graphs in stage_graphs:
@@ -661,6 +700,8 @@ def main() -> None:
             "compute_orbit": compute_orbit,
             "graphlet_backend": graphlet_backend,
             "generated_graphs": str(generated_path),
+            "base_graphs": str(base_path) if base_path is not None else None,
+            "base_stage": base_stage,
             "num_graphs_evaluated": len(generated),
             "num_reference_graphs": len(reference),
             "num_generated_graphs_evaluated": len(generated),
