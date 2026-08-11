@@ -1,6 +1,11 @@
 # Graph-ER implementation contract
 
-This document translates *Graph-ER: Structure-Guided Degree-Constrained Graph Generation* into an implementation-facing contract. Page references use the numbered PDF pages.
+This document translates *Graph-ER: Structure-Guided Degree-Constrained Graph
+Generation* into an implementation-facing contract for two explicitly scoped
+routes. The current generic route uses the decoupled topology design: it
+predicts graphlet targets only and never predicts terminal edge/no-edge labels.
+Hierarchical endpoint requirements apply only to the retained attributed route
+until Stage 2 is migrated. Page references use the numbered PDF pages.
 
 Labels:
 
@@ -63,15 +68,30 @@ Labels:
 - **REQUIRED**: backtrack or restart on an infeasible branch and fail only after the declared search budget is exhausted (§A.4, p. 15; Algorithm 1, p. 17).
 - **REQUIRED**: verify invariant equality, simplicity, connectedness, and domain validity before returning the source (Algorithm 1, p. 17).
 - **REQUIRED**: randomize tie-breaking so output is not determined by storage order (§E.3, p. 20).
-- **REQUIRED**: for training, preserve the target's indexed degree/signature assignment and apply any permutation jointly to `G0` and `G*` (§5.1, p. 6; Algorithm 4, p. 18).
+- **REQUIRED FOR THE RETAINED ATTRIBUTED ROUTE**: preserve the target's indexed
+  signature assignment during training and apply any permutation jointly to
+  `G0` and `G*` (§5.1, p. 6; Algorithm 4, p. 18). The generic topology teacher
+  receives only a degree sequence and cached graphlet target, so no terminal
+  adjacency correspondence is created.
 - **REQUIRED**: typed construction ranks feasible choices with training-only `p_init(r | tau_i, tau_j)` plus feasibility/connectivity information (§A.4, Eq. 21, pp. 14-15).
 - **OPTIONAL**: exact completion checking may be disabled when a declared search/restart method is used.
 - **REQUIRED BASELINE**: support uniform selection under the identical feasibility mask (§C.1, p. 16).
 - **REPORTED**: record restarts, trials per returned source, constructor success, and failure reasons (§A.4, p. 15).
 
-## 4. State-conditioned predictor and losses
+## 4. State-conditioned predictors and losses
 
-### 4.1 Encoder and heads
+### 4.1 Generic topology encoder and heads
+
+- **REQUIRED**: use a permutation-equivariant topology encoder over `G_t`,
+  indexed ordinary degrees, graph size, and normalized `t/T`.
+- **REQUIRED**: expose only graph-level connected-induced graphlet predictions;
+  do not instantiate a terminal node head, pair head, or no-edge class.
+- **REQUIRED**: the graphlet output is invariant to any joint permutation of
+  the adjacency and indexed degree inputs.
+- **REQUIRED**: use a distinct topology checkpoint format and reject endpoint
+  checkpoints rather than partially loading them.
+
+### 4.2 Attributed endpoint encoder and heads
 
 - **REQUIRED**: use a permutation-equivariant GNN/graph transformer over `G_t`; graph pooling may add context but must preserve node embeddings for pair decoding (§D.1, pp. 18-19).
 - **REQUIRED**: node inputs contain current category and ordinary/typed signature; edge inputs contain current edge category (§D.1, p. 18).
@@ -83,24 +103,45 @@ Labels:
 - **REQUIRED**: graphlet heads consume current-state information and soft node/all-pairs predictions (§5.2, p. 6; §B.3, p. 16).
 - **REQUIRED**: predictions are indexed node/pair marginals, not only graph-level category histograms.
 
-### 4.2 Losses
+### 4.3 Losses
 
-- **REQUIRED**: train node/pair heads with categorical cross-entropy against the indexed terminal graph (§B.3, Eq. 29, p. 16).
-- **REQUIRED**: use class weighting or negative-pair sampling for no-edge imbalance (§5.2, p. 6; §B.3, p. 16).
-- **REQUIRED**: train each available graphlet head against the normalized terminal histogram with a declared divergence (§B.3, Eq. 29, p. 16).
-- **OPTIONAL**: add soft ordinary/typed-degree consistency residuals from incident pair probabilities (§B.1, Eq. 24, p. 15).
-- **REQUIRED**: expose active node, pair, graphlet, consistency, and selector losses and weights (§5.4, Eq. 8, p. 7; §B.3, Eq. 29, p. 16).
+- **REQUIRED FOR GENERIC TOPOLOGY**: train only the graphlet mean/distribution
+  loss and an optional connected-subgraph-mass loss. Pair cross-entropy, pair
+  NLL/F1, and degree-consistency loss are absent rather than assigned fake zero
+  diagnostics.
+
+- **REQUIRED FOR THE RETAINED ATTRIBUTED ROUTE**: train node/pair heads with
+  categorical cross-entropy against the indexed terminal graph (§B.3, Eq. 29,
+  p. 16).
+- **REQUIRED FOR THE RETAINED ATTRIBUTED ROUTE**: use class weighting or
+  negative-pair sampling for no-edge imbalance (§5.2, p. 6; §B.3, p. 16).
+- **REQUIRED FOR THE RETAINED ATTRIBUTED ROUTE**: train each available graphlet
+  head against the normalized terminal histogram with a declared divergence
+  (§B.3, Eq. 29, p. 16).
+- **OPTIONAL FOR THE RETAINED ATTRIBUTED ROUTE**: add soft ordinary/typed-degree
+  consistency residuals from incident pair probabilities (§B.1, Eq. 24,
+  p. 15).
+- **REQUIRED FOR THE RETAINED ATTRIBUTED ROUTE**: expose active node, pair,
+  graphlet, consistency, and selector losses and weights (§5.4, Eq. 8, p. 7;
+  §B.3, Eq. 29, p. 16).
 - **UNSPECIFIED**: exact encoder, dimensions, divergence family, optimizer, and numeric weights.
 
 ## 5. Connected induced graphlets
 
 - **REQUIRED**: use connected, induced graphlets; default modeled sizes are `{3,4,5}` (§3.3, p. 4; §B.2, pp. 15-16; Tables 4-5, pp. 20-21).
 - **REQUIRED**: generic canonicalization preserves topology; attributed canonicalization also preserves node and edge categories (§3.3, p. 4; §B.2, p. 15).
-- **REQUIRED**: build each model vocabulary from training data only and add one unseen/overflow class (§B.2, Eq. 25, pp. 15-16).
+- **REQUIRED FOR GENERIC TOPOLOGY**: use the complete finite unlabeled topology
+  atlas for each modeled size.
+- **REQUIRED FOR ATTRIBUTED GRAPHLETS**: build the sparse labelled vocabulary
+  from training data only and add one unseen/overflow class (§B.2, Eq. 25,
+  pp. 15-16).
 - **REQUIRED**: normalize by the number of connected induced graphlets of that size and mask head/loss when `|V| < k` (§B.2, Eqs. 26-28, p. 16).
 - **OPTIONAL**: report connected-subgraph mass externally; it is not in the normalized predicted histogram (§B.2, Eq. 28, p. 16).
-- **OPTIONAL**: use exact counts or fixed Monte Carlo subsets. Candidate comparisons must reuse identical sampled subsets at one step (§B.2, p. 16).
-- **OPTIONAL**: incrementally update affected graphlet counts instead of fully recounting (§B.4, p. 16).
+- **IMPLEMENTED FOR GENERIC TOPOLOGY**: enumerate connected graphlets exactly
+  and update candidate counts with exact switch-local deltas (§B.4, p. 16).
+- **OPTIONAL FOR OTHER ROUTES**: use exact counts or fixed Monte Carlo subsets.
+  Sampled candidate comparisons must reuse identical subsets at one step
+  (§B.2, p. 16).
 - **REQUIRED**: external graphlet MMD uses the union of generated/reference classes, not the model overflow bin (§F.3, p. 20).
 
 ## 6. Rewiring candidates, energy, and selector
@@ -118,16 +159,39 @@ Labels:
 ### 6.2 Energy and selection
 
 - **REQUIRED**: hold `S_hat_t` fixed while comparing all candidates at step `t` (§5.3, pp. 6-7; §B.4, p. 16).
-- **REQUIRED**: energy combines weighted all-pairs categorical discrepancy with weighted divergences for every enabled graphlet head (§B.4, Eq. 30, p. 16).
+- **REQUIRED FOR GENERIC TOPOLOGY**: energy contains graphlet divergence only,
+  and improvement is
+  `D(H(G_t), H_hat_t) - D(H(T_a(G_t)), H_hat_t)`.
+- **REQUIRED FOR THE RETAINED ATTRIBUTED ROUTE**: energy may combine weighted
+  all-pairs categorical discrepancy with attributed graphlet divergences.
 - **REQUIRED**: improvement is current energy minus successor energy (§B.4, Eq. 31, p. 16).
-- **REQUIRED**: support energy-only, policy-only, and hybrid modes (§5.3, p. 7).
+- **REQUIRED FOR THE FIRST DECOUPLED GENERIC ROUTE**: support exact energy-only
+  selection with explicit `STOP`. A learned shortlist is deferred until it can
+  be trained using only features available before graphlet rescoring.
 - **REQUIRED**: energy-guided modes accept only positive current-step improvement (§5.3, p. 7; §C.5, p. 18).
-- **REQUIRED FOR HYBRID**: policy shortlists and current-step energy rescores (§D.3, p. 19).
-- **REQUIRED FOR POLICY**: a shared scorer is candidate-order independent and learns the teacher distribution including `STOP` (§D.3, Eq. 32, p. 19).
+- **REQUIRED FOR THE RETAINED ATTRIBUTED HYBRID MODE**: use policy shortlists
+  and current-step energy rescores (§D.3, p. 19).
+- **REQUIRED FOR THE RETAINED ATTRIBUTED POLICY MODE**: a shared scorer is
+  candidate-order independent and learns the teacher distribution including
+  `STOP` (§D.3, Eq. 32, p. 19).
 - **OPTIONAL**: visited-state/tabu memory may prevent cycles; a maximum step count remains required (§E.2, p. 20).
 - **UNSPECIFIED**: proposal distribution, energy divergences, and numeric score weights.
 
 ## 7. Teacher trajectories and training
+
+- **REQUIRED FOR GENERIC TOPOLOGY**: construct a randomized connected source
+  from the target degree sequence, cache one terminal graphlet target, propose
+  ordinary valid swaps without reading the target adjacency, and score only
+  graphlet discrepancy.
+- **REQUIRED FOR GENERIC TOPOLOGY**: reuse the identical cached exact graphlet
+  target for teacher scoring and predictor supervision across every path and
+  state from one terminal graph.
+- **REQUIRED FOR GENERIC TOPOLOGY**: terminate when no proposed action improves
+  the graphlet objective. Exact terminal adjacency recovery is not a stopping
+  condition.
+
+The following target-aligned requirements apply to the retained attributed
+endpoint route:
 
 - **REQUIRED**: construct a randomized connected source with the same indexed invariant as terminal `G*` (§5.4, p. 7; Algorithms 3-4, p. 18).
 - **REQUIRED**: extract fixed terminal node labels, all-pairs labels, and graphlet histograms once per trajectory (Algorithm 3, p. 18).
@@ -141,7 +205,11 @@ Labels:
 ## 8. Generation and stopping
 
 - **REQUIRED**: sample graph size and `I0`, reject infeasible draws, and construct valid `G0` before rewiring (Algorithm 5, p. 19).
-- **REQUIRED**: at each step predict `S_hat_t`, build valid candidates, rank in the configured mode, and apply at most one action (§5.5, p. 7; Algorithm 5, p. 19).
+- **REQUIRED FOR GENERIC TOPOLOGY**: at each step predict only the terminal
+  graphlet law, build valid candidates, compare them under one frozen
+  prediction, and apply at most one positive-improvement action.
+- **REQUIRED FOR ATTRIBUTED ENDPOINT GENERATION**: predict the configured
+  endpoint/attributed summaries before candidate ranking.
 - **REQUIRED**: recompute predictions after every accepted swap, but not separately for same-step candidates (§5.5, p. 7; §B.4, p. 16).
 - **REQUIRED**: stop on `STOP`, empty candidates, no acceptable energy improvement, exhausted search, or maximum accepted steps (§5.5, p. 7).
 - **REQUIRED**: return the last accepted state without post-hoc degree, connectivity, or molecular correction (§5.5, p. 7; Table 5, p. 21).
@@ -151,25 +219,42 @@ Labels:
 
 - **REPORTED**: invariant fidelity, feasibility, constructor success, trials/output, final preservation, and end-to-end yield (§F.4, Eq. 33, p. 21; §I.3, pp. 22-23).
 - **REPORTED**: candidate pass/rejection rate, proposals per accepted swap, accepted swaps, `STOP` rate, connectivity, and runtime (§I.4-I.6, pp. 23-24).
-- **REPORTED**: pair NLL/macro-F1, graphlet error, and soft consistency residual on held-out indexed states (§F.3, p. 20; §I.6, p. 24).
+- **REPORTED FOR GENERIC TOPOLOGY**: held-out graphlet error only; pair NLL,
+  macro-F1, and consistency residual are inapplicable.
+- **REPORTED FOR ATTRIBUTED ENDPOINT GENERATION**: pair NLL/macro-F1, graphlet
+  error, and any active soft consistency residual.
 - **REPORTED**: generic degree, clustering, four-node orbit, connected-induced graphlet MMD, and connectedness (§6.1, p. 8).
 - **REPORTED**: molecular pre-repair RDKit validity, uniqueness, novelty, NSPDK, FCD, graphlet fidelity, invariant preservation, and yield (§6.1, p. 8; §F.4, p. 21).
 - **REQUIRED CONTROL**: compare identical invariant samples/sources for full refinement, `G0`, and uniform valid swaps with matched accepted-swap counts (§6.3, p. 9).
-- **REQUIRED ABLATIONS**: graphlet-only, pair-only, prediction frozen at `G0`, energy-only, and policy-only (§6.3, p. 9).
+- **REQUIRED ABLATIONS**: for generic topology, compare the full energy refiner,
+  source-only, frozen-prediction, and graphlet-objective settings. Pair-only
+  and policy-only ablations apply to the retained attributed endpoint route
+  (§6.3, p. 9).
 - **REQUIRED EXTENDED ABLATIONS**: oracle invariant, random feasible constructor, greedy teacher, uniform proposals, small candidate budget, step-budget sweep, and molecular chemical-filter removal (§I.3-I.6, pp. 23-24).
 - **REPORTED**: break runtime/memory down by prior, construction, predictor, validation, selector, graphlet updates, and molecular checks (§I.7, p. 25).
 
 ## 10. Minimum conformance tests
 
-- Joint graph/invariant permutation permutes node/pair outputs and leaves graph-level graphlet output unchanged (§E.3, p. 20).
+- A joint generic graph/invariant permutation leaves graph-level topology
+  graphlet output unchanged. In the retained attributed route it also permutes
+  node/pair outputs consistently (§E.3, p. 20).
 - Every candidate has four distinct endpoints and is simple, connected, invariant preserving, and domain valid.
 - Every accepted typed swap preserves each node's typed-degree vector exactly.
 - Source and final states have identical indexed invariants after every trajectory.
-- Jointly permuting `G0` and `G*` retains training-label alignment.
-- Pair output is symmetric and covers all `n(n-1)/2` unordered pairs.
-- Pair-only has no graphlet loss/score; graphlet-only has no pair head/loss/score (§I.5, pp. 23-24).
+- Jointly permuting `G0` and `G*` retains training-label alignment in the
+  retained attributed route; the generic teacher has no terminal adjacency
+  labels to align.
+- Generic topology batches contain no terminal pair labels and generic model
+  outputs/state dictionaries contain no node or pair heads.
+- Attributed pair output is symmetric and covers all `n(n-1)/2` unordered pairs.
+- A generic teacher cannot access target adjacency and stops at graphlet
+  equality even when indexed adjacencies differ.
+- In the retained attributed ablations, pair-only has no graphlet loss/score;
+  graphlet-only has no pair head/loss/score (§I.5, pp. 23-24). The generic
+  topology model is always pair-head-free.
 - Frozen mode predicts once at `G0`; full mode predicts after each accepted swap (§I.5, p. 24).
-- Same-step energy comparison uses one fixed prediction and one fixed sampled graphlet subset.
+- Generic same-step energy comparison uses one fixed prediction and exact local
+  graphlet deltas; sampled ablations must use one fixed subset plan.
 - Evaluation graphlets do not alter training vocabulary/model dimensions.
 - Final molecular validity is measured before repair or correction.
 
@@ -178,8 +263,14 @@ Labels:
 - Independently attaching atom/bond labels after sampling ordinary degrees.
 - Preserving ordinary degree while changing a node's typed degrees.
 - Swapping different bond types in strict molecular mode.
-- Predicting only global category histograms rather than indexed pairs including `no-edge`.
-- Training source/terminal graphs without consistent node correspondence.
+- In the attributed route, predicting only global category histograms rather
+  than indexed edge attributes on the fixed support.
+- In the generic route, conditioning graphlet prediction on a learned terminal
+  pair/no-edge head.
+- Proposing generic teacher actions from missing terminal edges, even when the
+  pair-energy weight is zero.
+- In the retained attributed route, training source/terminal graphs without
+  consistent node correspondence.
 - Guiding every graph toward one empirical graphlet mean instead of state-conditioned per-graph predictions.
 - Recomputing predictions separately for same-step candidates.
 - Comparing sampled candidate graphlets with different Monte Carlo subsets.

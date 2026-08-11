@@ -46,7 +46,12 @@ ATOM_LABELS = {1: "H", 6: "C", 7: "N", 8: "O", 9: "F"}
 def _load_graph_list(path: Path) -> list[nx.Graph]:
     value = load_pickle(path)
     if isinstance(value, dict):
-        for key in ("graphs", "generated_graphs", "hybrid_refined_graphs"):
+        for key in (
+            "graphs",
+            "generated_graphs",
+            "topology_refined_graphs",
+            "hybrid_refined_graphs",
+        ):
             if key in value:
                 value = value[key]
                 break
@@ -63,6 +68,8 @@ def _load_graph_list(path: Path) -> list[nx.Graph]:
 def _paper_mmd(
     reference: Sequence[nx.Graph],
     candidate: Sequence[nx.Graph],
+    *,
+    compute_orbit: bool = True,
 ) -> dict[str, float]:
     """Evaluate the three generic-graph statistics used in the manuscript."""
 
@@ -95,7 +102,9 @@ def _paper_mmd(
             clustering_reference,
             clustering_candidate,
         ),
-        "orbit_mmd": mmd_orbit(reference, candidate),
+        "orbit_mmd": (
+            mmd_orbit(reference, candidate) if compute_orbit else float("nan")
+        ),
     }
 
 
@@ -450,8 +459,9 @@ def _print_molecular_metrics(rows: Sequence[dict[str, Any]]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate saved generated graphs with degree, clustering, and "
-            "four-node ORCA orbit MMD, then plot representative samples."
+            "Evaluate saved generated graphs with degree and clustering MMD, "
+            "optionally add four-node ORCA orbit MMD, then plot "
+            "representative samples."
         )
     )
     parser.add_argument("--config", required=True)
@@ -474,18 +484,43 @@ def main() -> None:
 
     config = load_yaml(args.config)
     generated_dir = Path(args.generated_dir)
-    generated_path = Path(
-        args.generated_graphs or generated_dir / "hybrid_refined_graphs.pkl"
-    )
+    if args.generated_graphs:
+        generated_path = Path(args.generated_graphs)
+    else:
+        topology_path = generated_dir / "topology_refined_graphs.pkl"
+        generated_path = (
+            topology_path
+            if topology_path.is_file()
+            else generated_dir / "hybrid_refined_graphs.pkl"
+        )
     coarse_path = Path(args.coarse_graphs or generated_dir / "coarse_graphs.pkl")
     output_dir = ensure_dir(args.output_dir or generated_dir / "evaluation_report")
 
     evaluation_cfg = config.get("evaluation", {}) or {}
-    orca_exec = configure_orca_executable(
-        evaluation_cfg.get("orca_exec"),
-        required=True,
+    compute_orbit = bool(evaluation_cfg.get("compute_orbit", True))
+    graphlet_backend = str(
+        evaluation_cfg.get("graphlet_backend", "sampled")
+    ).lower()
+    exact_orca_backend = graphlet_backend in {
+        "orca",
+        "exact_orca",
+        "exact",
+    }
+    orca_required = compute_orbit and exact_orca_backend
+    orca_exec = (
+        configure_orca_executable(
+            evaluation_cfg.get("orca_exec"),
+            required=orca_required,
+        )
+        if compute_orbit
+        else None
     )
-    print(f"ORCA orbit evaluation enabled: {orca_exec}", flush=True)
+    if orca_exec:
+        print(f"ORCA orbit evaluation enabled: {orca_exec}", flush=True)
+    elif compute_orbit:
+        print("Python four-node orbit evaluation enabled.", flush=True)
+    else:
+        print("ORCA evaluation disabled by configuration.", flush=True)
 
     dataset_cfg = config.get("dataset", {}) or {}
     splits = load_dataset_splits(
@@ -501,38 +536,64 @@ def main() -> None:
     if not test_graphs:
         raise ValueError("The configured dataset has no test graphs.")
 
-    available = min(len(test_graphs), len(generated_graphs))
+    protocol_cfg = config.get("protocol", {}) or {}
+    reference_count = len(test_graphs)
+    configured_reference_cap = protocol_cfg.get("max_reference_graphs")
+    if configured_reference_cap is not None and int(configured_reference_cap) > 0:
+        reference_count = min(reference_count, int(configured_reference_cap))
+    generated_count = len(generated_graphs)
     if args.max_graphs is not None:
-        available = min(available, int(args.max_graphs))
-    if available <= 0:
-        raise ValueError("No common generated/test graph subset is available.")
-    reference = test_graphs[:available]
-    generated = generated_graphs[:available]
+        requested_cap = int(args.max_graphs)
+        if requested_cap <= 0:
+            raise ValueError("--max-graphs must be positive when provided.")
+        reference_count = min(reference_count, requested_cap)
+        generated_count = min(generated_count, requested_cap)
+    if reference_count <= 0:
+        raise ValueError("No held-out reference graphs are available.")
+    if generated_count <= 0:
+        raise ValueError("No generated graphs are available.")
+    reference = test_graphs[:reference_count]
+    generated = generated_graphs[:generated_count]
     molecular = is_molecular_evaluation(dataset_cfg, generated_graphs)
+    pipeline_stage = str(
+        (config.get("pipeline", {}) or {}).get("stage", "endpoint")
+    ).lower()
+    final_stage = "topology_final" if pipeline_stage == "topology" else "hybrid_final"
 
     rows: list[dict[str, Any]] = []
     if train_graphs:
         rows.append(
             {
                 "comparison": "train_to_test",
-                **_paper_mmd(reference, train_graphs[:available]),
+                **_paper_mmd(
+                    reference,
+                    train_graphs,
+                    compute_orbit=compute_orbit,
+                ),
             }
         )
     if coarse_graphs:
-        coarse_count = min(available, len(coarse_graphs))
+        coarse_count = len(coarse_graphs)
+        if args.max_graphs is not None:
+            coarse_count = min(coarse_count, int(args.max_graphs))
         rows.append(
             {
                 "comparison": "hh_source_to_test",
                 **_paper_mmd(
-                    reference[:coarse_count],
+                    reference,
                     coarse_graphs[:coarse_count],
+                    compute_orbit=compute_orbit,
                 ),
             }
         )
     rows.append(
         {
-            "comparison": "hybrid_final_to_test",
-            **_paper_mmd(reference, generated),
+            "comparison": f"{final_stage}_to_test",
+            **_paper_mmd(
+                reference,
+                generated,
+                compute_orbit=compute_orbit,
+            ),
         }
     )
 
@@ -568,9 +629,11 @@ def main() -> None:
             ("real_test", reference),
         ]
         if coarse_graphs:
-            coarse_count = min(available, len(coarse_graphs))
+            coarse_count = len(coarse_graphs)
+            if args.max_graphs is not None:
+                coarse_count = min(coarse_count, int(args.max_graphs))
             stage_graphs.append(("hh_source", coarse_graphs[:coarse_count]))
-        stage_graphs.append(("hybrid_final", generated))
+        stage_graphs.append((final_stage, generated))
         valid_smiles: list[str] = []
         for stage, graphs in stage_graphs:
             (
@@ -581,7 +644,7 @@ def main() -> None:
             ) = molecular_quality_metrics(graphs, train_graphs)
             molecular_stage_rows.append({"stage": stage, **stage_metrics})
             molecular_stage_errors[stage] = stage_errors
-            if stage == "hybrid_final":
+            if stage == final_stage:
                 molecular_metrics = stage_metrics
                 valid_smiles = stage_smiles
                 invalid_molecule_indices = stage_invalid_indices
@@ -595,8 +658,12 @@ def main() -> None:
         {
             "format": "graph_generation_evaluation_report_v3",
             "orca_exec": orca_exec,
+            "compute_orbit": compute_orbit,
+            "graphlet_backend": graphlet_backend,
             "generated_graphs": str(generated_path),
-            "num_graphs_evaluated": available,
+            "num_graphs_evaluated": len(generated),
+            "num_reference_graphs": len(reference),
+            "num_generated_graphs_evaluated": len(generated),
             "metrics": rows,
             "molecular_evaluation": molecular,
             "molecular_quality": molecular_metrics,

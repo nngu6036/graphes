@@ -61,8 +61,43 @@ def test_community_config_matches_the_declared_gdss_protocol() -> None:
 def test_generic_grapher_configs_exist_for_every_readme_dataset() -> None:
     config_dir = REPOSITORY_ROOT / "configs" / "experiments" / "grapher"
     expected = {
-        "ego_small_hybrid_endpoint_graphlet.yaml",
-        "community_small_hybrid_endpoint_graphlet.yaml",
-        "grid_hybrid_endpoint_graphlet.yaml",
+        "ego_small_topology_graphlet.yaml",
+        "community_small_topology_graphlet.yaml",
+        "grid_topology_graphlet.yaml",
     }
     assert expected <= {path.name for path in config_dir.glob("*.yaml")}
+
+
+def test_generic_grapher_configs_are_decoupled_topology_configs() -> None:
+    config_dir = REPOSITORY_ROOT / "configs" / "experiments" / "grapher"
+    for path in sorted(config_dir.glob("*_topology_graphlet.yaml")):
+        config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+        assert config["pipeline"]["stage"] == "topology"
+        assert "categorical_state" not in config
+        assert "endpoint_predictor" not in config
+        assert "endpoint_trajectory" not in config
+        assert "hybrid_refiner" not in config
+        assert set(config["topology_predictor"]["loss_weights"]) <= {
+            "graphlet_mean",
+            "graphlet_distribution",
+            "graphlet_mass",
+        }
+        assert config["topology_refiner"]["mode"] == "energy"
+        assert config["topology_refiner"]["refresh_prediction_every"] == 1
+        assert config["topology_refiner"]["preserve_connectivity"] is True
+        assert config["topology_trajectory"]["storage"] == "eager"
+        assert config["topology_trajectory"]["preserve_connectivity"] is True
+        assert config["topology_trajectory"]["ensure_connected_source"] is True
+        assert config["graphlet_prediction"]["graphlet_num_samples"] is None
+        assert (
+            config["graphlet_prediction"]["estimator"]
+            == "exact_connected_local_delta"
+        )
+        assert config["generation"]["degree_source"] == "learned"
+        assert config["generation"]["max_attempts_per_graph"] > 0
+        assert config["generation"]["write_legacy_hybrid_alias"] is False
+        assert config["degree_generator"]["type"] == "degree_histogram_vae"
+        assert config["degree_generator"]["postprocess_policy"] == "reject_only"
+        assert config["degree_generator"]["fallback"] == "error"
+        assert config["constructor"]["ensure_connected"] is True

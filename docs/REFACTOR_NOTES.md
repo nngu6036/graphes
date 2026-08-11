@@ -1,11 +1,22 @@
-# Refactor and roadmap completion notes
+# Refactor and decoupled topology notes
 
-The original archive retained only an ordinary-degree energy refiner and a
-topology-first molecular baseline. The current tree extends that compact route
-to the complete typed and learned-selector pipeline while preserving the
-existing module boundaries.
+The generic route now lives in `grapher.topology` and is statistically coupled
+through `p(A,Y)=p_top(A)p_attr(Y|A)` while being computationally staged. This
+revision implements the topology factor only. The previous endpoint-coupled
+implementation remains in `grapher.hybrid` for attributed experiments.
 
 ## Added implementation slices
+
+- topology-only batches with no terminal adjacency labels;
+- a graphlet predictor with no node/pair heads or no-edge category;
+- graphlet-only teachers whose candidate proposals cannot access target edges;
+- common-random-number graphlet sampling reused by teacher and supervision;
+- topology energy refinement with prediction refresh after each accepted swap,
+  visited-state rejection, and explicit `STOP`;
+- distinct topology checkpoint, configuration, report, and diagnostic schemas;
+- topology-aware research diagnostic aggregation without fake pair metrics;
+
+Retained attributed implementation slices include:
 
 - typed-signature representation, feasibility checks, graph-size-conditioned
   VAE, checkpointing, and evaluation;
@@ -25,7 +36,9 @@ existing module boundaries.
   `prepare_zinc_dataset.py`;
 - invariant priors: `train_degree_generator.py`,
   `evaluate_degree_generator.py`;
-- predictor/refiner: `train_hybrid_endpoint_grapher.py`,
+- generic topology: `train_topology_grapher.py`,
+  `run_topology_grapher.py`;
+- retained attributed endpoint path: `train_hybrid_endpoint_grapher.py`,
   `run_hybrid_endpoint_grapher.py`;
 - reports: `evaluate_graph_generation_report.py`,
   `evaluate_generated_molecules.py`;
@@ -38,6 +51,12 @@ existing module boundaries.
   `configs/datasets/community_small.yaml`.
 - Legacy `candidate_budget` remains readable, but current configurations use
   separate proposal and valid-candidate budgets.
+- Old generic endpoint checkpoints and selector checkpoints are incompatible
+  with the topology path and must be retrained. Their graphlet encoder and
+  teacher both depended on terminal pair information.
+- The initial topology release uses exact energy selection. A learned shortlist
+  is deferred because the old selector was trained with graphlet-gain features
+  that were unavailable at shortlist inference time.
 - Connected graphlet mass remains available as a named ablation/diagnostic and
   is disabled in main losses.
 - Unspecified research choices and unavailable external adapters are explicit

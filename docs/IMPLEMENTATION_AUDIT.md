@@ -5,11 +5,15 @@ This audit records the implementation state after completing the roadmap in
 
 ## Verdict
 
-The generic and attributed molecular pipelines are implemented end to end:
-invariant sampling, invariant-matched construction, hierarchical summary
-prediction, teacher supervision, learned selection with `STOP`, constrained
-rewiring, and evaluation. The implementation fails explicitly at boundaries
-that require an unspecified research choice or unavailable external system.
+The generic pipeline is now decoupled end to end: ordinary DH-VAE sampling,
+connected Havel-Hakimi construction, topology-only graphlet prediction, a
+target-adjacency-free graphlet teacher, and graphlet-energy rewiring with
+`STOP`. The existing attributed molecular endpoint pipeline remains isolated
+and operational pending the attribute-only CatFlow/DeFoG migration.
+
+Topology graphlets use a portable fixed canonicalizer, exact connected-subset
+enumeration, and exact local count deltas for each proposed switch. This avoids
+empty sparse-Grid targets and environment-dependent checkpoint coordinates.
 
 ## Requirement status
 
@@ -19,28 +23,37 @@ that require an unspecified research choice or unavailable external system.
 | Atom-typed-degree invariant prior | Implemented | Training-only signature vocabulary, graph-size conditioning, incidence/valence checks |
 | Connected ordinary constructor | Implemented | Havel-Hakimi plus repair and postcondition validation |
 | Exact typed constructor | Implemented | Simultaneous residual-demand search, compatibility/connectivity pruning, backtrack/restart diagnostics |
-| Explicit invariant and size conditioning | Implemented | Predictor batches carry ordinary or typed invariants, graph size, and normalized `t/T` |
-| Hierarchical prediction | Implemented | Pair head consumes fixed/predicted node categories; graphlet head consumes soft pair predictions |
+| Generic invariant and size conditioning | Implemented | Topology batches carry current adjacency, indexed ordinary degrees, graph size, and `t/T` |
+| Decoupled generic prediction | Implemented | Graphlet heads consume topology encoder state directly; no node/pair head or no-edge class exists |
+| Generic graphlet teacher | Implemented | Random valid proposals and cached graphlet targets; no terminal adjacency access |
+| Attributed hierarchical prediction | Retained | Legacy pair head consumes fixed/predicted node categories; attributed graphlet head consumes soft pair predictions |
 | Attributed graphlets | Implemented | Joint topology/node/edge canonicalization, train-only vocabulary, overflow coordinate |
-| Invariant-matched teacher | Implemented | Randomized sources, shared validators, pair-plus-graphlet energy, hard/soft targets, cached `STOP` |
-| Memory-bounded trajectories | Implemented | Iterable streaming dataset for full molecular splits |
-| Selector modes | Implemented | Energy-only, policy-only, hybrid shortlist, positive-energy gate, learned `STOP` |
+| Attributed invariant-matched teacher | Retained | Randomized sources, shared validators, pair-plus-graphlet energy, hard/soft targets, cached `STOP` |
+| Generic memory-bounded trajectories | Implemented | Iterable streaming dataset processes one target graph at a time |
+| Attributed memory-bounded trajectories | Retained | Iterable streaming dataset for full molecular splits |
+| Generic selection | Implemented | Exact graphlet-energy scoring, positive-improvement gate, and explicit `STOP` |
+| Attributed selector modes | Retained | Energy-only, policy-only, hybrid shortlist, positive-energy gate, learned `STOP` |
 | Candidate accounting | Implemented | Separate proposal and valid-candidate budgets; domain checks precede graphlet scoring |
-| Typed generation | Implemented | Learned typed prior and typed constructor are wired into QM9/ZINC generation |
+| Typed generation | Retained | Learned typed prior and typed constructor remain wired into the legacy QM9/ZINC route |
 | Diagnostics and studies | Implemented | Stage decomposition, constructor bias, consistency, ablations, Pareto, three-seed aggregation |
 
 ## Conformance points
 
+- Generic topology checkpoints cannot load endpoint checkpoints; retraining is
+  required because the old graphlet encoder consumed soft pair predictions.
 - Generic swaps preserve indexed ordinary degree; molecular swaps preserve
   indexed per-bond-type degrees and weighted valence.
 - Candidate graphs are simple and undirected, and optionally connected.
 - Missing configured node/edge categorical attributes are errors.
-- The main graphlet objective excludes connected-mass prediction; that quantity
-  is retained only as an external diagnostic/explicit ablation.
-- Energy-only mode scores every valid candidate. Policy shortlisting occurs
-  only in hybrid mode.
-- Teacher time is the actual action step divided by the configured horizon.
-  An unreached clean target is never appended as a fake trajectory state.
+- The main generic topology graphlet objective excludes connected-mass
+  prediction; that quantity is retained only as an external diagnostic or
+  explicit ablation.
+- Generic energy mode scores every retained valid candidate against one frozen
+  graphlet prediction. A learned generic shortlist is intentionally deferred.
+- Teacher and generation time both use the actual action step divided by the
+  configured horizon.
+- One cached exact graphlet target is reused across all paths/states from one
+  target, including teacher energy computation.
 - Topology-only and attributed evaluation paths remain distinct.
 
 ## Explicitly unsupported boundaries
@@ -69,6 +82,6 @@ python -m compileall -q src scripts tests
 ```
 
 The suite includes constructor property tests, typed-invariant trajectory
-checks, attributed canonicalization, singleton handling, equivariance,
-selector/STOP behavior, evaluation metrics, and safe research-protocol
-execution.
+checks, attributed canonicalization, singleton handling, generic topology
+equivariance and `STOP`, retained endpoint selector behavior, evaluation
+metrics, and safe research-protocol execution.

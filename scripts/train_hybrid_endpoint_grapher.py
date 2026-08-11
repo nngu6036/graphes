@@ -243,6 +243,13 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_yaml(args.config)
+    if str((config.get("pipeline", {}) or {}).get("stage", "endpoint")).lower() == (
+        "topology"
+    ):
+        raise ValueError(
+            "Topology configs must be trained with "
+            "scripts/train_topology_grapher.py."
+        )
     if config.get("summary_generator") and not bool(
         config.get("legacy_summary_baseline", False)
     ):

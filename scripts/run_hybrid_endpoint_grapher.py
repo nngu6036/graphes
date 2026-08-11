@@ -61,6 +61,13 @@ def main() -> None:
     run_started = time.perf_counter()
 
     config = load_yaml(args.config)
+    if str((config.get("pipeline", {}) or {}).get("stage", "endpoint")).lower() == (
+        "topology"
+    ):
+        raise ValueError(
+            "Topology configs must be generated with "
+            "scripts/run_topology_grapher.py."
+        )
     seed = int(args.seed if args.seed is not None else config.get("seed", 0))
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)

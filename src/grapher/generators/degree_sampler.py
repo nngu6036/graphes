@@ -25,6 +25,7 @@ class DegreeVAESampler:
         parity_conditioned: bool = True,
         max_parity_resample: int = 32,
         fallback: str = "empirical_nearest_n",
+        postprocess_policy: str = "repair",
     ):
         self.checkpoint_path = str(checkpoint_path)
         self.device = resolve_torch_device(device)
@@ -35,6 +36,7 @@ class DegreeVAESampler:
         self.parity_conditioned = bool(parity_conditioned)
         self.max_parity_resample = int(max_parity_resample)
         self.fallback = str(fallback)
+        self.postprocess_policy = str(postprocess_policy)
         self._model = None
         self._vectorizer = None
         self._load()
@@ -63,6 +65,7 @@ class DegreeVAESampler:
             parity_conditioned=bool(data.get("parity_conditioned", True)),
             max_parity_resample=int(data.get("max_parity_resample", 32)),
             fallback=str(data.get("fallback", "empirical_nearest_n")),
+            postprocess_policy=str(data.get("postprocess_policy", "repair")),
         )
 
     def sample(self, rng: np.random.Generator | None = None) -> dict[str, Any]:
@@ -90,6 +93,8 @@ class DegreeVAESampler:
             parity_conditioned=self.parity_conditioned,
             max_parity_resample=self.max_parity_resample,
             fallback=self.fallback,
+            postprocess_policy=self.postprocess_policy,
+            include_diagnostics=True,
         )[0]
 
 

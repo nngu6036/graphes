@@ -196,6 +196,60 @@ def test_pipeline_diagnostics_aggregate_counts_and_refuse_fallback() -> None:
         aggregate_pipeline_diagnostics([bad])
 
 
+def test_topology_pipeline_diagnostics_do_not_require_pair_metrics() -> None:
+    record = {
+        "pipeline_mode": "topology",
+        "graphlet_error": 0.2,
+        "invariant_feasible": True,
+        "constructor_success": True,
+        "candidate_proposals": 10,
+        "candidate_passes": 5,
+        "candidate_pass_rate": 0.5,
+        "accepted_swaps": 2,
+        "proposals_per_accepted_swap": 5.0,
+        "stopped": 1,
+        "stop_opportunities": 1,
+        "stop_rate": 1.0,
+        "rejection_reasons": {"connectivity": 5},
+        "runtime_seconds": 3.0,
+        "generation_attempts": 1,
+        "generation_successes": 1,
+        "end_to_end_yield": 1.0,
+        "fallback_used": False,
+    }
+
+    result = aggregate_pipeline_diagnostics([record])
+
+    assert result["pipeline_mode"] == "topology"
+    assert "predictor_nll" not in result["metrics"]
+    assert "predictor_macro_f1" not in result["metrics"]
+    assert result["metrics"]["graphlet_error"]["mean"] == pytest.approx(0.2)
+
+
+def test_zero_accepted_swaps_leave_proposal_ratio_undefined() -> None:
+    record = {
+        "pipeline_mode": "topology",
+        "graphlet_error": 0.2,
+        "invariant_feasible": True,
+        "constructor_success": True,
+        "candidate_proposals": 10,
+        "candidate_passes": 5,
+        "accepted_swaps": 0,
+        "stopped": 1,
+        "stop_opportunities": 1,
+        "rejection_reasons": {"no_gain": 5},
+        "runtime_seconds": 3.0,
+        "generation_attempts": 2,
+        "generation_successes": 1,
+        "fallback_used": False,
+    }
+
+    result = aggregate_pipeline_diagnostics([record])
+
+    assert result["metrics"]["proposals_per_accepted_swap"] is None
+    assert result["metrics"]["end_to_end_yield"] == pytest.approx(0.5)
+
+
 def test_paired_ablation_validates_sources_and_reports_improvement() -> None:
     control = [
         {

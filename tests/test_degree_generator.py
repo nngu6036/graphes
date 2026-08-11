@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import networkx as nx
 import numpy as np
+import pytest
 import torch
 
 from grapher.evaluation.degree_sequences import evaluate_degree_sequence_sets
@@ -153,6 +154,27 @@ def test_parity_conditioned_sampling_produces_even_raw_sequence():
     diagnostic = summaries[0]["sampling_diagnostics"]
     assert diagnostic["raw_even_degree_sum"]
     assert diagnostic["parity_draws"] >= 1
+
+
+def test_reject_only_policy_does_not_silently_repair_invalid_draw():
+    vectorizer = DegreeVectorizer.fit(
+        [nx.cycle_graph(4)],
+        require_connected=True,
+    )
+    outputs = {
+        "num_nodes_logits": torch.tensor([[10.0]]),
+        # Four degree-one nodes are graphical but cannot form a connected graph.
+        "degree_logits": torch.tensor([[-10.0, 10.0, -10.0]]),
+        "conditioned_num_nodes": torch.tensor([4]),
+    }
+    with pytest.raises(RuntimeError, match="exhausted its samples"):
+        vectorizer.outputs_to_summaries(
+            outputs,
+            rng=np.random.default_rng(0),
+            deterministic=True,
+            fallback="error",
+            postprocess_policy="reject_only",
+        )
 
 
 def test_conditional_gmm_prior_shapes_and_standard_normal_override():

@@ -1059,6 +1059,18 @@ _PIPELINE_FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "fallback_used": ("fallback_used", "silent_fallback"),
 }
 
+_TOPOLOGY_PIPELINE_FIELDS = frozenset(
+    {
+        "graphlet_error",
+        "invariant_feasible",
+        "constructor_success",
+        "accepted_swaps",
+        "runtime_seconds",
+        "fallback_used",
+    }
+)
+_ENDPOINT_PIPELINE_FIELDS = frozenset(_PIPELINE_FIELD_GROUPS)
+
 
 def _first_present(record: Mapping[str, Any], names: Sequence[str]) -> Any | None:
     for name in names:
@@ -1088,6 +1100,20 @@ def aggregate_pipeline_diagnostics(
 
     if not records:
         raise ValueError("At least one pipeline diagnostic record is required.")
+    pipeline_modes = {
+        str(record.get("pipeline_mode", "endpoint")).lower() for record in records
+    }
+    if len(pipeline_modes) != 1:
+        raise ValueError(
+            "Pipeline diagnostics cannot mix topology and endpoint records."
+        )
+    pipeline_mode = next(iter(pipeline_modes))
+    if pipeline_mode == "topology":
+        required_fields = _TOPOLOGY_PIPELINE_FIELDS
+    elif pipeline_mode in {"endpoint", "attributed", "hybrid"}:
+        required_fields = _ENDPOINT_PIPELINE_FIELDS
+    else:
+        raise ValueError(f"Unknown pipeline_mode: {pipeline_mode!r}.")
     missing: set[str] = set()
     collected: dict[str, list[float]] = {key: [] for key in _PIPELINE_FIELD_GROUPS}
     rejection_reasons: Counter[str] = Counter()
@@ -1098,7 +1124,8 @@ def aggregate_pipeline_diagnostics(
         for canonical, aliases in _PIPELINE_FIELD_GROUPS.items():
             value = _first_present(record, aliases)
             if value is None:
-                missing.add(canonical)
+                if canonical in required_fields:
+                    missing.add(canonical)
                 continue
             numeric = _finite_float(value, name=f"record[{index}].{canonical}")
             collected[canonical].append(numeric)
@@ -1135,7 +1162,7 @@ def aggregate_pipeline_diagnostics(
                 direct_rates[canonical].append(
                     _finite_float(value, name=f"record[{index}].{canonical}")
                 )
-        if not direct_rates[canonical]:
+        if len(direct_rates[canonical]) < len(records):
             derivable = {
                 "candidate_pass_rate": count_fields_seen["candidate_proposals"]
                 == len(records)
@@ -1143,8 +1170,7 @@ def aggregate_pipeline_diagnostics(
                 and totals["candidate_proposals"] > 0,
                 "proposals_per_accepted_swap": count_fields_seen["candidate_proposals"]
                 == len(records)
-                and count_fields_seen["accepted_swaps"] == len(records)
-                and totals["accepted_swaps"] > 0,
+                and count_fields_seen["accepted_swaps"] == len(records),
                 "stop_rate": count_fields_seen["stopped"] == len(records)
                 and count_fields_seen["stop_opportunities"] == len(records)
                 and totals["stop_opportunities"] > 0,
@@ -1229,6 +1255,7 @@ def aggregate_pipeline_diagnostics(
         }
     )
     return {
+        "pipeline_mode": pipeline_mode,
         "num_records": len(records),
         "metrics": metrics,
         "totals": {key: float(value) for key, value in sorted(totals.items())},

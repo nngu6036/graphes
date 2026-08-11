@@ -219,9 +219,18 @@ class PythonCanonicalizer:
         return best.decode("ascii")
 
 
-def default_topology_canonicalizer() -> NautyCanonicalizer | PythonCanonicalizer:
-    if NAUTY_EXEC:
-        return NautyCanonicalizer(NAUTY_EXEC)
+TOPOLOGY_CANONICALIZER_CONVENTION = "python_lexicographic_graph6_v1"
+
+
+def default_topology_canonicalizer() -> PythonCanonicalizer:
+    """Return the portable topology canonicalizer used by checkpoints.
+
+    Topology graphlets are at most seven nodes, so the cached exact Python
+    implementation is practical and, unlike environment-dependent dispatch to
+    ``labelg``, gives training and generation identical coordinate keys.
+    Nauty remains available explicitly for attributed workflows.
+    """
+
     return PythonCanonicalizer()
 
 
@@ -395,7 +404,7 @@ def _iter_k_induced_subgraphs(
     if k > G.number_of_nodes():
         return
 
-    nodes = list(G.nodes())
+    nodes = sorted(G.nodes(), key=lambda node: (type(node).__name__, repr(node)))
 
     for subset in _sample_node_subsets(
         nodes,
@@ -411,6 +420,47 @@ def _iter_k_induced_subgraphs(
         yield H
 
 
+def _iter_connected_k_induced_subgraphs_exact(
+    G: nx.Graph,
+    k: int,
+) -> Iterator[nx.Graph]:
+    """Enumerate connected k-sets by local frontier expansion."""
+
+    _validate_simple_undirected(G)
+    if k <= 0:
+        raise ValueError("k must be positive.")
+    if k > G.number_of_nodes():
+        return
+    nodes = sorted(G.nodes(), key=lambda node: (type(node).__name__, repr(node)))
+    connected_sets: set[frozenset[Any]] = {
+        frozenset((node,)) for node in nodes
+    }
+    for _size in range(2, int(k) + 1):
+        expanded: set[frozenset[Any]] = set()
+        for subset in connected_sets:
+            frontier: set[Any] = set()
+            for node in subset:
+                frontier.update(G.neighbors(node))
+            frontier.difference_update(subset)
+            for node in frontier:
+                expanded.add(subset | {node})
+        connected_sets = expanded
+        if not connected_sets:
+            return
+    ordered_sets = sorted(
+        connected_sets,
+        key=lambda subset: tuple(
+            (type(node).__name__, repr(node))
+            for node in sorted(
+                subset,
+                key=lambda value: (type(value).__name__, repr(value)),
+            )
+        ),
+    )
+    for subset in ordered_sets:
+        yield G.subgraph(subset)
+
+
 def graphlet_count_dict(
     G: nx.Graph,
     k: int,
@@ -418,7 +468,7 @@ def graphlet_count_dict(
     connected_only: bool = True,
     num_samples: int | None = None,
     rng: np.random.Generator | None = None,
-    canonicalizer: NautyCanonicalizer | None = None,
+    canonicalizer: NautyCanonicalizer | PythonCanonicalizer | None = None,
     batch_size: int = 4096,
 ) -> dict[str, int]:
     """
@@ -443,6 +493,23 @@ def graphlet_count_dict(
     return {str(key): int(value) for key, value in counts.items()}
 
 
+def connected_graphlet_count_dict_exact(
+    G: nx.Graph,
+    k: int,
+    *,
+    canonicalizer: NautyCanonicalizer | PythonCanonicalizer | None = None,
+    batch_size: int = 4096,
+) -> dict[str, int]:
+    """Exactly count connected induced topology graphlets of size ``k``."""
+
+    canonicalizer = canonicalizer or default_topology_canonicalizer()
+    counts: Counter[str] = Counter()
+    subgraphs = _iter_connected_k_induced_subgraphs_exact(G, int(k))
+    for batch in _batched(subgraphs, batch_size=batch_size):
+        counts.update(canonicalizer.canonical_graph6_batch(batch))
+    return {str(key): int(value) for key, value in counts.items()}
+
+
 # ============================================================
 # Frequency / history utilities
 # ============================================================
@@ -462,7 +529,7 @@ def graphlet_frequency_dict(
     connected_only: bool = True,
     num_samples: int | None = None,
     rng: np.random.Generator | None = None,
-    canonicalizer: NautyCanonicalizer | None = None,
+    canonicalizer: NautyCanonicalizer | PythonCanonicalizer | None = None,
     batch_size: int = 4096,
 ) -> dict[str, float]:
     return normalize_count_dict(
@@ -486,7 +553,7 @@ def graphlet_history(
     connected_only: bool = True,
     num_samples: int | None = None,
     rng: np.random.Generator | None = None,
-    canonicalizer: NautyCanonicalizer | None = None,
+    canonicalizer: NautyCanonicalizer | PythonCanonicalizer | None = None,
     batch_size: int = 4096,
 ) -> dict[str, dict[str, float]]:
     """

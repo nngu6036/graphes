@@ -315,8 +315,14 @@ class DegreeVectorizer:
         fallback: str = "empirical_nearest_n",
         parity_conditioned: bool = True,
         max_parity_resample: int = 32,
+        postprocess_policy: str = "repair",
         include_diagnostics: bool = False,
     ) -> list[dict[str, Any]]:
+        policy = str(postprocess_policy).strip().lower()
+        if policy not in {"repair", "reject_only"}:
+            raise ValueError(
+                "postprocess_policy must be either 'repair' or 'reject_only'."
+            )
         generator = rng if rng is not None else np.random.default_rng(0)
         arrays: dict[str, np.ndarray] = {}
         for key, value in outputs.items():
@@ -392,7 +398,7 @@ class DegreeVectorizer:
             # true rejection sampling and hid the native decoder quality.
             if degree_sequence is None:
                 attempts_used = attempt_limit
-                if last_raw_sequence is not None:
+                if policy == "repair" and last_raw_sequence is not None:
                     repaired = repair_degree_sequence(
                         last_raw_sequence,
                         n=int(n),
@@ -410,8 +416,8 @@ class DegreeVectorizer:
                 if degree_sequence is None:
                     if fallback == "error":
                         raise RuntimeError(
-                            "Degree generator failed to sample or repair a "
-                            "graphical degree sequence."
+                            "Degree generator exhausted its samples without a "
+                            "valid graphical, connected-feasible degree sequence."
                         )
                     degree_sequence = self.empirical_nearest_degree_sequence(
                         n, generator
@@ -477,6 +483,7 @@ class DegreeVectorizer:
                     "accepted_without_postprocessing": bool(
                         accepted_without_postprocessing
                     ),
+                    "postprocess_policy": policy,
                     "first_raw_degree_sequence": (
                         [int(d) for d in raw_seq] if raw_seq is not None else []
                     ),
