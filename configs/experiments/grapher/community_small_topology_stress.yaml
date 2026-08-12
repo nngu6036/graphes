@@ -64,13 +64,11 @@ inference_budget:
         steps: 80
         proposal_budget: 128
         valid_candidate_budget: 32
-
     - name: width256_t80
       refiner:
         steps: 80
         proposal_budget: 256
         valid_candidate_budget: 64
-
     # Step/time-conditioning sweep at fixed B=512, K=128.
     - name: width512_t24
       refiner:
