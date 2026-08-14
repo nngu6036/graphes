@@ -8,6 +8,10 @@ from pathlib import Path
 import networkx as nx
 
 from grapher.data.io import save_dataset_splits
+from grapher.data.preparation_reporting import (
+    common_preparation_report,
+    print_preparation_summary,
+)
 from grapher.rewiring_mlp.molecular.constants import QM9_ATOM_TYPES, QM9_BOND_TYPES
 from grapher.rewiring_mlp.molecular.graph_io import (
     graphs_from_smiles,
@@ -425,11 +429,29 @@ def main() -> None:
 
     save_dataset_splits(args.topology_name, topology_splits, config_top, root=root)
     save_dataset_splits(args.attributed_name, attributed_splits, config_attr, root=root)
+    input_records = (
+        len(smiles)
+        if smiles is not None
+        else (
+            int(num_input_records)
+            if num_input_records is not None
+            else len(graphs) + sum(int(value) for value in errors.values())
+        )
+    )
+    common_report = common_preparation_report(
+        input_records=input_records,
+        processed_records=input_records,
+        accepted_graphs=len(graphs),
+        rejection_reasons=errors,
+    )
     prep_report = {
+        "status": "pass",
+        "dataset": "QM9",
         "source_type": source,
         "source": source_path,
         "num_input_smiles": len(smiles) if smiles is not None else None,
-        "num_input_records": num_input_records,
+        **common_report,
+        # Backward-compatible alias retained for existing consumers.
         "num_valid_graphs": len(graphs),
         "errors": errors,
         "topology_dataset": args.topology_name,
@@ -445,22 +467,26 @@ def main() -> None:
             prep_report,
             ensure_dir(root / dataset_name) / "qm9_prep_report.json",
         )
-    print("Prepared QM9 datasets")
-    print(f"  source: {source_path}")
-    if smiles is not None:
-        print(f"  valid molecules: {len(graphs)} / {len(smiles)}")
-    elif num_input_records is not None:
-        print(f"  valid molecules: {len(graphs)} / {num_input_records}")
-    else:
-        print(f"  valid molecules: {len(graphs)}")
-    print(f"  errors: {errors}")
-    print(
-        f"  topology only:         {root / args.topology_name} "
-        "(node attributes: none; edge attributes: none)"
-    )
-    print(
-        f"  topology + attributes: {root / args.attributed_name} "
-        "(node: atomic_num, atom_type; edge: bond_type, bond_order)"
+    print_preparation_summary(
+        dataset="QM9",
+        source=source_path,
+        input_records=input_records,
+        processed_records=input_records,
+        accepted_graphs=len(graphs),
+        rejection_reasons=errors,
+        split_sizes=prep_report["split_sizes"],
+        outputs=(
+            (
+                "topology only",
+                root / args.topology_name,
+                "node attributes: none; edge attributes: none",
+            ),
+            (
+                "topology + attributes",
+                root / args.attributed_name,
+                "node: atomic_num, atom_type; edge: bond_type, bond_order",
+            ),
+        ),
     )
 
 

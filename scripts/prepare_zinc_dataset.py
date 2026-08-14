@@ -16,6 +16,10 @@ import networkx as nx
 import numpy as np
 
 from grapher.data.io import save_dataset_splits
+from grapher.data.preparation_reporting import (
+    common_preparation_report,
+    print_preparation_summary,
+)
 from grapher.rewiring_mlp.molecular.graph_io import require_rdkit
 from grapher.utils.io import ensure_dir, load_yaml, save_json
 
@@ -542,6 +546,13 @@ def prepare_zinc_dataset(
         root=output_root,
     )
 
+    rejection_reasons = dict(sorted(rejected.items()))
+    common_report = common_preparation_report(
+        input_records=len(smiles_records),
+        processed_records=attempted,
+        accepted_graphs=len(selected),
+        rejection_reasons=rejection_reasons,
+    )
     report = {
         "status": "pass",
         "dataset": protocol.dataset_name,
@@ -550,15 +561,15 @@ def prepare_zinc_dataset(
         "smiles_column": smiles_column,
         "selection": protocol.selection,
         "selection_seed": protocol.seed,
-        "num_input_records": len(smiles_records),
+        **common_report,
+        # Backward-compatible aliases retained for existing consumers.
         "num_attempted_records": attempted,
-        "num_unexamined_records": len(smiles_records) - attempted,
         "num_selected_graphs": len(selected),
         "selected_records_sha256": _selected_records_sha256(selected),
         "split_sizes": {name: len(splits[name]) for name in SPLIT_NAMES},
         "filter_diagnostics": {
             "num_rejected": int(sum(rejected.values())),
-            "rejection_reasons": dict(sorted(rejected.items())),
+            "rejection_reasons": rejection_reasons,
         },
         "graph_statistics": _graph_statistics(selected),
         "schema": {
@@ -622,11 +633,23 @@ def main(argv: Sequence[str] | None = None) -> None:
         root=args.root,
         smiles_column=args.smiles_column,
     )
-    print(f"Prepared ZINC dataset: {report['dataset']}")
-    print(f"Source records: {report['num_input_records']}")
-    print(f"Selected graphs: {report['num_selected_graphs']}")
-    print(f"Splits: {report['split_sizes']}")
-    print(f"Rejected: {report['filter_diagnostics']}")
+    output_root = Path(args.root or config.get("root", "outputs/datasets"))
+    print_preparation_summary(
+        dataset="ZINC250k-GraphER12k",
+        source=report["source"],
+        input_records=report["num_input_records"],
+        processed_records=report["num_processed_records"],
+        accepted_graphs=report["num_accepted_graphs"],
+        rejection_reasons=report["rejection_reasons"],
+        split_sizes=report["split_sizes"],
+        outputs=(
+            (
+                "topology + attributes",
+                output_root / report["dataset"],
+                "node: atomic_num, atom_type; edge: bond_type, bond_order",
+            ),
+        ),
+    )
 
 
 if __name__ == "__main__":
