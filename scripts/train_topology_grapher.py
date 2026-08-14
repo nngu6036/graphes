@@ -12,13 +12,13 @@ from torch.utils.data import DataLoader
 
 from grapher.data.io import load_dataset_splits
 from grapher.properties.summary import SummaryConfig
-from grapher.topology.basis import TopologyGraphletBasis
-from grapher.topology.data import (
+from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
+from grapher.rewiring_mlp.generic.data import (
     TopologyTrajectoryIterableDataset,
     build_topology_examples,
     collate_topology_examples,
 )
-from grapher.topology.model import (
+from grapher.rewiring_mlp.generic.model import (
     TopologyGraphletPredictor,
     save_topology_checkpoint,
 )

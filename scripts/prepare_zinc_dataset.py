@@ -16,7 +16,7 @@ import networkx as nx
 import numpy as np
 
 from grapher.data.io import save_dataset_splits
-from grapher.molecular.graph_io import require_rdkit
+from grapher.rewiring_mlp.molecular.graph_io import require_rdkit
 from grapher.utils.io import ensure_dir, load_yaml, save_json
 
 SPLIT_NAMES = ("train", "val", "test")

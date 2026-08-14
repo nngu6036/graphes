@@ -4,7 +4,7 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from grapher.evaluation.studies import (
+from grapher.rewiring_mlp.evaluation.studies import (
     EXACT_REACHABILITY_MAX_NODES,
     aggregate_pipeline_diagnostics,
     aggregate_three_seed_results,

@@ -2,7 +2,7 @@
 """Run DeFoG sampling in its own interpreter and emit a neutral NPZ export.
 
 This script intentionally imports no GraphER modules.  It is launched by
-``grapher.generators.defog`` with a child ``PYTHONPATH`` containing only the
+``grapher.models.defog_backend`` with a child ``PYTHONPATH`` containing only the
 DeFoG source roots, so DeFoG's legacy top-level imports cannot collide with
 GraphER packages.
 """

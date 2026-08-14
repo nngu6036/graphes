@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from grapher.data.io import load_dataset_splits
-from grapher.hybrid.data import (
+from grapher.rewiring_mlp.attributed.data import (
     EndpointTrajectoryIterableDataset,
     GraphCategoryVocabulary,
     GraphletBasis,
@@ -20,16 +20,16 @@ from grapher.hybrid.data import (
     build_endpoint_examples,
     collate_endpoint_examples,
 )
-from grapher.hybrid.model import (
+from grapher.rewiring_mlp.attributed.model import (
     HybridEndpointPredictor,
     save_hybrid_endpoint_checkpoint,
 )
-from grapher.hybrid.refiner import (
+from grapher.rewiring_mlp.attributed.refiner import (
     HybridRefinerConfig,
     predict_hybrid_target,
     score_hybrid_candidates,
 )
-from grapher.hybrid.selector import (
+from grapher.rewiring_mlp.attributed.selector import (
     CANDIDATE_FEATURE_NAMES,
     GRAPH_CONTEXT_FEATURE_NAMES,
     LearnedCandidateSelector,

@@ -22,7 +22,7 @@ from typing import Any
 import numpy as np
 import yaml
 
-from grapher.evaluation.studies import (
+from grapher.rewiring_mlp.evaluation.studies import (
     DEFAULT_EVALUATION_SEEDS,
     aggregate_pipeline_diagnostics,
     aggregate_three_seed_results,

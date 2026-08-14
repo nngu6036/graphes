@@ -1,9 +1,9 @@
 # Refactor and decoupled topology notes
 
-The generic route now lives in `grapher.topology` and is statistically coupled
+The generic route now lives in `grapher.rewiring_mlp.generic` and is statistically coupled
 through `p(A,Y)=p_top(A)p_attr(Y|A)` while being computationally staged. This
 revision implements the topology factor only. The previous endpoint-coupled
-implementation remains in `grapher.hybrid` for attributed experiments.
+implementation remains in `grapher.rewiring_mlp.attributed` for attributed experiments.
 
 ## Added implementation slices
 

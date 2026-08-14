@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 import torch
 
-from grapher.evaluation.degree_sequences import evaluate_degree_sequence_sets
-from grapher.generators.degree_vae import (
+from grapher.rewiring_mlp.evaluation.degree_sequences import evaluate_degree_sequence_sets
+from grapher.models.dhvae_hh.degree_vae import (
     DegreeVectorizer,
     build_degree_vae,
     connected_feasible_degree_sequence,

@@ -4,7 +4,7 @@ import networkx as nx
 import pytest
 import torch
 
-from grapher.hybrid.selector import (
+from grapher.rewiring_mlp.attributed.selector import (
     CANDIDATE_FEATURE_NAMES,
     GRAPH_CONTEXT_FEATURE_NAMES,
     CandidateDiagnostics,
@@ -19,7 +19,7 @@ from grapher.hybrid.selector import (
     select_with_selector,
     selector_distribution_loss,
 )
-from grapher.refinement.rewiring import enumerate_valid_double_edge_swaps
+from grapher.rewiring_mlp.core.rewiring import enumerate_valid_double_edge_swaps
 
 
 def _graph_and_actions():

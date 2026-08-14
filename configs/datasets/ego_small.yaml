@@ -1,29 +1,55 @@
-# Ego-small benchmark used by GDSS and subsequent graph-generation work.
+# Research protocol for Ego-small, extracted from the Citeseer citation graph.
+format_version: 1
 name: ego_small
-type: ego
+benchmark_id: ego_small
 benchmark: ego_small
+kind: extracted_generic
+type: ego
 
-# Keep dataset preparation fixed across model-training seeds.
+provenance:
+  protocol_id: grapher-ego-small-v1
+  relation_to_reference: benchmark_compatible_reimplementation
+  citation_key: jo2022gdss
+  paper_url: https://proceedings.mlr.press/v162/jo22a.html
+  reference_repository: https://github.com/harryjo97/GDSS
+  reference_revision: 24cc490e0c5b39cbd265fda33ab2bc8b528d4454
+  reference_generator: data_generators.py
+  source_dataset: Citeseer
+  source_repository: https://github.com/kimiyoung/planetoid
+  source_revision: af6abf468a772cc055bec88c52e4d6f51b7c37e3
+  source_file_sha256: d79a4ef9d3e7169aee8946145f6b7306e35bc79bffad26346cfb94e10e9912a7
+  notes:
+    - The project uses a declared 70/10/20 seeded split of the extracted
+      graphs; it does not claim to preserve a pre-existing GDSS test subset.
+
+# With selection='first', this seed controls the split permutation and any
+# stochastic fallback, not the selected ego centers.
 seed: 0
 num_graphs: 200
 
-# The original benchmark uses an 80/20 train/test split. We reserve 20 graphs
-# from the training side for validation while retaining 40 held-out test graphs.
 split:
-  train: 0.7
-  val: 0.1
-  test: 0.2
+  train: 0.70
+  val: 0.10
+  test: 0.20
+
+split_protocol:
+  strategy: seeded_random_permutation
+  seed_source: top_level_seed
+  expected_counts:
+    train: 140
+    val: 20
+    test: 40
 
 ego:
   source_model: citeseer
   source_root: outputs/datasets/planetoid
-  source_graph_url: https://github.com/kimiyoung/planetoid/raw/master/data/ind.citeseer.graph
+  source_graph_url: https://raw.githubusercontent.com/kimiyoung/planetoid/af6abf468a772cc055bec88c52e4d6f51b7c37e3/data/ind.citeseer.graph
   largest_connected_component: true
   radius: 1
   min_nodes: 4
   max_nodes: 18
-  # The official generator iterates over the relabelled Citeseer component and
-  # retains the first 200 qualifying ego graphs.
+  # Iterate over the relabelled largest connected component and retain the
+  # first 200 centers whose ego graphs satisfy the node-count bounds.
   selection: first
   sample_with_replacement: false
 
@@ -31,3 +57,22 @@ filters:
   require_connected: true
   reject_zero_degree: true
   max_attempts_per_graph: 300
+
+graph_schema:
+  directed: false
+  multigraph: false
+  self_loops: false
+  modeled_node_attributes: []
+  modeled_edge_attributes: []
+
+# These are reporting requirements. Source-hash enforcement should be added to
+# the preparation script before the final experimental run.
+audit:
+  expected_split_counts: true
+  verify_simple_graphs: true
+  verify_connectivity: true
+  verify_no_isolates: true
+  verify_source_sha256: true
+  report_config_sha256: true
+  report_split_sha256: true
+  report_software_versions: true

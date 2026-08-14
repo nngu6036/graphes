@@ -3,7 +3,7 @@ from __future__ import annotations
 import networkx as nx
 import numpy as np
 
-from grapher.hybrid.data import (
+from grapher.rewiring_mlp.attributed.data import (
     GRAPHLET_OVERFLOW_KEY,
     GraphCategoryVocabulary,
     GraphletBasis,

@@ -8,8 +8,8 @@ from pathlib import Path
 import networkx as nx
 
 from grapher.data.io import save_dataset_splits
-from grapher.molecular.constants import QM9_ATOM_TYPES, QM9_BOND_TYPES
-from grapher.molecular.graph_io import (
+from grapher.rewiring_mlp.molecular.constants import QM9_ATOM_TYPES, QM9_BOND_TYPES
+from grapher.rewiring_mlp.molecular.graph_io import (
     graphs_from_smiles,
     nx_to_topology,
     read_smiles_file,

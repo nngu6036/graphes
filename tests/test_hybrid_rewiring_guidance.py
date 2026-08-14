@@ -5,18 +5,18 @@ from typing import Any
 import networkx as nx
 import numpy as np
 
-from grapher.hybrid.data import (
+from grapher.rewiring_mlp.attributed.data import (
     GraphCategoryVocabulary,
     GraphletBasis,
     graph_to_categorical_arrays,
 )
-from grapher.hybrid.refiner import (
+from grapher.rewiring_mlp.attributed.refiner import (
     HybridPrediction,
     refine_graph_with_hybrid_predictions,
     score_hybrid_candidates,
 )
 from grapher.properties.summary import SummaryConfig, extract_summary
-from grapher.refinement.rewiring import apply_action, make_action
+from grapher.rewiring_mlp.core.rewiring import apply_action, make_action
 
 CUBE_EDGES = [
     (0, 1),

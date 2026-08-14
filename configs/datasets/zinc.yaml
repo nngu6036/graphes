@@ -1,18 +1,31 @@
-# Fixed 12k subset derived from ZINC250k. This is a prepared molecular dataset:
-# create train.pkl/val.pkl/test.pkl under outputs/datasets/zinc before training.
+# Research protocol for GraphER's fixed 12,000-molecule subset of ZINC250k.
+# This must be reported as "ZINC250k-GraphER12k", not as the full ZINC250k
+# benchmark. All base generators must be trained and evaluated on these exact
+# serialized splits for paired comparisons.
+format_version: 1
 name: zinc
+benchmark_id: zinc250k_grapher12k
+benchmark: zinc250k_grapher12k
+protocol_id: zinc250k-grapher12k-v1
 kind: prepared_molecular_attributed
 root: outputs/datasets
 
 source:
   dataset: ZINC250k
+  format: smiles
+  citation_key: irwin2005zinc
+  paper_url: https://doi.org/10.1021/ci049714+
+  reference_source_url: https://raw.githubusercontent.com/harryjo97/GruM/master/GruM_2D/data/zinc250k.csv
+  # The local source path and SHA-256 written by the preparation script are the
+  # authoritative provenance record; the URL alone is not sufficient.
   subset:
-    name: grapher_fixed_12k
+    name: grapher_fixed_12k_v1
     selection: first_valid_after_seeded_shuffle
     seed: 0
     expected_graphs: 12000
 
 split:
+  strategy: contiguous_after_seeded_selection
   train: 10000
   val: 1000
   test: 1000
@@ -27,11 +40,16 @@ preprocessing:
   sanitize_with_rdkit: true
   kekulize: false
   retain_aromatic_bonds: true
+  # Formal charge is not part of the current modeled node state. The audit
+  # below must quantify accepted molecules with non-zero atom-level charges;
+  # those molecules must be excluded or charge must become a modeled attribute
+  # before the final report.
   retain_formal_charge: false
   retain_stereochemistry: false
   max_nodes: 38
 
 filters:
+  require_nonempty: true
   require_connected: true
   neutral_only: true
   allowed_atomic_numbers: [6, 7, 8, 9, 15, 16, 17, 35, 53]
@@ -49,3 +67,16 @@ bond_orders:
   2: 2.0
   3: 3.0
   4: 1.5
+
+audit:
+  fail_on_selected_count_mismatch: true
+  record_source_sha256: true
+  record_selected_records_sha256: true
+  record_split_sha256: true
+  record_rejection_reasons: true
+  record_retention_rate: true
+  audit_canonical_duplicates: true
+  audit_cross_split_overlap: true
+  audit_atom_formal_charges: true
+  record_software_versions: true
+  record_repository_revision: true

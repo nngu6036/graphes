@@ -29,7 +29,7 @@ from typing import Any, Iterable
 
 import networkx as nx
 
-from grapher.molecular.graph_io import (
+from grapher.rewiring_mlp.molecular.graph_io import (
     graph_to_smiles,
     graphs_from_smiles,
     nx_to_rdkit_mol,

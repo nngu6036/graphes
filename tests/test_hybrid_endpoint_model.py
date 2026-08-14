@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 
-from grapher.hybrid.data import (
+from grapher.rewiring_mlp.attributed.data import (
     GraphCategoryVocabulary,
     GraphletBasis,
     HybridEndpointExample,
@@ -13,13 +13,13 @@ from grapher.hybrid.data import (
     build_endpoint_examples,
     collate_endpoint_examples,
 )
-from grapher.hybrid.model import (
+from grapher.rewiring_mlp.attributed.model import (
     HybridEndpointPredictor,
     load_hybrid_endpoint_checkpoint,
     save_hybrid_endpoint_checkpoint,
 )
 from grapher.properties.summary import SummaryConfig, extract_summary
-from grapher.refinement.rewiring import apply_action, make_action
+from grapher.rewiring_mlp.core.rewiring import apply_action, make_action
 
 CUBE_EDGES = [
     (0, 1),

@@ -6,11 +6,11 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from grapher.construction.typed import (
+from grapher.models.dhvae_hh.typed_constructor import (
     TypedConstructionError,
     construct_typed_graph,
 )
-from grapher.molecular.typed_invariants import (
+from grapher.rewiring_mlp.molecular.typed_invariants import (
     TypedDegreeSignature,
     TypedInvariant,
     extract_typed_invariant,

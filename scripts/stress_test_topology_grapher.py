@@ -50,27 +50,27 @@ def _load_runtime_dependencies() -> None:
     import networkx as nx_module
     import numpy as np_module
 
-    from grapher.construction.coarse import (
+    from grapher.models.dhvae_hh.havel_hakimi import (
         assert_constructor_validity as assert_constructor_validity_fn,
     )
-    from grapher.construction.coarse import (
+    from grapher.models.dhvae_hh.havel_hakimi import (
         construct_coarse_graph as construct_coarse_graph_fn,
     )
     from grapher.data.io import load_dataset_splits as load_dataset_splits_fn
-    from grapher.evaluation.metrics import (
+    from grapher.rewiring_mlp.evaluation.metrics import (
         degree_preservation_rate as degree_preservation_rate_fn,
     )
-    from grapher.evaluation.metrics import evaluate_graph_sets as evaluate_graph_sets_fn
+    from grapher.rewiring_mlp.evaluation.metrics import evaluate_graph_sets as evaluate_graph_sets_fn
     from grapher.properties.summary import (
         configure_orca_executable as configure_orca_executable_fn,
     )
-    from grapher.topology.model import (
+    from grapher.rewiring_mlp.generic.model import (
         load_topology_checkpoint as load_topology_checkpoint_fn,
     )
-    from grapher.topology.refiner import (
+    from grapher.rewiring_mlp.generic.refiner import (
         refine_graph_with_topology_predictions as refine_graph_fn,
     )
-    from grapher.topology.rewiring import (
+    from grapher.rewiring_mlp.generic.rewiring import (
         propose_valid_topology_swaps as propose_swaps_fn,
     )
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import networkx as nx
 import numpy as np
 
-from grapher.construction.coarse import (
+from grapher.models.dhvae_hh.havel_hakimi import (
     assert_constructor_validity,
     construct_coarse_graph,
 )

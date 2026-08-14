@@ -6,31 +6,31 @@ import pytest
 import torch
 
 from grapher.properties.summary import SummaryConfig
-from grapher.refinement.rewiring import apply_action
-from grapher.topology.basis import TopologyGraphletBasis
-from grapher.topology.data import (
+from grapher.rewiring_mlp.core.rewiring import apply_action
+from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
+from grapher.rewiring_mlp.generic.data import (
     TopologyGraphletExample,
     build_topology_examples,
     build_topology_teacher_states,
     collate_topology_examples,
 )
-from grapher.topology.graphlets import (
+from grapher.rewiring_mlp.generic.graphlets import (
     candidate_topology_graphlet_counts,
     extract_topology_graphlet_counts,
     extract_topology_graphlet_target,
     topology_graphlet_discrepancy,
 )
-from grapher.topology.model import (
+from grapher.rewiring_mlp.generic.model import (
     TopologyGraphletPredictor,
     load_topology_checkpoint,
     save_topology_checkpoint,
 )
-from grapher.topology.refiner import (
+from grapher.rewiring_mlp.generic.refiner import (
     TopologyPrediction,
     TopologyRefinerConfig,
     refine_graph_with_topology_predictions,
 )
-from grapher.topology.rewiring import propose_valid_topology_swaps
+from grapher.rewiring_mlp.generic.rewiring import propose_valid_topology_swaps
 
 
 def _basis(k_max: int = 4) -> tuple[TopologyGraphletBasis, SummaryConfig]:

@@ -11,31 +11,31 @@ import networkx as nx
 import numpy as np
 import torch
 
-from grapher.construction.coarse import (
+from grapher.models.dhvae_hh.havel_hakimi import (
     assert_constructor_validity,
     construct_coarse_graph,
 )
-from grapher.construction.typed import construct_typed_graph
+from grapher.models.dhvae_hh.typed_constructor import construct_typed_graph
 from grapher.data.io import load_dataset_splits
-from grapher.evaluation.metrics import (
+from grapher.rewiring_mlp.evaluation.metrics import (
     degree_preservation_rate,
     degree_target_match_rate,
     evaluate_graph_sets,
 )
-from grapher.generators.degree_sampler import (
+from grapher.models.dhvae_hh.degree_sampler import (
     EmpiricalDegreeSampler,
     build_degree_sampler,
 )
-from grapher.hybrid.model import load_hybrid_endpoint_checkpoint
-from grapher.hybrid.refiner import refine_graph_with_hybrid_predictions
-from grapher.hybrid.selector import load_selector_checkpoint
-from grapher.molecular.constraints import (
+from grapher.rewiring_mlp.attributed.model import load_hybrid_endpoint_checkpoint
+from grapher.rewiring_mlp.attributed.refiner import refine_graph_with_hybrid_predictions
+from grapher.rewiring_mlp.attributed.selector import load_selector_checkpoint
+from grapher.rewiring_mlp.molecular.constraints import (
     fit_molecular_attribute_priors,
     initialize_molecular_attributes,
     molecular_valence_errors,
 )
-from grapher.molecular.graph_io import is_valid_molecular_graph
-from grapher.molecular.typed_invariants import (
+from grapher.rewiring_mlp.molecular.graph_io import is_valid_molecular_graph
+from grapher.rewiring_mlp.molecular.typed_invariants import (
     TypedInvariant,
     extract_typed_invariant,
     typed_invariant_matches_graph,

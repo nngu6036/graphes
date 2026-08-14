@@ -3,14 +3,14 @@ from __future__ import annotations
 import networkx as nx
 import numpy as np
 
-from grapher.hybrid.data import (
+from grapher.rewiring_mlp.attributed.data import (
     EndpointTrajectoryIterableDataset,
     GraphCategoryVocabulary,
     GraphletBasis,
     build_aligned_teacher_states,
     build_endpoint_examples,
 )
-from grapher.molecular.typed_invariants import (
+from grapher.rewiring_mlp.molecular.typed_invariants import (
     extract_typed_invariant,
     typed_invariant_matches_graph,
 )

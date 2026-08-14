@@ -6,16 +6,18 @@ import networkx as nx
 import numpy as np
 import torch
 
-from grapher.construction.typed import construct_typed_graph
-from grapher.molecular.typed_invariants import (
+from grapher.models.dhvae_hh.typed_constructor import construct_typed_graph
+from grapher.rewiring_mlp.molecular.typed_invariants import (
     TypedInvariant,
-    TypedSignatureVectorizer,
-    build_typed_signature_vae,
     extract_typed_invariant,
-    load_typed_signature_checkpoint,
-    save_typed_signature_checkpoint,
     typed_invariant_errors,
     typed_invariant_matches_graph,
+)
+from grapher.models.dhvae_hh.typed_degree_vae import (
+    TypedSignatureVectorizer,
+    build_typed_signature_vae,
+    load_typed_signature_checkpoint,
+    save_typed_signature_checkpoint,
 )
 
 

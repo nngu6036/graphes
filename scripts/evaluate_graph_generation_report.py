@@ -19,12 +19,12 @@ import numpy as np
 from matplotlib.lines import Line2D
 
 from grapher.data.io import load_dataset_splits
-from grapher.evaluation.metrics import (
+from grapher.rewiring_mlp.evaluation.metrics import (
     descriptor_matrix,
     mmd_gaussian_emd,
     mmd_orbit,
 )
-from grapher.molecular.graph_io import nx_to_rdkit_mol, require_rdkit
+from grapher.rewiring_mlp.molecular.graph_io import nx_to_rdkit_mol, require_rdkit
 from grapher.properties.summary import (
     clustering_histogram,
     configure_orca_executable,

@@ -4,14 +4,14 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from grapher.hybrid.data import GraphCategoryVocabulary, GraphletBasis
-from grapher.hybrid.refiner import (
+from grapher.rewiring_mlp.attributed.data import GraphCategoryVocabulary, GraphletBasis
+from grapher.rewiring_mlp.attributed.refiner import (
     HybridPrediction,
     HybridRefinerConfig,
     apply_hybrid_action,
     score_hybrid_candidates,
 )
-from grapher.molecular.constraints import (
+from grapher.rewiring_mlp.molecular.constraints import (
     fit_molecular_attribute_priors,
     initialize_molecular_attributes,
     molecular_valence_errors,
@@ -121,7 +121,7 @@ def test_rdkit_filter_does_not_depend_on_valence_filter(monkeypatch) -> None:
         sampled_connected=False,
     )
     monkeypatch.setattr(
-        "grapher.molecular.graph_io.is_valid_molecular_graph",
+        "grapher.rewiring_mlp.molecular.graph_io.is_valid_molecular_graph",
         lambda _graph: False,
     )
 

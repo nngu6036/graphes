@@ -1,4 +1,80 @@
+# Canonical research protocol for the heavy-atom QM9 graph benchmark.
+#
+# IMPORTANT: `scripts/prepare_qm9_dataset.py` must be extended to accept this
+# file with `--config`, exclude the official uncharacterized records, enforce
+# the expected counts, and write the requested hashes. Until then, this file is
+# an authoritative protocol specification rather than a fully consumed input.
+format_version: 1
 name: qm9_attributed
+benchmark_id: qm9
+benchmark: qm9
+protocol_id: qm9-heavy-atom-grapher-v1
 kind: prepared_molecular_attributed
 root: outputs/datasets
-# Build this dataset with scripts/prepare_qm9_dataset.py.
+seed: 42
+
+source:
+  dataset: QM9
+  release: gdb9
+  format: sdf
+  expected_raw_records: 133885
+  # Standard QM9 graph-generation preprocessing removes the 3,054 records
+  # listed as uncharacterized by the dataset release.
+  exclude_uncharacterized: true
+  expected_selected_records: 130831
+  citation_key: ramakrishnan2014quantum
+  paper_url: https://doi.org/10.1038/sdata.2014.22
+  source_url: https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/molnet_publish/qm9.zip
+  # The preparation report must record the actual local path and SHA-256; a
+  # mutable download URL is not sufficient provenance.
+
+split:
+  strategy: seeded_random_after_preprocessing
+  seed: 42
+  train: 0.80
+  val: 0.10
+  test: 0.10
+  expected_counts:
+    train: 104665
+    val: 13083
+    test: 13083
+
+preprocessing:
+  representation: heavy_atom_graph
+  hydrogens: implicit
+  remove_hydrogens: true
+  sanitize_with_rdkit: true
+  kekulize: true
+  retain_aromatic_bonds: false
+  remove_self_loops: true
+  undirected: true
+  simple_graph: true
+
+filters:
+  require_nonempty: true
+  require_connected: true
+  max_nodes: 9
+  allowed_atomic_numbers: [6, 7, 8, 9]
+
+categorical_state:
+  node_attribute: atomic_num
+  node_categories: [6, 7, 8, 9]
+  edge_attribute: bond_type
+  edge_categories: [1, 2, 3]
+
+bond_orders:
+  1: 1.0
+  2: 2.0
+  3: 3.0
+
+audit:
+  fail_on_raw_count_mismatch: true
+  fail_on_selected_count_mismatch: true
+  record_source_sha256: true
+  record_selected_indices_sha256: true
+  record_split_sha256: true
+  record_rejection_indices_and_reasons: true
+  audit_canonical_duplicates: true
+  audit_cross_split_overlap: true
+  record_software_versions: true
+  record_repository_revision: true

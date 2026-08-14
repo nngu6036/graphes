@@ -11,24 +11,24 @@ import networkx as nx
 import numpy as np
 import torch
 
-from grapher.construction.coarse import (
+from grapher.models.dhvae_hh.havel_hakimi import (
     assert_constructor_validity,
     construct_coarse_graph,
 )
 from grapher.data.io import load_dataset_splits
-from grapher.evaluation.metrics import (
+from grapher.rewiring_mlp.evaluation.metrics import (
     degree_preservation_rate,
     degree_target_match_rate,
     evaluate_graph_sets,
 )
-from grapher.evaluation.studies import aggregate_pipeline_diagnostics
-from grapher.generators.degree_sampler import (
+from grapher.rewiring_mlp.evaluation.studies import aggregate_pipeline_diagnostics
+from grapher.models.dhvae_hh.degree_sampler import (
     EmpiricalDegreeSampler,
     build_degree_sampler,
 )
 from grapher.properties.summary import configure_orca_executable
-from grapher.topology.model import load_topology_checkpoint
-from grapher.topology.refiner import refine_graph_with_topology_predictions
+from grapher.rewiring_mlp.generic.model import load_topology_checkpoint
+from grapher.rewiring_mlp.generic.refiner import refine_graph_with_topology_predictions
 from grapher.utils.io import ensure_dir, load_yaml, save_json, save_pickle
 
 

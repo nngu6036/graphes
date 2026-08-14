@@ -12,7 +12,7 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from grapher.generators.defog import (
+from grapher.models.defog_backend import (
     DEFOG_EXPORT_FORMAT,
     DeFoGGeneratorConfig,
     _worker_environment,
