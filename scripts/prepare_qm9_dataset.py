@@ -444,7 +444,11 @@ def _graphs_from_sdf_qm9(
     if not sdf_file.exists():
         raise FileNotFoundError(f"SDF file does not exist: {sdf_file}")
 
-    supplier = Chem.SDMolSupplier(str(sdf_file), removeHs=False, sanitize=True)
+    supplier = Chem.SDMolSupplier(
+        str(sdf_file),
+        removeHs=False,
+        sanitize=False,
+    )
     if supplier is None:
         raise RuntimeError(f"Could not open SDF file: {sdf_file}")
 

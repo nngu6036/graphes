@@ -261,12 +261,20 @@ QM9 preparation requires RDKit and writes both a topology-only dataset and an
 attributed molecular dataset. To obtain the source through PyTorch Geometric:
 
 ```bash
+mkdir -p /home/quang/graphes/data
+
+curl --fail --location --retry 3 \
+  https://ndownloader.figshare.com/files/3195404 \
+  --output /home/quang/graphes/data/uncharacterized.txt
 PYTHONPATH=src python scripts/prepare_qm9_dataset.py \
-  --source pyg \
-  --pyg-root data/pyg_qm9 \
+  --config configs/datasets/qm9.yaml \
+  --source sdf \
+  --sdf-file /home/quang/graphes/data/qm9.sdf \
+  --uncharacterized-file /home/quang/graphes/data/uncharacterized.txt \
   --root outputs/datasets \
   --topology-name qm9_topology \
   --attributed-name qm9_attributed
+
 ```
 
 If `gdb9.sdf` is already available locally, prepare the same datasets without
