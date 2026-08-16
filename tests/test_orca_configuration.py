@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from grapher.properties import summary
+from grapher.rewiring_mlp.properties import summary
 
 
 def test_configure_orca_executable_accepts_explicit_executable() -> None:

@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 
-from grapher.properties.summary import SummaryConfig
+from grapher.rewiring_mlp.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.core.rewiring import apply_action
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.data import (

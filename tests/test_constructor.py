@@ -7,7 +7,7 @@ from grapher.models.dhvae_hh.havel_hakimi import (
     assert_constructor_validity,
     construct_coarse_graph,
 )
-from grapher.properties.summary import extract_summary
+from grapher.rewiring_mlp.properties.summary import extract_summary
 
 
 def test_constructor_preserves_degree_sequence():

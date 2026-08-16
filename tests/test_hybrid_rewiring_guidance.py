@@ -15,7 +15,7 @@ from grapher.rewiring_mlp.attributed.refiner import (
     refine_graph_with_hybrid_predictions,
     score_hybrid_candidates,
 )
-from grapher.properties.summary import SummaryConfig, extract_summary
+from grapher.rewiring_mlp.properties.summary import SummaryConfig, extract_summary
 from grapher.rewiring_mlp.core.rewiring import apply_action, make_action
 
 CUBE_EDGES = [

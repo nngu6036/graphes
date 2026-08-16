@@ -16,7 +16,7 @@ from grapher.rewiring_mlp.molecular.constraints import (
     initialize_molecular_attributes,
     molecular_valence_errors,
 )
-from grapher.properties.summary import SummaryConfig
+from grapher.rewiring_mlp.properties.summary import SummaryConfig
 
 
 def _molecule(

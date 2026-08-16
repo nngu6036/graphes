@@ -36,7 +36,7 @@ from grapher.rewiring_mlp.attributed.selector import (
     build_selector_features,
     save_selector_checkpoint,
 )
-from grapher.properties.summary import SummaryConfig
+from grapher.rewiring_mlp.properties.summary import SummaryConfig
 from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir, load_yaml, save_json
 

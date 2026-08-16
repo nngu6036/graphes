@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import networkx as nx
 
@@ -19,7 +22,7 @@ from grapher.rewiring_mlp.molecular.graph_io import (
     read_smiles_file,
     split_graphs,
 )
-from grapher.utils.io import ensure_dir, save_json
+from grapher.utils.io import ensure_dir, load_yaml, save_json
 
 TOPOLOGY_SCHEMA = {
     "node_attributes": [],
@@ -29,6 +32,133 @@ ATTRIBUTED_SCHEMA = {
     "node_attributes": ["atomic_num", "atom_type"],
     "edge_attributes": ["bond_type", "bond_order"],
 }
+
+
+@dataclass(frozen=True)
+class QM9Protocol:
+    """Pinned preparation contract for the report-facing QM9 benchmark."""
+
+    canonical: bool
+    expected_source_records: int
+    expected_excluded_records: int
+    expected_graphs: int
+    split_seed: int
+    split_counts: dict[str, int]
+    project_formal_charge: bool
+    project_stereochemistry: bool
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> "QM9Protocol":
+        protocol = config.get("protocol", {}) or {}
+        split = config.get("split", {}) or {}
+        preprocessing = config.get("preprocessing", {}) or {}
+        result = cls(
+            canonical=bool(protocol.get("canonical", True)),
+            expected_source_records=int(
+                protocol.get("expected_source_records", 133885)
+            ),
+            expected_excluded_records=int(
+                protocol.get("expected_excluded_records", 3054)
+            ),
+            expected_graphs=int(protocol.get("expected_graphs", 130831)),
+            split_seed=int(split.get("seed", 42)),
+            split_counts={
+                name: int(split.get(name, 0)) for name in ("train", "val", "test")
+            },
+            project_formal_charge=bool(
+                preprocessing.get("project_formal_charge", True)
+            ),
+            project_stereochemistry=bool(
+                preprocessing.get("project_stereochemistry", True)
+            ),
+        )
+        if min(
+            result.expected_source_records,
+            result.expected_excluded_records,
+            result.expected_graphs,
+        ) <= 0:
+            raise ValueError("QM9 protocol counts must be positive.")
+        if (
+            result.expected_source_records - result.expected_excluded_records
+            != result.expected_graphs
+        ):
+            raise ValueError(
+                "QM9 source minus excluded count must equal expected_graphs."
+            )
+        if any(value < 0 for value in result.split_counts.values()):
+            raise ValueError("QM9 split counts must be non-negative.")
+        if sum(result.split_counts.values()) != result.expected_graphs:
+            raise ValueError("QM9 split counts must sum to expected_graphs.")
+        if result.canonical and not (
+            result.project_formal_charge and result.project_stereochemistry
+        ):
+            raise ValueError(
+                "Canonical QM9 must explicitly declare projection of formal "
+                "charge and stereochemistry from DeFoG's categorical state."
+            )
+        return result
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _ordered_indices_sha256(indices: list[int]) -> str:
+    digest = hashlib.sha256()
+    for index in indices:
+        digest.update(str(int(index)).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _read_uncharacterized_indices(
+    path: str | Path,
+    *,
+    expected_count: int,
+    expected_source_records: int,
+) -> set[int]:
+    """Parse QM9's official one-based uncharacterized-molecule list."""
+
+    source = Path(path)
+    if not source.is_file():
+        raise FileNotFoundError(
+            "QM9 canonical preparation requires the official "
+            f"uncharacterized.txt file: {source}"
+        )
+    lines = source.read_text(encoding="utf-8", errors="strict").splitlines()
+    if len(lines) < 11:
+        raise ValueError(f"Malformed QM9 uncharacterized file: {source}")
+    indices: list[int] = []
+    # This is the official QM9/Figshare layout also consumed by PyG/DeFoG:
+    # nine header lines, one-based molecule rows, and one footer line. PyG's
+    # ``text.split("\n")[9:-2]`` is equivalent because the file ends in a
+    # newline; ``splitlines()`` removes that final empty element.
+    for line_number, line in enumerate(lines[9:-1], start=10):
+        fields = line.split()
+        if not fields:
+            continue
+        try:
+            index = int(fields[0]) - 1
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid QM9 exclusion index on line {line_number}: {line!r}"
+            ) from exc
+        if index < 0 or index >= expected_source_records:
+            raise ValueError(
+                f"QM9 exclusion index {index} is outside the source range."
+            )
+        indices.append(index)
+    if len(indices) != expected_count or len(set(indices)) != expected_count:
+        raise ValueError(
+            "QM9 uncharacterized index count mismatch: "
+            f"found {len(indices)} rows/{len(set(indices))} unique, "
+            f"expected {expected_count}."
+        )
+    return set(indices)
 
 
 def _dataset_output_paths(
@@ -169,11 +299,16 @@ def _graphs_from_pyg_qm9(
     errors: dict[str, int] = {}
     for idx in range(limit):
         try:
-            graph = _pyg_data_to_nx(dataset[idx], remove_h=remove_h)
+            datum = dataset[idx]
+            graph = _pyg_data_to_nx(datum, remove_h=remove_h)
             if graph.number_of_nodes() == 0:
                 raise ValueError("empty molecule after preprocessing")
             if graph.number_of_nodes() > 1 and not nx.is_connected(graph):
                 raise ValueError("disconnected molecule")
+            source_index = getattr(datum, "idx", idx)
+            if hasattr(source_index, "item"):
+                source_index = source_index.item()
+            graph.graph["source_index"] = int(source_index)
             graphs.append(graph)
         except Exception as exc:
             name = type(exc).__name__
@@ -217,6 +352,21 @@ def _rdkit_mol_to_nx(mol, *, remove_h: bool = True, kekulize: bool = True) -> nx
         raise ImportError("RDKit is required for --source sdf.") from exc
 
     mol = Chem.Mol(mol)
+    charged_atoms = [
+        (int(atom.GetIdx()), int(atom.GetFormalCharge()))
+        for atom in mol.GetAtoms()
+        if int(atom.GetFormalCharge()) != 0
+    ]
+    chiral_atoms = [
+        int(atom.GetIdx())
+        for atom in mol.GetAtoms()
+        if atom.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED
+    ]
+    stereo_bonds = [
+        int(bond.GetIdx())
+        for bond in mol.GetBonds()
+        if bond.GetStereo() != Chem.BondStereo.STEREONONE
+    ]
     if kekulize:
         Chem.Kekulize(mol, clearAromaticFlags=True)
 
@@ -256,7 +406,23 @@ def _rdkit_mol_to_nx(mol, *, remove_h: bool = True, kekulize: bool = True) -> nx
             bond_order=float(1.5 if bond_type == 4 else bond_type),
         )
 
-    return nx.convert_node_labels_to_integers(graph, ordering="sorted")
+    graph = nx.convert_node_labels_to_integers(graph, ordering="sorted")
+    # The standard DeFoG/DiGress-style QM9 state contains atom and bond
+    # categories only. Preserve the canonical molecule rather than filtering
+    # it, while making every projected source channel auditable.
+    graph.graph.update(
+        {
+            "qm9_source_state_projection_policy": (
+                "audit_and_project_from_categorical_graph_state_v1"
+            ),
+            "projected_formal_charge_atoms": [
+                [int(index), int(charge)] for index, charge in charged_atoms
+            ],
+            "projected_chiral_atoms": [int(index) for index in chiral_atoms],
+            "projected_stereo_bonds": [int(index) for index in stereo_bonds],
+        }
+    )
+    return graph
 
 
 def _graphs_from_sdf_qm9(
@@ -265,6 +431,7 @@ def _graphs_from_sdf_qm9(
     max_molecules: int | None = None,
     remove_h: bool = True,
     kekulize: bool = True,
+    excluded_indices: set[int] | None = None,
 ) -> tuple[list[nx.Graph], dict[str, int], int]:
     try:
         from rdkit import Chem  # type: ignore
@@ -284,10 +451,13 @@ def _graphs_from_sdf_qm9(
     graphs: list[nx.Graph] = []
     errors: dict[str, int] = {}
     num_seen = 0
-    for mol in supplier:
+    excluded = excluded_indices or set()
+    for source_index, mol in enumerate(supplier):
         if max_molecules is not None and num_seen >= int(max_molecules):
             break
         num_seen += 1
+        if source_index in excluded:
+            continue
         try:
             if mol is None:
                 raise ValueError("RDKit returned None for molecule")
@@ -296,6 +466,7 @@ def _graphs_from_sdf_qm9(
                 raise ValueError("empty molecule after preprocessing")
             if graph.number_of_nodes() > 1 and not nx.is_connected(graph):
                 raise ValueError("disconnected molecule")
+            graph.graph["source_index"] = int(source_index)
             graphs.append(graph)
         except Exception as exc:
             name = type(exc).__name__
@@ -306,6 +477,11 @@ def _graphs_from_sdf_qm9(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Prepare QM9 heavy-atom topology and attributed graph splits."
+    )
+    parser.add_argument(
+        "--config",
+        default="configs/datasets/qm9.yaml",
+        help="Pinned QM9 preparation protocol YAML.",
     )
     parser.add_argument(
         "--source",
@@ -328,6 +504,14 @@ def main() -> None:
         help="Path to QM9 gdb9.sdf. Defaults to <pyg-root>/raw/gdb9.sdf for --source sdf.",
     )
     parser.add_argument(
+        "--uncharacterized-file",
+        default=None,
+        help=(
+            "Official QM9 uncharacterized.txt. For SDF input, defaults to a "
+            "file with this name beside the SDF."
+        ),
+    )
+    parser.add_argument(
         "--pyg-root",
         default="data/pyg_qm9",
         help="Root directory for torch_geometric.datasets.QM9.",
@@ -347,10 +531,43 @@ def main() -> None:
         ),
     )
     parser.add_argument("--max-molecules", type=int, default=None)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Split seed; defaults to the pinned value in the protocol config.",
+    )
     parser.add_argument("--keep-hydrogens", action="store_true")
     parser.add_argument("--no-kekulize", action="store_true")
+    parser.add_argument(
+        "--allow-noncanonical",
+        action="store_true",
+        help=(
+            "Permit development subsets or non-SDF inputs without enforcing "
+            "the report-facing canonical counts. Such outputs are marked noncanonical."
+        ),
+    )
     args = parser.parse_args()
+
+    config = load_yaml(args.config)
+    protocol = QM9Protocol.from_config(config)
+    split_seed = protocol.split_seed if args.seed is None else int(args.seed)
+    canonical_run = bool(protocol.canonical and not args.allow_noncanonical)
+    if canonical_run and args.max_molecules is not None:
+        raise ValueError(
+            "--max-molecules is a development option; combine it with "
+            "--allow-noncanonical."
+        )
+    if canonical_run and split_seed != protocol.split_seed:
+        raise ValueError(
+            f"Canonical QM9 uses split seed {protocol.split_seed}; received "
+            f"{split_seed}. Use --allow-noncanonical for a different split."
+        )
+    if canonical_run and (args.keep_hydrogens or args.no_kekulize):
+        raise ValueError(
+            "Canonical QM9 uses the heavy-atom, kekulized representation. "
+            "Use --allow-noncanonical to change preprocessing."
+        )
 
     root = Path(args.root)
     output_paths = _dataset_output_paths(
@@ -370,7 +587,16 @@ def main() -> None:
 
     smiles = None
     num_input_records = None
+    source_sha256: str | None = None
+    exclusions_path: Path | None = None
+    exclusions_sha256: str | None = None
+    excluded_indices: set[int] = set()
     if source == "smiles":
+        if canonical_run:
+            raise ValueError(
+                "Canonical QM9 preparation requires the original SDF plus the "
+                "official uncharacterized.txt; SMILES input is development-only."
+            )
         if not args.smiles_file:
             raise ValueError("--smiles-file is required when --source smiles.")
         smiles = read_smiles_file(args.smiles_file, smiles_column=args.smiles_column)
@@ -383,16 +609,39 @@ def main() -> None:
             kekulize=not args.no_kekulize,
         )
         source_path = str(args.smiles_file)
+        source_sha256 = _sha256_file(Path(args.smiles_file).resolve())
     elif source == "sdf":
         sdf_file = Path(args.sdf_file) if args.sdf_file else default_sdf
+        if canonical_run:
+            exclusions_path = (
+                Path(args.uncharacterized_file)
+                if args.uncharacterized_file
+                else sdf_file.parent / "uncharacterized.txt"
+            )
+            excluded_indices = _read_uncharacterized_indices(
+                exclusions_path,
+                expected_count=protocol.expected_excluded_records,
+                expected_source_records=protocol.expected_source_records,
+            )
+            exclusions_path = exclusions_path.resolve()
+            exclusions_sha256 = _sha256_file(exclusions_path)
         graphs, errors, num_input_records = _graphs_from_sdf_qm9(
             sdf_file,
             max_molecules=args.max_molecules,
             remove_h=not args.keep_hydrogens,
             kekulize=not args.no_kekulize,
+            excluded_indices=excluded_indices,
         )
+        sdf_file = sdf_file.resolve()
         source_path = str(sdf_file)
+        source_sha256 = _sha256_file(sdf_file)
     else:
+        if canonical_run:
+            raise ValueError(
+                "Canonical report preparation uses the original SDF so formal "
+                "charge, stereochemistry, source count, and exclusion indices "
+                "can be audited. Use --source sdf or --allow-noncanonical."
+            )
         graphs, errors = _graphs_from_pyg_qm9(
             args.pyg_root,
             max_molecules=args.max_molecules,
@@ -405,7 +654,62 @@ def main() -> None:
             f"No valid molecules parsed from {source_path}; errors={errors}"
         )
 
-    attributed_splits = split_graphs(graphs, seed=args.seed)
+    if canonical_run:
+        if num_input_records != protocol.expected_source_records:
+            raise RuntimeError(
+                "QM9 source record count mismatch: "
+                f"found {num_input_records}, expected "
+                f"{protocol.expected_source_records}."
+            )
+        if errors:
+            raise RuntimeError(
+                "Characterized QM9 records must convert without additional "
+                f"rejections; observed {errors}."
+            )
+        if len(graphs) != protocol.expected_graphs:
+            raise RuntimeError(
+                f"QM9 selected graph count is {len(graphs)}, expected "
+                f"{protocol.expected_graphs}."
+            )
+
+    attributed_splits = split_graphs(graphs, seed=split_seed)
+    split_sizes = {name: len(values) for name, values in attributed_splits.items()}
+    split_source_indices_sha256 = {
+        name: _ordered_indices_sha256(
+            [
+                int(graph.graph.get("source_index", index))
+                for index, graph in enumerate(values)
+            ]
+        )
+        for name, values in attributed_splits.items()
+    }
+    projection_summary = {
+        "formal_charge_graphs": sum(
+            bool(graph.graph.get("projected_formal_charge_atoms"))
+            for graph in graphs
+        ),
+        "formal_charge_atoms": sum(
+            len(graph.graph.get("projected_formal_charge_atoms", ()))
+            for graph in graphs
+        ),
+        "stereochemistry_graphs": sum(
+            bool(graph.graph.get("projected_chiral_atoms"))
+            or bool(graph.graph.get("projected_stereo_bonds"))
+            for graph in graphs
+        ),
+        "chiral_atoms": sum(
+            len(graph.graph.get("projected_chiral_atoms", ())) for graph in graphs
+        ),
+        "stereo_bonds": sum(
+            len(graph.graph.get("projected_stereo_bonds", ())) for graph in graphs
+        ),
+        "policy": "audit_and_project_from_categorical_graph_state_v1",
+    }
+    if canonical_run and split_sizes != protocol.split_counts:
+        raise RuntimeError(
+            f"QM9 split sizes {split_sizes} do not match the pinned "
+            f"protocol {protocol.split_counts}."
+        )
     topology_splits = {
         k: [nx_to_topology(g) for g in v] for k, v in attributed_splits.items()
     }
@@ -417,7 +721,18 @@ def main() -> None:
         "kind": "qm9_topology",
         "remove_h": not args.keep_hydrogens,
         "kekulize": not args.no_kekulize,
-        "seed": args.seed,
+        "seed": split_seed,
+        "canonical_protocol": canonical_run,
+        "source_sha256": source_sha256,
+        "uncharacterized_file": (
+            str(exclusions_path) if exclusions_path is not None else None
+        ),
+        "uncharacterized_file_sha256": exclusions_sha256,
+        "selected_source_indices_sha256": _ordered_indices_sha256(
+            [int(graph.graph.get("source_index", index)) for index, graph in enumerate(graphs)]
+        ),
+        "split_source_indices_sha256": split_source_indices_sha256,
+        "source_state_projection": projection_summary,
     }
     config_attr = dict(config_top)
     config_attr["name"] = args.attributed_name
@@ -438,22 +753,48 @@ def main() -> None:
             else len(graphs) + sum(int(value) for value in errors.values())
         )
     )
+    report_rejections = dict(errors)
+    if excluded_indices:
+        report_rejections["official_uncharacterized"] = len(excluded_indices)
     common_report = common_preparation_report(
         input_records=input_records,
         processed_records=input_records,
         accepted_graphs=len(graphs),
-        rejection_reasons=errors,
+        rejection_reasons=report_rejections,
     )
     prep_report = {
         "status": "pass",
         "dataset": "QM9",
         "source_type": source,
         "source": source_path,
+        "source_sha256": source_sha256,
+        "protocol": {
+            "canonical": canonical_run,
+            "expected_source_records": protocol.expected_source_records,
+            "expected_excluded_records": protocol.expected_excluded_records,
+            "expected_graphs": protocol.expected_graphs,
+            "split_seed": split_seed,
+            "uncharacterized_file": (
+                str(exclusions_path) if exclusions_path is not None else None
+            ),
+            "uncharacterized_file_sha256": exclusions_sha256,
+            "excluded_indices_sha256": (
+                _ordered_indices_sha256(sorted(excluded_indices))
+                if excluded_indices
+                else None
+            ),
+            "selected_source_indices_sha256": config_top[
+                "selected_source_indices_sha256"
+            ],
+            "split_source_indices_sha256": split_source_indices_sha256,
+            "source_state_projection": projection_summary,
+        },
         "num_input_smiles": len(smiles) if smiles is not None else None,
         **common_report,
         # Backward-compatible alias retained for existing consumers.
         "num_valid_graphs": len(graphs),
-        "errors": errors,
+        "errors": report_rejections,
+        "conversion_errors": errors,
         "topology_dataset": args.topology_name,
         "attributed_dataset": args.attributed_name,
         "split_sizes": {k: len(v) for k, v in topology_splits.items()},
@@ -473,7 +814,7 @@ def main() -> None:
         input_records=input_records,
         processed_records=input_records,
         accepted_graphs=len(graphs),
-        rejection_reasons=errors,
+        rejection_reasons=report_rejections,
         split_sizes=prep_report["split_sizes"],
         outputs=(
             (

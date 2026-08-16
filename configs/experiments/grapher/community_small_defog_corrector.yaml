@@ -37,11 +37,12 @@ base_generator:
   source_env: DEFOG
   python_env: DEFOG_PYTHON
 
-  # The supplied DeFoG archive exposes comm20, sbm, planar, and tree. It does
-  # not expose ready-made Ego-small or Grid entry points.
+  # Community-small uses DeFoG's comm20 profile. Ego-small may reuse this
+  # data-driven profile with its benchmark identity recorded separately; Grid
+  # has no declared compatibility profile. QM9 and ZINC use native profiles.
   dataset: comm20
   experiment: comm20
-  checkpoint_path: outputs/base/defog/comm20/model.ckpt
+  checkpoint_path: outputs/baselines/defog/community_small/seed_42/train/checkpoints/model.ckpt
 
   # Set this to a trusted DeFoG .pkl or a previously exported neutral .npz to
   # reuse exactly the same base samples for correction ablations.

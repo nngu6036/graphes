@@ -49,6 +49,7 @@ class ZincProtocol:
     max_nodes: int
     require_connected: bool
     neutral_only: bool
+    uncharged_atoms_only: bool
     allowed_atomic_numbers: tuple[int, ...]
     allowed_bond_types: tuple[int, ...]
     bond_orders: dict[int, float]
@@ -157,6 +158,9 @@ class ZincProtocol:
             max_nodes=max_nodes,
             require_connected=bool(filters.get("require_connected", True)),
             neutral_only=bool(filters.get("neutral_only", True)),
+            uncharged_atoms_only=bool(
+                filters.get("uncharged_atoms_only", False)
+            ),
             allowed_atomic_numbers=allowed_atoms,
             allowed_bond_types=allowed_bonds,
             bond_orders=bond_orders,
@@ -344,6 +348,12 @@ def smiles_to_zinc_graph(
         raise ZincRecordError(
             "non_neutral",
             "The molecule has non-zero net formal charge.",
+        )
+    if protocol.uncharged_atoms_only and any(formal_charges):
+        raise ZincRecordError(
+            "charged_atom",
+            "The molecule contains a formally charged atom, which cannot be "
+            "represented by the configured categorical graph state.",
         )
 
     graph = nx.Graph()

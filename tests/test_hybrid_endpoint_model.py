@@ -18,7 +18,7 @@ from grapher.rewiring_mlp.attributed.model import (
     load_hybrid_endpoint_checkpoint,
     save_hybrid_endpoint_checkpoint,
 )
-from grapher.properties.summary import SummaryConfig, extract_summary
+from grapher.rewiring_mlp.properties.summary import SummaryConfig, extract_summary
 from grapher.rewiring_mlp.core.rewiring import apply_action, make_action
 
 CUBE_EDGES = [

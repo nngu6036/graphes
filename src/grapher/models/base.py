@@ -189,6 +189,10 @@ class TrainingArtifacts:
     manifest_path: Path
     log_path: Path | None = None
     artifacts: tuple[Path, ...] = ()
+    estimated_graphs_path: Path | None = None
+    ground_truth_graphs_path: Path | None = None
+    ground_truth_model_view_graphs_path: Path | None = None
+    training_estimates_manifest_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -291,4 +295,3 @@ class PlaceholderBaseGeneratorWrapper(BaseGeneratorWrapper):
             "Generation",
             detail=self.implementation_note,
         )
-

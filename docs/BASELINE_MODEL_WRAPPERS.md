@@ -41,13 +41,15 @@ src/grapher/models/
 ├── digress.py
 ├── catflow.py
 ├── defog.py
+├── defog_backend.py
+├── defog_molecular_codec.py
 ├── hog_diff.py
 └── flagg.py
 ```
 
 The project-owned DH-VAE+HH implementation is colocated with its wrapper. Thin
 compatibility modules preserve its former import and CLI paths. Third-party
-implementations remain external; for example, the future `DeFoGWrapper` should delegate to
+implementations remain external; for example, `DeFoGWrapper` delegates to
 `grapher.models.defog_backend` rather than replace its validated subprocess and NPZ
 export code.
 
@@ -118,6 +120,13 @@ outputs/baselines/
             │   ├── manifest.json
             │   ├── resolved_config.yaml
             │   ├── train.log
+            │   ├── native_dataset/
+            │   ├── training_estimates/
+            │   │   ├── estimated_graphs.pkl
+            │   │   ├── ground_truth_graphs.pkl
+            │   │   ├── ground_truth_model_view.pkl  # molecular, when needed
+            │   │   ├── manifest.json
+            │   │   └── native/
             │   └── checkpoints/
             └── generations/
                 └── <generation_id>/
@@ -165,6 +174,12 @@ Every completed wrapper must:
 9. compute checkpoint, dataset, and graph-batch hashes; and
 10. publish final artifacts atomically after validation.
 
+When a base does not implement graph-specific reconstruction, generated
+post-training samples must not be presented as naturally aligned with the
+training graphs. Such a wrapper saves both pools and records
+`pairing.status: unpaired`; a separate declared matching step must construct
+the supervision pairs. Equal pool sizes alone do not establish correspondence.
+
 DH-VAE + HH is a composite base. Its `train()` operation trains the DH-VAE;
 randomized Havel--Hakimi is a stateless constructor invoked by `generate()`.
 
@@ -173,11 +188,16 @@ and one-shot filler model/configuration.
 
 ## Current status
 
-The DH-VAE+HH implementation has been isolated under its model package, while
-its common `train()` and `generate()` wrapper orchestration remains pending.
-The five third-party wrappers remain explicit placeholders. Unimplemented
-methods raise `BaselineNotImplementedError` before creating any directories;
-an incomplete adapter must not leave a partial run that looks like evidence.
+The DH-VAE+HH implementation has been isolated under its model package. The
+DeFoG wrapper implements isolated training, post-training estimate export, and
+generation for generic graphs and attributed QM9/ZINC molecular graphs. Its
+neutral backend validates the dataset-specific schema before publishing
+GraphER-facing NetworkX batches. DiGress, CatFlow, HOG-Diff, and FLAGG remain
+explicit placeholders. Unimplemented methods raise
+`BaselineNotImplementedError` before creating any directories; an incomplete
+adapter must not leave a partial run that looks like evidence.
 
-The DH-VAE+HH compatibility CLIs and the isolated generic DeFoG generation
-backend remain operational until their common wrappers are implemented.
+The DH-VAE+HH compatibility CLIs and the isolated DeFoG workers remain
+available alongside the common wrapper interface. Molecular preparation is
+performed by `scripts/defog_prepare_molecular_dataset_worker.py`; it records
+the exact source representation and, for ZINC, the verified Kekule model view.

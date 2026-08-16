@@ -1,4 +1,4 @@
-"""Isolated DeFoG base-generator adapter for generic GraphER topologies.
+"""Isolated DeFoG base-generator adapter for GraphER graph batches.
 
 The attached DeFoG reference implementation is not an installable, namespaced
 library: it mixes ``src.*`` imports with bare ``datasets``/``models`` imports
@@ -25,16 +25,31 @@ from typing import Any
 import networkx as nx
 import numpy as np
 
-from grapher.rewiring_mlp.generic.data import normalize_topology_graph
 from grapher.utils.io import ensure_dir
 
-DEFOG_EXPORT_FORMAT = "defog_generic_topology_v1"
+DEFOG_EXPORT_FORMAT = "defog_graph_batch_v2"
+LEGACY_DEFOG_EXPORT_FORMAT = "defog_generic_topology_v1"
 DEFOG_ROOT_ENV = "DEFOG"
 DEFOG_PYTHON_ENV = "DEFOG_PYTHON"
 SUPPORTED_GENERIC_DATASETS = frozenset({"comm20", "planar", "sbm", "tree"})
+SUPPORTED_MOLECULAR_DATASETS = frozenset({"qm9", "zinc"})
+SUPPORTED_DATASETS = SUPPORTED_GENERIC_DATASETS | SUPPORTED_MOLECULAR_DATASETS
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]+$")
 _SAFE_DEVICE = re.compile(r"^(?:auto|cpu|cuda(?::[0-9]+)?)$")
 _SAFE_ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _normalize_generic_graph(graph: nx.Graph) -> nx.Graph:
+    """Normalize a generic graph without importing Torch-heavy rewiring code."""
+
+    if graph.is_directed() or graph.is_multigraph():
+        raise ValueError("A generic DeFoG export must be simple and undirected.")
+    normalized = nx.convert_node_labels_to_integers(
+        nx.Graph(graph), first_label=0, ordering="sorted"
+    )
+    if nx.number_of_selfloops(normalized):
+        raise ValueError("A generic DeFoG export cannot contain self-loops.")
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -46,17 +61,20 @@ class DeFoGGeneratorConfig:
     checkpoint_path: Path | None = None
     generated_path: Path | None = None
     manifest_path: Path | None = None
+    dataset_datadir: Path | None = None
+    resolved_config_path: Path | None = None
+    molecular_statistics_path: Path | None = None
     source_env: str = DEFOG_ROOT_ENV
     python_env: str = DEFOG_PYTHON_ENV
     python_executable: str | None = None
     device: str = "auto"
     batch_size: int = 64
-    sample_steps: int = 1000
-    eta: float = 0.0
-    omega: float = 0.0
-    time_distortion: str = "identity"
-    rdb: str = "general"
-    rdb_crit: str = "dummy"
+    sample_steps: int | None = None
+    eta: float | None = None
+    omega: float | None = None
+    time_distortion: str | None = None
+    rdb: str | None = None
+    rdb_crit: str | None = None
     timeout_seconds: float | None = None
     cuda_visible_devices: str | None = None
 
@@ -85,10 +103,10 @@ class DeFoGGeneratorConfig:
         for name, value in (("dataset", dataset), ("experiment", experiment)):
             if not value or _SAFE_IDENTIFIER.fullmatch(value) is None:
                 raise ValueError(f"base_generator.{name} is not a safe identifier.")
-        if dataset not in SUPPORTED_GENERIC_DATASETS:
+        if dataset not in SUPPORTED_DATASETS:
             raise ValueError(
-                f"Unsupported generic DeFoG dataset {dataset!r}; expected one of "
-                f"{sorted(SUPPORTED_GENERIC_DATASETS)}."
+                f"Unsupported DeFoG dataset {dataset!r}; expected one of "
+                f"{sorted(SUPPORTED_DATASETS)}."
             )
 
         sampling = dict(values.get("sampling", {}) or {})
@@ -109,21 +127,40 @@ class DeFoGGeneratorConfig:
                 "base_generator.runtime.device must be auto, cpu, cuda, or cuda:N."
             )
         batch_size = int(sampling.get("batch_size", 64))
-        sample_steps = int(sampling.get("sample_steps", 1000))
-        if batch_size <= 0 or sample_steps <= 0:
+        sample_steps_value = sampling.get("sample_steps")
+        sample_steps = (
+            None if sample_steps_value is None else int(sample_steps_value)
+        )
+        if batch_size <= 0 or (sample_steps is not None and sample_steps <= 0):
             raise ValueError("DeFoG batch_size and sample_steps must be positive.")
-        time_distortion = str(sampling.get("time_distortion", "identity")).lower()
-        if time_distortion not in {"identity", "cosine", "polyinc", "polydec"}:
+        time_distortion_value = sampling.get("time_distortion")
+        time_distortion = (
+            None
+            if time_distortion_value is None
+            else str(time_distortion_value).lower()
+        )
+        if time_distortion is not None and time_distortion not in {
+            "identity",
+            "cosine",
+            "polyinc",
+            "polydec",
+        }:
             raise ValueError("Unsupported DeFoG time_distortion.")
-        rdb = str(sampling.get("rdb", "general")).lower()
-        if rdb not in {"general", "column", "entry"}:
+        rdb_value = sampling.get("rdb")
+        rdb = None if rdb_value is None else str(rdb_value).lower()
+        if rdb is not None and rdb not in {"general", "column", "entry"}:
             raise ValueError("DeFoG sampling.rdb must be general, column, or entry.")
-        rdb_crit = str(sampling.get("rdb_crit", "dummy")).strip()
-        if _SAFE_IDENTIFIER.fullmatch(rdb_crit) is None:
+        rdb_crit_value = sampling.get("rdb_crit")
+        rdb_crit = None if rdb_crit_value is None else str(rdb_crit_value).strip()
+        if rdb_crit is not None and _SAFE_IDENTIFIER.fullmatch(rdb_crit) is None:
             raise ValueError("base_generator.sampling.rdb_crit is invalid.")
-        eta = float(sampling.get("eta", 0.0))
-        omega = float(sampling.get("omega", 0.0))
-        if not np.isfinite(eta) or not np.isfinite(omega):
+        eta_value = sampling.get("eta")
+        omega_value = sampling.get("omega")
+        eta = None if eta_value is None else float(eta_value)
+        omega = None if omega_value is None else float(omega_value)
+        if (eta is not None and not np.isfinite(eta)) or (
+            omega is not None and not np.isfinite(omega)
+        ):
             raise ValueError("DeFoG eta and omega must be finite.")
 
         timeout_value = runtime.get("timeout_seconds")
@@ -135,6 +172,11 @@ class DeFoGGeneratorConfig:
             cuda_visible = str(cuda_visible)
             if not cuda_visible or any(ch in cuda_visible for ch in "\n\r\0"):
                 raise ValueError("runtime.cuda_visible_devices is invalid.")
+            if selected_device.startswith("cuda:") and selected_device != "cuda:0":
+                raise ValueError(
+                    "When cuda_visible_devices is set, device must be 'cuda' or "
+                    "'cuda:0' because CUDA renumbers visible devices locally."
+                )
 
         source_env = str(values.get("source_env", DEFOG_ROOT_ENV))
         python_env = str(values.get("python_env", DEFOG_PYTHON_ENV))
@@ -145,6 +187,9 @@ class DeFoGGeneratorConfig:
                 "DeFoG source_env and python_env must be environment keys."
             )
         manifest_value = values.get("manifest_path")
+        datadir_value = values.get("dataset_datadir")
+        resolved_config_value = values.get("resolved_config_path")
+        molecular_statistics_value = values.get("molecular_statistics_path")
         return cls(
             dataset=dataset,
             experiment=experiment,
@@ -156,6 +201,19 @@ class DeFoGGeneratorConfig:
             ),
             manifest_path=(
                 Path(manifest_value).expanduser() if manifest_value else None
+            ),
+            dataset_datadir=(
+                Path(datadir_value).expanduser() if datadir_value else None
+            ),
+            resolved_config_path=(
+                Path(resolved_config_value).expanduser()
+                if resolved_config_value
+                else None
+            ),
+            molecular_statistics_path=(
+                Path(molecular_statistics_value).expanduser()
+                if molecular_statistics_value
+                else None
             ),
             source_env=source_env,
             python_env=python_env,
@@ -278,6 +336,27 @@ def build_defog_worker_command(
         return command
     if config.checkpoint_path is None:
         raise ValueError("A DeFoG checkpoint is required for generation.")
+    if config.resolved_config_path is not None:
+        resolved_config = config.resolved_config_path.expanduser().resolve()
+        if not resolved_config.is_file():
+            raise FileNotFoundError(
+                f"Missing DeFoG resolved training config: {resolved_config}."
+            )
+        command.extend(["--resolved-config", str(resolved_config)])
+    if config.dataset_datadir is not None:
+        datadir = config.dataset_datadir.expanduser().resolve()
+        if not datadir.is_dir():
+            raise FileNotFoundError(
+                f"Missing DeFoG-formatted dataset directory: {datadir}."
+            )
+        command.extend(["--dataset-datadir", str(datadir)])
+    if config.molecular_statistics_path is not None:
+        statistics = config.molecular_statistics_path.expanduser().resolve()
+        if not statistics.is_file():
+            raise FileNotFoundError(
+                f"Missing DeFoG molecular-statistics cache: {statistics}."
+            )
+        command.extend(["--molecular-statistics", str(statistics)])
     command.extend(
         [
             "--checkpoint",
@@ -286,20 +365,19 @@ def build_defog_worker_command(
             config.device,
             "--batch-size",
             str(config.batch_size),
-            "--sample-steps",
-            str(config.sample_steps),
-            "--eta",
-            repr(config.eta),
-            "--omega",
-            repr(config.omega),
-            "--time-distortion",
-            config.time_distortion,
-            "--rdb",
-            config.rdb,
-            "--rdb-crit",
-            config.rdb_crit,
         ]
     )
+    optional_sampling_arguments = (
+        ("--sample-steps", config.sample_steps),
+        ("--eta", config.eta),
+        ("--omega", config.omega),
+        ("--time-distortion", config.time_distortion),
+        ("--rdb", config.rdb),
+        ("--rdb-crit", config.rdb_crit),
+    )
+    for flag, value in optional_sampling_arguments:
+        if value is not None:
+            command.extend([flag, str(value)])
     return command
 
 
@@ -379,13 +457,50 @@ def _require_integer_array(value: np.ndarray, *, name: str) -> np.ndarray:
 def load_defog_export(
     path: str | Path,
     *,
+    dataset: str | None = None,
     expected_count: int | None = None,
 ) -> list[nx.Graph]:
-    """Load and strictly validate a neutral DeFoG generic-topology export."""
+    """Load and strictly validate a neutral DeFoG graph export.
+
+    Molecular batches use semantic atomic-number/bond-type arrays and are
+    decoded by the dedicated molecular codec. Generic batches retain the
+    compact topology representation used by the original adapter.
+    """
 
     export_path = Path(path)
     if not export_path.is_file():
         raise FileNotFoundError(f"Missing DeFoG export: {export_path}")
+    normalized_dataset = str(dataset).lower() if dataset is not None else None
+    if normalized_dataset is None:
+        with np.load(export_path, allow_pickle=False) as probe:
+            if "format" in probe.files:
+                encoded_format = np.asarray(probe["format"])
+                if (
+                    encoded_format.ndim == 0
+                    and str(encoded_format.item()) == "grapher_defog_molecular_v1"
+                ):
+                    if "dataset" not in probe.files:
+                        raise ValueError("Molecular DeFoG export has no dataset metadata.")
+                    encoded_dataset = np.asarray(probe["dataset"])
+                    if encoded_dataset.ndim != 0:
+                        raise ValueError(
+                            "Molecular DeFoG dataset metadata must be scalar."
+                        )
+                    normalized_dataset = str(encoded_dataset.item()).lower()
+    if normalized_dataset in SUPPORTED_MOLECULAR_DATASETS:
+        from grapher.models.defog_molecular_codec import (
+            MODEL_REPRESENTATION,
+            load_molecular_export,
+        )
+
+        return load_molecular_export(
+            export_path,
+            expected_dataset=normalized_dataset,
+            expected_representation=MODEL_REPRESENTATION,
+            expected_count=expected_count,
+        )
+    if normalized_dataset is not None and normalized_dataset not in SUPPORTED_GENERIC_DATASETS:
+        raise ValueError(f"Unsupported DeFoG dataset {dataset!r}.")
     with np.load(export_path, allow_pickle=False) as payload:
         required = {
             "node_ptr",
@@ -406,6 +521,16 @@ def load_defog_export(
         )
         edge_labels = _require_integer_array(payload["edge_labels"], name="edge_labels")
         raw_indices = _require_integer_array(payload["raw_indices"], name="raw_indices")
+        if "dataset" in payload.files:
+            encoded_dataset_values = np.asarray(payload["dataset"]).reshape(-1)
+            if encoded_dataset_values.size != 1:
+                raise ValueError("DeFoG dataset metadata must contain one value.")
+            encoded_dataset = str(encoded_dataset_values[0]).lower()
+            if normalized_dataset is not None and encoded_dataset != normalized_dataset:
+                raise ValueError(
+                    f"DeFoG export dataset {encoded_dataset!r} does not match "
+                    f"expected dataset {normalized_dataset!r}."
+                )
 
     if node_ptr.ndim != 1 or edge_ptr.ndim != 1 or node_ptr.size != edge_ptr.size:
         raise ValueError("DeFoG node_ptr and edge_ptr must be aligned vectors.")
@@ -461,7 +586,7 @@ def load_defog_export(
         graph.add_edges_from((int(u), int(v)) for u, v in graph_edges)
         graph.graph["base_generator"] = "defog"
         graph.graph["defog_raw_index"] = index
-        graphs.append(normalize_topology_graph(graph))
+        graphs.append(_normalize_generic_graph(graph))
     return graphs
 
 
@@ -471,7 +596,10 @@ def _read_manifest(path: Path | None) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise TypeError(f"DeFoG manifest {path} must contain a JSON object.")
-    if value.get("format") != DEFOG_EXPORT_FORMAT:
+    if value.get("format") not in {
+        DEFOG_EXPORT_FORMAT,
+        LEGACY_DEFOG_EXPORT_FORMAT,
+    }:
         raise ValueError(f"Unsupported DeFoG manifest format {value.get('format')!r}.")
     return value
 
@@ -489,11 +617,19 @@ def _verify_export_manifest(
     *,
     export_path: Path,
     expected_count: int,
+    expected_dataset: str | None = None,
 ) -> None:
     if not manifest:
         return
     if int(manifest.get("exported_samples", -1)) != expected_count:
         raise ValueError("DeFoG manifest sample count does not match the export.")
+    manifest_dataset = manifest.get("dataset")
+    if (
+        expected_dataset is not None
+        and manifest_dataset is not None
+        and str(manifest_dataset).lower() != str(expected_dataset).lower()
+    ):
+        raise ValueError("DeFoG manifest dataset does not match the requested dataset.")
     export = manifest.get("export", {}) or {}
     if not isinstance(export, Mapping):
         raise TypeError("DeFoG manifest export metadata must be a mapping.")
@@ -526,12 +662,17 @@ def generate_defog_graphs(
             if config.manifest_path is not None
             else configured_generated.with_name("defog_manifest.json")
         )
-        graphs = load_defog_export(configured_generated, expected_count=num_graphs)
+        graphs = load_defog_export(
+            configured_generated,
+            dataset=config.dataset,
+            expected_count=num_graphs,
+        )
         manifest = _read_manifest(manifest_path)
         _verify_export_manifest(
             manifest,
             export_path=configured_generated,
             expected_count=num_graphs,
+            expected_dataset=config.dataset,
         )
         return DeFoGGenerationResult(
             graphs=graphs,
@@ -586,7 +727,11 @@ def generate_defog_graphs(
         log_path=log_path,
         seed=seed,
     )
-    graphs = load_defog_export(export_path, expected_count=num_graphs)
+    graphs = load_defog_export(
+        export_path,
+        dataset=config.dataset,
+        expected_count=num_graphs,
+    )
     manifest = _read_manifest(manifest_path)
     if not manifest:
         raise RuntimeError("DeFoG worker completed without publishing a manifest.")
@@ -594,6 +739,7 @@ def generate_defog_graphs(
         manifest,
         export_path=export_path,
         expected_count=num_graphs,
+        expected_dataset=config.dataset,
     )
     return DeFoGGenerationResult(
         graphs=graphs,

@@ -40,7 +40,7 @@ from grapher.rewiring_mlp.molecular.typed_invariants import (
     extract_typed_invariant,
     typed_invariant_matches_graph,
 )
-from grapher.properties.summary import configure_orca_executable
+from grapher.rewiring_mlp.properties.summary import configure_orca_executable
 from grapher.utils.io import ensure_dir, load_yaml, save_json, save_pickle
 
 

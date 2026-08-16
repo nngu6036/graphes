@@ -3,7 +3,7 @@ from __future__ import annotations
 import networkx as nx
 import numpy as np
 
-from grapher.properties.summary import (
+from grapher.rewiring_mlp.properties.summary import (
     SummaryConfig,
     extract_summary,
     python_orbit_count_vector,

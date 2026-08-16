@@ -14,16 +14,16 @@ import numpy as np
 import torch
 
 from grapher.data.io import load_dataset_splits
-from grapher.rewiring_mlp.evaluation.metrics import degree_preservation_rate, evaluate_graph_sets
-from grapher.rewiring_mlp.evaluation.studies import aggregate_pipeline_diagnostics
-from grapher.models.defog_backend import (
+from grapher.evaluation.metrics import degree_preservation_rate, evaluate_graph_sets
+from grapher.evaluation.studies import aggregate_pipeline_diagnostics
+from grapher.models.defog.defog import (
     DeFoGGeneratorConfig,
     generate_defog_graphs,
 )
-from grapher.properties.summary import configure_orca_executable
-from grapher.rewiring_mlp.generic.data import normalize_topology_graph
-from grapher.rewiring_mlp.generic.model import load_topology_checkpoint
-from grapher.rewiring_mlp.generic.refiner import refine_graph_with_topology_predictions
+from grapher.rewiring_mlp.properties.summary import configure_orca_executable
+from grapher.topology.data import normalize_topology_graph
+from grapher.topology.model import load_topology_checkpoint
+from grapher.topology.refiner import refine_graph_with_topology_predictions
 from grapher.utils.io import ensure_dir, load_yaml, save_json, save_pickle
 
 

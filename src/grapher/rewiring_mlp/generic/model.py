@@ -6,7 +6,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from grapher.properties.summary import SummaryConfig
+from grapher.rewiring_mlp.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.data import TopologyGraphletBatch
 from grapher.rewiring_mlp.generic.layers import TopologyMPNNLayer

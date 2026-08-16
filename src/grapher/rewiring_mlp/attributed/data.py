@@ -12,7 +12,7 @@ from grapher.rewiring_mlp.molecular.typed_invariants import (
     extract_typed_invariant,
     typed_invariant_matches_graph,
 )
-from grapher.properties.summary import SummaryConfig
+from grapher.rewiring_mlp.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.core.rewiring import (
     Action,
     candidate_actions_from_edge_pair,

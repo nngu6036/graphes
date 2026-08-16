@@ -49,6 +49,7 @@ def _zinc_config(*, expected_graphs: int = 6, seed: int = 0) -> dict:
         "filters": {
             "require_connected": True,
             "neutral_only": True,
+            "uncharged_atoms_only": True,
             "allowed_atomic_numbers": [6, 7, 8, 9, 15, 16, 17, 35, 53],
         },
         "categorical_state": {
@@ -69,6 +70,7 @@ def test_repository_zinc_config_resolves_fixed_12k_protocol() -> None:
     assert protocol.expected_graphs == 12000
     assert protocol.seed == 0
     assert protocol.split_counts == {"train": 10000, "val": 1000, "test": 1000}
+    assert protocol.uncharged_atoms_only is True
     assert protocol.allowed_bond_types == (1, 2, 3, 4)
 
 
@@ -119,6 +121,10 @@ def test_zinc_conversion_applies_fragment_charge_and_size_filters() -> None:
     with pytest.raises(ZincRecordError) as charged:
         smiles_to_zinc_graph("[NH4+]", protocol)
     assert charged.value.reason == "non_neutral"
+
+    with pytest.raises(ZincRecordError) as zwitterion:
+        smiles_to_zinc_graph("[NH3+]CC(=O)[O-]", protocol)
+    assert zwitterion.value.reason == "charged_atom"
 
     with pytest.raises(ZincRecordError) as invalid:
         smiles_to_zinc_graph("not-a-smiles", protocol)

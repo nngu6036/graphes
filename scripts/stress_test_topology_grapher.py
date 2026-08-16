@@ -61,7 +61,7 @@ def _load_runtime_dependencies() -> None:
         degree_preservation_rate as degree_preservation_rate_fn,
     )
     from grapher.rewiring_mlp.evaluation.metrics import evaluate_graph_sets as evaluate_graph_sets_fn
-    from grapher.properties.summary import (
+    from grapher.rewiring_mlp.properties.summary import (
         configure_orca_executable as configure_orca_executable_fn,
     )
     from grapher.rewiring_mlp.generic.model import (

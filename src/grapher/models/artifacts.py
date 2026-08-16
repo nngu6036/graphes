@@ -102,6 +102,44 @@ class ArtifactLayout:
         return self.train_dir / "train.log"
 
     @property
+    def training_estimates_dir(self) -> Path:
+        """Post-training samples used to build corrector-training pairs."""
+
+        return self.train_dir / "training_estimates"
+
+    @property
+    def estimated_training_graphs_path(self) -> Path:
+        return self.training_estimates_dir / "estimated_graphs.pkl"
+
+    @property
+    def ground_truth_training_graphs_path(self) -> Path:
+        return self.training_estimates_dir / "ground_truth_graphs.pkl"
+
+    @property
+    def ground_truth_model_view_graphs_path(self) -> Path:
+        """Ground truth transformed into the upstream model's representation."""
+
+        return self.training_estimates_dir / "ground_truth_model_view.pkl"
+
+    @property
+    def training_estimates_manifest_path(self) -> Path:
+        return self.training_estimates_dir / "manifest.json"
+
+    @property
+    def training_estimates_log_path(self) -> Path:
+        return self.training_estimates_dir / "generate.log"
+
+    @property
+    def native_training_estimates_dir(self) -> Path:
+        return self.training_estimates_dir / "native"
+
+    @property
+    def native_training_dataset_dir(self) -> Path:
+        """DeFoG-formatted copy of the exact GraphER training splits."""
+
+        return self.train_dir / "native_dataset"
+
+    @property
     def generations_dir(self) -> Path:
         return self.run_dir / "generations"
 
@@ -143,4 +181,3 @@ class ArtifactLayout:
                 "generation identifier, or explicitly enable overwrite."
             )
         return candidate
-
