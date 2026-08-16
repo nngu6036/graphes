@@ -448,6 +448,7 @@ def _graphs_from_sdf_qm9(
         str(sdf_file),
         removeHs=False,
         sanitize=False,
+        strictParsing=True,
     )
     if supplier is None:
         raise RuntimeError(f"Could not open SDF file: {sdf_file}")
@@ -567,11 +568,14 @@ def main() -> None:
             f"Canonical QM9 uses split seed {protocol.split_seed}; received "
             f"{split_seed}. Use --allow-noncanonical for a different split."
         )
-    if canonical_run and (args.keep_hydrogens or args.no_kekulize):
+    if canonical_run and args.keep_hydrogens:
         raise ValueError(
-            "Canonical QM9 uses the heavy-atom, kekulized representation. "
-            "Use --allow-noncanonical to change preprocessing."
+            "Canonical QM9 uses the heavy-atom representation. "
+            "Use --allow-noncanonical to retain hydrogens."
         )
+
+    # PyG and DeFoG preserve QM9's source SDF bond categories.
+    effective_kekulize = False if canonical_run else not args.no_kekulize
 
     root = Path(args.root)
     output_paths = _dataset_output_paths(
@@ -610,7 +614,7 @@ def main() -> None:
         graphs, errors = graphs_from_smiles(
             smiles,
             remove_h=not args.keep_hydrogens,
-            kekulize=not args.no_kekulize,
+            kekulize=effective_kekulize,
         )
         source_path = str(args.smiles_file)
         source_sha256 = _sha256_file(Path(args.smiles_file).resolve())
@@ -633,7 +637,7 @@ def main() -> None:
             sdf_file,
             max_molecules=args.max_molecules,
             remove_h=not args.keep_hydrogens,
-            kekulize=not args.no_kekulize,
+            kekulize=effective_kekulize,
             excluded_indices=excluded_indices,
         )
         sdf_file = sdf_file.resolve()
@@ -724,7 +728,7 @@ def main() -> None:
         "source_type": source,
         "kind": "qm9_topology",
         "remove_h": not args.keep_hydrogens,
-        "kekulize": not args.no_kekulize,
+        "kekulize": effective_kekulize,
         "seed": split_seed,
         "canonical_protocol": canonical_run,
         "source_sha256": source_sha256,

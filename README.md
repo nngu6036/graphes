@@ -332,37 +332,6 @@ export.
 
 ### Train DeFoG
 
-```python
-from pathlib import Path
-
-from grapher.models import DatasetReference, RunSpec, TrainRequest, create_baseline
-
-run = RunSpec.for_seed(
-    model_id="defog",
-    dataset_id="community_small",
-    seed=42,
-    output_root=Path("outputs/baselines"),
-)
-
-dataset = DatasetReference(
-    benchmark_id="community_small",
-    root=Path("outputs/datasets"),
-    serialized_id="sbm",
-    native_id="comm20",
-)
-
-wrapper = create_baseline("defog")
-training = wrapper.train(
-    TrainRequest(
-        run=run,
-        dataset=dataset,
-        options={
-            "experiment": "comm20",
-            "runtime": {"gpus": 1},
-        },
-    )
-)
-```
 
 The training worker converts the trusted GraphER split pickles into DeFoG's
 adjacency-tensor format, invokes the upstream Hydra entry point, and publishes
