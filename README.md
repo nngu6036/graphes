@@ -1,45 +1,54 @@
-# GraphER: Decoupled Topology Generation
+# GraphER: Decoupled Topology Generation and Post-Correction
 
 GraphER is a constraint-preserving graph generator/refiner. The maintained
-generic routes either construct a graph from a learned degree sequence or use
-a frozen DeFoG sample as the base, then apply valid double-edge rewiring.
+generic implementation treats the Rewiring MLP as a model-agnostic structural
+corrector: it starts from a **completed graph produced by a declared base
+generator**, predicts graph-level structural targets, and applies valid
+double-edge swaps without changing the base graph's indexed degree sequence.
 
-This release implements the first part of the decoupled design: generic graph
-topology generation. It does not predict node labels, edge labels, edge
-occupancy, or a no-edge category in the active topology path.
+The current generic target vector is
+
+\[
+\Phi(G)=\bigl(H_{3:5}(G),\ C(G),\ O_{0:14}(G)\bigr),
+\]
+
+where \(H_{3:5}\) contains connected induced graphlet histograms, \(C\) is a
+clustering-coefficient histogram, and \(O_{0:14}\) is the standard
+15-dimensional mean orbit-count vector for connected graphlets with two to
+four nodes. The active topology model has no terminal adjacency, edge/no-edge,
+node-label, or edge-label prediction head.
 
 ## Current scope
 
-The intended topology-attribute factorization is
+The intended topology-attribute factorization remains
 
 \[
-p(A,X,R)=p_{\mathrm{top}}(A)\,
-         p_{\mathrm{attr}}(X,R\mid A),
+p(A,X,R)=p_{\mathrm{top}}(A)\,p_{\mathrm{attr}}(X,R\mid A),
 \]
 
 where \(A\) is the unlabelled topology, \(X\) contains node attributes, and
-\(R\) contains edge attributes. The current implementation provides
-\(p_{\mathrm{top}}\):
+\(R\) contains edge attributes. This release implements generic topology
+correction and from-scratch topology generation:
 
-\[
-p_{\mathrm{top}}(A,d)
-=p_\eta(d)\,p_\theta(A\mid d).
-\]
-
-- \(p_\eta(d)\): DH-VAE samples an ordinary degree sequence.
-- A connected Havel-Hakimi constructor realizes the sampled sequence.
-- \(p_\theta(A\mid d)\): a topology predictor estimates the target
-  connected-graphlet law, and GraphER rewires within the fixed degree fibre.
+- DH-VAE + randomized connected Havel--Hakimi is the maintained optional
+  from-scratch base;
+- DeFoG is the maintained external frozen base;
+- the Rewiring MLP is trained from each base's completed post-training output
+  pool, not from an implicit Havel--Hakimi reconstruction of the target; and
+- target graphs supply permutation-invariant graphlet, clustering, and orbit
+  summaries only.
 
 | Route | Status | Active implementation |
 | --- | --- | --- |
-| Generic topology | Current | DH-VAE + connected Havel-Hakimi + graphlet-only GraphER |
-| Generic post-hoc correction | Current baseline | frozen DeFoG + graphlet-only GraphER |
-| Attributed endpoint model | Legacy compatibility | Existing QM9/ZINC code under `grapher.rewiring_mlp.attributed` |
-| Decoupled attribute stage | Planned | Attribute-only CatFlow/DeFoG-style process conditioned on generated topology |
+| Generic from-scratch topology | Current | declared DH-VAE+HH base + structural-summary GraphER |
+| Generic post-hoc correction | Current | declared frozen DeFoG base + base-matched structural-summary GraphER |
+| Attributed endpoint model | Legacy compatibility | existing QM9/ZINC code under `grapher.rewiring_mlp.attributed` |
+| Decoupled attribute stage | Planned | attribute-only CatFlow/DeFoG-style process conditioned on generated topology |
 
-The DH-VAE and topology predictor are currently trained as separate modules and
-composed during generation. End-to-end joint optimization is not implemented.
+The base generator and Rewiring MLP are optimized separately. A corrector
+checkpoint is base-specific unless its `training_sources.generators` list
+explicitly contains multiple generators. End-to-end joint optimization is not
+implemented.
 
 ## Baseline model wrappers
 
@@ -53,9 +62,12 @@ train(request: TrainRequest) -> TrainingArtifacts
 generate(request: GenerateRequest) -> GenerationArtifacts
 ```
 
-This is an experiment-orchestration and reporting refactor. It does not change
-the GraphER predictor, candidate swaps, validity constraints, or correction
-rule.
+The wrapper layer also defines the training-source contract for the Rewiring
+MLP. A completed wrapper publishes a checksum-verified post-training output
+pool; `train_topology_grapher.py` resolves that manifest, creates a deterministic
+train/validation partition, and explicitly couples source graphs to training
+targets. Candidate swaps and hard validity constraints remain independent of
+the base implementation.
 
 Wrappers are located in `src/grapher/models/`, rather than a top-level
 `src/models/`, so that GraphER remains namespaced and does not shadow external
@@ -132,9 +144,13 @@ The command trains the DH-VAE from `outputs/datasets/sbm`, realizes sampled
 degree sequences with the existing randomized connected HH constructor, and
 writes the raw batch to
 `outputs/baselines/dhvae_hh/community_small/seed_42/generations/seed_42_n_1024/base_graphs.pkl`.
-The optional post-training estimate pool is an independent unconditional
-sample, so its manifest records `pairing.status: unpaired` and retains an exact
-copy of the training split instead of asserting index alignment.
+The post-training estimate pool is an independent unconditional sample, so its
+manifest records `pairing.status: unpaired`; equal source/target counts never
+imply index alignment. Rewiring-MLP training performs a separate deterministic
+one-to-one coupling within exact node-count strata using Hungarian assignment
+on the normalized sorted-degree profile. Clustering, orbit, and graphlet
+summaries are explicitly excluded from the matching cost and remain held-out
+prediction targets.
 
 To train DeFoG on the prepared Community-small split and then generate 1,024
 raw graphs, keep GraphER in its own environment and point the wrapper at the
@@ -162,26 +178,29 @@ after the temporary staging directory is removed.
 
 ```mermaid
 flowchart TD
-    G["Training graph G*"] --> S["Degree sequence d* and exact graphlet target"]
-    S --> H["Connected Havel-Hakimi source G0"]
-    H --> T["Target-adjacency-free teacher rewiring"]
-    T --> P["Train topology graphlet predictor"]
-    D["DH-VAE degree sample"] --> C["Connected Havel-Hakimi construction"]
-    C --> R["Predict graphlet target and score valid swaps"]
-    R --> O["Generated topology"]
+    B["Declared base-generator wrapper"] --> U["Completed output pool + manifest"]
+    G["Training target split"] --> F["Extract graphlet + clustering + orbit targets"]
+    U --> M["Deterministic split and one-to-one matching by n + degree profile"]
+    F --> M
+    M --> T["Target-adjacency-free structural teacher"]
+    T --> P["Train Rewiring-MLP structural predictor"]
+    D["Managed DH-VAE checkpoint"] --> C["Randomized connected HH base"]
+    C --> R["Predict structural target and score valid swaps"]
+    X["Frozen external base sample"] --> R
+    R --> O["Corrected topology"]
 ```
 
 ### Degree-constrained state space
 
-After construction assigns the sampled degrees to indexed nodes, GraphER stays
-inside
+For a completed source graph \(G_0\), GraphER stays inside its indexed degree
+fibre
 
 \[
 \Omega(d^{(0)})=
 \left\{
 G:
 G\text{ is simple and connected, and }
-d_v(G)=d_v^{(0)}\ \forall v
+d_v(G)=d_v(G_0)\ \forall v
 \right\}.
 \]
 
@@ -190,137 +209,131 @@ replaces them by one of the two cross-connections. Before scoring, GraphER
 rejects actions that introduce a self-loop, duplicate edge, disconnected
 state, or previously visited state.
 
-Every accepted action therefore preserves:
-
-- node and edge counts;
-- each indexed node's ordinary degree;
-- the degree multiset;
-- simplicity and undirectedness;
-- absence of self-loops and parallel edges; and
-- connectivity.
-
+Every accepted action therefore preserves node and edge counts, every indexed
+node degree, the degree multiset, simplicity, undirectedness, and connectivity.
 These are hard guarantees of the transition operator, not learned penalties.
 
-### Connected graphlet target
+### Structural-summary targets
 
-For each maintained graphlet size \(k\in\{3,4,5\}\), the implementation
-uses the complete basis of connected, unlabelled, induced graphlets. If
-\(c_H(G)\) is the number of induced occurrences of graphlet \(H\), the
-per-size composition is
+For each maintained graphlet size \(k\in\{3,4,5\}\), the implementation uses
+the complete basis of connected, unlabelled, induced graphlets. If \(c_H(G)\)
+is the number of induced occurrences of graphlet \(H\), the per-size
+composition is
 
 \[
 h_k(G)_H=
-\frac{c_H(G)}
-{\sum_{J\in\mathcal K_k}c_J(G)}.
+\frac{c_H(G)}{\sum_{J\in\mathcal K_k}c_J(G)}.
 \]
 
 The optional connected-subset mass is
 
 \[
 \rho_k(G)=
-\frac{\sum_{H\in\mathcal K_k}c_H(G)}
-{\binom{|V|}{k}}.
+\frac{\sum_{H\in\mathcal K_k}c_H(G)}{\binom{|V|}{k}}.
 \]
 
-Graphlet counts are exact. Candidate counts are obtained with exact
-switch-local deltas over subsets affected by the removed or inserted edges.
-The `graphlet_backend: sampled` field in maintained YAML files applies to
-standalone evaluation, not to topology training or candidate scoring.
+The clustering target is a normalized histogram of node clustering
+coefficients on `[0,1]`; maintained configurations use 20 bins. The orbit
+target is the mean per-node count for the standard ORCA-style orbits 0--14.
+Because these orbits are determined by the edge count and connected induced
+three- and four-node graphlet counts, the implementation derives them from the
+same exact cache rather than invoking ORCA during training.
+
+Graphlet counts are exact. Candidate graphlet and orbit counts are obtained
+with exact switch-local deltas over subsets affected by removed or inserted
+edges. Clustering is recomputed for the materialized candidate. The
+`graphlet_backend: sampled` field in maintained YAML files applies to external
+evaluation, not to predictor targets or candidate scoring.
 
 ### State-conditioned predictor
 
-`TopologyGraphletPredictor` consumes:
+`TopologyGraphletPredictor` is retained as the compatibility class name, but
+checkpoint format `topology_structural_predictor_v2` contains three active
+heads. The model consumes the current binary adjacency, normalized indexed
+node degrees, graph size, normalized rewiring time `t/T`, and padding masks. It
+outputs:
 
-- the current binary adjacency \(A_t\);
-- normalized indexed node degrees;
-- graph size;
-- normalized rewiring time \(t/T\); and
-- node/pair padding masks.
-
-It produces one Dirichlet concentration vector \(\alpha_{t,k}\) per graphlet
-size and one optional Beta pair \((a_{t,k},b_{t,k})\) for connected mass:
+- one Dirichlet concentration vector \(\alpha_{t,k}\) per graphlet size;
+- an optional Beta pair for each connected-subset mass;
+- one Dirichlet concentration vector \(\gamma_t\) for clustering; and
+- a non-negative prediction of \(\log(1+O_{0:14})\).
 
 \[
-\widehat h_{t,k}
-=\frac{\alpha_{t,k}}{\sum_j\alpha_{t,k,j}},
+\widehat h_{t,k}=\frac{\alpha_{t,k}}{\sum_j\alpha_{t,k,j}},
 \qquad
-\widehat\rho_{t,k}
-=\frac{a_{t,k}}{a_{t,k}+b_{t,k}}.
+\widehat C_t=\frac{\gamma_t}{\sum_j\gamma_{t,j}}.
 \]
 
-The graph-level output is permutation invariant. The model has no terminal
+The graph-level outputs are permutation invariant. The model has no terminal
 node head, pair/edge head, no-edge class, pair loss, degree-consistency loss, or
-learned selector. It does use dense symmetric pair features internally, so the
+learned selector. Dense symmetric pair features are used internally, so the
 current encoder still has \(O(n^2)\) pair memory/computation.
 
-The topology loss is
+The maintained objective is
 
 \[
-\mathcal L_{\mathrm{top}}
-=\lambda_{\mathrm{mean}}\,
-  \mathrm{CE}(h^\star,\widehat h)
-+\lambda_{\mathrm{dist}}\,
-  [-\log\operatorname{Dir}(h^\star;\alpha)]
-+\lambda_{\mathrm{mass}}\,
-  [-\log\operatorname{Beta}(\rho^\star;a,b)].
+\mathcal L=
+\lambda_{g,m}\,\mathrm{CE}(H^\star,\widehat H)
++\lambda_{g,d}\,[-\log\mathrm{Dir}(H^\star;\alpha)]
++\lambda_{c,m}\,\mathrm{CE}(C^\star,\widehat C)
++\lambda_{c,d}\,[-\log\mathrm{Dir}(C^\star;\gamma)]
++\lambda_o\,\mathrm{SmoothL1}
+  \bigl(\log(1+O^\star),\widehat L_o\bigr),
 \]
 
-All maintained generic configurations use weights
-`graphlet_mean: 1.0`, `graphlet_distribution: 0.1`, and
-`graphlet_mass: 0.0`. The mass head exists, but it is not trained or used by
-the maintained experiments.
+plus the optional graphlet connected-mass term. Maintained configurations use
+`graphlet_mean: 1.0`, `graphlet_distribution: 0.1`,
+`clustering_mean: 1.0`, `clustering_distribution: 0.1`, `orbit: 1.0`, and
+`graphlet_mass: 0.0`.
 
-### Teacher trajectories
+### Completed-base matching and teacher trajectories
 
-For each terminal training graph \(G^\star\), the teacher:
+For each declared base generator and each split, training:
 
-1. extracts its ordinary degree sequence and one exact graphlet target;
-2. constructs and optionally randomizes a connected Havel-Hakimi realization;
-3. proposes ordinary valid double-edge swaps without reading the terminal
-   adjacency;
-4. scores candidates against the cached graphlet target;
-5. follows a hard or soft distribution over positive-improvement actions; and
-6. emits `STOP` when the target tolerance is met or no proposed valid action
-   improves the target discrepancy.
+1. loads the wrapper's completed graph pool and verifies its published SHA-256;
+2. drops or errors on disconnected sources according to the declared policy;
+3. partitions that pool deterministically into training and validation sources;
+4. forms exact node-count strata and solves a one-to-one Hungarian assignment
+   using only normalized sorted-degree-profile distance;
+5. extracts graphlet, clustering, and orbit targets from the matched dataset
+   graph; and
+6. starts the teacher trajectory from the **unchanged completed source output**
+   (`source_randomization_steps: 0`; optional random relabelling changes indices
+   only).
 
-The same cached target supervises all selected states from that trajectory.
-Teacher actions create informative intermediate states and are retained for
-diagnostics, but they are not used to train a selector in the current generic
-path.
+The target adjacency is never supplied to the predictor or candidate proposer.
+The same cached graph-level target supervises all selected states from a
+trajectory. The source and target need not have identical degrees; every
+teacher state remains in the source graph's degree fibre, while degree-profile
+matching reduces avoidable incompatibility. Pairing retention, costs, strata,
+source hashes, and excluded matching features are written to
+`training_report.json`.
 
 ### Generation and correction energy
 
-At generation step \(t\), one predicted target is frozen while all proposed
-candidates are compared:
+At step \(t\), one predicted target is frozen while all proposed candidates are
+compared:
 
 \[
-\widehat E_t(G)
-=
-\frac{1}{|\mathcal K|}
-\sum_k
-\left\|h_k(G)-\widehat h_{t,k}\right\|_2
-+\lambda_m
-\frac{1}{|\mathcal K|}
-\sum_k
-\left|\rho_k(G)-\widehat\rho_{t,k}\right|.
+\widehat E_t(G)=
+\lambda_g D_g(H(G),\widehat H_t)
++\lambda_c\frac{\|C(G)-\widehat C_t\|_2}{\sqrt{B}}
++\lambda_o\frac{\|\log(1+O(G))-\log(1+\widehat O_t)\|_2}{\sqrt{15}}
++\lambda_m D_m(\rho(G),\widehat\rho_t).
 \]
 
 For candidate action \(a\),
 
 \[
-\Delta_t(a)
-=\widehat E_t(G_t)
--\widehat E_t(T_a(G_t)).
+\Delta_t(a)=\widehat E_t(G_t)-\widehat E_t(T_a(G_t)).
 \]
 
 Only candidates with \(\Delta_t(a)>\varepsilon\) can be accepted. The
 maintained greedy configuration chooses the best improving candidate and
-recomputes the graphlet prediction after every accepted swap.
-
-This gives a step-local decrease guarantee for the frozen prediction used in
-that decision. It does not imply global monotonicity, exact target recovery, or
-convergence to the data distribution because the predicted target changes
-after each accepted swap.
+recomputes all predicted summaries after every accepted swap. This gives a
+step-local decrease guarantee for the frozen prediction used in that decision;
+it does not imply global monotonicity, exact target recovery, or convergence to
+the data distribution.
 
 ## Repository layout
 
@@ -388,6 +401,8 @@ Run every command below from the repository root.
 
 ## End-to-end quick start: Community-small
 
+Run every command from the repository root.
+
 ### 1. Prepare and freeze the dataset
 
 ```bash
@@ -396,48 +411,66 @@ PYTHONPATH=src python scripts/prepare_generic_dataset.py \
   --root outputs/datasets
 ```
 
-Community-small intentionally retains the historical serialized name `sbm`.
-Its files are therefore written to `outputs/datasets/sbm/`.
+Community-small intentionally retains the historical serialized name `sbm`;
+its split files are written to `outputs/datasets/sbm/`.
 
-### 2. Train the DH-VAE degree prior
-
-```bash
-PYTHONPATH=src python scripts/train_degree_generator.py \
-  --config configs/experiments/dhvae/community_small.yaml
-```
-
-The maintained generation configuration samples graph size from the empirical
-training distribution and samples the degree histogram conditional on that
-size.
-
-Optional prior diagnostic:
+### 2. Train the declared DH-VAE+HH base and publish completed outputs
 
 ```bash
-PYTHONPATH=src python scripts/evaluate_degree_generator.py \
-  --config configs/experiments/dhvae/community_small.yaml \
+PYTHONPATH=src python scripts/run_dhvae_hh_baseline.py \
+  --dataset community_small \
   --num-samples 1024 \
-  --max-reference-sequences 20
+  --training-estimate-count 1024 \
+  --seed-id 42 \
+  --device auto
 ```
 
-The standalone evaluator reports both raw-prior and accepted-prior results. Its
-accepted stream retains the older repair-capable postprocessing behavior.
-Strict end-to-end topology generation is instead enforced by the topology
-configuration with `postprocess_policy: reject_only` and `fallback: error`.
-Use the raw-prior fields when diagnosing native DH-VAE feasibility.
+This single managed run publishes both artifacts required by the maintained
+configuration:
 
-### 3. Train the topology graphlet predictor
+```text
+outputs/baselines/dhvae_hh/community_small/seed_42/train/
+├── checkpoints/checkpoint.pt
+└── training_estimates/manifest.json
+```
+
+The manifest points to completed randomized-HH graphs sampled from the trained
+DH-VAE. They are unconditional outputs and therefore deliberately unpaired.
+
+### 3. Train the Rewiring MLP
 
 ```bash
 PYTHONPATH=src python scripts/train_topology_grapher.py \
   --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
   --output-dir outputs/topology_grapher/community_small/seed_42 \
-  --seed 42
+  --seed 42 \
+  --device auto
 ```
 
-This command writes the best validation checkpoint. It does not load or update
-the DH-VAE checkpoint.
+Despite the historical config filename, this trains the v2 structural
+predictor with graphlet, clustering, and orbit targets. Before building teacher
+states, the script loads the declared completed source pool, verifies its
+checksum, partitions it deterministically, and writes the one-to-one matching
+audit to `training_report.json`. It fails rather than silently reverting to an
+implicit Havel--Hakimi training source.
 
-### 4. Generate graph topologies
+A small integration run can be launched with:
+
+```bash
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
+  --output-dir outputs/topology_grapher/community_small/smoke_seed_42 \
+  --max-train-graphs 8 \
+  --max-val-graphs 4 \
+  --epochs 1 \
+  --seed 42 \
+  --device cpu
+```
+
+The completed source pool must still contain matching node-count strata for the
+selected target subset.
+
+### 4. Generate and refine graph topologies
 
 ```bash
 PYTHONPATH=src python scripts/run_topology_grapher.py \
@@ -448,13 +481,9 @@ PYTHONPATH=src python scripts/run_topology_grapher.py \
   --seed 42
 ```
 
-The topology configuration points to
-`outputs/degree_generators/sbm/seed_42/checkpoint.pt`. Generation fails early
-if either checkpoint is missing or incompatible.
-
-For each requested graph, the script retries degree sampling plus construction
-up to `generation.max_attempts_per_graph`. If one graph exhausts that budget,
-the run raises an error and does not save a partial collection.
+The maintained topology config points to the same managed DH-VAE checkpoint
+that produced the Rewiring-MLP training sources. Generation fails early if the
+base or corrector checkpoint is missing or incompatible.
 
 ### 5. Evaluate saved graphs
 
@@ -465,11 +494,9 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir outputs/topology_grapher/community_small/seed_42/evaluation
 ```
 
-The standalone report compares training, Havel-Hakimi source, and final
-topology distributions using degree, clustering, and four-node orbit MMD. It
-also writes representative graph figures. It does not currently report
-graphlet-history MMD; graphlet discrepancy appears in training/generation
-diagnostics.
+The report compares the completed DH-VAE+HH base and corrected graphs against
+the held-out split using degree, clustering, orbit, and configured graphlet
+metrics.
 
 ## Prepare report-facing molecular datasets
 
@@ -505,18 +532,37 @@ and machine-readable preparation reports.
 
 ## DeFoG base + GraphER correction
 
-The DeFoG adapter runs in a subprocess so DeFoG can retain its own legacy
-Python/Lightning/PyG environment. Set `DEFOG` to the DeFoG repository root. If
-that environment uses a different interpreter, also set `DEFOG_PYTHON`:
+DeFoG remains isolated in its own environment. Set its repository and
+interpreter, then train it through the common wrapper so a completed
+post-training output pool is published:
 
 ```bash
 export DEFOG=/absolute/path/to/DeFoG
 export DEFOG_PYTHON=/absolute/path/to/defog/environment/bin/python
 
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 42
+```
+
+Train a DeFoG-specific Rewiring MLP from that pool:
+
+```bash
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_defog_rewiring_mlp.yaml \
+  --output-dir outputs/topology_grapher/community_small_defog/seed_42 \
+  --seed 42 \
+  --device auto
+```
+
+Then generate a new DeFoG batch and correct it with the matching checkpoint:
+
+```bash
 PYTHONPATH=src python scripts/run_defog_grapher.py \
   --config configs/experiments/grapher/community_small_defog_corrector.yaml \
-  --defog-checkpoint /absolute/path/to/comm20.ckpt \
-  --checkpoint outputs/topology_grapher/community_small/seed_42/checkpoint.pt \
+  --defog-checkpoint outputs/baselines/defog/community_small/seed_42/train/checkpoints/model.ckpt \
+  --checkpoint outputs/topology_grapher/community_small_defog/seed_42/checkpoint.pt \
   --output-dir outputs/defog_grapher/community_small/seed_42 \
   --num-generate 1024 \
   --seed 42
@@ -525,33 +571,16 @@ PYTHONPATH=src python scripts/run_defog_grapher.py \
 The child calls DeFoG's `GraphDiscreteFlowModel.sample_batch()` directly; it
 does not invoke DeFoG's test-metric or visualization path. Samples are exported
 as numeric `defog_samples.npz` arrays with `allow_pickle=False` and decoded
-according to the recorded dataset schema. Generic batches are checked for a
-simple symmetric adjacency, a zero diagonal, one node class, and preserved
-sample order. QM9 and ZINC batches are checked against their dataset-specific
-atom and bond vocabularies and converted to NetworkX graphs with
-`atomic_num`/`atom_type` and `bond_type`/`bond_order` attributes intact.
+according to the recorded schema.
 
 To reuse identical DeFoG samples across correction ablations, set
-`base_generator.generated_path` to a previous `defog_samples.npz`. A raw DeFoG
-`.pkl` is also accepted through the isolated worker, but it must be trusted in
-the same way as a model checkpoint because Pickle loading can execute code.
+`base_generator.generated_path` or pass `--defog-generated` with a previous
+neutral NPZ. Disconnected samples are retained unchanged under
+`disconnected_policy: no_op_and_report`; they are not dropped, repaired, or
+replaced. The report records the raw base order, correction eligibility,
+structural gains, invariant preservation, and runtime.
 
-Disconnected DeFoG samples are retained unchanged under
-`disconnected_policy: no_op_and_report`; they are not dropped, connected, or
-replaced by their largest component. The common wrapper supports
-Community-small through DeFoG's `comm20` profile and Ego-small through the same
-explicitly recorded generic compatibility profile; the report-facing identity
-and artifact path remain `ego_small`. Grid has no declared compatible profile.
-The attached DeFoG revision also supports heavy-atom QM9 (`dataset=qm9`, default
-experiment `qm9_no_h`) and ZINC (`dataset=zinc`, experiment `zinc`). ZINC uses
-DeFoG's verified Kekule model representation, so generated bond classes are
-1--3 rather than an explicit aromatic class. The fixed ZINC preparation
-protocol rejects molecules containing any formally charged atom because that
-state is not represented by DeFoG; regenerate older prepared ZINC splits after
-updating this repository. No generated molecule is silently filtered or
-repaired.
-
-Evaluate the paired source/final sets with the same report script:
+Evaluate the paired source/final sets with:
 
 ```bash
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
@@ -559,46 +588,41 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir outputs/defog_grapher/community_small/seed_42
 ```
 
-This reports `defog_base_to_test` rather than mislabelling the base set as a
-Havel-Hakimi source. A released DeFoG `comm20` checkpoint uses DeFoG's own
-SPECTRE split; the run report records this provenance and must not claim an
-identical GraphER training split unless DeFoG was retrained accordingly.
+A released DeFoG `comm20` checkpoint may use DeFoG's own SPECTRE split. The
+wrapper and corrector reports preserve this provenance; an identical GraphER
+training split must not be claimed unless DeFoG was retrained on it.
 
 ## Other generic datasets
 
-Use the same five-stage workflow with the corresponding names:
+Use the same prepare -> managed base -> Rewiring MLP -> generation workflow:
 
-| Benchmark | Prepare with `--dataset` | DH-VAE config | Topology config | Configured degree checkpoint |
+| Benchmark | Prepare with `--dataset` | Managed base command | Rewiring-MLP config | Managed base checkpoint |
 | --- | --- | --- | --- | --- |
-| Community-small | `community_small` | `configs/experiments/dhvae/community_small.yaml` | `configs/experiments/grapher/community_small_topology_graphlet.yaml` | `outputs/degree_generators/sbm/seed_42/checkpoint.pt` |
-| Ego-small | `ego_small` | `configs/experiments/dhvae/ego_small.yaml` | `configs/experiments/grapher/ego_small_topology_graphlet.yaml` | `outputs/degree_generators/ego_small/seed_42/checkpoint.pt` |
-| Grid | `grid` | `configs/experiments/dhvae/grid.yaml` | `configs/experiments/grapher/grid_topology_graphlet.yaml` | `outputs/degree_generators/grid/seed_42/checkpoint.pt` |
+| Community-small | `community_small` | `run_dhvae_hh_baseline.py --dataset community_small` | `configs/experiments/grapher/community_small_topology_graphlet.yaml` | `outputs/baselines/dhvae_hh/community_small/seed_42/train/checkpoints/checkpoint.pt` |
+| Ego-small | `ego_small` | `run_dhvae_hh_baseline.py --dataset ego_small` | `configs/experiments/grapher/ego_small_topology_graphlet.yaml` | `outputs/baselines/dhvae_hh/ego_small/seed_42/train/checkpoints/checkpoint.pt` |
+| Grid | `grid` | `run_dhvae_hh_baseline.py --dataset grid` | `configs/experiments/grapher/grid_topology_graphlet.yaml` | `outputs/baselines/dhvae_hh/grid/seed_42/train/checkpoints/checkpoint.pt` |
 
-Suggested topology output roots are:
-
-- `outputs/topology_grapher/community_small/seed_42`
-- `outputs/topology_grapher/ego_small/seed_42`
-- `outputs/topology_grapher/grid/seed_42`
-
-Grid uses `topology_predictor.batch_size: 1` because exact graphlet extraction
-and dense pair representations are substantially more expensive for its larger
-graphs.
+Suggested corrector output roots are
+`outputs/topology_grapher/<benchmark>/seed_42`. Grid uses
+`topology_predictor.batch_size: 1` because exact structural extraction and
+dense pair features are substantially more expensive for its larger graphs.
 
 ## Configuration reference
 
 | Section | Purpose | Important maintained settings |
 | --- | --- | --- |
-| `pipeline` | Select active route | `stage: topology` |
-| `dataset` | Split name, root, and config | `build_if_missing: false` |
-| `graphlet_prediction` | Target basis/counting | connected, exact, \(k=3,4,5\) |
-| `topology_trajectory` | Teacher construction | 12 steps, 96 proposals, 24 valid candidates, 4 retained states |
-| `topology_predictor` | Model and optimizer | graphlet-only losses, best validation checkpoint |
-| `generation` | Degree source and requested yield | learned prior, 1024 graphs, 8 outer attempts |
-| `degree_generator` | DH-VAE loading/sampling | empirical size, reject-only, no fallback |
-| `constructor` | Initial realization | connected Havel-Hakimi |
-| `topology_refiner` | Candidate selection | 24 steps, 128 proposals, 32 valid candidates, greedy positive-gain selection |
-| `evaluation` | Saved-set metrics | degree/clustering/orbit MMD and sample figures |
-| `base_generator` | Optional external base | isolated DeFoG checkpoint/export and sampling settings |
+| `pipeline` | Select active route | `stage: topology` or `posthoc_correction` |
+| `dataset` | Frozen target/reference split | `build_if_missing: false` |
+| `training_sources` | Completed base-output contract | declared manifests, exact-size strata, Hungarian degree-profile coupling |
+| `graphlet_prediction` | Structural target schema | exact connected graphlets `k=3,4,5`, 20-bin clustering, 15 orbit counts |
+| `topology_trajectory` | Teacher construction | completed source, zero source randomization, valid degree-preserving swaps |
+| `topology_predictor` | Rewiring MLP and optimizer | graphlet + clustering + orbit losses, best validation checkpoint |
+| `generation` | Requested yield | learned base prior or external frozen base |
+| `degree_generator` | Managed DH-VAE loading | same wrapper run that published the source pool |
+| `constructor` | From-scratch base realization | randomized connected Havel--Hakimi |
+| `topology_refiner` | Candidate selection | combined structural energy, positive-gain gate, prediction refresh |
+| `evaluation` | Saved-set metrics | degree/clustering/orbit/graphlet and audit fields |
+| `base_generator` | External base | isolated DeFoG checkpoint/export and sampling settings |
 
 ### Degree-source ablations
 
@@ -613,16 +637,17 @@ Oracle mode is not a generative result and must be labelled explicitly.
 
 ### Topology checkpoint contract
 
-Topology checkpoints use format `topology_graphlet_predictor_v1` and include:
+Topology checkpoints use format `topology_structural_predictor_v2` and include:
 
-- model weights and architecture;
+- model weights and architecture, including clustering/orbit head widths;
 - the complete graphlet basis and coordinate order;
-- graphlet summary configuration;
-- validation metrics; and
-- the resolved experiment configuration.
+- structural-summary configuration;
+- held-out graphlet, clustering, and orbit diagnostics;
+- resolved experiment configuration; and
+- the source-pool/matching report in the adjacent `training_report.json`.
 
-Legacy endpoint checkpoints are intentionally rejected rather than partially
-loaded.
+Graphlet-only v1 and legacy endpoint checkpoints are intentionally rejected;
+retraining is required because their output dimensions and semantics differ.
 
 ## Output files
 
@@ -643,23 +668,25 @@ Maintained topology configurations do not write the old
 
 `training_report.json` records:
 
-- best epoch and validation loss;
-- per-epoch graphlet losses and MAE;
-- graphlet basis coordinates;
-- initial/final teacher graphlet discrepancy;
-- accepted teacher steps and STOP rate; and
-- teacher proposal and valid-candidate statistics.
+- best epoch and all per-epoch graphlet, clustering, and orbit losses/errors;
+- target dimensions and graphlet coordinate order;
+- declared base-generator IDs, source artifact and manifest hashes;
+- deterministic pool partitions and per-size matching retention;
+- mean/median/max degree-profile matching cost;
+- the fact that graphlet, clustering, and orbit targets were excluded from
+  matching;
+- initial/final teacher discrepancy for every active structural component;
+- accepted teacher steps, `STOP` rate, proposal counts, and valid-candidate
+  counts.
 
-Generation `report.json` records:
+Generation/correction `report.json` records:
 
-- raw DH-VAE graphicality and connected feasibility;
-- internal sampling attempts, repair/fallback flags, and outer retries;
-- constructor and final degree fidelity;
-- connectedness rate;
-- proposal/pass counts and rejection reasons;
-- accepted swaps and frozen-target graphlet gains;
-- predictor validation graphlet MAE;
-- STOP behavior; and
+- raw base provenance and completed sample order;
+- indexed degree preservation and connectivity;
+- proposal/pass/rejection counts and accepted swaps;
+- frozen-target graphlet, clustering, orbit, and total structural gains;
+- held-out predictor graphlet, clustering, and orbit errors;
+- `STOP` behavior; and
 - per-graph and total runtime.
 
 Do not replace missing topology diagnostics with endpoint fields such as pair
@@ -670,11 +697,13 @@ the active generic model.
 
 - GraphER cannot repair a poor sampled degree sequence because every accepted
   swap preserves it. Degree-distribution error primarily diagnoses DH-VAE.
-- Connected Havel-Hakimi is not a uniform sampler over \(\Omega(d)\).
+- Randomized connected Havel--Hakimi is not a uniform sampler over \(\Omega(d)\).
 - Strict rejection changes the effective accepted invariant distribution, so
   report raw feasibility, attempts, rejection, constructor yield, and final
   quality separately.
-- A finite graphlet law does not identify a unique adjacency.
+- Finite graphlet, clustering, and orbit summaries do not identify a unique adjacency.
+- Source/target matching is an explicit coupling heuristic, not observed natural correspondence; report its cost and retention.
+- A target summary may be unreachable inside a source degree fibre even after nearest-degree matching.
 - Exact candidate scoring is performed only within the sampled candidate set;
   finite proposal budgets can miss improving swaps.
 - `STOP` means no positive move among the proposed valid unvisited

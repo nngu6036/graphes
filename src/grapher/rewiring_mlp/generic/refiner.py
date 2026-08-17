@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 import networkx as nx
@@ -16,9 +16,9 @@ from grapher.rewiring_mlp.generic.data import (
 )
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.graphlets import (
+    candidate_topology_graphlet_counts,
     extract_topology_graphlet_counts,
-    topology_candidate_graphlet_discrepancy,
-    topology_graphlet_discrepancy_from_counts,
+    topology_structural_discrepancy_from_counts,
 )
 from grapher.rewiring_mlp.generic.model import TopologyGraphletPredictor
 from grapher.rewiring_mlp.generic.rewiring import (
@@ -33,6 +33,12 @@ class TopologyPrediction:
     graphlet_mass_target: np.ndarray
     graphlet_history: dict[str, dict[str, float]]
     graphlet_connected_mass: dict[str, float]
+    clustering_target: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    orbit_target: np.ndarray = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
 
 
 @dataclass(frozen=True)
@@ -45,6 +51,8 @@ class TopologyRefinerConfig:
     temperature: float = 0.1
     graphlet_weight: float = 1.0
     graphlet_mass_weight: float = 0.0
+    clustering_weight: float = 0.0
+    orbit_weight: float = 0.0
     accept_only_improving: bool = True
     min_improvement: float = 1.0e-8
     sample_graphlet: bool = False
@@ -61,8 +69,8 @@ class TopologyRefinerConfig:
         if mode != "energy":
             raise NotImplementedError(
                 "The decoupled topology reference path currently implements exact "
-                "graphlet-energy selection only. Legacy pair-aware selector "
-                "checkpoints are incompatible and must not be reused."
+                "structural-summary energy selection only. Legacy pair-aware "
+                "selector checkpoints are incompatible and must not be reused."
             )
         legacy_budget = int(values.get("candidate_budget", 128))
         valid_budget = int(values.get("valid_candidate_budget", legacy_budget))
@@ -81,6 +89,8 @@ class TopologyRefinerConfig:
             temperature=float(values.get("temperature", 0.1)),
             graphlet_weight=float(values.get("graphlet_weight", 1.0)),
             graphlet_mass_weight=float(values.get("graphlet_mass_weight", 0.0)),
+            clustering_weight=float(values.get("clustering_weight", 0.0)),
+            orbit_weight=float(values.get("orbit_weight", 0.0)),
             accept_only_improving=bool(
                 values.get("accept_only_improving", True)
             ),
@@ -101,18 +111,25 @@ class TopologyRefinerConfig:
             raise ValueError("Topology selection must be greedy or softmax sampling.")
         if config.temperature <= 0.0:
             raise ValueError("topology_refiner.temperature must be positive.")
-        if config.graphlet_weight <= 0.0:
-            raise ValueError("topology_refiner.graphlet_weight must be positive.")
-        if not np.isfinite(config.graphlet_weight):
-            raise ValueError("topology_refiner.graphlet_weight must be finite.")
-        if (
-            not np.isfinite(config.graphlet_mass_weight)
-            or config.graphlet_mass_weight < 0.0
-        ):
-            raise ValueError(
-                "topology_refiner.graphlet_mass_weight must be finite and "
-                "nonnegative."
+        for name, value in {
+            "graphlet_weight": config.graphlet_weight,
+            "graphlet_mass_weight": config.graphlet_mass_weight,
+            "clustering_weight": config.clustering_weight,
+            "orbit_weight": config.orbit_weight,
+        }.items():
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(
+                    f"topology_refiner.{name} must be finite and nonnegative."
+                )
+        if not any(
+            value > 0.0
+            for value in (
+                config.graphlet_weight,
+                config.clustering_weight,
+                config.orbit_weight,
             )
+        ):
+            raise ValueError("At least one topology structural weight must be active.")
         if not np.isfinite(config.min_improvement) or config.min_improvement < 0.0:
             raise ValueError(
                 "topology_refiner.min_improvement must be finite and nonnegative."
@@ -143,7 +160,7 @@ def predict_topology_target(
     rng: np.random.Generator,
     sample_graphlet: bool = False,
 ) -> TopologyPrediction:
-    """Predict only the state-conditioned terminal graphlet law."""
+    """Predict the state-conditioned graphlet, clustering, and orbit targets."""
 
     model.eval()
     batch = collate_topology_examples(
@@ -155,6 +172,10 @@ def predict_topology_target(
                 graphlet_mass_target=np.zeros(
                     len(graphlet_basis.sizes), dtype=np.float32
                 ),
+                clustering_target=np.zeros(
+                    model.clustering_width, dtype=np.float32
+                ),
+                orbit_target=np.zeros(model.orbit_width, dtype=np.float32),
             )
         ]
     ).to(device)
@@ -178,6 +199,22 @@ def predict_topology_target(
         ],
         dtype=np.float64,
     )
+    clustering_target = np.zeros(model.clustering_width, dtype=np.float64)
+    if model.clustering_width > 0:
+        clustering_alpha = np.maximum(
+            outputs["clustering_alpha"][0].detach().cpu().numpy(),
+            1.0e-12,
+        )
+        clustering_target = (
+            rng.dirichlet(clustering_alpha)
+            if sample_graphlet
+            else clustering_alpha / float(clustering_alpha.sum())
+        )
+    orbit_target = np.zeros(model.orbit_width, dtype=np.float64)
+    if model.orbit_width > 0:
+        orbit_target = np.expm1(
+            outputs["orbit_log_mean"][0].detach().cpu().numpy()
+        ).clip(min=0.0)
     return TopologyPrediction(
         graphlet_target=graphlet_target,
         graphlet_mass_target=graphlet_mass,
@@ -186,6 +223,8 @@ def predict_topology_target(
             key: float(value)
             for key, value in zip(graphlet_basis.sizes, graphlet_mass)
         },
+        clustering_target=clustering_target,
+        orbit_target=orbit_target,
     )
 
 
@@ -199,27 +238,45 @@ def score_topology_candidates(
     config: TopologyRefinerConfig | dict[str, Any] | None = None,
     candidate_graphs: dict[Action, nx.Graph] | None = None,
 ) -> list[dict[str, Any]]:
-    """Score all candidates against one frozen predicted graphlet target."""
+    """Score candidates against one frozen graph-level structural prediction."""
 
+    del summary_config
     cfg = (
         config
         if isinstance(config, TopologyRefinerConfig)
         else TopologyRefinerConfig.from_dict(config)
     )
+    if cfg.clustering_weight > 0.0 and prediction.clustering_target.size == 0:
+        raise ValueError(
+            "clustering_weight is active but the checkpoint has no clustering head."
+        )
+    if cfg.orbit_weight > 0.0 and prediction.orbit_target.size == 0:
+        raise ValueError("orbit_weight is active but the checkpoint has no orbit head.")
+
     current_counts = extract_topology_graphlet_counts(
         graph,
         graphlet_basis=graphlet_basis,
     )
-    current_total, current_histogram, current_mass = (
-        topology_graphlet_discrepancy_from_counts(
-            current_counts,
-            num_nodes=graph.number_of_nodes(),
-            target=prediction.graphlet_target,
-            target_mass=prediction.graphlet_mass_target,
+
+    def score(
+        candidate: nx.Graph,
+        counts: dict[str, dict[str, int]],
+    ) -> dict[str, float]:
+        return topology_structural_discrepancy_from_counts(
+            candidate,
+            counts,
+            graphlet_target=prediction.graphlet_target,
+            graphlet_mass_target=prediction.graphlet_mass_target,
+            clustering_target=prediction.clustering_target,
+            orbit_target=prediction.orbit_target,
             graphlet_basis=graphlet_basis,
-            mass_weight=cfg.graphlet_mass_weight,
+            graphlet_weight=cfg.graphlet_weight,
+            graphlet_mass_weight=cfg.graphlet_mass_weight,
+            clustering_weight=cfg.clustering_weight,
+            orbit_weight=cfg.orbit_weight,
         )
-    )
+
+    current_score = score(graph, current_counts)
     rows: list[dict[str, Any]] = []
     for action in candidates:
         if candidate_graphs is None or action not in candidate_graphs:
@@ -227,31 +284,57 @@ def score_topology_candidates(
                 "Topology candidate materialization is required for scoring."
             )
         candidate = candidate_graphs[action]
-        candidate_total, candidate_histogram, candidate_mass = (
-            topology_candidate_graphlet_discrepancy(
-                graph,
-                candidate,
-                action,
-                prediction.graphlet_target,
-                prediction.graphlet_mass_target,
-                current_counts=current_counts,
-                graphlet_basis=graphlet_basis,
-                mass_weight=cfg.graphlet_mass_weight,
-            )
+        candidate_counts = candidate_topology_graphlet_counts(
+            graph,
+            candidate,
+            action,
+            current_counts=current_counts,
+            graphlet_basis=graphlet_basis,
         )
-        graphlet_gain = float(current_total - candidate_total)
+        candidate_score = score(candidate, candidate_counts)
+        graphlet_gain = float(
+            current_score["graphlet"] - candidate_score["graphlet"]
+        )
+        clustering_gain = float(
+            current_score["clustering"] - candidate_score["clustering"]
+        )
+        orbit_gain = float(current_score["orbit"] - candidate_score["orbit"])
+        structural_gain = float(current_score["total"] - candidate_score["total"])
         rows.append(
             {
                 "action": action,
                 "candidate_graph": candidate,
-                "current_graphlet_discrepancy": float(current_total),
-                "candidate_graphlet_discrepancy": float(candidate_total),
-                "current_histogram_discrepancy": float(current_histogram),
-                "candidate_histogram_discrepancy": float(candidate_histogram),
-                "current_mass_discrepancy": float(current_mass),
-                "candidate_mass_discrepancy": float(candidate_mass),
+                "current_structural_discrepancy": float(current_score["total"]),
+                "candidate_structural_discrepancy": float(
+                    candidate_score["total"]
+                ),
+                "current_graphlet_discrepancy": float(current_score["graphlet"]),
+                "candidate_graphlet_discrepancy": float(
+                    candidate_score["graphlet"]
+                ),
+                "current_histogram_discrepancy": float(
+                    current_score["graphlet_histogram"]
+                ),
+                "candidate_histogram_discrepancy": float(
+                    candidate_score["graphlet_histogram"]
+                ),
+                "current_mass_discrepancy": float(current_score["graphlet_mass"]),
+                "candidate_mass_discrepancy": float(
+                    candidate_score["graphlet_mass"]
+                ),
+                "current_clustering_discrepancy": float(
+                    current_score["clustering"]
+                ),
+                "candidate_clustering_discrepancy": float(
+                    candidate_score["clustering"]
+                ),
+                "current_orbit_discrepancy": float(current_score["orbit"]),
+                "candidate_orbit_discrepancy": float(candidate_score["orbit"]),
                 "graphlet_gain": graphlet_gain,
-                "energy_improvement": float(cfg.graphlet_weight * graphlet_gain),
+                "clustering_gain": clustering_gain,
+                "orbit_gain": orbit_gain,
+                "structural_gain": structural_gain,
+                "energy_improvement": structural_gain,
             }
         )
     return rows
@@ -306,7 +389,7 @@ def refine_graph_with_topology_predictions(
     return_trace: bool = False,
     prediction_fn: Any | None = None,
 ) -> nx.Graph | tuple[nx.Graph, list[dict[str, Any]]]:
-    """Apply degree-preserving graphlet correction to a generic topology."""
+    """Apply degree-preserving structural correction to a generic topology."""
 
     cfg = (
         refiner_config
@@ -385,13 +468,16 @@ def refine_graph_with_topology_predictions(
                 {
                     "step": step,
                     "accepted": False,
-                    "reason": "explicit_stop_no_positive_graphlet_gain",
+                    "reason": "explicit_stop_no_positive_structural_gain",
                     "prediction_refreshed": prediction_refreshed,
                     "prediction_calls": prediction_calls,
                     "stop_probability": stop_probability,
                     "selection_probabilities": probabilities,
                     "current_graphlet_discrepancy": float(
                         rows[0]["current_graphlet_discrepancy"]
+                    ),
+                    "current_structural_discrepancy": float(
+                        rows[0]["current_structural_discrepancy"]
                     ),
                     **proposal_diagnostics,
                 }
@@ -417,7 +503,7 @@ def refine_graph_with_topology_predictions(
             {
                 "step": step,
                 "accepted": True,
-                "reason": "graphlet_improving_swap",
+                "reason": "structural_improving_swap",
                 "action": chosen["action"],
                 "prediction_refreshed": prediction_refreshed,
                 "prediction_calls": prediction_calls,
@@ -429,7 +515,16 @@ def refine_graph_with_topology_predictions(
                 "candidate_graphlet_discrepancy": float(
                     chosen["candidate_graphlet_discrepancy"]
                 ),
+                "current_structural_discrepancy": float(
+                    chosen["current_structural_discrepancy"]
+                ),
+                "candidate_structural_discrepancy": float(
+                    chosen["candidate_structural_discrepancy"]
+                ),
                 "graphlet_gain": float(chosen["graphlet_gain"]),
+                "clustering_gain": float(chosen["clustering_gain"]),
+                "orbit_gain": float(chosen["orbit_gain"]),
+                "structural_gain": float(chosen["structural_gain"]),
                 "energy_improvement": float(chosen["energy_improvement"]),
                 **proposal_diagnostics,
             }

@@ -8,10 +8,10 @@ implementation remains in `grapher.rewiring_mlp.attributed` for attributed exper
 ## Added implementation slices
 
 - topology-only batches with no terminal adjacency labels;
-- a graphlet predictor with no node/pair heads or no-edge category;
-- graphlet-only teachers whose candidate proposals cannot access target edges;
-- common-random-number graphlet sampling reused by teacher and supervision;
-- topology energy refinement with prediction refresh after each accepted swap,
+- a graph-level graphlet/clustering/orbit predictor with no node/pair heads or no-edge category;
+- completed-base structural teachers whose candidate proposals cannot access target edges;
+- checksum-verified completed base pools with deterministic one-to-one matching;
+- graphlet/clustering/orbit energy refinement with prediction refresh after each accepted swap,
   visited-state rejection, and explicit `STOP`;
 - distinct topology checkpoint, configuration, report, and diagnostic schemas;
 - topology-aware research diagnostic aggregation without fake pair metrics;
@@ -58,7 +58,7 @@ Retained attributed implementation slices include:
   is deferred because the old selector was trained with graphlet-gain features
   that were unavailable at shortlist inference time.
 - Connected graphlet mass remains available as a named ablation/diagnostic and
-  is disabled in main losses.
+  is disabled in main losses; clustering and orbit are active maintained targets.
 - Unspecified research choices and unavailable external adapters are explicit
   `NotImplementedError` placeholders, listed in the README and implementation
   audit.

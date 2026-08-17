@@ -1,22 +1,62 @@
 from __future__ import annotations
 
 from collections import Counter
+from functools import lru_cache
 from math import comb
 from typing import Any
 
 import networkx as nx
 import numpy as np
 
-from grapher.properties.summary import SummaryConfig
+from grapher.properties.summary import SummaryConfig, clustering_histogram
 from grapher.rewiring_mlp.core.rewiring import Action
 from grapher.utils.motifs import (
     connected_graphlet_count_dict_exact,
     default_topology_canonicalizer,
+    topology_graphlet_basis,
 )
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 
 
 TopologyGraphletCounts = dict[str, dict[str, int]]
+TOPOLOGY_ORBIT_WIDTH = 15
+
+
+_ORBIT_ROLES_BY_SIGNATURE: dict[
+    tuple[int, int, tuple[int, ...]], tuple[tuple[int, int], ...]
+] = {
+    (3, 2, (1, 1, 2)): ((1, 2), (2, 1)),
+    (3, 3, (2, 2, 2)): ((3, 3),),
+    (4, 3, (1, 1, 2, 2)): ((4, 2), (5, 2)),
+    (4, 3, (1, 1, 1, 3)): ((6, 3), (7, 1)),
+    (4, 4, (2, 2, 2, 2)): ((8, 4),),
+    (4, 4, (1, 2, 2, 3)): ((9, 1), (10, 2), (11, 1)),
+    (4, 5, (2, 2, 3, 3)): ((12, 2), (13, 2)),
+    (4, 6, (3, 3, 3, 3)): ((14, 4),),
+}
+
+
+@lru_cache(maxsize=2)
+def _orbit_roles_by_graphlet_key(k: int) -> dict[str, tuple[tuple[int, int], ...]]:
+    """Return standard ORCA orbit multiplicities for connected k-graphlets."""
+
+    k = int(k)
+    if k not in {3, 4}:
+        raise ValueError("Topology orbit summaries require graphlet sizes 3 and 4.")
+    result: dict[str, tuple[tuple[int, int], ...]] = {}
+    for key, representative in topology_graphlet_basis(k, connected_only=True):
+        signature = (
+            k,
+            representative.number_of_edges(),
+            tuple(sorted(int(degree) for _, degree in representative.degree())),
+        )
+        roles = _ORBIT_ROLES_BY_SIGNATURE.get(signature)
+        if roles is None:
+            raise RuntimeError(
+                f"No standard orbit-role mapping for k={k}, graphlet={key!r}."
+            )
+        result[str(key)] = roles
+    return result
 
 
 def extract_topology_graphlet_counts(
@@ -89,6 +129,158 @@ def extract_topology_graphlet_target(
         num_nodes=graph.number_of_nodes(),
         graphlet_basis=graphlet_basis,
     )
+
+
+def topology_orbit_count_vector_from_counts(
+    counts_by_size: TopologyGraphletCounts,
+    *,
+    num_nodes: int,
+    num_edges: int,
+) -> np.ndarray:
+    """Return the mean per-node ORCA 0--14 orbit descriptor from graphlet counts.
+
+    The descriptor is computed from the same exact connected induced graphlet
+    counts used by the topology teacher. This avoids launching ORCA for every
+    candidate while retaining the standard four-node orbit convention.
+    """
+
+    n = int(num_nodes)
+    output = np.zeros(TOPOLOGY_ORBIT_WIDTH, dtype=np.float64)
+    if n <= 0:
+        return output
+    output[0] = 2.0 * float(num_edges) / float(n)
+    for k in (3, 4):
+        counts = counts_by_size.get(str(k))
+        if counts is None:
+            raise ValueError(
+                "Orbit targets require graphlet_prediction to include sizes 3 and 4."
+            )
+        roles_by_key = _orbit_roles_by_graphlet_key(k)
+        for key, count in counts.items():
+            roles = roles_by_key.get(str(key))
+            if roles is None:
+                raise ValueError(
+                    f"Unknown connected topology graphlet key for k={k}: {key!r}."
+                )
+            for orbit, multiplicity in roles:
+                output[int(orbit)] += float(count) * float(multiplicity) / float(n)
+    return output
+
+
+def extract_topology_structural_target(
+    graph: nx.Graph,
+    *,
+    graphlet_basis: TopologyGraphletBasis,
+    summary_config: SummaryConfig | dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Extract graphlet, clustering, and orbit targets from one terminal graph."""
+
+    cfg = (
+        summary_config
+        if isinstance(summary_config, SummaryConfig)
+        else SummaryConfig.from_dict(summary_config or {})
+    )
+    counts = extract_topology_graphlet_counts(
+        graph,
+        graphlet_basis=graphlet_basis,
+    )
+    graphlet, mass = _target_from_counts(
+        counts,
+        num_nodes=graph.number_of_nodes(),
+        graphlet_basis=graphlet_basis,
+    )
+    clustering = (
+        clustering_histogram(graph, cfg.clustering_bins)
+        if cfg.clustering_summary
+        else np.zeros(0, dtype=np.float64)
+    )
+    orbit = (
+        topology_orbit_count_vector_from_counts(
+            counts,
+            num_nodes=graph.number_of_nodes(),
+            num_edges=graph.number_of_edges(),
+        )
+        if cfg.orbit_count
+        else np.zeros(0, dtype=np.float64)
+    )
+    return graphlet, mass, clustering, orbit
+
+
+def _normalized_l2(left: Any, right: Any) -> float:
+    left_array = np.asarray(left, dtype=np.float64).reshape(-1)
+    right_array = np.asarray(right, dtype=np.float64).reshape(-1)
+    if left_array.shape != right_array.shape:
+        raise ValueError(
+            "Topology structural target width mismatch: "
+            f"{left_array.shape} != {right_array.shape}."
+        )
+    if left_array.size == 0:
+        return 0.0
+    return float(
+        np.linalg.norm(left_array - right_array) / np.sqrt(left_array.size)
+    )
+
+
+def topology_structural_discrepancy_from_counts(
+    graph: nx.Graph,
+    counts_by_size: TopologyGraphletCounts,
+    *,
+    graphlet_target: np.ndarray,
+    graphlet_mass_target: np.ndarray,
+    clustering_target: np.ndarray,
+    orbit_target: np.ndarray,
+    graphlet_basis: TopologyGraphletBasis,
+    graphlet_weight: float = 1.0,
+    graphlet_mass_weight: float = 0.0,
+    clustering_weight: float = 0.0,
+    orbit_weight: float = 0.0,
+) -> dict[str, float]:
+    """Score a graph against one frozen graph-level structural target."""
+
+    graphlet_total, graphlet_histogram, graphlet_mass = (
+        topology_graphlet_discrepancy_from_counts(
+            counts_by_size,
+            num_nodes=graph.number_of_nodes(),
+            target=graphlet_target,
+            target_mass=graphlet_mass_target,
+            graphlet_basis=graphlet_basis,
+            mass_weight=graphlet_mass_weight,
+        )
+    )
+    clustering_distance = 0.0
+    if float(clustering_weight) != 0.0:
+        expected_clustering = np.asarray(
+            clustering_target, dtype=np.float64
+        ).reshape(-1)
+        clustering_distance = _normalized_l2(
+            clustering_histogram(graph, expected_clustering.size),
+            expected_clustering,
+        )
+    orbit_distance = 0.0
+    if float(orbit_weight) != 0.0:
+        current_orbit = topology_orbit_count_vector_from_counts(
+            counts_by_size,
+            num_nodes=graph.number_of_nodes(),
+            num_edges=graph.number_of_edges(),
+        )
+        expected_orbit = np.asarray(orbit_target, dtype=np.float64).reshape(-1)
+        orbit_distance = _normalized_l2(
+            np.log1p(np.maximum(current_orbit, 0.0)),
+            np.log1p(np.maximum(expected_orbit, 0.0)),
+        )
+    total = (
+        float(graphlet_weight) * float(graphlet_total)
+        + float(clustering_weight) * float(clustering_distance)
+        + float(orbit_weight) * float(orbit_distance)
+    )
+    return {
+        "total": float(total),
+        "graphlet": float(graphlet_total),
+        "graphlet_histogram": float(graphlet_histogram),
+        "graphlet_mass": float(graphlet_mass),
+        "clustering": float(clustering_distance),
+        "orbit": float(orbit_distance),
+    }
 
 
 def topology_graphlet_discrepancy_from_counts(

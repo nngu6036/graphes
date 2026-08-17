@@ -1,23 +1,24 @@
-experiment: ego_small_topology_graphlet
-benchmark: ego_small
+experiment: community_small_defog_rewiring_mlp
+benchmark: community_small
 seed: 42
 
 pipeline:
   stage: topology
-  factorization: declared_dhvae_hh_base_then_structural_rewiring
+  factorization: completed_defog_base_then_structural_rewiring
 
 protocol:
   evaluation_seeds: [42, 43, 44]
   report_mean_and_std: true
   generated_graphs_per_seed: 1024
-  max_reference_graphs: 40
+  max_reference_graphs: 20
   tune_on_split: val
   final_split: test
 
 dataset:
-  name: ego_small
-  benchmark: ego_small
-  config_path: configs/datasets/ego_small.yaml
+  # Community-small retains the historical serialized dataset name `sbm`.
+  name: sbm
+  benchmark: community_small
+  config_path: configs/datasets/community_small.yaml
   root: outputs/datasets
   build_if_missing: false
   max_train_graphs: null
@@ -37,8 +38,8 @@ training_sources:
     disconnected_policy: drop
     max_degree_cost: null
   generators:
-    - id: dhvae_hh
-      manifest_path: outputs/baselines/dhvae_hh/ego_small/seed_{seed}/train/training_estimates/manifest.json
+    - id: defog
+      manifest_path: outputs/baselines/defog/community_small/seed_{seed}/train/training_estimates/manifest.json
       artifact: estimated_graphs
       verify_sha256: true
 
@@ -58,6 +59,9 @@ graphlet_prediction:
   motif_proxy: false
   orbit_count: true
 
+# The teacher starts from a completed base-generator output and sees only
+# graph-level terminal summaries, never the terminal adjacency. It follows valid
+# degree-preserving swaps that improve the combined structural target.
 topology_trajectory:
   # Only selected sparse NetworkX states are retained; candidates are scored
   # and discarded, so eager caching avoids rebuilding teachers every epoch.
@@ -84,7 +88,7 @@ topology_trajectory:
   max_repair_trials: 10000
 
 topology_predictor:
-  checkpoint_path: outputs/topology_grapher/ego_small/seed_42/checkpoint.pt
+  checkpoint_path: outputs/topology_grapher/community_small_defog/seed_42/checkpoint.pt
   device: auto
   hidden_dim: 128
   edge_dim: 64
@@ -116,7 +120,7 @@ generation:
 degree_generator:
   enabled: true
   type: degree_histogram_vae
-  checkpoint_path: outputs/baselines/dhvae_hh/ego_small/seed_42/train/checkpoints/checkpoint.pt
+  checkpoint_path: outputs/degree_generators/sbm/seed_42/checkpoint.pt
   device: auto
   deterministic: false
   sample_num_nodes: empirical

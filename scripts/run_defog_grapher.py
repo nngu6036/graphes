@@ -47,6 +47,8 @@ def correct_defog_base_graphs(
     device: torch.device | str,
     rng: np.random.Generator,
     predictor_graphlet_error: float,
+    predictor_clustering_error: float | None = None,
+    predictor_orbit_log_error: float | None = None,
     disconnected_policy: str = "no_op_and_report",
     show_progress: bool = True,
 ) -> tuple[
@@ -132,6 +134,16 @@ def correct_defog_base_graphs(
                 "pipeline_mode": "topology",
                 "base_generator": "defog",
                 "graphlet_error": float(predictor_graphlet_error),
+                "clustering_error": (
+                    float(predictor_clustering_error)
+                    if predictor_clustering_error is not None
+                    else None
+                ),
+                "orbit_log_error": (
+                    float(predictor_orbit_log_error)
+                    if predictor_orbit_log_error is not None
+                    else None
+                ),
                 "invariant_feasible": 1.0,
                 "constructor_success": 1.0,
                 "accepted_swaps": accepted,
@@ -288,6 +300,8 @@ def main() -> None:
         raise ValueError(
             "The topology checkpoint is missing held-out val_graphlet_mae."
         )
+    predictor_clustering_error = predictor_report.get("val_clustering_mae")
+    predictor_orbit_log_error = predictor_report.get("val_orbit_log_mae")
 
     output_dir = ensure_dir(args.output_dir)
     base_cfg_raw = dict(config.get("base_generator", {}) or {})
@@ -318,6 +332,16 @@ def main() -> None:
             device=model_device,
             rng=rng,
             predictor_graphlet_error=float(predictor_graphlet_error),
+            predictor_clustering_error=(
+                float(predictor_clustering_error)
+                if predictor_clustering_error is not None
+                else None
+            ),
+            predictor_orbit_log_error=(
+                float(predictor_orbit_log_error)
+                if predictor_orbit_log_error is not None
+                else None
+            ),
             disconnected_policy=str(
                 generation_cfg.get("disconnected_policy", "no_op_and_report")
             ),
@@ -374,10 +398,35 @@ def main() -> None:
             if accepted_rows
             else 0.0
         ),
+        "mean_accepted_clustering_gain": (
+            float(np.mean([row["clustering_gain"] for row in accepted_rows]))
+            if accepted_rows
+            else 0.0
+        ),
+        "mean_accepted_orbit_gain": (
+            float(np.mean([row["orbit_gain"] for row in accepted_rows]))
+            if accepted_rows
+            else 0.0
+        ),
+        "mean_accepted_structural_gain": (
+            float(np.mean([row["structural_gain"] for row in accepted_rows]))
+            if accepted_rows
+            else 0.0
+        ),
         "all_accepted_moves_improve_frozen_energy": bool(
             all(float(row["energy_improvement"]) > 0.0 for row in accepted_rows)
         ),
         "predictor_graphlet_error": float(predictor_graphlet_error),
+        "predictor_clustering_error": (
+            float(predictor_clustering_error)
+            if predictor_clustering_error is not None
+            else None
+        ),
+        "predictor_orbit_log_error": (
+            float(predictor_orbit_log_error)
+            if predictor_orbit_log_error is not None
+            else None
+        ),
         "mean_graph_runtime_seconds": float(np.mean(graph_runtimes)),
         "runtime_seconds": float(time.perf_counter() - run_started),
         "inline_evaluation": bool(
@@ -385,7 +434,7 @@ def main() -> None:
         ),
     }
     report = {
-        "format": "defog_topology_correction_v1",
+        "format": "defog_structural_correction_v2",
         "pipeline_mode": "topology",
         "pipeline_stage": pipeline_stage,
         "base_generator": "defog",

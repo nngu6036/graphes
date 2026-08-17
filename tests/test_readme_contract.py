@@ -82,14 +82,32 @@ def test_generic_grapher_configs_are_decoupled_topology_configs() -> None:
             "graphlet_mean",
             "graphlet_distribution",
             "graphlet_mass",
+            "clustering_mean",
+            "clustering_distribution",
+            "orbit",
         }
         assert config["topology_refiner"]["mode"] == "energy"
         assert config["topology_refiner"]["refresh_prediction_every"] == 1
         assert config["topology_refiner"]["preserve_connectivity"] is True
+        assert config["training_sources"]["mode"] == "completed_base_outputs"
+        assert config["training_sources"]["generators"]
+        assert (
+            config["training_sources"]["matching"]["method"]
+            == "hungarian_degree_profile"
+        )
+        assert (
+            config["training_sources"]["matching"]["require_exact_node_count"]
+            is True
+        )
         assert config["topology_trajectory"]["storage"] == "eager"
         assert config["topology_trajectory"]["preserve_connectivity"] is True
         assert config["topology_trajectory"]["ensure_connected_source"] is True
+        assert config["topology_trajectory"]["source_randomization_steps"] == 0
         assert config["graphlet_prediction"]["graphlet_num_samples"] is None
+        assert config["graphlet_prediction"]["clustering_summary"] is True
+        assert config["graphlet_prediction"]["orbit_count"] is True
+        assert config["graphlet_prediction"]["graphlet_k_min"] <= 3
+        assert config["graphlet_prediction"]["graphlet_k_max"] >= 4
         assert (
             config["graphlet_prediction"]["estimator"]
             == "exact_connected_local_delta"
@@ -98,6 +116,9 @@ def test_generic_grapher_configs_are_decoupled_topology_configs() -> None:
         assert config["generation"]["max_attempts_per_graph"] > 0
         assert config["generation"]["write_legacy_hybrid_alias"] is False
         assert config["degree_generator"]["type"] == "degree_histogram_vae"
+        assert str(config["degree_generator"]["checkpoint_path"]).startswith(
+            "outputs/baselines/dhvae_hh/"
+        )
         assert config["degree_generator"]["postprocess_policy"] == "reject_only"
         assert config["degree_generator"]["fallback"] == "error"
         assert config["constructor"]["ensure_connected"] is True

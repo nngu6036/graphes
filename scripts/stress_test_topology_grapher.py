@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Controlled compute-scaling study for graphlet-only topology GraphER.
+"""Controlled compute-scaling study for structural-summary topology GraphER.
 
 The study deliberately tunes on the validation split.  It constructs one fixed
 set of oracle-degree Havel-Hakimi source graphs and reuses the exact graph bytes

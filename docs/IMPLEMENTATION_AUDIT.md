@@ -5,10 +5,12 @@ This audit records the implementation state after completing the roadmap in
 
 ## Verdict
 
-The generic pipeline is now decoupled end to end: ordinary DH-VAE sampling,
-connected Havel-Hakimi construction, topology-only graphlet prediction, a
-target-adjacency-free graphlet teacher, and graphlet-energy rewiring with
-`STOP`. The existing attributed molecular endpoint pipeline remains isolated
+The generic pipeline now trains the corrector from checksum-verified completed
+outputs of explicitly declared base generators. Those unpaired pools are
+partitioned deterministically and coupled one-to-one to targets by exact graph
+size and degree-profile cost. The predictor and teacher use graphlet, clustering,
+and orbit summaries without terminal adjacency, and correction uses their
+combined structural energy with `STOP`. The existing attributed molecular endpoint pipeline remains isolated
 and operational pending the attribute-only CatFlow/DeFoG migration.
 
 Topology graphlets use a portable fixed canonicalizer, exact connected-subset
@@ -24,14 +26,15 @@ empty sparse-Grid targets and environment-dependent checkpoint coordinates.
 | Connected ordinary constructor | Implemented | Havel-Hakimi plus repair and postcondition validation |
 | Exact typed constructor | Implemented | Simultaneous residual-demand search, compatibility/connectivity pruning, backtrack/restart diagnostics |
 | Generic invariant and size conditioning | Implemented | Topology batches carry current adjacency, indexed ordinary degrees, graph size, and `t/T` |
-| Decoupled generic prediction | Implemented | Graphlet heads consume topology encoder state directly; no node/pair head or no-edge class exists |
-| Generic graphlet teacher | Implemented | Random valid proposals and cached graphlet targets; no terminal adjacency access |
+| Completed-base training sources | Implemented | Manifest/checksum validation, deterministic split, exact-size Hungarian degree-profile coupling, explicit retention/cost report |
+| Decoupled generic prediction | Implemented | Graphlet, clustering, and orbit heads consume topology encoder state directly; no node/pair head or no-edge class exists |
+| Generic structural teacher | Implemented | Completed source outputs, random valid proposals, cached graphlet/clustering/orbit targets; no terminal adjacency access |
 | Attributed hierarchical prediction | Retained | Legacy pair head consumes fixed/predicted node categories; attributed graphlet head consumes soft pair predictions |
 | Attributed graphlets | Implemented | Joint topology/node/edge canonicalization, train-only vocabulary, overflow coordinate |
 | Attributed invariant-matched teacher | Retained | Randomized sources, shared validators, pair-plus-graphlet energy, hard/soft targets, cached `STOP` |
 | Generic memory-bounded trajectories | Implemented | Iterable streaming dataset processes one target graph at a time |
 | Attributed memory-bounded trajectories | Retained | Iterable streaming dataset for full molecular splits |
-| Generic selection | Implemented | Exact graphlet-energy scoring, positive-improvement gate, and explicit `STOP` |
+| Generic selection | Implemented | Combined graphlet/clustering/orbit energy, positive-improvement gate, and explicit `STOP` |
 | Attributed selector modes | Retained | Energy-only, policy-only, hybrid shortlist, positive-energy gate, learned `STOP` |
 | Candidate accounting | Implemented | Separate proposal and valid-candidate budgets; domain checks precede graphlet scoring |
 | Typed generation | Retained | Learned typed prior and typed constructor remain wired into the legacy QM9/ZINC route |
@@ -45,15 +48,17 @@ empty sparse-Grid targets and environment-dependent checkpoint coordinates.
   indexed per-bond-type degrees and weighted valence.
 - Candidate graphs are simple and undirected, and optionally connected.
 - Missing configured node/edge categorical attributes are errors.
-- The main generic topology graphlet objective excludes connected-mass
-  prediction; that quantity is retained only as an external diagnostic or
-  explicit ablation.
+- The maintained generic objective includes graphlet composition, clustering
+  histogram, and 15 orbit counts. Connected graphlet mass remains an explicit
+  disabled-by-default ablation.
 - Generic energy mode scores every retained valid candidate against one frozen
-  graphlet prediction. A learned generic shortlist is intentionally deferred.
+  graphlet, clustering, and orbit prediction. A learned generic shortlist is intentionally deferred.
 - Teacher and generation time both use the actual action step divided by the
   configured horizon.
-- One cached exact graphlet target is reused across all paths/states from one
+- One cached exact structural target is reused across all paths/states from one
   target, including teacher energy computation.
+- Completed source outputs are never replaced by an implicit constructor in the
+  maintained training mode.
 - Topology-only and attributed evaluation paths remain distinct.
 
 ## Explicitly unsupported boundaries

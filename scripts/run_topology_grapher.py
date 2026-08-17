@@ -54,7 +54,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Generate generic graph topologies with DH-VAE, connected "
-            "Havel-Hakimi construction, and graphlet-only GraphER rewiring."
+            "Havel-Hakimi construction, and structural-summary GraphER rewiring."
         )
     )
     parser.add_argument("--config", required=True)
@@ -113,6 +113,8 @@ def main() -> None:
             "The topology checkpoint is missing held-out val_graphlet_mae; "
             "generate from a checkpoint selected by train_topology_grapher.py."
         )
+    predictor_clustering_error = predictor_report.get("val_clustering_mae")
+    predictor_orbit_log_error = predictor_report.get("val_orbit_log_mae")
 
     degree_source = str(generation_cfg.get("degree_source", "learned")).lower()
     degree_cfg = dict(config.get("degree_generator", {}) or {})
@@ -255,6 +257,16 @@ def main() -> None:
         pipeline_record = {
             "pipeline_mode": "topology",
             "graphlet_error": float(predictor_graphlet_error),
+            "clustering_error": (
+                float(predictor_clustering_error)
+                if predictor_clustering_error is not None
+                else None
+            ),
+            "orbit_log_error": (
+                float(predictor_orbit_log_error)
+                if predictor_orbit_log_error is not None
+                else None
+            ),
             "invariant_feasible": 1.0,
             "constructor_success": 1.0,
             "accepted_swaps": accepted,
@@ -402,16 +414,41 @@ def main() -> None:
             if accepted_rows
             else 0.0
         ),
+        "mean_accepted_clustering_gain": (
+            float(np.mean([row["clustering_gain"] for row in accepted_rows]))
+            if accepted_rows
+            else 0.0
+        ),
+        "mean_accepted_orbit_gain": (
+            float(np.mean([row["orbit_gain"] for row in accepted_rows]))
+            if accepted_rows
+            else 0.0
+        ),
+        "mean_accepted_structural_gain": (
+            float(np.mean([row["structural_gain"] for row in accepted_rows]))
+            if accepted_rows
+            else 0.0
+        ),
         "all_accepted_moves_improve_frozen_energy": bool(
             all(float(row["energy_improvement"]) > 0.0 for row in accepted_rows)
         ),
         "predictor_graphlet_error": float(predictor_graphlet_error),
+        "predictor_clustering_error": (
+            float(predictor_clustering_error)
+            if predictor_clustering_error is not None
+            else None
+        ),
+        "predictor_orbit_log_error": (
+            float(predictor_orbit_log_error)
+            if predictor_orbit_log_error is not None
+            else None
+        ),
         "mean_graph_runtime_seconds": float(np.mean(graph_runtimes)),
         "runtime_seconds": float(time.perf_counter() - run_started),
         "inline_evaluation": inline_evaluation,
     }
     report = {
-        "format": "topology_graphlet_generation_v1",
+        "format": "topology_structural_generation_v2",
         "pipeline_mode": "topology",
         "checkpoint_format": checkpoint.get("format"),
         "degree_source": degree_source,

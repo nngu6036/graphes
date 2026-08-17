@@ -97,7 +97,11 @@ estimate pool and the exact source training pool, records
 `pairing.status: unpaired`, and never invents index alignment. Generic runs
 default to one estimate per training graph; molecular runs default to at most
 1,024 estimates to avoid an unexpectedly large post-training job. Set
-`training_estimates.num_graphs` explicitly for the final protocol.
+`training_estimates.num_graphs` explicitly for the final protocol. For generic GraphER
+correction, these completed estimates are consumed by
+`configs/experiments/grapher/community_small_defog_rewiring_mlp.yaml`; the
+trainer constructs and reports its own same-size degree-profile coupling before
+building structural-summary teacher trajectories.
 
 ### QM9 and ZINC
 

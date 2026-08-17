@@ -18,9 +18,14 @@ from grapher.rewiring_mlp.generic.data import (
     build_topology_examples,
     collate_topology_examples,
 )
+from grapher.rewiring_mlp.generic.graphlets import TOPOLOGY_ORBIT_WIDTH
 from grapher.rewiring_mlp.generic.model import (
+    TOPOLOGY_CHECKPOINT_FORMAT,
     TopologyGraphletPredictor,
     save_topology_checkpoint,
+)
+from grapher.rewiring_mlp.generic.training_sources import (
+    build_completed_base_training_pairs,
 )
 from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir, load_yaml, save_json
@@ -54,6 +59,9 @@ def _streaming_teacher_report(
     for key in (
         "num_paths",
         "num_examples",
+        "mean_matching_cost",
+        "mean_initial_structural_discrepancy",
+        "mean_final_teacher_structural_discrepancy",
         "mean_initial_graphlet_discrepancy",
         "mean_final_teacher_graphlet_discrepancy",
         "mean_accepted_teacher_steps",
@@ -106,8 +114,8 @@ def _run_epoch(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Train the decoupled GraphER topology graphlet predictor. The "
-            "degree prior is trained separately with train_degree_generator.py."
+            "Train the GraphER/Rewiring-MLP structural-summary predictor from "
+            "completed outputs of explicitly declared base generators."
         )
     )
     parser.add_argument("--config", required=True)
@@ -171,13 +179,57 @@ def main() -> None:
     summary_data["graphlet_history"] = True
     summary_cfg = SummaryConfig.from_dict(summary_data, train_graphs)
     if summary_cfg.graphlet_k_min < 3:
-        raise ValueError("Topology graphlet prediction requires graphlet_k_min >= 3.")
+        raise ValueError("Topology structural prediction requires graphlet_k_min >= 3.")
     graphlet_basis = TopologyGraphletBasis.fit_from_graphs(
         train_graphs,
         summary_data,
         attributed=False,
         seed=seed,
     )
+    if summary_cfg.orbit_count and not {"3", "4"}.issubset(
+        set(graphlet_basis.sizes)
+    ):
+        raise ValueError(
+            "Orbit supervision requires graphlet_prediction to include sizes 3 and 4."
+        )
+
+    source_cfg_raw = config.get("training_sources")
+    if not isinstance(source_cfg_raw, dict):
+        raise ValueError(
+            "Topology-corrector training now requires training_sources with "
+            "mode: completed_base_outputs and at least one declared base-generator "
+            "manifest. The implicit Havel--Hakimi training source is disabled."
+        )
+    source_mode = str(
+        source_cfg_raw.get("mode", "completed_base_outputs")
+    ).lower()
+    if source_mode == "completed_base_outputs":
+        train_items, val_items, source_report = (
+            build_completed_base_training_pairs(
+                train_graphs,
+                val_graphs,
+                config=source_cfg_raw,
+                seed=seed,
+            )
+        )
+    elif source_mode == "legacy_havel_hakimi":
+        # The fallback is intentionally explicit and is retained only for
+        # reproducing old checkpoints, not for the post-correction protocol.
+        train_items = train_graphs
+        val_items = val_graphs
+        source_report = {
+            "format": "legacy_havel_hakimi_source_v1",
+            "mode": source_mode,
+            "warning": (
+                "This mode does not train on completed outputs from the declared "
+                "base generators."
+            ),
+        }
+    else:
+        raise ValueError(
+            "training_sources.mode must be completed_base_outputs or the explicit "
+            "legacy_havel_hakimi compatibility mode."
+        )
 
     trajectory_cfg = dict(config.get("topology_trajectory", {}) or {})
     if not bool(trajectory_cfg.get("ensure_connected_source", True)) or not bool(
@@ -192,12 +244,20 @@ def main() -> None:
         raise ValueError("topology_trajectory.storage must be eager or streaming.")
     print(
         f"Preparing {storage_mode} topology trajectories "
-        f"(train={len(train_graphs)}, val={len(val_graphs)})...",
+        f"(train_pairs={len(train_items)}, val_pairs={len(val_items)}, "
+        f"source_mode={source_mode})...",
         flush=True,
     )
+    if source_mode == "completed_base_outputs" and int(
+        trajectory_cfg.get("source_randomization_steps", 0)
+    ) != 0:
+        raise ValueError(
+            "topology_trajectory.source_randomization_steps must be 0 when "
+            "training from completed base-generator outputs."
+        )
     if storage_mode == "streaming":
         train_examples = TopologyTrajectoryIterableDataset(
-            train_graphs,
+            train_items,
             summary_config=summary_cfg,
             graphlet_basis=graphlet_basis,
             trajectory_config=trajectory_cfg,
@@ -205,7 +265,7 @@ def main() -> None:
             shuffle_graphs=True,
         )
         val_examples = TopologyTrajectoryIterableDataset(
-            val_graphs,
+            val_items,
             summary_config=summary_cfg,
             graphlet_basis=graphlet_basis,
             trajectory_config=trajectory_cfg,
@@ -218,14 +278,14 @@ def main() -> None:
         num_val_examples = val_examples.estimated_examples
     else:
         train_examples, train_teacher_report = build_topology_examples(
-            train_graphs,
+            train_items,
             summary_config=summary_cfg,
             graphlet_basis=graphlet_basis,
             trajectory_config=trajectory_cfg,
             seed=seed,
         )
         val_examples, val_teacher_report = build_topology_examples(
-            val_graphs,
+            val_items,
             summary_config=summary_cfg,
             graphlet_basis=graphlet_basis,
             trajectory_config=trajectory_cfg,
@@ -243,6 +303,12 @@ def main() -> None:
     device = resolve_torch_device(args.device or predictor_cfg.get("device", "auto"))
     model = TopologyGraphletPredictor(
         graphlet_slices=graphlet_basis.slices,
+        clustering_width=(
+            int(summary_cfg.clustering_bins)
+            if summary_cfg.clustering_summary
+            else 0
+        ),
+        orbit_width=(TOPOLOGY_ORBIT_WIDTH if summary_cfg.orbit_count else 0),
         hidden_dim=int(predictor_cfg.get("hidden_dim", 128)),
         edge_dim=int(predictor_cfg.get("edge_dim", 64)),
         graph_dim=int(predictor_cfg.get("graph_dim", 128)),
@@ -285,15 +351,25 @@ def main() -> None:
             "Topology loss cannot contain endpoint terms: "
             f"{sorted(forbidden_loss_keys)}"
         )
+    active_loss_defaults = [
+        ("graphlet_mean", 1.0),
+        ("graphlet_distribution", 0.1),
+        ("graphlet_mass", 0.0),
+    ]
+    if summary_cfg.clustering_summary:
+        active_loss_defaults.extend(
+            [
+                ("clustering_mean", 1.0),
+                ("clustering_distribution", 0.1),
+            ]
+        )
+    if summary_cfg.orbit_count:
+        active_loss_defaults.append(("orbit", 1.0))
     if not any(
         float(loss_weights.get(key, default)) != 0.0
-        for key, default in (
-            ("graphlet_mean", 1.0),
-            ("graphlet_distribution", 0.1),
-            ("graphlet_mass", 0.0),
-        )
+        for key, default in active_loss_defaults
     ):
-        raise ValueError("At least one topology graphlet loss must be active.")
+        raise ValueError("At least one topology structural loss must be active.")
     target_epsilon = float(predictor_cfg.get("target_epsilon", 1.0e-5))
 
     configured_checkpoint = predictor_cfg.get(
@@ -357,18 +433,22 @@ def main() -> None:
                 f"train={train_metrics['loss']:.5f} "
                 f"val={val_metrics['loss']:.5f} "
                 f"graphlet_mae={val_metrics['graphlet_mae']:.5f} "
-                f"mass_mae={val_metrics['graphlet_mass_mae']:.5f}",
+                f"mass_mae={val_metrics['graphlet_mass_mae']:.5f} "
+                f"clustering_mae={val_metrics.get('clustering_mae', 0.0):.5f} "
+                f"orbit_log_mae={val_metrics.get('orbit_log_mae', 0.0):.5f}",
                 flush=True,
             )
 
     report = {
-        "format": "topology_graphlet_training_v1",
+        "format": "topology_structural_training_v2",
         "pipeline_mode": "topology",
-        "checkpoint_format": "topology_graphlet_predictor_v1",
+        "checkpoint_format": TOPOLOGY_CHECKPOINT_FORMAT,
         "best_epoch": best_epoch,
         "best_val_loss": best_val,
-        "num_train_graphs": len(train_graphs),
-        "num_val_graphs": len(val_graphs),
+        "num_train_targets": len(train_graphs),
+        "num_val_targets": len(val_graphs),
+        "num_train_pairs": len(train_items),
+        "num_val_pairs": len(val_items),
         "num_train_examples": num_train_examples,
         "num_val_examples": num_val_examples,
         "train_teacher": (
@@ -382,19 +462,28 @@ def main() -> None:
             else val_teacher_report
         ),
         "graphlet_basis": graphlet_basis.to_dict(),
+        "predictor_targets": {
+            "graphlet_histogram": True,
+            "graphlet_connected_mass": True,
+            "clustering_histogram": bool(summary_cfg.clustering_summary),
+            "clustering_bins": (
+                int(summary_cfg.clustering_bins)
+                if summary_cfg.clustering_summary
+                else 0
+            ),
+            "orbit_count": bool(summary_cfg.orbit_count),
+            "orbit_width": TOPOLOGY_ORBIT_WIDTH if summary_cfg.orbit_count else 0,
+        },
+        "training_sources": source_report,
         "active_losses": sorted(
             key
-            for key, default in (
-                ("graphlet_mean", 1.0),
-                ("graphlet_distribution", 0.1),
-                ("graphlet_mass", 0.0),
-            )
+            for key, default in active_loss_defaults
             if float(loss_weights.get(key, default)) != 0.0
         ),
         "history": history,
     }
     save_json(report, output_dir / "training_report.json")
-    print(f"Saved best topology checkpoint: {checkpoint_path}", flush=True)
+    print(f"Saved best Rewiring-MLP checkpoint: {checkpoint_path}", flush=True)
     print(f"Best epoch={best_epoch} val_loss={best_val:.6f}", flush=True)
 
 

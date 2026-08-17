@@ -91,13 +91,16 @@ _enhanced_trajectory: &enhanced_trajectory
   valid_candidate_budget: 48
   states_per_graph: 8
   paths_per_graph: 1
-  source_randomization_steps: 8
+  source_randomization_steps: 0
   random_relabel_source: true
   teacher_mode: soft
   teacher_temperature: 0.25
   teacher_top_k: 4
   teacher_sample_actions: true
+  teacher_graphlet_weight: 1.0
   teacher_graphlet_mass_weight: 0.0
+  teacher_clustering_weight: 1.0
+  teacher_orbit_weight: 1.0
   teacher_min_improvement: 0.00000001
   target_tolerance: 0.0
   preserve_connectivity: true
@@ -123,7 +126,7 @@ training_budget:
           valid_candidate_budget: 24
           states_per_graph: 4
           paths_per_graph: 1
-          source_randomization_steps: 4
+          source_randomization_steps: 0
         topology_predictor:
           epochs: 50
           batch_size: 4
@@ -138,7 +141,7 @@ training_budget:
           valid_candidate_budget: 24
           states_per_graph: 4
           paths_per_graph: 1
-          source_randomization_steps: 4
+          source_randomization_steps: 0
         topology_predictor:
           epochs: 50
           batch_size: 4

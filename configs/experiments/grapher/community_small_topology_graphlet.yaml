@@ -4,7 +4,7 @@ seed: 42
 
 pipeline:
   stage: topology
-  factorization: degree_prior_then_graphlet_rewiring
+  factorization: declared_dhvae_hh_base_then_structural_rewiring
 
 protocol:
   evaluation_seeds: [42, 43, 44]
@@ -24,6 +24,25 @@ dataset:
   max_train_graphs: null
   max_val_graphs: null
 
+# Rewiring-MLP states start from finished outputs of the declared frozen base
+# generator. The wrapper manifest is checksum-verified, partitioned
+# deterministically, then coupled one-to-one to targets within node-count
+# strata using only the sorted degree profile.
+training_sources:
+  mode: completed_base_outputs
+  validation_fraction: 0.1
+  partition_seed: 42
+  matching:
+    method: hungarian_degree_profile
+    require_exact_node_count: true
+    disconnected_policy: drop
+    max_degree_cost: null
+  generators:
+    - id: dhvae_hh
+      manifest_path: outputs/baselines/dhvae_hh/community_small/seed_{seed}/train/training_estimates/manifest.json
+      artifact: estimated_graphs
+      verify_sha256: true
+
 graphlet_prediction:
   estimator: exact_connected_local_delta
   graphlet_history: true
@@ -34,14 +53,15 @@ graphlet_prediction:
   # Connected topology graphlets are enumerated exactly; candidate scores use
   # exact local deltas around the four switch endpoints.
   graphlet_num_samples: null
-  clustering_summary: false
+  clustering_summary: true
+  clustering_bins: 20
   spectral_summary: false
   motif_proxy: false
-  orbit_count: false
+  orbit_count: true
 
-# The teacher sees the target degree sequence and target graphlet histogram,
-# never the terminal adjacency. It proposes ordinary valid swaps and follows
-# graphlet-improving actions inside the fixed degree fibre.
+# The teacher starts from a completed base-generator output and sees only
+# graph-level terminal summaries, never the terminal adjacency. It follows valid
+# degree-preserving swaps that improve the combined structural target.
 topology_trajectory:
   # Only selected sparse NetworkX states are retained; candidates are scored
   # and discarded, so eager caching avoids rebuilding teachers every epoch.
@@ -51,13 +71,16 @@ topology_trajectory:
   valid_candidate_budget: 24
   states_per_graph: 4
   paths_per_graph: 1
-  source_randomization_steps: 4
+  source_randomization_steps: 0
   random_relabel_source: true
   teacher_mode: soft
   teacher_temperature: 0.25
   teacher_top_k: 4
   teacher_sample_actions: true
+  teacher_graphlet_weight: 1.0
   teacher_graphlet_mass_weight: 0.0
+  teacher_clustering_weight: 1.0
+  teacher_orbit_weight: 1.0
   teacher_min_improvement: 0.00000001
   target_tolerance: 0.0
   preserve_connectivity: true
@@ -83,6 +106,9 @@ topology_predictor:
     graphlet_mean: 1.0
     graphlet_distribution: 0.1
     graphlet_mass: 0.0
+    clustering_mean: 1.0
+    clustering_distribution: 0.1
+    orbit: 1.0
   progress_interval: 5
 
 generation:
@@ -94,7 +120,7 @@ generation:
 degree_generator:
   enabled: true
   type: degree_histogram_vae
-  checkpoint_path: outputs/degree_generators/sbm/seed_42/checkpoint.pt
+  checkpoint_path: outputs/baselines/dhvae_hh/community_small/seed_42/train/checkpoints/checkpoint.pt
   device: auto
   deterministic: false
   sample_num_nodes: empirical
@@ -120,6 +146,8 @@ topology_refiner:
   temperature: 0.1
   graphlet_weight: 1.0
   graphlet_mass_weight: 0.0
+  clustering_weight: 1.0
+  orbit_weight: 1.0
   accept_only_improving: true
   min_improvement: 0.00000001
   sample_graphlet: false

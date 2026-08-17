@@ -5,6 +5,7 @@ from typing import Any
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
@@ -14,21 +15,26 @@ from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir
 from grapher.utils.motifs import TOPOLOGY_CANONICALIZER_CONVENTION
 
-TOPOLOGY_CHECKPOINT_FORMAT = "topology_graphlet_predictor_v1"
+TOPOLOGY_CHECKPOINT_FORMAT = "topology_structural_predictor_v2"
 
 
 class TopologyGraphletPredictor(nn.Module):
-    """Predict a terminal topology graphlet law from an intermediate graph.
+    """Predict terminal graph-level structural summaries from an intermediate graph.
 
-    The model consumes only the current binary topology, the indexed ordinary
-    degrees, graph size, and rewiring time. It has no terminal node head, pair
-    head, no-edge category, or typed-degree consistency objective.
+    The maintained targets are connected graphlet histograms, a clustering-
+    coefficient histogram, and the standard 15-dimensional mean orbit-count
+    vector for connected graphlets with two to four nodes. The model consumes
+    only the current binary topology, indexed ordinary degrees, graph size, and
+    rewiring time. It has no terminal node head, pair head, no-edge category,
+    or typed-degree consistency objective.
     """
 
     def __init__(
         self,
         *,
         graphlet_slices: tuple[tuple[int, int], ...],
+        clustering_width: int = 0,
+        orbit_width: int = 0,
         hidden_dim: int = 128,
         edge_dim: int = 64,
         graph_dim: int = 128,
@@ -60,6 +66,10 @@ class TopologyGraphletPredictor(nn.Module):
         self.max_concentration = float(max_concentration)
         if self.max_concentration <= self.min_concentration:
             raise ValueError("max_concentration must exceed min_concentration.")
+        self.clustering_width = int(clustering_width)
+        self.orbit_width = int(orbit_width)
+        if self.clustering_width < 0 or self.orbit_width < 0:
+            raise ValueError("Structural target widths must be nonnegative.")
 
         # Normalized degree, graph size, time, and node mask.
         self.node_in = nn.Linear(4, self.hidden_dim)
@@ -87,6 +97,18 @@ class TopologyGraphletPredictor(nn.Module):
         self.graphlet_mass_head = nn.Linear(
             self.graph_dim,
             2 * len(self.graphlet_slices),
+        )
+        self.clustering_head = (
+            nn.Linear(self.graph_dim, self.clustering_width)
+            if self.clustering_width > 0
+            else None
+        )
+        # This head predicts log(1 + mean orbit count), which is substantially
+        # better conditioned than raw orbit counts across graph sizes.
+        self.orbit_head = (
+            nn.Linear(self.graph_dim, self.orbit_width)
+            if self.orbit_width > 0
+            else None
         )
 
     @property
@@ -217,10 +239,17 @@ class TopologyGraphletPredictor(nn.Module):
         graphlet_mass_ab = self._bounded_concentration(
             self.graphlet_mass_head(graph_hidden)
         ).view(batch_size, len(self.graphlet_slices), 2)
-        return {
+        result = {
             "graphlet_alpha": graphlet_alpha,
             "graphlet_mass_ab": graphlet_mass_ab,
         }
+        if self.clustering_head is not None:
+            result["clustering_alpha"] = self._bounded_concentration(
+                self.clustering_head(graph_hidden)
+            )
+        if self.orbit_head is not None:
+            result["orbit_log_mean"] = F.softplus(self.orbit_head(graph_hidden))
+        return result
 
     def graphlet_means(
         self,
@@ -238,6 +267,22 @@ class TopologyGraphletPredictor(nn.Module):
         mass_ab = outputs["graphlet_mass_ab"]
         mass_mean = mass_ab[..., 0] / mass_ab.sum(dim=-1).clamp_min(1.0e-12)
         return means, mass_mean
+
+    def structural_means(
+        self,
+        outputs: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        graphlet, mass = self.graphlet_means(outputs)
+        if self.clustering_width > 0:
+            alpha = outputs["clustering_alpha"]
+            clustering = alpha / alpha.sum(dim=-1, keepdim=True).clamp_min(1.0e-12)
+        else:
+            clustering = graphlet.new_zeros((graphlet.shape[0], 0))
+        if self.orbit_width > 0:
+            orbit = torch.expm1(outputs["orbit_log_mean"]).clamp_min(0.0)
+        else:
+            orbit = graphlet.new_zeros((graphlet.shape[0], 0))
+        return graphlet, mass, clustering, orbit
 
     def loss(
         self,
@@ -290,16 +335,61 @@ class TopologyGraphletPredictor(nn.Module):
                 .mean()
             )
         graphlet_mass_loss = torch.stack(mass_terms).mean() if mass_terms else zero
+
+        if batch.clustering_target.shape[-1] != self.clustering_width:
+            raise ValueError(
+                "Clustering target width does not match the predictor head: "
+                f"{batch.clustering_target.shape[-1]} != {self.clustering_width}."
+            )
+        clustering_distribution_loss = zero
+        clustering_mean_loss = zero
+        if self.clustering_width > 0:
+            target = batch.clustering_target
+            valid = target.sum(dim=-1) > 0.0
+            if torch.any(valid):
+                smoothed = target[valid] + float(target_epsilon)
+                smoothed = smoothed / smoothed.sum(dim=-1, keepdim=True)
+                alpha = outputs["clustering_alpha"][valid]
+                clustering_distribution_loss = -torch.distributions.Dirichlet(
+                    alpha
+                ).log_prob(smoothed).mean()
+                mean = alpha / alpha.sum(dim=-1, keepdim=True).clamp_min(1.0e-12)
+                clustering_mean_loss = -(
+                    smoothed * torch.log(mean.clamp_min(1.0e-12))
+                ).sum(dim=-1).mean()
+
+        if batch.orbit_target.shape[-1] != self.orbit_width:
+            raise ValueError(
+                "Orbit target width does not match the predictor head: "
+                f"{batch.orbit_target.shape[-1]} != {self.orbit_width}."
+            )
+        orbit_loss = zero
+        if self.orbit_width > 0:
+            orbit_log_target = torch.log1p(batch.orbit_target.clamp_min(0.0))
+            orbit_loss = F.smooth_l1_loss(
+                outputs["orbit_log_mean"],
+                orbit_log_target,
+            )
         total = (
             float(weights.get("graphlet_mean", weights.get("graphlet", 1.0)))
             * graphlet_mean_loss
             + float(weights.get("graphlet_distribution", 0.1))
             * graphlet_distribution_loss
             + float(weights.get("graphlet_mass", 0.0)) * graphlet_mass_loss
+            + float(weights.get("clustering_mean", 1.0))
+            * clustering_mean_loss
+            + float(weights.get("clustering_distribution", 0.1))
+            * clustering_distribution_loss
+            + float(weights.get("orbit", 1.0)) * orbit_loss
         )
 
         with torch.no_grad():
-            predicted, predicted_mass = self.graphlet_means(outputs)
+            (
+                predicted,
+                predicted_mass,
+                predicted_clustering,
+                predicted_orbit,
+            ) = self.structural_means(outputs)
             graphlet_errors: list[torch.Tensor] = []
             mass_errors: list[torch.Tensor] = []
             for block_index, ((start, stop), valid) in enumerate(
@@ -325,6 +415,24 @@ class TopologyGraphletPredictor(nn.Module):
             graphlet_mass_mae = (
                 torch.stack(mass_errors).mean() if mass_errors else zero
             )
+            clustering_mae = (
+                torch.abs(predicted_clustering - batch.clustering_target).mean()
+                if self.clustering_width > 0
+                else zero
+            )
+            orbit_mae = (
+                torch.abs(predicted_orbit - batch.orbit_target).mean()
+                if self.orbit_width > 0
+                else zero
+            )
+            orbit_log_mae = (
+                torch.abs(
+                    outputs["orbit_log_mean"]
+                    - torch.log1p(batch.orbit_target.clamp_min(0.0))
+                ).mean()
+                if self.orbit_width > 0
+                else zero
+            )
         metrics = {
             "loss": float(total.detach().cpu()),
             "graphlet_mean_loss": float(graphlet_mean_loss.detach().cpu()),
@@ -335,11 +443,33 @@ class TopologyGraphletPredictor(nn.Module):
             "graphlet_mae": float(graphlet_mae.detach().cpu()),
             "graphlet_mass_mae": float(graphlet_mass_mae.detach().cpu()),
         }
+        if self.clustering_width > 0:
+            metrics.update(
+                {
+                    "clustering_mean_loss": float(
+                        clustering_mean_loss.detach().cpu()
+                    ),
+                    "clustering_distribution_loss": float(
+                        clustering_distribution_loss.detach().cpu()
+                    ),
+                    "clustering_mae": float(clustering_mae.detach().cpu()),
+                }
+            )
+        if self.orbit_width > 0:
+            metrics.update(
+                {
+                    "orbit_loss": float(orbit_loss.detach().cpu()),
+                    "orbit_mae": float(orbit_mae.detach().cpu()),
+                    "orbit_log_mae": float(orbit_log_mae.detach().cpu()),
+                }
+            )
         return total, metrics
 
     def model_config(self) -> dict[str, Any]:
         return {
             "graphlet_slices": [list(value) for value in self.graphlet_slices],
+            "clustering_width": self.clustering_width,
+            "orbit_width": self.orbit_width,
             "hidden_dim": self.hidden_dim,
             "edge_dim": self.edge_dim,
             "graph_dim": self.graph_dim,
@@ -393,7 +523,7 @@ def load_topology_checkpoint(
     checkpoint = torch.load(Path(path), map_location=resolved_device)
     if checkpoint.get("format") != TOPOLOGY_CHECKPOINT_FORMAT:
         raise ValueError(
-            "Checkpoint is not a decoupled topology graphlet predictor "
+            "Checkpoint is not a decoupled topology structural predictor "
             f"({TOPOLOGY_CHECKPOINT_FORMAT}). Endpoint checkpoints require the "
             "legacy attributed pipeline and cannot be migrated without retraining."
         )

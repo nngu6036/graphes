@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 import networkx as nx
 import numpy as np
 import pytest
@@ -10,16 +13,25 @@ from grapher.rewiring_mlp.core.rewiring import apply_action
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.data import (
     TopologyGraphletExample,
+    TopologyTrainingPair,
     build_topology_examples,
     build_topology_teacher_states,
     collate_topology_examples,
 )
 from grapher.rewiring_mlp.generic.graphlets import (
+    TOPOLOGY_ORBIT_WIDTH,
     candidate_topology_graphlet_counts,
     extract_topology_graphlet_counts,
     extract_topology_graphlet_target,
+    extract_topology_structural_target,
+    topology_orbit_count_vector_from_counts,
     topology_graphlet_discrepancy,
 )
+from grapher.rewiring_mlp.generic.training_sources import (
+    build_completed_base_training_pairs,
+)
+from grapher.utils.io import save_pickle
+from grapher.properties.summary import python_orbit_count_vector
 from grapher.rewiring_mlp.generic.model import (
     TopologyGraphletPredictor,
     load_topology_checkpoint,
@@ -82,6 +94,62 @@ def test_topology_batch_and_predictor_expose_no_terminal_pair_targets() -> None:
     assert not hasattr(model, "edge_head")
     assert not hasattr(model, "node_head")
     assert all("edge_head" not in name for name in model.state_dict())
+
+
+def test_structural_heads_attach_clustering_and_orbit_without_pair_targets() -> None:
+    basis, _ = _basis(4)
+    config = SummaryConfig.from_dict(
+        {
+            "graphlet_history": True,
+            "graphlet_k_min": 3,
+            "graphlet_k_max": 4,
+            "graphlet_connected_only": True,
+            "clustering_summary": True,
+            "clustering_bins": 8,
+            "orbit_count": True,
+        }
+    )
+    graph = nx.house_graph()
+    graphlet, mass, clustering, orbit = extract_topology_structural_target(
+        graph,
+        graphlet_basis=basis,
+        summary_config=config,
+    )
+    batch = collate_topology_examples(
+        [
+            TopologyGraphletExample(
+                current_graph=graph,
+                time=0.0,
+                graphlet_target=graphlet,
+                graphlet_mass_target=mass,
+                clustering_target=clustering,
+                orbit_target=orbit,
+            )
+        ]
+    )
+    model = TopologyGraphletPredictor(
+        graphlet_slices=basis.slices,
+        clustering_width=8,
+        orbit_width=TOPOLOGY_ORBIT_WIDTH,
+        hidden_dim=16,
+        edge_dim=8,
+        graph_dim=16,
+        num_layers=1,
+    )
+    outputs = model(batch)
+    loss, metrics = model.loss(batch)
+    loss.backward()
+
+    assert set(outputs) == {
+        "graphlet_alpha",
+        "graphlet_mass_ab",
+        "clustering_alpha",
+        "orbit_log_mean",
+    }
+    assert batch.clustering_target.shape == (1, 8)
+    assert batch.orbit_target.shape == (1, TOPOLOGY_ORBIT_WIDTH)
+    assert "clustering_mae" in metrics and "orbit_log_mae" in metrics
+    assert not hasattr(model, "edge_head")
 
 
 def test_topology_loss_contains_only_graphlet_terms_and_backpropagates() -> None:
@@ -388,6 +456,125 @@ def test_local_graphlet_delta_matches_full_candidate_recount() -> None:
         graphlet_basis=basis,
     )
     assert delta_counts == exact_counts
+
+
+def test_orbit_target_from_cached_graphlets_matches_python_orbit_counter() -> None:
+    basis, _ = _basis(4)
+    for graph in (nx.path_graph(6), nx.house_graph(), nx.complete_graph(5)):
+        counts = extract_topology_graphlet_counts(graph, graphlet_basis=basis)
+        cached = topology_orbit_count_vector_from_counts(
+            counts,
+            num_nodes=graph.number_of_nodes(),
+            num_edges=graph.number_of_edges(),
+        )
+        assert np.allclose(cached, python_orbit_count_vector(graph))
+
+
+def test_completed_base_manifest_is_partitioned_and_explicitly_matched(tmp_path) -> None:
+    sources = [
+        nx.path_graph(5),
+        nx.cycle_graph(5),
+        nx.star_graph(4),
+        nx.complete_graph(5),
+        nx.house_graph(),
+        nx.path_graph(6),
+        nx.cycle_graph(6),
+        nx.wheel_graph(6),
+    ]
+    source_path = tmp_path / "estimated_graphs.pkl"
+    save_pickle(sources, source_path)
+    digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": "test_training_estimates_v1",
+                "estimated_graphs": {
+                    "path": source_path.name,
+                    "count": len(sources),
+                    "sha256": digest,
+                },
+                "pairing": {"status": "unpaired", "pair_count": 0},
+            }
+        )
+    )
+    train_targets = [
+        nx.path_graph(5),
+        nx.cycle_graph(5),
+        nx.star_graph(4),
+        nx.complete_graph(5),
+        nx.house_graph(),
+        nx.path_graph(6),
+        nx.cycle_graph(6),
+    ]
+    val_targets = [nx.house_graph(), nx.wheel_graph(6), nx.path_graph(6)]
+    train_pairs, val_pairs, report = build_completed_base_training_pairs(
+        train_targets,
+        val_targets,
+        config={
+            "mode": "completed_base_outputs",
+            "validation_fraction": 0.25,
+            "partition_seed": 7,
+            "matching": {
+                "method": "hungarian_degree_profile",
+                "require_exact_node_count": True,
+                "disconnected_policy": "error",
+            },
+            "generators": [
+                {
+                    "id": "toy_base",
+                    "manifest_path": str(manifest_path),
+                    "artifact": "estimated_graphs",
+                }
+            ],
+        },
+        seed=7,
+    )
+
+    assert train_pairs and val_pairs
+    assert all(isinstance(pair, TopologyTrainingPair) for pair in train_pairs)
+    assert all(pair.base_generator == "toy_base" for pair in train_pairs + val_pairs)
+    assert all(
+        pair.source_graph.number_of_nodes() == pair.target_graph.number_of_nodes()
+        for pair in train_pairs + val_pairs
+    )
+    assert len({pair.source_index for pair in train_pairs}) == len(train_pairs)
+    assert report["pool_reports"][0]["checksum_verified"] is True
+    matching = report["matching_reports"][0]
+    assert matching["target_features_used_for_matching"] == [
+        "sorted_degree_profile"
+    ]
+    assert "graphlet_histogram" in matching["target_features_excluded_from_matching"]
+
+
+def test_completed_training_pair_starts_from_declared_source_not_hh() -> None:
+    basis, summary_config = _basis(4)
+    source = nx.cycle_graph(6)
+    target = nx.wheel_graph(6)
+    pair = TopologyTrainingPair(
+        source_graph=source,
+        target_graph=target,
+        base_generator="toy_base",
+        source_index=3,
+        target_index=1,
+    )
+    examples, report = build_topology_examples(
+        [pair],
+        summary_config=summary_config,
+        graphlet_basis=basis,
+        trajectory_config={
+            "steps": 0,
+            "states_per_graph": 1,
+            "paths_per_graph": 1,
+            "source_randomization_steps": 0,
+            "random_relabel_source": False,
+            "preserve_connectivity": True,
+            "ensure_connected_source": True,
+        },
+    )
+    assert nx.utils.graphs_equal(examples[0].current_graph, source)
+    assert examples[0].base_generator == "toy_base"
+    assert report["source_modes"] == ["completed_base_output"]
 
 
 def test_topology_path_rejects_disconnected_inputs_and_configs() -> None:

@@ -178,7 +178,13 @@ When a base does not implement graph-specific reconstruction, generated
 post-training samples must not be presented as naturally aligned with the
 training graphs. Such a wrapper saves both pools and records
 `pairing.status: unpaired`; a separate declared matching step must construct
-the supervision pairs. Equal pool sizes alone do not establish correspondence.
+the supervision pairs. Equal pool sizes alone do not establish correspondence. The maintained generic
+matching step is implemented in `grapher.rewiring_mlp.generic.training_sources`:
+it validates the completed-output manifest and checksum, partitions each base
+pool deterministically, then performs one-to-one Hungarian matching within
+exact node-count strata using normalized sorted-degree profiles. Structural
+prediction targets are excluded from that cost and the complete coupling audit
+is saved by `train_topology_grapher.py`.
 
 DH-VAE + HH is a composite base. Its `train()` operation trains the DH-VAE;
 randomized Havel--Hakimi is a stateless constructor invoked by `generate()`.

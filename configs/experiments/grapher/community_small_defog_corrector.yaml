@@ -4,7 +4,7 @@ seed: 42
 
 pipeline:
   stage: posthoc_correction
-  factorization: frozen_defog_base_then_graphlet_correction
+  factorization: frozen_defog_base_then_structural_summary_correction
 
 protocol:
   evaluation_seeds: [42, 43, 44]
@@ -78,7 +78,7 @@ constructor:
   enabled: false
 
 topology_predictor:
-  checkpoint_path: outputs/topology_grapher/community_small/seed_42/checkpoint.pt
+  checkpoint_path: outputs/topology_grapher/community_small_defog/seed_42/checkpoint.pt
   device: auto
 
 topology_refiner:
@@ -91,6 +91,8 @@ topology_refiner:
   temperature: 0.1
   graphlet_weight: 1.0
   graphlet_mass_weight: 0.0
+  clustering_weight: 1.0
+  orbit_weight: 1.0
   accept_only_improving: true
   min_improvement: 0.00000001
   sample_graphlet: false
