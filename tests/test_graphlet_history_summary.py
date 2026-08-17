@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import networkx as nx
 
-from grapher.rewiring_mlp.properties.summary import (
+from grapher.properties.summary import (
     SummaryConfig,
     distance_to_summary,
     extract_summary,

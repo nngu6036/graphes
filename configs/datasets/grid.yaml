@@ -1,75 +1,24 @@
-# Research protocol for the synthetic two-dimensional Grid benchmark.
-format_version: 1
 name: grid
-benchmark_id: grid
-benchmark: grid
-kind: generated_generic
 type: grid
-
-provenance:
-  protocol_id: grapher-grid-v1
-  relation_to_reference: benchmark_compatible_reimplementation
-  citation_key: jo2022gdss
-  paper_url: https://proceedings.mlr.press/v162/jo22a.html
-  reference_repository: https://github.com/harryjo97/GDSS
-  reference_revision: 24cc490e0c5b39cbd265fda33ab2bc8b528d4454
-  reference_generator: data_generators.py
-  notes:
-    - The dimension ranges match GDSS, but this seeded native regeneration is
-      not a byte-identical copy of the archived GDSS graph list.
-    - The project uses a declared 70/10/20 seeded split and does not claim to
-      preserve a pre-existing GDSS test subset.
-
-# The current builder uses this seed for both dimension draws and the split
-# permutation. It must remain fixed across model-training seeds.
+benchmark: grid
 seed: 0
 num_graphs: 100
-
 split:
-  train: 0.70
-  val: 0.10
-  test: 0.20
-
-split_protocol:
-  strategy: seeded_random_permutation
-  seed_source: top_level_seed
-  expected_counts:
-    train: 70
-    val: 10
-    test: 20
-
+  # Reserve validation data from the original 80% training side while keeping
+  # the benchmark's 20 held-out graphs for final evaluation.
+  train: 0.7
+  val: 0.1
+  test: 0.2
 grid:
-  # Draw both dimensions independently and inclusively from 10,...,19. The
-  # realized node-count range is therefore 100,...,361.
   min_rows: 10
   max_rows: 19
   min_cols: 10
   max_cols: 19
-  # The reference generator samples with replacement, so repeated dimension
-  # pairs are permitted and must be reported in the preparation audit.
+  # Match the GDSS generator: independently sample each side length for every
+  # graph, so repeated dimension pairs are allowed.
   enumerate_dimensions: false
   random_relabel: false
-
 filters:
   require_connected: true
   reject_zero_degree: true
   max_attempts_per_graph: 50
-
-graph_schema:
-  directed: false
-  multigraph: false
-  self_loops: false
-  modeled_node_attributes: []
-  modeled_edge_attributes: []
-  expected_node_range: [100, 361]
-
-audit:
-  expected_split_counts: true
-  verify_simple_graphs: true
-  verify_connectivity: true
-  verify_no_isolates: true
-  report_dimension_pair_histogram: true
-  report_cross_split_isomorphism_overlap: true
-  report_config_sha256: true
-  report_split_sha256: true
-  report_software_versions: true

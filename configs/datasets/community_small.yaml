@@ -1,51 +1,27 @@
-# Research protocol for the Community-small benchmark. `name` is the
-# historical serialized directory used by this repository; `benchmark_id` is
-# the name that must appear in reports.
-format_version: 1
+# Historical filename: this is the Community-small benchmark used by GDSS and
+# the manuscript, not the larger variable-block SPECTRE SBM benchmark.
 name: sbm
-benchmark_id: community_small
-benchmark: community_small
-kind: generated_generic
 type: sbm
+benchmark: community_small
 
-provenance:
-  protocol_id: grapher-community-small-v1
-  relation_to_reference: benchmark_compatible_reimplementation
-  citation_key: jo2022gdss
-  paper_url: https://proceedings.mlr.press/v162/jo22a.html
-  reference_repository: https://github.com/harryjo97/GDSS
-  reference_revision: 24cc490e0c5b39cbd265fda33ab2bc8b528d4454
-  reference_generator: data_generators.py
-  notes:
-    - The native GraphER builder reproduces the reference parameter ranges.
-    - A fixed preparation seed is added for deterministic regeneration.
-    - The project uses a declared 70/10/20 split rather than the reference
-      implementation's train/test-only use of the 100 generated graphs.
-
-# The current builder uses this seed for both graph generation and split
-# permutation. It must remain fixed across model-training seeds.
+# Keep the dataset/split seed fixed across all model-training seeds.
 seed: 0
 num_graphs: 100
 
+# GDSS exposes an 80/20 train/test split. This project reserves 10 graphs from
+# the training side for validation, giving 70/10/20 while retaining the
+# benchmark's 20-graph held-out test set.
 split:
-  train: 0.70
-  val: 0.10
-  test: 0.20
-
-split_protocol:
-  strategy: seeded_random_permutation
-  seed_source: top_level_seed
-  expected_counts:
-    train: 70
-    val: 10
-    test: 20
+  train: 0.7
+  val: 0.1
+  test: 0.2
 
 communities:
   min_blocks: 2
   max_blocks: 2
-  # Sample max_nodes uniformly from 12,...,20 and allocate
-  # floor(max_nodes / 2) nodes to both blocks. Realized graph orders are
-  # therefore 12, 14, 16, 18, or 20.
+  # Match GDSS: draw max_nodes uniformly from 12..20, then use two equal
+  # communities of floor(max_nodes / 2). Actual graph sizes are therefore
+  # 12, 14, 16, 18, or 20.
   min_total_nodes: 12
   max_total_nodes: 20
   equal_block_sizes: true
@@ -53,8 +29,8 @@ communities:
 edge_probs:
   p_in: 0.70
   p_out: 0.0
-  # This is not the raw cross-pair Bernoulli probability. The builder converts
-  # it so that E[number of cross-block edges] = p_inter * |V|.
+  # `p_inter` follows the GDSS generator: the Bernoulli bridge probability is
+  # chosen so that E[number of cross-community edges] = p_inter * |V|.
   p_inter: 0.05
   ensure_inter_community_edge: true
 
@@ -62,21 +38,3 @@ filters:
   require_connected: true
   reject_zero_degree: true
   max_attempts_per_graph: 300
-
-graph_schema:
-  directed: false
-  multigraph: false
-  self_loops: false
-  modeled_node_attributes: []
-  modeled_edge_attributes: []
-
-# These fields declare the evidence required for the final report; the current
-# preparation script does not yet enforce every hash/version check.
-audit:
-  expected_split_counts: true
-  verify_simple_graphs: true
-  verify_connectivity: true
-  verify_no_isolates: true
-  report_config_sha256: true
-  report_split_sha256: true
-  report_software_versions: true

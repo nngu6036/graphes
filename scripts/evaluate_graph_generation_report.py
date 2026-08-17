@@ -25,7 +25,7 @@ from grapher.rewiring_mlp.evaluation.metrics import (
     mmd_orbit,
 )
 from grapher.rewiring_mlp.molecular.graph_io import nx_to_rdkit_mol, require_rdkit
-from grapher.rewiring_mlp.properties.summary import (
+from grapher.properties.summary import (
     clustering_histogram,
     configure_orca_executable,
     degree_histogram,

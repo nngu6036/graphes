@@ -26,7 +26,7 @@ from grapher.models.dhvae_hh.degree_sampler import (
     EmpiricalDegreeSampler,
     build_degree_sampler,
 )
-from grapher.rewiring_mlp.properties.summary import configure_orca_executable
+from grapher.properties.summary import configure_orca_executable
 from grapher.rewiring_mlp.generic.model import load_topology_checkpoint
 from grapher.rewiring_mlp.generic.refiner import refine_graph_with_topology_predictions
 from grapher.utils.io import ensure_dir, load_yaml, save_json, save_pickle

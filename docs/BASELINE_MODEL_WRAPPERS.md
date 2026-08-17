@@ -188,16 +188,18 @@ and one-shot filler model/configuration.
 
 ## Current status
 
-The DH-VAE+HH implementation has been isolated under its model package. The
-DeFoG wrapper implements isolated training, post-training estimate export, and
-generation for generic graphs and attributed QM9/ZINC molecular graphs. Its
-neutral backend validates the dataset-specific schema before publishing
-GraphER-facing NetworkX batches. DiGress, CatFlow, HOG-Diff, and FLAGG remain
-explicit placeholders. Unimplemented methods raise
+The DH-VAE+HH wrapper implements training and exact-count generation for
+generic graphs and attributed QM9/ZINC molecular graphs using the existing
+project-owned trainer, invariant samplers, and constructors. The DeFoG wrapper
+implements isolated training, post-training estimate export, and generation
+for the same domains. Its neutral backend validates the dataset-specific
+schema before publishing GraphER-facing NetworkX batches. DiGress, CatFlow,
+HOG-Diff, and FLAGG remain explicit placeholders. Unimplemented methods raise
 `BaselineNotImplementedError` before creating any directories; an incomplete
 adapter must not leave a partial run that looks like evidence.
 
-The DH-VAE+HH compatibility CLIs and the isolated DeFoG workers remain
-available alongside the common wrapper interface. Molecular preparation is
+`scripts/run_dhvae_hh_baseline.py` provides a thin train-then-generate command
+over the common wrapper. The former DH-VAE+HH compatibility CLIs and the
+isolated DeFoG workers remain available. Molecular preparation for DeFoG is
 performed by `scripts/defog_prepare_molecular_dataset_worker.py`; it records
 the exact source representation and, for ZINC, the verified Kekule model view.

@@ -5,7 +5,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from grapher.rewiring_mlp.properties.summary import SummaryConfig
+from grapher.properties.summary import SummaryConfig
 from grapher.utils.motifs import topology_graphlet_keys_by_size
 
 

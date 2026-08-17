@@ -14,7 +14,7 @@ from grapher.rewiring_mlp.molecular.typed_invariants import (
     extract_typed_invariant,
     typed_invariant_matches_graph,
 )
-from grapher.rewiring_mlp.properties.summary import SummaryConfig
+from grapher.properties.summary import SummaryConfig
 
 
 def _attributed_cycle() -> nx.Graph:

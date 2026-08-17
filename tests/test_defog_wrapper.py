@@ -12,7 +12,7 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from grapher.models.defog.defog import (
+from grapher.models.defog_backend import (
     DEFOG_EXPORT_FORMAT,
     DeFoGGeneratorConfig,
     _worker_environment,
@@ -125,12 +125,18 @@ def test_worker_command_and_environment_are_shell_free(tmp_path) -> None:
     root = _fake_defog_root(tmp_path)
     checkpoint = tmp_path / "model.ckpt"
     checkpoint.write_bytes(b"checkpoint")
+    resolved_config = tmp_path / "resolved_config.yaml"
+    resolved_config.write_text("dataset:\n  name: comm20\n", encoding="utf-8")
+    dataset_datadir = tmp_path / "native_dataset"
+    dataset_datadir.mkdir()
     config = DeFoGGeneratorConfig.from_dict(
         {
             "type": "defog",
             "dataset": "comm20",
             "experiment": "comm20",
             "checkpoint_path": str(checkpoint),
+            "dataset_datadir": str(dataset_datadir),
+            "resolved_config_path": str(resolved_config),
         },
         python_executable=sys.executable,
     )
@@ -148,7 +154,20 @@ def test_worker_command_and_environment_are_shell_free(tmp_path) -> None:
     assert isinstance(command, list)
     assert command[0] == sys.executable
     assert "--checkpoint" in command
+    assert command[command.index("--resolved-config") + 1] == str(
+        resolved_config.resolve()
+    )
+    assert command[command.index("--dataset-datadir") + 1] == str(
+        dataset_datadir.resolve()
+    )
     assert command[command.index("--num-samples") + 1] == "7"
+    # Omitted sampling options must inherit the saved DeFoG configuration.
+    # Passing adapter-wide defaults here would silently replace QM9/ZINC's
+    # experiment-specific schedule.
+    assert "--sample-steps" not in command
+    assert "--time-distortion" not in command
+    assert "--eta" not in command
+    assert "--omega" not in command
     assert environment["PYTHONPATH"].split(os.pathsep) == [
         str(root),
         str(root / "src"),

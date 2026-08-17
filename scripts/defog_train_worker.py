@@ -3,7 +3,304 @@
 
 from __future__ import annotations
 
+import json
 import os
+import platform
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+RUNTIME_DIAGNOSTICS_FORMAT = "grapher_defog_runtime_diagnostics_v1"
+
+
+def _device_count(value: Any) -> int | None:
+    """Return a concrete Lightning device count when one is declared."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (list, tuple)):
+        return len(value)
+    return None
+
+
+def _install_single_device_strategy() -> None:
+    """Prevent upstream DeFoG from launching DDP for one local device.
+
+    The reference DeFoG entrypoint hard-codes
+    ``ddp_find_unused_parameters_true`` even though its configuration states
+    that multi-GPU execution is unsupported.  Lightning consequently creates
+    a distributed process group for a one-GPU run and makes training depend on
+    NCCL and NVML.  A single device needs neither.  This process-local patch
+    leaves multi-device declarations untouched and records every replacement
+    in the subprocess log.
+    """
+
+    from pytorch_lightning import Trainer
+
+    if getattr(Trainer, "_grapher_single_device_strategy_patch", False):
+        return
+    original_init = Trainer.__init__
+
+    def init_with_single_device_strategy(self, *args, **kwargs):
+        strategy = kwargs.get("strategy")
+        devices = kwargs.get("devices")
+        count = _device_count(devices)
+        replaced = False
+        if (
+            count == 1
+            and isinstance(strategy, str)
+            and strategy.lower().startswith("ddp")
+        ):
+            kwargs["strategy"] = "auto"
+            replaced = True
+            print(
+                "[GraphER/DeFoG] Disabled one-device DDP: "
+                f"strategy={strategy!r} -> 'auto', devices={devices!r}.",
+                flush=True,
+            )
+        result = original_init(self, *args, **kwargs)
+        if replaced:
+            effective_strategy = type(getattr(self, "strategy", None)).__name__
+            effective_accelerator = type(
+                getattr(self, "accelerator", None)
+            ).__name__
+            print(
+                "[GraphER/DeFoG] Effective Lightning runtime: "
+                f"strategy={effective_strategy}, "
+                f"accelerator={effective_accelerator}.",
+                flush=True,
+            )
+        return result
+
+    Trainer.__init__ = init_with_single_device_strategy
+    Trainer._grapher_single_device_strategy_patch = True
+
+
+def _capture_command(command: list[str]) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+            check=False,
+            shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "argv": command,
+            "resolved_executable": shutil.which(command[0]),
+            "available": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "argv": command,
+        "resolved_executable": shutil.which(command[0]),
+        "available": True,
+        "status": "ok" if completed.returncode == 0 else "error",
+        "returncode": int(completed.returncode),
+        "stdout": completed.stdout.strip(),
+        "stderr": completed.stderr.strip(),
+    }
+
+
+def _read_optional_text(path: Path) -> dict[str, Any]:
+    try:
+        return {
+            "path": str(path),
+            "available": True,
+            "text": path.read_text(encoding="utf-8", errors="replace").strip(),
+        }
+    except OSError as exc:
+        return {
+            "path": str(path),
+            "available": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _collect_runtime_diagnostics(
+    dataset: str,
+    requested_gpus: int,
+) -> dict[str, Any]:
+    """Collect a bounded, non-secret preflight record for failed GPU runs."""
+
+    record: dict[str, Any] = {
+        "format": RUNTIME_DIAGNOSTICS_FORMAT,
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "dataset": dataset,
+        "requested_gpus": requested_gpus,
+        "single_device_strategy_policy": "disable_ddp_use_auto",
+        "process": {
+            "pid": os.getpid(),
+            "cwd": str(Path.cwd()),
+            "argv": list(sys.argv),
+            "python_executable": sys.executable,
+            "python_version": platform.python_version(),
+            "python_implementation": platform.python_implementation(),
+            "prefix": sys.prefix,
+            "base_prefix": sys.base_prefix,
+            "platform": platform.platform(),
+        },
+        "environment": {
+            key: os.environ.get(key)
+            for key in (
+                "CUDA_VISIBLE_DEVICES",
+                "CUDA_DEVICE_ORDER",
+                "CUDA_HOME",
+                "NVIDIA_VISIBLE_DEVICES",
+                "NVIDIA_DRIVER_CAPABILITIES",
+                "CONDA_DEFAULT_ENV",
+                "CONDA_PREFIX",
+                "VIRTUAL_ENV",
+                "PYTHONPATH",
+                "PATH",
+                "LD_LIBRARY_PATH",
+                "LD_PRELOAD",
+                "NCCL_DEBUG",
+                "NCCL_DEBUG_SUBSYS",
+                "NCCL_P2P_DISABLE",
+                "NCCL_IB_DISABLE",
+                "NCCL_SOCKET_IFNAME",
+                "RANK",
+                "LOCAL_RANK",
+                "WORLD_SIZE",
+                "MASTER_ADDR",
+                "MASTER_PORT",
+                "TORCH_DISTRIBUTED_DEBUG",
+            )
+        },
+        "nvidia_smi": _capture_command(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,driver_version,memory.total",
+                "--format=csv,noheader",
+            ]
+        ),
+        "nvidia_kernel_module": _read_optional_text(
+            Path("/proc/driver/nvidia/version")
+        ),
+    }
+    try:
+        import torch
+
+        torch_record: dict[str, Any] = {
+            "import_ok": True,
+            "version": str(torch.__version__),
+            "compiled_cuda": str(torch.version.cuda),
+        }
+        try:
+            torch_record["cudnn_version"] = (
+                int(torch.backends.cudnn.version())
+                if torch.backends.cudnn.is_available()
+                else None
+            )
+        except Exception as exc:
+            torch_record["cudnn_probe_error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+        try:
+            torch_record["distributed_available"] = bool(
+                torch.distributed.is_available()
+            )
+        except Exception as exc:
+            torch_record["distributed_probe_error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+        try:
+            torch_record["cuda_available"] = bool(torch.cuda.is_available())
+            torch_record["cuda_device_count"] = int(torch.cuda.device_count())
+            torch_record["cuda_current_device"] = (
+                int(torch.cuda.current_device())
+                if torch_record["cuda_available"]
+                and torch_record["cuda_device_count"] > 0
+                else None
+            )
+            torch_record["devices"] = [
+                {
+                    "index": index,
+                    "name": torch.cuda.get_device_name(index),
+                    "capability": list(torch.cuda.get_device_capability(index)),
+                    "total_memory_bytes": int(
+                        torch.cuda.get_device_properties(index).total_memory
+                    ),
+                }
+                for index in range(torch_record["cuda_device_count"])
+            ]
+        except Exception as exc:  # diagnostic collection must remain available
+            torch_record["cuda_probe_error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+            torch_record.setdefault("cuda_available", False)
+            torch_record.setdefault("cuda_device_count", 0)
+        try:
+            nccl_available = bool(torch.distributed.is_nccl_available())
+            nccl_version = (
+                torch.cuda.nccl.version() if nccl_available else None
+            )
+            if isinstance(nccl_version, tuple):
+                nccl_version = list(nccl_version)
+            torch_record["nccl"] = {
+                "required_for_this_run": False,
+                "available": nccl_available,
+                "version": nccl_version,
+            }
+        except Exception as exc:
+            torch_record["nccl"] = {
+                "required_for_this_run": False,
+                "probe_error": f"{type(exc).__name__}: {exc}",
+            }
+        record["torch"] = torch_record
+    except Exception as exc:
+        record["torch"] = {
+            "import_error": f"{type(exc).__name__}: {exc}",
+            "cuda_available": False,
+            "cuda_device_count": 0,
+        }
+    return record
+
+
+def _publish_runtime_diagnostics(record: dict[str, Any]) -> None:
+    print(
+        "[GraphER/DeFoG] Runtime preflight:\n"
+        + json.dumps(record, indent=2, sort_keys=True),
+        flush=True,
+    )
+    target_value = os.environ.get("GRAPHER_DEFOG_DIAGNOSTICS_PATH", "").strip()
+    if not target_value:
+        return
+    target = Path(target_value).expanduser().resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".tmp")
+    temporary.write_text(
+        json.dumps(record, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(target)
+
+
+def _requested_gpus() -> int:
+    raw = os.environ.get("GRAPHER_DEFOG_REQUESTED_GPUS", "1")
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            "GRAPHER_DEFOG_REQUESTED_GPUS must be the integer 0 or 1; "
+            f"received {raw!r}."
+        ) from exc
+    if value not in {0, 1}:
+        raise ValueError(
+            "GRAPHER_DEFOG_REQUESTED_GPUS must be 0 or 1; "
+            f"received {value}."
+        )
+    return value
 
 
 def _install_final_checkpoint_policy() -> None:
@@ -79,10 +376,23 @@ def main() -> None:
             "GRAPHER_DEFOG_DATASET must name a supported DeFoG dataset; "
             f"received {dataset!r}."
         )
+    requested_gpus = _requested_gpus()
+    diagnostics = _collect_runtime_diagnostics(dataset, requested_gpus)
+    _publish_runtime_diagnostics(diagnostics)
+    torch_record = diagnostics.get("torch", {})
+    if requested_gpus == 1 and not bool(torch_record.get("cuda_available")):
+        print(
+            "[GraphER/DeFoG] WARNING: one GPU was requested, but the isolated "
+            "interpreter reported torch.cuda.is_available() == False. The "
+            "upstream DeFoG entrypoint will use its documented CPU fallback. "
+            "Review the runtime diagnostics if this was unexpected.",
+            flush=True,
+        )
     if dataset in {"qm9", "zinc"}:
         from defog_molecular_runtime import install_dataset_info_patch
 
         install_dataset_info_patch(dataset)
+    _install_single_device_strategy()
     _install_final_checkpoint_policy()
     from main import main as upstream_main
 

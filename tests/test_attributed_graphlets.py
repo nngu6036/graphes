@@ -8,7 +8,7 @@ from grapher.rewiring_mlp.attributed.data import (
     GraphCategoryVocabulary,
     GraphletBasis,
 )
-from grapher.rewiring_mlp.properties.summary import SummaryConfig
+from grapher.properties.summary import SummaryConfig
 from grapher.utils.motifs import attributed_graphlet_count_dict
 
 

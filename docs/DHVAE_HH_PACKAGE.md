@@ -53,3 +53,32 @@ serialized base graphs through the common correction interface.
 This refactor changes code ownership and import boundaries. It does not change
 the DH-VAE objective, HH realization behavior, GraphER predictor, candidate
 swaps, or correction rule.
+
+## Common wrapper
+
+`DHVAEHHWrapper` is the report-facing interface. Its `train()` method rewrites
+the selected project experiment configuration into a staged, run-scoped
+configuration and delegates to the maintained `train_degree_generator.py`
+trainer. It publishes the checkpoint, vectorizer, training metrics, resolved
+configuration, log, dataset hashes, and manifest under
+`outputs/baselines/dhvae_hh/<benchmark>/<run-id>/train/`.
+
+Its `generate()` method loads that checkpoint through the existing ordinary or
+typed sampler and calls the existing connected HH or typed exact constructor.
+It retries rejected invariant samples or failed realizations until exactly the
+requested number of graphs is produced, or fails without publishing a partial
+batch. Every accepted graph retains its raw order in `base_graphs.pkl`.
+
+Post-training estimates are unconditional prior samples, not reconstructions
+of particular training graphs. The wrapper therefore saves both pools and
+records `pairing.status: unpaired`; it never infers alignment from equal pool
+sizes.
+
+The convenience command is:
+
+```bash
+PYTHONPATH=src python scripts/run_dhvae_hh_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 42
+```

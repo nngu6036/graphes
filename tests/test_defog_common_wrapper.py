@@ -66,6 +66,23 @@ def _prepared_dataset(
     )
 
 
+def _write_fake_runtime_diagnostics(environment: dict[str, str]) -> None:
+    path = Path(environment["GRAPHER_DEFOG_DIAGNOSTICS_PATH"])
+    path.write_text(
+        json.dumps(
+            {
+                "format": "grapher_defog_runtime_diagnostics_v1",
+                "dataset": environment["GRAPHER_DEFOG_DATASET"],
+                "requested_gpus": int(
+                    environment["GRAPHER_DEFOG_REQUESTED_GPUS"]
+                ),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_wrapper_declares_implemented_generic_and_attributed_scope() -> None:
     wrapper = DeFoGWrapper()
     assert wrapper.capabilities.status == "ready"
@@ -160,6 +177,7 @@ def test_training_publishes_common_artifacts(
                 encoding="utf-8",
             )
             return
+        _write_fake_runtime_diagnostics(kwargs["environment"])
         run_override = next(value for value in command if value.startswith("hydra.run.dir="))
         native_run = Path(run_override.split("=", 1)[1])
         (native_run / ".hydra").mkdir(parents=True)
@@ -210,6 +228,15 @@ def test_training_publishes_common_artifacts(
     assert manifest["train_seed"] == 42
     assert manifest["checkpoint"]["selected_epoch"] == 2
     assert manifest["checkpoint"]["final_epoch_verified"] is True
+    assert manifest["runtime"]["requested_gpus"] == 0
+    assert manifest["runtime"]["single_device_strategy_policy"] == (
+        "disable_ddp_use_auto"
+    )
+    diagnostics_path = artifacts.run_dir / "train" / "runtime_diagnostics.json"
+    assert diagnostics_path.is_file()
+    assert json.loads(diagnostics_path.read_text(encoding="utf-8"))["format"] == (
+        "grapher_defog_runtime_diagnostics_v1"
+    )
     assert manifest["commands"]["shell"] is False
     assert "train.n_epochs=3" in manifest["commands"]["train"]
     assert "model.n_layers=2" in manifest["commands"]["train"]
@@ -234,6 +261,65 @@ def test_training_publishes_common_artifacts(
     assert estimates_manifest["ground_truth_graphs"]["count"] == 2
     assert estimates_manifest["pairing"]["status"] == "unpaired"
     assert estimates_manifest["pairing"]["pair_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "override",
+    ["general.gpus=2", "+general.gpus=2", "++general.gpus=2"],
+)
+def test_training_rejects_hydra_override_of_single_gpu_boundary(
+    monkeypatch,
+    tmp_path,
+    override: str,
+) -> None:
+    root = _fake_defog_root(tmp_path)
+    monkeypatch.setenv("DEFOG", str(root))
+    monkeypatch.setenv("DEFOG_PYTHON", sys.executable)
+    request = TrainRequest(
+        run=RunSpec.for_seed(
+            model_id="defog",
+            dataset_id="community_small",
+            seed=42,
+            output_root=tmp_path / "outputs" / "baselines",
+        ),
+        dataset=_prepared_dataset(tmp_path),
+        options={
+            "runtime": {"gpus": 1},
+            "hydra_overrides": [override],
+            "training_estimates": {"enabled": False},
+        },
+    )
+    wrapper = DeFoGWrapper()
+    launched_labels: list[str] = []
+
+    def fake_external(command, **kwargs):
+        launched_labels.append(kwargs["label"])
+        if kwargs["label"] != "DeFoG dataset preparation":
+            raise AssertionError("A protected GPU override reached DeFoG training.")
+        manifest = Path(command[command.index("--manifest") + 1])
+        split_records = {}
+        for split, source_path in request.dataset.split_paths.items():
+            split_records[split] = {
+                "graph_count": 1,
+                "source": {
+                    "path": str(source_path),
+                    "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                },
+            }
+        manifest.write_text(
+            json.dumps({"splits": split_records}) + "\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(wrapper, "_run_external", fake_external)
+
+    with pytest.raises(
+        (ValueError, RuntimeError),
+        match=r"controlled by the wrapper.*general\.gpus",
+    ):
+        wrapper.train(request)
+
+    assert "DeFoG training" not in launched_labels
 
 
 def test_generation_serializes_exact_ordered_batch(monkeypatch, tmp_path) -> None:
@@ -589,6 +675,7 @@ def test_molecular_train_and_generate_dispatch_and_manifest_semantics(
             )
             return
 
+        _write_fake_runtime_diagnostics(kwargs["environment"])
         assert f"+experiment={experiment}" in command
         assert f"dataset={benchmark_id}" in command
         assert f"general.name=grapher_{run_id}" in command

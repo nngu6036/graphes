@@ -65,19 +65,22 @@ _DEFAULT_EXPERIMENT_BY_NATIVE_DATASET = {
     "zinc": "zinc",
 }
 _SAFE_OVERRIDE = re.compile(r"^[^\x00\r\n]+$")
-_PROTECTED_OVERRIDE_PREFIXES = (
-    "+experiment=",
-    "dataset=",
-    "dataset.datadir=",
-    "general.name=",
-    "general.resume=",
-    "general.test_only=",
-    "general.generated_path=",
-    "hydra.run.dir=",
-    "train.seed=",
-    "train.n_epochs=",
-    "general.check_val_every_n_epochs=",
-    "general.sample_every_val=",
+_PROTECTED_OVERRIDE_KEYS = frozenset(
+    {
+        "experiment",
+        "dataset",
+        "dataset.datadir",
+        "general.name",
+        "general.gpus",
+        "general.resume",
+        "general.test_only",
+        "general.generated_path",
+        "hydra.run.dir",
+        "train.seed",
+        "train.n_epochs",
+        "general.check_val_every_n_epochs",
+        "general.sample_every_val",
+    }
 )
 
 
@@ -564,11 +567,151 @@ def _checkpoint_epoch(path: Path) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _log_tail(path: Path, *, lines: int = 60) -> str:
+def _log_tail(path: Path, *, lines: int = 200) -> str:
     if not path.is_file():
         return ""
     content = path.read_text(encoding="utf-8", errors="replace").splitlines()
     return "\n".join(content[-lines:])
+
+
+def _external_failure_classification(output: str) -> str | None:
+    lowered = output.lower()
+    if (
+        "nvml_error_lib_rm_version_mismatch" in lowered
+        or (
+            "driver/library version mismatch" in lowered
+            and any(token in lowered for token in ("nvml", "nvidia-smi", "nvrm"))
+        )
+    ):
+        return "gpu_driver_library_mismatch"
+    if "cuda out of memory" in lowered or "outofmemoryerror" in lowered:
+        return "cuda_out_of_memory"
+    if "torch.cuda.is_available() == false" in lowered:
+        return "cuda_unavailable"
+    if "nccl" in lowered:
+        return "distributed_runtime_failure"
+    return None
+
+
+def _external_failure_hint(output: str) -> str | None:
+    """Explain common isolated-runtime failures without hiding the raw log."""
+
+    classification = _external_failure_classification(output)
+    if classification == "gpu_driver_library_mismatch":
+        return (
+            "Detected an NVIDIA NVML driver/library mismatch. GraphER disables "
+            "DDP/NCCL for one-device DeFoG training, but the host driver stack "
+            "may still need attention. Run `nvidia-smi`; if it reports the "
+            "same mismatch, reboot after the driver update or ask the server "
+            "administrator to reconcile the loaded kernel module and user-space "
+            "NVIDIA libraries."
+        )
+    if classification == "distributed_runtime_failure":
+        return (
+            "Detected an NCCL/distributed-runtime failure. A one-device run "
+            "should log `Disabled one-device DDP` before Trainer starts. Confirm "
+            "that scripts/defog_train_worker.py is the updated GraphER worker "
+            "and inspect the saved runtime diagnostics."
+        )
+    if classification == "cuda_unavailable":
+        return (
+            "The DeFoG interpreter cannot access CUDA. Verify DEFOG_PYTHON, "
+            "CUDA_VISIBLE_DEVICES, the installed PyTorch CUDA build, and the "
+            "driver reported by `nvidia-smi`; or explicitly set runtime.gpus: 0."
+        )
+    if classification == "cuda_out_of_memory":
+        return (
+            "CUDA ran out of memory. Reduce the DeFoG training batch size or "
+            "select a less occupied GPU with runtime.cuda_visible_devices."
+        )
+    return None
+
+
+def _debug_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    """Return only non-secret runtime selectors that help reproduce failures."""
+
+    keys = (
+        "GRAPHER_DEFOG_DATASET",
+        "GRAPHER_DEFOG_REQUESTED_GPUS",
+        "GRAPHER_DEFOG_DIAGNOSTICS_PATH",
+        "CUDA_VISIBLE_DEVICES",
+        "CUDA_DEVICE_ORDER",
+        "NCCL_DEBUG",
+        "NCCL_P2P_DISABLE",
+        "NCCL_IB_DISABLE",
+        "CONDA_DEFAULT_ENV",
+        "CONDA_PREFIX",
+        "VIRTUAL_ENV",
+        "PYTHONPATH",
+        "PATH",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "PYTHONHASHSEED",
+        "HYDRA_FULL_ERROR",
+    )
+    return {key: environment[key] for key in keys if key in environment}
+
+
+def _preserve_training_failure(
+    *,
+    layout: ArtifactLayout,
+    log_path: Path,
+    diagnostics_path: Path,
+    error: BaseException,
+    started_at: str,
+    commands: Mapping[str, Sequence[str] | None],
+    native_run: Path,
+    working_directory: Path,
+    environment: Mapping[str, str],
+) -> Path:
+    """Persist bounded failure evidence outside the disposable staging tree."""
+
+    attempt = f"attempt-{time.time_ns()}"
+    target = layout.run_dir / "failures" / attempt
+    target.mkdir(parents=True, exist_ok=False)
+    if log_path.is_file():
+        shutil.copy2(log_path, target / "train.log")
+    if diagnostics_path.is_file():
+        shutil.copy2(diagnostics_path, target / "runtime_diagnostics.json")
+    hydra_source = native_run / ".hydra"
+    hydra_files: list[str] = []
+    if hydra_source.is_dir():
+        hydra_target = target / "hydra"
+        hydra_target.mkdir()
+        for name in ("config.yaml", "overrides.yaml", "hydra.yaml"):
+            source = hydra_source / name
+            if source.is_file():
+                shutil.copy2(source, hydra_target / name)
+                hydra_files.append(f"hydra/{name}")
+    _atomic_json(
+        target / "failure.json",
+        {
+            "format": "grapher_defog_training_failure_v1",
+            "model_id": "defog",
+            "dataset_id": layout.dataset_id,
+            "run_id": layout.run_id,
+            "started_at": started_at,
+            "failed_at": _utc_now(),
+            "exception_type": type(error).__name__,
+            "exception": str(error),
+            "failure_classification": _external_failure_classification(
+                str(error)
+            ),
+            "diagnostic_hint": _external_failure_hint(str(error)),
+            "commands": {
+                name: list(command) if command is not None else None
+                for name, command in commands.items()
+            },
+            "working_directory": str(working_directory.resolve()),
+            "environment": _debug_environment(environment),
+            "hydra": hydra_files,
+            "log": "train.log" if log_path.is_file() else None,
+            "runtime_diagnostics": (
+                "runtime_diagnostics.json" if diagnostics_path.is_file() else None
+            ),
+        },
+    )
+    return target
 
 
 class DeFoGWrapper(BaseGeneratorWrapper):
@@ -598,7 +741,13 @@ class DeFoGWrapper(BaseGeneratorWrapper):
     ) -> None:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as log_file:
-            log_file.write(f"\n[{label}] argv={json.dumps(list(command))}\n")
+            log_file.write(
+                f"\n[{label}] started_at={_utc_now()}\n"
+                f"[{label}] cwd={cwd.resolve()}\n"
+                f"[{label}] argv={json.dumps(list(command))}\n"
+                f"[{label}] environment="
+                f"{json.dumps(_debug_environment(environment), sort_keys=True)}\n"
+            )
             log_file.flush()
             try:
                 completed = subprocess.run(
@@ -614,14 +763,30 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 )
             except subprocess.TimeoutExpired as exc:
                 log_file.flush()
+                tail = _log_tail(log_path)
                 raise RuntimeError(
-                    f"{label} timed out. Last subprocess output:\n"
-                    f"{_log_tail(log_path)}"
+                    f"{label} timed out.\n"
+                    f"Working directory: {cwd.resolve()}\n"
+                    f"Subprocess log: {log_path.resolve()}\n"
+                    f"Command: {json.dumps(list(command))}\n"
+                    f"Last subprocess output:\n{tail}"
                 ) from exc
         if completed.returncode != 0:
+            tail = _log_tail(log_path)
+            classification = _external_failure_classification(tail)
+            hint = _external_failure_hint(tail)
             raise RuntimeError(
-                f"{label} exited with code {completed.returncode}. "
-                f"Last subprocess output:\n{_log_tail(log_path)}"
+                f"{label} exited with code {completed.returncode}.\n"
+                + (
+                    f"Failure classification: {classification}\n"
+                    if classification
+                    else ""
+                )
+                + f"Working directory: {cwd.resolve()}\n"
+                f"Subprocess log: {log_path.resolve()}\n"
+                f"Command: {json.dumps(list(command))}\n"
+                + (f"Diagnostic hint: {hint}\n" if hint else "")
+                + f"Last subprocess output:\n{tail}"
             )
 
     def train(self, request: TrainRequest) -> TrainingArtifacts:
@@ -711,12 +876,16 @@ class DeFoGWrapper(BaseGeneratorWrapper):
         stage_train = workspace / "train"
         stage_train.mkdir()
         log_path = stage_train / "train.log"
+        runtime_diagnostics_path = stage_train / "runtime_diagnostics.json"
         native_data = workspace / "native_dataset"
         native_run = workspace / "native_run"
         molecular_statistics_capture = workspace / "molecular_statistics.json"
         preparation_manifest = stage_train / "dataset_conversion.json"
         started_at = _utc_now()
         started = time.monotonic()
+        prepare_command: list[str] | None = None
+        command: list[str] | None = None
+        environment: dict[str, str] = {}
         try:
             splits = request.dataset.split_paths
             prepare_command = [
@@ -741,6 +910,10 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 cuda_visible_devices=cuda_visible_devices,
             )
             environment["GRAPHER_DEFOG_DATASET"] = native
+            environment["GRAPHER_DEFOG_REQUESTED_GPUS"] = str(gpus)
+            environment["GRAPHER_DEFOG_DIAGNOSTICS_PATH"] = str(
+                runtime_diagnostics_path
+            )
             if native in SUPPORTED_MOLECULAR_DATASETS:
                 environment["GRAPHER_DEFOG_STATISTICS_PATH"] = str(
                     molecular_statistics_capture
@@ -811,7 +984,8 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 override = str(raw_override)
                 if _SAFE_OVERRIDE.fullmatch(override) is None or "=" not in override:
                     raise ValueError(f"Invalid Hydra override: {override!r}.")
-                if override.startswith(_PROTECTED_OVERRIDE_PREFIXES):
+                override_key = override.split("=", 1)[0].lstrip("+")
+                if override_key in _PROTECTED_OVERRIDE_KEYS:
                     raise ValueError(f"Hydra override is controlled by the wrapper: {override}")
                 command.append(override)
 
@@ -823,6 +997,21 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 timeout_seconds=timeout_seconds,
                 label="DeFoG training",
             )
+            if not runtime_diagnostics_path.is_file():
+                raise RuntimeError(
+                    "DeFoG training worker did not publish runtime diagnostics."
+                )
+            runtime_diagnostics = _read_json_object(
+                runtime_diagnostics_path,
+                label="DeFoG runtime diagnostics",
+            )
+            if runtime_diagnostics.get("format") != (
+                "grapher_defog_runtime_diagnostics_v1"
+            ):
+                raise RuntimeError(
+                    "DeFoG training worker published unsupported runtime "
+                    "diagnostics."
+                )
             _verify_prepared_sources_unchanged(prepared_splits, splits)
             molecular_statistics_record: dict[str, Any] | None = None
             molecular_statistics_path: Path | None = None
@@ -1344,6 +1533,15 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 "started_at": started_at,
                 "finished_at": _utc_now(),
                 "duration_seconds": duration,
+                "runtime": {
+                    "requested_gpus": gpus,
+                    "cuda_visible_devices": cuda_visible_devices,
+                    "single_device_strategy_policy": "disable_ddp_use_auto",
+                    "diagnostics": {
+                        "path": "runtime_diagnostics.json",
+                        "sha256": _sha256(runtime_diagnostics_path),
+                    },
+                },
                 "checkpoint": {
                     "path": "checkpoints/model.ckpt",
                     "sha256": _sha256(checkpoint_path),
@@ -1430,6 +1628,42 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                     ),
                 },
             )
+        except Exception as exc:
+            try:
+                failure_path = _preserve_training_failure(
+                    layout=layout,
+                    log_path=log_path,
+                    diagnostics_path=runtime_diagnostics_path,
+                    error=exc,
+                    started_at=started_at,
+                    commands={
+                        "prepare": prepare_command,
+                        "train": command,
+                    },
+                    native_run=native_run,
+                    working_directory=defog_root / "src",
+                    environment=environment,
+                )
+            except Exception as preservation_error:
+                raise RuntimeError(
+                    f"{exc}\nGraphER also failed to preserve DeFoG failure "
+                    f"artifacts: {preservation_error}"
+                ) from exc
+            preserved_details = [
+                f"Failure artifacts preserved at: {failure_path.resolve()}"
+            ]
+            preserved_log = failure_path / "train.log"
+            if preserved_log.is_file():
+                preserved_details.append(f"Full log: {preserved_log.resolve()}")
+            preserved_diagnostics = failure_path / "runtime_diagnostics.json"
+            if preserved_diagnostics.is_file():
+                preserved_details.append(
+                    "Runtime diagnostics: "
+                    f"{preserved_diagnostics.resolve()}"
+                )
+            raise RuntimeError(
+                f"{exc}\n" + "\n".join(preserved_details)
+            ) from exc
         finally:
             if workspace.exists():
                 shutil.rmtree(workspace)
@@ -1443,6 +1677,7 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 layout.resolved_training_config_path,
                 layout.train_dir / "dataset_conversion.json",
                 layout.native_training_dataset_dir,
+                layout.train_dir / "runtime_diagnostics.json",
             )
             + (
                 (layout.train_dir / "molecular_statistics.json",)

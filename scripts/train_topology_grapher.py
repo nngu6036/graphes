@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from grapher.data.io import load_dataset_splits
-from grapher.rewiring_mlp.properties.summary import SummaryConfig
+from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.data import (
     TopologyTrajectoryIterableDataset,

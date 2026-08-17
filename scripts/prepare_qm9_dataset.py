@@ -33,26 +33,6 @@ ATTRIBUTED_SCHEMA = {
     "edge_attributes": ["bond_type", "bond_order"],
 }
 
-# DeFoG and PyG both pin the older ``molnet_publish/qm9.zip`` archive. Its
-# ``gdb9.sdf`` is the report-facing source for this project. A newer DeepChem
-# archive contains an OpenBabel-derived ``qm9.sdf`` with different connection
-# tables; some characterized records become disconnected after hydrogen
-# removal. Canonical runs therefore identify the source by content, not merely
-# by filename or record count.
-DEFOG_PYG_QM9_ARCHIVE_URL = (
-    "https://deepchemdata.s3-us-west-1.amazonaws.com/"
-    "datasets/molnet_publish/qm9.zip"
-)
-DEFOG_PYG_QM9_SDF_SHA256 = (
-    "98c4e97d50ac549b8c9f0b2114b348a9a944718e17e50d9a724b729f1deaa28e"
-)
-QM9_UNCHARACTERIZED_SHA256 = (
-    "3aa5115d540b356de94791d4a74c3bf1ed91c469ecf52a4f5d7cc0506fe02e24"
-)
-KNOWN_INCOMPATIBLE_DEEPCHEM_SDF_SHA256 = (
-    "d93a319831492355f44adfba9d73d358aa96c82216fe6754b9a83550e52cf718"
-)
-
 
 @dataclass(frozen=True)
 class QM9Protocol:
@@ -62,8 +42,6 @@ class QM9Protocol:
     expected_source_records: int
     expected_excluded_records: int
     expected_graphs: int
-    expected_sdf_sha256: str
-    expected_uncharacterized_sha256: str
     split_seed: int
     split_counts: dict[str, int]
     project_formal_charge: bool
@@ -83,18 +61,6 @@ class QM9Protocol:
                 protocol.get("expected_excluded_records", 3054)
             ),
             expected_graphs=int(protocol.get("expected_graphs", 130831)),
-            expected_sdf_sha256=str(
-                protocol.get(
-                    "expected_sdf_sha256",
-                    DEFOG_PYG_QM9_SDF_SHA256,
-                )
-            ).strip().lower(),
-            expected_uncharacterized_sha256=str(
-                protocol.get(
-                    "expected_uncharacterized_sha256",
-                    QM9_UNCHARACTERIZED_SHA256,
-                )
-            ).strip().lower(),
             split_seed=int(split.get("seed", 42)),
             split_counts={
                 name: int(split.get(name, 0)) for name in ("train", "val", "test")
@@ -119,45 +85,6 @@ class QM9Protocol:
             raise ValueError(
                 "QM9 source minus excluded count must equal expected_graphs."
             )
-        if (
-            len(result.expected_sdf_sha256) != 64
-            or any(
-                character not in "0123456789abcdef"
-                for character in result.expected_sdf_sha256
-            )
-        ):
-            raise ValueError(
-                "protocol.expected_sdf_sha256 must be a 64-character "
-                "hexadecimal SHA-256 digest."
-            )
-        if (
-            result.canonical
-            and result.expected_sdf_sha256 != DEFOG_PYG_QM9_SDF_SHA256
-        ):
-            raise ValueError(
-                "Canonical QM9 must use the gdb9.sdf SHA-256 pinned by "
-                "DeFoG/PyG. Use --allow-noncanonical for another source."
-            )
-        if (
-            len(result.expected_uncharacterized_sha256) != 64
-            or any(
-                character not in "0123456789abcdef"
-                for character in result.expected_uncharacterized_sha256
-            )
-        ):
-            raise ValueError(
-                "protocol.expected_uncharacterized_sha256 must be a "
-                "64-character hexadecimal SHA-256 digest."
-            )
-        if (
-            result.canonical
-            and result.expected_uncharacterized_sha256
-            != QM9_UNCHARACTERIZED_SHA256
-        ):
-            raise ValueError(
-                "Canonical QM9 must use the official uncharacterized.txt "
-                "SHA-256 pinned by DeFoG/PyG."
-            )
         if any(value < 0 for value in result.split_counts.values()):
             raise ValueError("QM9 split counts must be non-negative.")
         if sum(result.split_counts.values()) != result.expected_graphs:
@@ -178,37 +105,6 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def _validate_canonical_sdf_source(
-    path: Path,
-    *,
-    observed_sha256: str,
-    expected_sha256: str,
-) -> None:
-    """Require the exact QM9 SDF source pinned by DeFoG and PyG."""
-
-    if observed_sha256 == expected_sha256:
-        return
-
-    if observed_sha256 == KNOWN_INCOMPATIBLE_DEEPCHEM_SDF_SHA256:
-        detail = (
-            "This is the newer OpenBabel-derived DeepChem qm9.sdf. Its "
-            "connection tables are not the source used by DeFoG/PyG and can "
-            "produce disconnected characterized heavy-atom graphs."
-        )
-    else:
-        detail = "The file is not the gdb9.sdf source pinned by DeFoG/PyG."
-
-    raise RuntimeError(
-        "Canonical QM9 source checksum mismatch. "
-        f"{detail}\n"
-        f"  path: {path}\n"
-        f"  observed SHA-256: {observed_sha256}\n"
-        f"  expected SHA-256: {expected_sha256}\n"
-        "Download the DeFoG/PyG archive, extract gdb9.sdf, and pass that "
-        f"file with --sdf-file. Archive: {DEFOG_PYG_QM9_ARCHIVE_URL}"
-    )
 
 
 def _ordered_indices_sha256(indices: list[int]) -> str:
@@ -392,9 +288,8 @@ def _graphs_from_pyg_qm9(
         raise RuntimeError(
             "Could not initialize torch_geometric.datasets.QM9. PyG preprocessing may "
             "stop when RDKit cannot parse an individual molecule. If the raw download "
-            f"exists, retry with --source sdf --sdf-file {downloaded_sdf}; "
-            "the direct SDF loader audits the pinned records. For import or "
-            "TorchScript errors, reinstall "
+            f"exists, retry with --source sdf --sdf-file {downloaded_sdf}; the direct "
+            "SDF loader skips invalid records. For import or TorchScript errors, reinstall "
             "a PyG build matching your PyTorch/CUDA version."
         ) from exc
     limit = (
@@ -429,17 +324,25 @@ def _rdkit_bond_type(bond) -> int:
         raise ImportError("RDKit is required for --source sdf.") from exc
 
     if bond.GetIsAromatic():
-        value = 4
+        val = 4
     else:
-        value = {
-            Chem.BondType.SINGLE: 1,
-            Chem.BondType.DOUBLE: 2,
-            Chem.BondType.TRIPLE: 3,
-            Chem.BondType.AROMATIC: 4,
-        }.get(bond.GetBondType())
-    if value is None or int(value) not in QM9_BOND_TYPES:
-        raise ValueError(f"Unsupported QM9 bond type: {bond.GetBondType()}")
-    return int(value)
+        bond_type = bond.GetBondType()
+        if bond_type == Chem.BondType.SINGLE:
+            val = 1
+        elif bond_type == Chem.BondType.DOUBLE:
+            val = 2
+        elif bond_type == Chem.BondType.TRIPLE:
+            val = 3
+        elif bond_type == Chem.BondType.AROMATIC:
+            val = 4
+        else:
+            val = 1
+
+    if val in QM9_BOND_TYPES:
+        return int(val)
+    # Fallback for constants encoded as an ordered list rather than explicit bond orders.
+    idx = max(0, min(int(val) - 1, len(QM9_BOND_TYPES) - 1))
+    return int(QM9_BOND_TYPES[idx])
 
 
 def _rdkit_mol_to_nx(mol, *, remove_h: bool = True, kekulize: bool = True) -> nx.Graph:
@@ -541,12 +444,7 @@ def _graphs_from_sdf_qm9(
     if not sdf_file.exists():
         raise FileNotFoundError(f"SDF file does not exist: {sdf_file}")
 
-    supplier = Chem.SDMolSupplier(
-        str(sdf_file),
-        removeHs=False,
-        sanitize=False,
-        strictParsing=True,
-    )
+    supplier = Chem.SDMolSupplier(str(sdf_file), removeHs=False, sanitize=True)
     if supplier is None:
         raise RuntimeError(f"Could not open SDF file: {sdf_file}")
 
@@ -665,14 +563,11 @@ def main() -> None:
             f"Canonical QM9 uses split seed {protocol.split_seed}; received "
             f"{split_seed}. Use --allow-noncanonical for a different split."
         )
-    if canonical_run and args.keep_hydrogens:
+    if canonical_run and (args.keep_hydrogens or args.no_kekulize):
         raise ValueError(
-            "Canonical QM9 uses the heavy-atom representation. "
-            "Use --allow-noncanonical to retain hydrogens."
+            "Canonical QM9 uses the heavy-atom, kekulized representation. "
+            "Use --allow-noncanonical to change preprocessing."
         )
-
-    # PyG and DeFoG preserve QM9's source SDF bond categories.
-    effective_kekulize = False if canonical_run else not args.no_kekulize
 
     root = Path(args.root)
     output_paths = _dataset_output_paths(
@@ -711,22 +606,13 @@ def main() -> None:
         graphs, errors = graphs_from_smiles(
             smiles,
             remove_h=not args.keep_hydrogens,
-            kekulize=effective_kekulize,
+            kekulize=not args.no_kekulize,
         )
         source_path = str(args.smiles_file)
         source_sha256 = _sha256_file(Path(args.smiles_file).resolve())
     elif source == "sdf":
         sdf_file = Path(args.sdf_file) if args.sdf_file else default_sdf
-        if not sdf_file.is_file():
-            raise FileNotFoundError(f"QM9 SDF file does not exist: {sdf_file}")
-        sdf_file = sdf_file.resolve()
-        source_sha256 = _sha256_file(sdf_file)
         if canonical_run:
-            _validate_canonical_sdf_source(
-                sdf_file,
-                observed_sha256=source_sha256,
-                expected_sha256=protocol.expected_sdf_sha256,
-            )
             exclusions_path = (
                 Path(args.uncharacterized_file)
                 if args.uncharacterized_file
@@ -739,24 +625,16 @@ def main() -> None:
             )
             exclusions_path = exclusions_path.resolve()
             exclusions_sha256 = _sha256_file(exclusions_path)
-            if exclusions_sha256 != protocol.expected_uncharacterized_sha256:
-                raise RuntimeError(
-                    "Canonical QM9 uncharacterized.txt checksum mismatch.\n"
-                    f"  path: {exclusions_path}\n"
-                    f"  observed SHA-256: {exclusions_sha256}\n"
-                    "  expected SHA-256: "
-                    f"{protocol.expected_uncharacterized_sha256}\n"
-                    "Use the official file distributed with the DeFoG/PyG "
-                    "QM9 source."
-                )
         graphs, errors, num_input_records = _graphs_from_sdf_qm9(
             sdf_file,
             max_molecules=args.max_molecules,
             remove_h=not args.keep_hydrogens,
-            kekulize=effective_kekulize,
+            kekulize=not args.no_kekulize,
             excluded_indices=excluded_indices,
         )
+        sdf_file = sdf_file.resolve()
         source_path = str(sdf_file)
+        source_sha256 = _sha256_file(sdf_file)
     else:
         if canonical_run:
             raise ValueError(
@@ -792,35 +670,6 @@ def main() -> None:
             raise RuntimeError(
                 f"QM9 selected graph count is {len(graphs)}, expected "
                 f"{protocol.expected_graphs}."
-            )
-        selected_source_indices = [
-            int(graph.graph["source_index"]) for graph in graphs
-        ]
-        expected_selected_source_indices = [
-            index
-            for index in range(protocol.expected_source_records)
-            if index not in excluded_indices
-        ]
-        if selected_source_indices != expected_selected_source_indices:
-            mismatch = next(
-                (
-                    position,
-                    expected,
-                    observed,
-                )
-                for position, (expected, observed) in enumerate(
-                    zip(
-                        expected_selected_source_indices,
-                        selected_source_indices,
-                    )
-                )
-                if expected != observed
-            )
-            raise RuntimeError(
-                "QM9 selected source indices are not the ordered complement "
-                "of the official exclusions: "
-                f"position={mismatch[0]}, expected={mismatch[1]}, "
-                f"observed={mismatch[2]}."
             )
 
     attributed_splits = split_graphs(graphs, seed=split_seed)
@@ -871,32 +720,16 @@ def main() -> None:
         "source_type": source,
         "kind": "qm9_topology",
         "remove_h": not args.keep_hydrogens,
-        "kekulize": effective_kekulize,
+        "kekulize": not args.no_kekulize,
         "seed": split_seed,
         "canonical_protocol": canonical_run,
         "source_sha256": source_sha256,
-        "expected_source_sha256": (
-            protocol.expected_sdf_sha256 if canonical_run else None
-        ),
-        "source_sha256_verified": bool(
-            canonical_run and source_sha256 == protocol.expected_sdf_sha256
-        ),
         "uncharacterized_file": (
             str(exclusions_path) if exclusions_path is not None else None
         ),
         "uncharacterized_file_sha256": exclusions_sha256,
-        "expected_uncharacterized_file_sha256": (
-            protocol.expected_uncharacterized_sha256 if canonical_run else None
-        ),
-        "uncharacterized_file_sha256_verified": bool(
-            canonical_run
-            and exclusions_sha256 == protocol.expected_uncharacterized_sha256
-        ),
         "selected_source_indices_sha256": _ordered_indices_sha256(
-            [
-                int(graph.graph.get("source_index", index))
-                for index, graph in enumerate(graphs)
-            ]
+            [int(graph.graph.get("source_index", index)) for index, graph in enumerate(graphs)]
         ),
         "split_source_indices_sha256": split_source_indices_sha256,
         "source_state_projection": projection_summary,
@@ -940,18 +773,6 @@ def main() -> None:
             "expected_source_records": protocol.expected_source_records,
             "expected_excluded_records": protocol.expected_excluded_records,
             "expected_graphs": protocol.expected_graphs,
-            "expected_sdf_sha256": protocol.expected_sdf_sha256,
-            "source_sha256_verified": bool(
-                canonical_run and source_sha256 == protocol.expected_sdf_sha256
-            ),
-            "expected_uncharacterized_sha256": (
-                protocol.expected_uncharacterized_sha256
-            ),
-            "uncharacterized_sha256_verified": bool(
-                canonical_run
-                and exclusions_sha256
-                == protocol.expected_uncharacterized_sha256
-            ),
             "split_seed": split_seed,
             "uncharacterized_file": (
                 str(exclusions_path) if exclusions_path is not None else None

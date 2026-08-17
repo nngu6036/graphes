@@ -36,7 +36,7 @@ class BaselineRegistryTests(unittest.TestCase):
 
     def test_wrapper_statuses(self) -> None:
         expected = {model_id: "placeholder" for model_id in EXPECTED_BASELINES}
-        expected.update({"dhvae_hh": "partial", "defog": "ready"})
+        expected.update({"dhvae_hh": "ready", "defog": "ready"})
         for model_id, status in expected.items():
             wrapper = create_baseline(model_id)
             self.assertEqual(wrapper.model_id, model_id)

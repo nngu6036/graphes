@@ -7,7 +7,7 @@ from typing import Any
 import networkx as nx
 import numpy as np
 
-from grapher.rewiring_mlp.properties.summary import SummaryConfig
+from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.core.rewiring import Action
 from grapher.utils.motifs import (
     connected_graphlet_count_dict_exact,

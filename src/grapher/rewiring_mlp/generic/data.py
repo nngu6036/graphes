@@ -7,7 +7,7 @@ import networkx as nx
 import numpy as np
 import torch
 
-from grapher.rewiring_mlp.properties.summary import SummaryConfig
+from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.core.rewiring import Action, make_action
 from grapher.rewiring_mlp.generic.graphlets import (
     extract_topology_graphlet_counts,

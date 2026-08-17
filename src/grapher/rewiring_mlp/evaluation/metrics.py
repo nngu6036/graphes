@@ -6,7 +6,7 @@ from typing import Callable, Sequence
 import networkx as nx
 import numpy as np
 
-from grapher.rewiring_mlp.properties.summary import (
+from grapher.properties.summary import (
     SummaryConfig,
     clustering_histogram,
     degree_histogram,

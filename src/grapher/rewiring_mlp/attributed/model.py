@@ -12,7 +12,7 @@ from grapher.rewiring_mlp.attributed.data import (
     HybridEndpointBatch,
 )
 from grapher.rewiring_mlp.attributed.layers import EdgeAwareMPNNLayer
-from grapher.rewiring_mlp.properties.summary import SummaryConfig
+from grapher.properties.summary import SummaryConfig
 from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir
 

@@ -27,7 +27,7 @@ from grapher.rewiring_mlp.molecular.constraints import (
     bond_order,
     is_molecular_valence_feasible,
 )
-from grapher.rewiring_mlp.properties.summary import SummaryConfig
+from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.core.rewiring import (
     Action,
     candidate_actions_from_edge_pair,
