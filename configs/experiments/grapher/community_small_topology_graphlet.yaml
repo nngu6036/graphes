@@ -142,7 +142,7 @@ topology_refiner:
   selection: greedy
   graphlet_weight: 1.0
   clustering_weight: 1.0
-  orbit_weight: 1.0
+  orbit_weight: 2.0
   accept_only_improving: true
   min_improvement: 0.00000001
   refresh_prediction_every: 1
