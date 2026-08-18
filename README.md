@@ -422,7 +422,7 @@ PYTHONPATH=src python scripts/run_dhvae_hh_baseline.py \
   --num-samples 1024 \
   --training-estimate-count 1024 \
   --seed-id 42 \
-  --device auto
+  --device gpu
 ```
 
 This single managed run publishes both artifacts required by the maintained
@@ -444,7 +444,7 @@ PYTHONPATH=src python scripts/train_topology_grapher.py \
   --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
   --output-dir outputs/topology_grapher/community_small/seed_42 \
   --seed 42 \
-  --device auto
+  --device gpu
 ```
 
 Despite the historical config filename, this trains the v2 structural
