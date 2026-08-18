@@ -473,12 +473,12 @@ selected target subset.
 ### 4. Generate and refine graph topologies
 
 ```bash
-PYTHONPATH=src python scripts/run_topology_grapher.py \
+ PYTHONPATH=src python scripts/run_topology_grapher.py \
   --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
-  --checkpoint outputs/topology_grapher/community_small/seed_42/checkpoint.pt \
-  --output-dir outputs/topology_grapher/community_small/seed_42/generated \
+  --output-dir outputs/topology_generation/community_small/seed_42 \
   --num-generate 1024 \
-  --seed 42
+  --seed 42 \
+  --device auto
 ```
 
 The maintained topology config points to the same managed DH-VAE checkpoint
@@ -490,7 +490,7 @@ base or corrector checkpoint is missing or incompatible.
 ```bash
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
-  --generated-dir outputs/topology_grapher/community_small/seed_42/generated \
+  --generated-dir outputs/topology_generation/community_small/seed_42 \
   --output-dir outputs/topology_grapher/community_small/seed_42/evaluation
 ```
 
