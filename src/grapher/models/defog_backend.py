@@ -26,6 +26,7 @@ import networkx as nx
 import numpy as np
 
 from grapher.utils.io import ensure_dir
+from grapher.utils.subprocess_progress import SubprocessLogReporter
 
 DEFOG_EXPORT_FORMAT = "defog_graph_batch_v2"
 LEGACY_DEFOG_EXPORT_FORMAT = "defog_generic_topology_v1"
@@ -77,6 +78,10 @@ class DeFoGGeneratorConfig:
     rdb_crit: str | None = None
     timeout_seconds: float | None = None
     cuda_visible_devices: str | None = None
+    progress_enabled: bool = False
+    stream_subprocess_output: bool = False
+    progress_interval_seconds: float = 30.0
+    generation_progress_interval: int = 1
 
     @classmethod
     def from_dict(
@@ -167,6 +172,34 @@ class DeFoGGeneratorConfig:
         timeout_seconds = None if timeout_value is None else float(timeout_value)
         if timeout_seconds is not None and timeout_seconds <= 0.0:
             raise ValueError("base_generator.runtime.timeout_seconds must be positive.")
+        raw_progress = runtime.get("progress", {}) or {}
+        if not isinstance(raw_progress, Mapping):
+            raise TypeError("base_generator.runtime.progress must be a mapping.")
+        progress_enabled = raw_progress.get("enabled", False)
+        if not isinstance(progress_enabled, bool):
+            raise TypeError(
+                "base_generator.runtime.progress.enabled must be a boolean."
+            )
+        stream_output = raw_progress.get("stream_output", progress_enabled)
+        if not isinstance(stream_output, bool):
+            raise TypeError(
+                "base_generator.runtime.progress.stream_output must be a boolean."
+            )
+        progress_interval_seconds = float(
+            raw_progress.get("interval_seconds", 30.0)
+        )
+        if progress_interval_seconds <= 0:
+            raise ValueError(
+                "base_generator.runtime.progress.interval_seconds must be positive."
+            )
+        generation_progress_interval = int(
+            raw_progress.get("generation_batch_interval", 1)
+        )
+        if generation_progress_interval <= 0:
+            raise ValueError(
+                "base_generator.runtime.progress.generation_batch_interval "
+                "must be positive."
+            )
         cuda_visible = runtime.get("cuda_visible_devices")
         if cuda_visible is not None:
             cuda_visible = str(cuda_visible)
@@ -232,6 +265,10 @@ class DeFoGGeneratorConfig:
             rdb_crit=rdb_crit,
             timeout_seconds=timeout_seconds,
             cuda_visible_devices=cuda_visible,
+            progress_enabled=progress_enabled,
+            stream_subprocess_output=stream_output,
+            progress_interval_seconds=progress_interval_seconds,
+            generation_progress_interval=generation_progress_interval,
         )
 
 
@@ -397,6 +434,16 @@ def _worker_environment(
             "HYDRA_FULL_ERROR": "1",
             "MPLBACKEND": "Agg",
             "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+            "PYTHONUNBUFFERED": "1",
+            "GRAPHER_DEFOG_PROGRESS_ENABLED": (
+                "1" if config.progress_enabled else "0"
+            ),
+            "GRAPHER_DEFOG_PROGRESS_INTERVAL_SECONDS": str(
+                config.progress_interval_seconds
+            ),
+            "GRAPHER_DEFOG_GENERATION_PROGRESS_INTERVAL": str(
+                config.generation_progress_interval
+            ),
         }
     )
     if config.cuda_visible_devices is not None:
@@ -420,8 +467,17 @@ def _run_worker(
     seed: int,
 ) -> None:
     ensure_dir(log_path.parent)
+    reporter = SubprocessLogReporter(
+        label="DeFoG generation worker",
+        log_path=log_path,
+        enabled=config.progress_enabled,
+        stream_output=config.stream_subprocess_output,
+        interval_seconds=config.progress_interval_seconds,
+    )
     try:
         with log_path.open("w", encoding="utf-8") as log_file:
+            log_file.flush()
+            reporter.start(start_offset=0)
             completed = subprocess.run(
                 command,
                 cwd=str(defog_root / "src"),
@@ -433,10 +489,23 @@ def _run_worker(
                 shell=False,
                 start_new_session=True,
             )
+            log_file.flush()
     except subprocess.TimeoutExpired as exc:
+        reporter.stop(status="timed out")
         raise RuntimeError(
             f"DeFoG generation timed out. Last worker output:\n{_log_tail(log_path)}"
         ) from exc
+    except BaseException:
+        reporter.stop(status="failed")
+        raise
+    else:
+        reporter.stop(
+            status=(
+                "completed"
+                if completed.returncode == 0
+                else f"failed with exit code {completed.returncode}"
+            )
+        )
     if completed.returncode != 0:
         raise RuntimeError(
             f"DeFoG worker exited with code {completed.returncode}. "

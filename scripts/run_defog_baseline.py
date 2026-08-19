@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -53,6 +55,22 @@ def _nonnegative_int(raw: str) -> int:
     if value < 0:
         raise argparse.ArgumentTypeError("value must be a non-negative integer")
     return value
+
+
+def _positive_float(raw: str) -> float:
+    value = float(raw)
+    if value <= 0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return value
+
+
+def _status(message: str, *, enabled: bool = True) -> None:
+    """Write human-readable progress to stderr without corrupting JSON stdout."""
+
+    if not enabled:
+        return
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    print(f"[run_defog_baseline {timestamp}] {message}", file=sys.stderr, flush=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -148,6 +166,44 @@ def build_parser() -> argparse.ArgumentParser:
             "overwrite remains forbidden when the run already has generations."
         ),
     )
+    parser.add_argument(
+        "--progress-interval-seconds",
+        type=_positive_float,
+        default=15.0,
+        help=(
+            "Heartbeat interval while DeFoG subprocesses are running. Progress "
+            "is written to stderr; the final JSON summary remains on stdout."
+        ),
+    )
+    parser.add_argument(
+        "--epoch-progress-interval",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Optional number of training epochs between stable progress lines. "
+            "By default the worker chooses an interval that emits about 100 "
+            "lines over the configured horizon."
+        ),
+    )
+    parser.add_argument(
+        "--generation-progress-every-batches",
+        type=_positive_int,
+        default=1,
+        help="Report generation progress every N completed sampling batches.",
+    )
+    parser.add_argument(
+        "--no-stream-subprocess-output",
+        action="store_true",
+        help=(
+            "Show stage transitions and heartbeats only instead of mirroring "
+            "the complete DeFoG subprocess output to the terminal."
+        ),
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress progress output and print only the final JSON summary.",
+    )
     return parser
 
 
@@ -164,6 +220,17 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
     """Run one train-then-generate transaction and return its artifact summary."""
 
     _configure_upstream_environment(args)
+    progress_enabled = not args.quiet
+    progress_options: dict[str, object] = {
+        "enabled": progress_enabled,
+        "stream_output": (
+            progress_enabled and not args.no_stream_subprocess_output
+        ),
+        "interval_seconds": args.progress_interval_seconds,
+        "generation_batch_interval": args.generation_progress_every_batches,
+    }
+    if args.epoch_progress_interval is not None:
+        progress_options["epoch_interval"] = args.epoch_progress_interval
     profile = DATASET_PROFILES[args.dataset]
     run = RunSpec.for_seed(
         model_id="defog",
@@ -178,9 +245,24 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
         serialized_id=profile.serialized_id,
         native_id=profile.native_id,
     )
+    _status(
+        "resolved run: "
+        f"dataset={args.dataset}, serialized={profile.serialized_id}, "
+        f"native={profile.native_id}, run_id={run.run_id}, seed={args.seed_id}",
+        enabled=progress_enabled,
+    )
+    _status(
+        f"checking prepared splits under {dataset.dataset_dir.resolve()}",
+        enabled=progress_enabled,
+    )
     # Fail before launching the external training process when preparation is
     # incomplete or the selected dataset alias points to the wrong directory.
     dataset.require_prepared()
+    _status(
+        "prepared dataset found; starting DeFoG training. Durable log will be "
+        f"published at {run.layout.training_log_path.resolve()}",
+        enabled=progress_enabled,
+    )
 
     wrapper = create_baseline("defog")
     training = wrapper.train(
@@ -188,10 +270,24 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
             run=run,
             dataset=dataset,
             config_path=args.wrapper_config,
-            options={"training_estimates": {"enabled": True}},
+            options={
+                "training_estimates": {"enabled": True},
+                "runtime": {"progress": progress_options},
+            },
             resume_from=args.resume_from,
             overwrite=args.overwrite,
         )
+    )
+    _status(
+        "training completed and artifacts were published: "
+        f"checkpoint={training.checkpoint_path.resolve()}, "
+        f"log={training.log_path.resolve() if training.log_path else None}",
+        enabled=progress_enabled,
+    )
+    _status(
+        "starting final raw-batch generation: "
+        f"requested={args.num_samples}, seed={args.seed_id}",
+        enabled=progress_enabled,
     )
     generation = wrapper.generate(
         GenerateRequest(
@@ -200,6 +296,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
             num_graphs=args.num_samples,
             generation_seed=args.seed_id,
             generation_id=args.generation_id,
+            options={"runtime": {"progress": progress_options}},
             overwrite=args.overwrite,
         )
     )
@@ -208,6 +305,12 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
             "DeFoG generation count mismatch after wrapper validation: "
             f"requested {args.num_samples}, received {generation.num_generated}."
         )
+    _status(
+        "generation completed: "
+        f"graphs={generation.graphs_path.resolve()}, "
+        f"log={generation.log_path.resolve() if generation.log_path else None}",
+        enabled=progress_enabled,
+    )
 
     return {
         "status": "complete",
@@ -246,7 +349,14 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    summary = run_pipeline(args)
+    try:
+        summary = run_pipeline(args)
+    except Exception as exc:
+        _status(
+            f"FAILED: {type(exc).__name__}: {exc}",
+            enabled=not args.quiet,
+        )
+        raise
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 

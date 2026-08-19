@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pickle
 import platform
 import random
@@ -35,6 +36,32 @@ MOLECULAR_BOND_TYPES = {
     "zinc": (1, 2, 3),
 }
 SUPPORTED_DATASETS = frozenset(GENERIC_DATASETS | MOLECULAR_ATOMIC_NUMBERS.keys())
+
+
+def _progress_enabled() -> bool:
+    return os.environ.get("GRAPHER_DEFOG_PROGRESS_ENABLED", "0") == "1"
+
+
+def _progress(message: str) -> None:
+    if _progress_enabled():
+        print(f"[GraphER/DeFoG] {message}", flush=True)
+
+
+def _generation_progress_interval() -> int:
+    raw = os.environ.get("GRAPHER_DEFOG_GENERATION_PROGRESS_INTERVAL", "1")
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            "GRAPHER_DEFOG_GENERATION_PROGRESS_INTERVAL must be a positive "
+            f"integer; received {raw!r}."
+        ) from exc
+    if value <= 0:
+        raise ValueError(
+            "GRAPHER_DEFOG_GENERATION_PROGRESS_INTERVAL must be positive; "
+            f"received {value}."
+        )
+    return value
 
 
 def _sha256(path: Path) -> str:
@@ -365,6 +392,11 @@ def _generate_samples(
     from graph_discrete_flow_model import GraphDiscreteFlowModel
     from omegaconf import OmegaConf
 
+    _progress(
+        "generation worker initializing: "
+        f"dataset={args.dataset}, requested={args.num_samples}, "
+        f"batch_size={args.batch_size}, seed={args.seed}"
+    )
     cfg = _compose_config(args)
     pl.seed_everything(args.seed, workers=True)
     random.seed(args.seed)
@@ -377,6 +409,7 @@ def _generate_samples(
             f"the requested dataset {args.dataset!r}."
         )
 
+    _progress("loading DeFoG dataset metadata and model components")
     dataset_infos, extra_features, domain_features = _model_parts(
         cfg,
         dataset_name,
@@ -392,6 +425,7 @@ def _generate_samples(
         domain_features=domain_features,
         test_labels=None,
     )
+    _progress(f"loading checkpoint from {args.checkpoint}")
     try:
         payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     except TypeError:
@@ -417,15 +451,20 @@ def _generate_samples(
     model.to(device)
     model.limit_dist.to_device(device)
     model.eval()
+    _progress(f"checkpoint loaded; sampling device={device}")
 
     samples: list[Any] = []
     offset = 0
+    batch_index = 0
+    total_batches = (args.num_samples + args.batch_size - 1) // args.batch_size
+    report_every = _generation_progress_interval()
     # Sampling is an inference-only operation.  Disabling autograd is
     # especially important for long QM9/ZINC runs, where retaining graphs for
     # hundreds of reverse-flow steps can otherwise consume unnecessary memory.
     with torch.inference_mode():
         while offset < args.num_samples:
             current_batch = min(args.batch_size, args.num_samples - offset)
+            batch_index += 1
             batch_samples, _ = model.sample_batch(
                 batch_id=offset,
                 batch_size=current_batch,
@@ -442,6 +481,17 @@ def _generate_samples(
                 )
             samples.extend(batch_samples)
             offset += current_batch
+            if (
+                batch_index == 1
+                or batch_index % report_every == 0
+                or offset == args.num_samples
+            ):
+                _progress(
+                    "generation progress: "
+                    f"batch={batch_index}/{total_batches}, "
+                    f"generated={offset}/{args.num_samples}"
+                )
+    _progress("all requested DeFoG samples have been produced")
     runtime: dict[str, Any] = {
         "python": platform.python_version(),
         "torch": str(torch.__version__),
@@ -560,6 +610,7 @@ def main() -> None:
     if len(samples) != args.num_samples:
         raise ValueError(f"DeFoG supplied {len(samples)} samples, expected {args.num_samples}.")
 
+    _progress("validating and encoding generated graphs into the neutral NPZ")
     arrays = encode_samples(samples, dataset=args.dataset)
     _atomic_npz(args.output, arrays)
     manifest = {
@@ -590,6 +641,7 @@ def main() -> None:
         "export": {"path": str(args.output), "sha256": _sha256(args.output), "allow_pickle": False},
     }
     _atomic_json(args.manifest, manifest)
+    _progress(f"generation export and manifest written under {args.output.parent}")
     print(f"Exported {len(samples)} {args.dataset} DeFoG graphs to {args.output}")
 
 

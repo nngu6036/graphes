@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -303,6 +304,57 @@ def _requested_gpus() -> int:
     return value
 
 
+def _progress_enabled() -> bool:
+    return os.environ.get("GRAPHER_DEFOG_PROGRESS_ENABLED", "0") == "1"
+
+
+def _epoch_progress_interval(max_epochs: int) -> int:
+    """Return an explicit or bounded automatic epoch-reporting interval."""
+
+    raw = os.environ.get("GRAPHER_DEFOG_EPOCH_PROGRESS_INTERVAL", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError(
+                "GRAPHER_DEFOG_EPOCH_PROGRESS_INTERVAL must be a positive "
+                f"integer; received {raw!r}."
+            ) from exc
+        if value <= 0:
+            raise ValueError(
+                "GRAPHER_DEFOG_EPOCH_PROGRESS_INTERVAL must be positive; "
+                f"received {value}."
+            )
+        return value
+    # DeFoG experiments can use very large epoch counts.  About one hundred
+    # stable progress lines is informative without turning train.log into a
+    # second per-batch trace.
+    return max(int(max_epochs) // 100, 1)
+
+
+def _scalar_callback_metrics(trainer: Any) -> dict[str, float]:
+    values: dict[str, float] = {}
+    raw_metrics = getattr(trainer, "callback_metrics", {})
+    if not isinstance(raw_metrics, Mapping):
+        return values
+    for key, raw_value in raw_metrics.items():
+        if len(values) >= 8:
+            break
+        try:
+            if hasattr(raw_value, "detach"):
+                raw_value = raw_value.detach()
+            if hasattr(raw_value, "numel") and int(raw_value.numel()) != 1:
+                continue
+            if hasattr(raw_value, "item"):
+                raw_value = raw_value.item()
+            value = float(raw_value)
+        except (TypeError, ValueError, RuntimeError):
+            continue
+        if value == value and abs(value) != float("inf"):
+            values[str(key)] = value
+    return values
+
+
 def _install_final_checkpoint_policy() -> None:
     """Save one explicit checkpoint after a successful upstream ``fit``.
 
@@ -315,15 +367,72 @@ def _install_final_checkpoint_policy() -> None:
     from pathlib import Path
 
     from pytorch_lightning import Trainer
-    from pytorch_lightning.callbacks import ModelCheckpoint
+    from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 
     if getattr(Trainer, "_grapher_final_checkpoint_patch", False):
         return
     original_fit = Trainer.fit
 
-    def fit_and_save_final(self, *args, **kwargs):
-        import json
+    class GraphERProgressCallback(Callback):
+        """Emit stable epoch-level progress independently of Lightning bars."""
 
+        _grapher_defog_progress_callback = True
+
+        def __init__(self, max_epochs: int) -> None:
+            super().__init__()
+            self.max_epochs = max(int(max_epochs), 1)
+            self.interval = _epoch_progress_interval(self.max_epochs)
+
+        def on_fit_start(self, trainer, pl_module) -> None:
+            del pl_module
+            estimated_steps = getattr(trainer, "estimated_stepping_batches", None)
+            print(
+                "[GraphER/DeFoG] Training loop started: "
+                f"max_epochs={self.max_epochs}, "
+                f"epoch_progress_interval={self.interval}, "
+                f"estimated_stepping_batches={estimated_steps}.",
+                flush=True,
+            )
+
+        def on_train_epoch_end(self, trainer, pl_module) -> None:
+            del pl_module
+            epoch = int(getattr(trainer, "current_epoch", 0)) + 1
+            if not (
+                epoch == 1
+                or epoch % self.interval == 0
+                or epoch >= self.max_epochs
+            ):
+                return
+            metrics = _scalar_callback_metrics(trainer)
+            metric_text = (
+                " metrics=" + json.dumps(metrics, sort_keys=True)
+                if metrics
+                else ""
+            )
+            print(
+                "[GraphER/DeFoG] Training progress: "
+                f"epoch={epoch}/{self.max_epochs}, "
+                f"global_step={int(getattr(trainer, 'global_step', 0))}."
+                f"{metric_text}",
+                flush=True,
+            )
+
+        def on_fit_end(self, trainer, pl_module) -> None:
+            del pl_module
+            print(
+                "[GraphER/DeFoG] Training loop finished: "
+                f"completed_epochs="
+                f"{int(trainer.fit_loop.epoch_progress.current.completed)}, "
+                f"global_step={int(getattr(trainer, 'global_step', 0))}.",
+                flush=True,
+            )
+
+    def fit_and_save_final(self, *args, **kwargs):
+        if _progress_enabled() and not any(
+            getattr(callback, "_grapher_defog_progress_callback", False)
+            for callback in self.callbacks
+        ):
+            self.callbacks.append(GraphERProgressCallback(int(self.max_epochs)))
         result = original_fit(self, *args, **kwargs)
         checkpoint_callbacks = [
             callback
@@ -377,6 +486,13 @@ def main() -> None:
             f"received {dataset!r}."
         )
     requested_gpus = _requested_gpus()
+    if _progress_enabled():
+        print(
+            "[GraphER/DeFoG] Training worker initializing: "
+            f"dataset={dataset}, requested_gpus={requested_gpus}, "
+            f"python={sys.executable}.",
+            flush=True,
+        )
     diagnostics = _collect_runtime_diagnostics(dataset, requested_gpus)
     _publish_runtime_diagnostics(diagnostics)
     torch_record = diagnostics.get("torch", {})
@@ -397,6 +513,12 @@ def main() -> None:
     from main import main as upstream_main
 
     # Hydra consumes the original command line unchanged.
+    if _progress_enabled():
+        print(
+            "[GraphER/DeFoG] Entering the upstream Hydra/Lightning training "
+            "entrypoint.",
+            flush=True,
+        )
     upstream_main()
 
 

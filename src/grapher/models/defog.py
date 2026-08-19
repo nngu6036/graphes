@@ -17,6 +17,7 @@ import pickle
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -36,6 +37,7 @@ from grapher.models.base import (
     TrainingArtifacts,
 )
 from grapher.models.errors import ArtifactCollisionError
+from grapher.utils.subprocess_progress import SubprocessLogReporter
 
 TRAINING_MANIFEST_FORMAT = "grapher_defog_training_v2"
 TRAINING_ESTIMATES_MANIFEST_FORMAT = "grapher_defog_training_estimates_v1"
@@ -269,6 +271,50 @@ def _boolean_option(value: Any, *, name: str) -> bool:
     if not isinstance(value, bool):
         raise TypeError(f"{name} must be a YAML/Python boolean.")
     return value
+
+
+def _runtime_progress_options(runtime: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the optional terminal-progress settings for DeFoG workers."""
+
+    raw = runtime.get("progress", {}) or {}
+    if not isinstance(raw, Mapping):
+        raise TypeError("runtime.progress must be a mapping.")
+    enabled = _boolean_option(
+        raw.get("enabled", False),
+        name="runtime.progress.enabled",
+    )
+    stream_output = _boolean_option(
+        raw.get("stream_output", enabled),
+        name="runtime.progress.stream_output",
+    )
+    interval_seconds = float(raw.get("interval_seconds", 30.0))
+    if interval_seconds <= 0:
+        raise ValueError("runtime.progress.interval_seconds must be positive.")
+    epoch_interval_value = raw.get("epoch_interval")
+    epoch_interval = (
+        None if epoch_interval_value is None else int(epoch_interval_value)
+    )
+    if epoch_interval is not None and epoch_interval <= 0:
+        raise ValueError("runtime.progress.epoch_interval must be positive.")
+    generation_batch_interval = int(
+        raw.get("generation_batch_interval", 1)
+    )
+    if generation_batch_interval <= 0:
+        raise ValueError(
+            "runtime.progress.generation_batch_interval must be positive."
+        )
+    return {
+        "enabled": enabled,
+        "stream_output": stream_output,
+        "interval_seconds": interval_seconds,
+        "epoch_interval": epoch_interval,
+        "generation_batch_interval": generation_batch_interval,
+    }
+
+
+def _emit_progress(progress: Mapping[str, Any], message: str) -> None:
+    if bool(progress.get("enabled")):
+        print(f"[GraphER/DeFoG] {message}", file=sys.stderr, flush=True)
 
 
 def _deep_update(base: dict[str, Any], update: Mapping[str, Any]) -> dict[str, Any]:
@@ -519,6 +565,7 @@ def _external_environment(
             "HYDRA_FULL_ERROR": "1",
             "MPLBACKEND": "Agg",
             "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+            "PYTHONUNBUFFERED": "1",
         }
     )
     if cuda_visible_devices is not None:
@@ -634,6 +681,10 @@ def _debug_environment(environment: Mapping[str, str]) -> dict[str, str]:
         "GRAPHER_DEFOG_DATASET",
         "GRAPHER_DEFOG_REQUESTED_GPUS",
         "GRAPHER_DEFOG_DIAGNOSTICS_PATH",
+        "GRAPHER_DEFOG_PROGRESS_ENABLED",
+        "GRAPHER_DEFOG_PROGRESS_INTERVAL_SECONDS",
+        "GRAPHER_DEFOG_EPOCH_PROGRESS_INTERVAL",
+        "GRAPHER_DEFOG_GENERATION_PROGRESS_INTERVAL",
         "CUDA_VISIBLE_DEVICES",
         "CUDA_DEVICE_ORDER",
         "NCCL_DEBUG",
@@ -738,6 +789,9 @@ class DeFoGWrapper(BaseGeneratorWrapper):
         log_path: Path,
         timeout_seconds: float | None,
         label: str,
+        progress_enabled: bool = False,
+        stream_output: bool = False,
+        progress_interval_seconds: float = 30.0,
     ) -> None:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as log_file:
@@ -749,6 +803,14 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 f"{json.dumps(_debug_environment(environment), sort_keys=True)}\n"
             )
             log_file.flush()
+            reporter = SubprocessLogReporter(
+                label=label,
+                log_path=log_path,
+                enabled=progress_enabled,
+                stream_output=stream_output,
+                interval_seconds=progress_interval_seconds,
+            )
+            reporter.start(start_offset=log_path.stat().st_size)
             try:
                 completed = subprocess.run(
                     list(command),
@@ -763,6 +825,7 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 )
             except subprocess.TimeoutExpired as exc:
                 log_file.flush()
+                reporter.stop(status="timed out")
                 tail = _log_tail(log_path)
                 raise RuntimeError(
                     f"{label} timed out.\n"
@@ -771,6 +834,19 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                     f"Command: {json.dumps(list(command))}\n"
                     f"Last subprocess output:\n{tail}"
                 ) from exc
+            except BaseException:
+                log_file.flush()
+                reporter.stop(status="failed")
+                raise
+            else:
+                log_file.flush()
+                reporter.stop(
+                    status=(
+                        "completed"
+                        if completed.returncode == 0
+                        else f"failed with exit code {completed.returncode}"
+                    )
+                )
         if completed.returncode != 0:
             tail = _log_tail(log_path)
             classification = _external_failure_classification(tail)
@@ -811,10 +887,18 @@ class DeFoGWrapper(BaseGeneratorWrapper):
         python_env = str(options.get("python_env", DEFOG_PYTHON_ENV))
         defog_root = resolve_defog_root(source_env)
         runtime_cfg = dict(options.get("runtime", {}) or {})
+        progress = _runtime_progress_options(runtime_cfg)
         python_executable = resolve_defog_python(
             defog_root=defog_root,
             python_executable=runtime_cfg.get("python_executable"),
             python_env=python_env,
+        )
+        _emit_progress(
+            progress,
+            "training preflight: "
+            f"benchmark={request.dataset.benchmark_id}, native={native}, "
+            f"run_id={request.run.run_id}, seed={request.run.train_seed}, "
+            f"defog_root={defog_root}, python={python_executable}",
         )
         source_identity = _source_identity(defog_root)
         python_environment = _python_environment_identity(python_executable)
@@ -914,10 +998,28 @@ class DeFoGWrapper(BaseGeneratorWrapper):
             environment["GRAPHER_DEFOG_DIAGNOSTICS_PATH"] = str(
                 runtime_diagnostics_path
             )
+            environment["GRAPHER_DEFOG_PROGRESS_ENABLED"] = (
+                "1" if progress["enabled"] else "0"
+            )
+            environment["GRAPHER_DEFOG_PROGRESS_INTERVAL_SECONDS"] = str(
+                progress["interval_seconds"]
+            )
+            environment["GRAPHER_DEFOG_GENERATION_PROGRESS_INTERVAL"] = str(
+                progress["generation_batch_interval"]
+            )
+            if progress["epoch_interval"] is not None:
+                environment["GRAPHER_DEFOG_EPOCH_PROGRESS_INTERVAL"] = str(
+                    progress["epoch_interval"]
+                )
             if native in SUPPORTED_MOLECULAR_DATASETS:
                 environment["GRAPHER_DEFOG_STATISTICS_PATH"] = str(
                     molecular_statistics_capture
                 )
+            _emit_progress(
+                progress,
+                "preparing DeFoG-native dataset tensors from the immutable "
+                "GraphER train/validation/test splits",
+            )
             self._run_external(
                 prepare_command,
                 cwd=defog_root / "src",
@@ -925,6 +1027,9 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 log_path=log_path,
                 timeout_seconds=timeout_seconds,
                 label="DeFoG dataset preparation",
+                progress_enabled=progress["enabled"],
+                stream_output=progress["stream_output"],
+                progress_interval_seconds=progress["interval_seconds"],
             )
             if not preparation_manifest.is_file():
                 raise RuntimeError("DeFoG dataset worker did not publish its manifest.")
@@ -947,6 +1052,10 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 raise RuntimeError(
                     "DeFoG dataset conversion reported an empty training split."
                 )
+            _emit_progress(
+                progress,
+                f"dataset preparation complete: train_graphs={train_graph_count}",
+            )
 
             upstream_name = f"grapher_{request.run.run_id}"
             command = [
@@ -989,6 +1098,13 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                     raise ValueError(f"Hydra override is controlled by the wrapper: {override}")
                 command.append(override)
 
+            configured_horizon = options.get("n_epochs", "upstream default")
+            _emit_progress(
+                progress,
+                "launching upstream DeFoG training: "
+                f"experiment={experiment}, gpus={gpus}, "
+                f"train.n_epochs={configured_horizon}",
+            )
             self._run_external(
                 command,
                 cwd=defog_root / "src",
@@ -996,7 +1112,11 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 log_path=log_path,
                 timeout_seconds=timeout_seconds,
                 label="DeFoG training",
+                progress_enabled=progress["enabled"],
+                stream_output=progress["stream_output"],
+                progress_interval_seconds=progress["interval_seconds"],
             )
+            _emit_progress(progress, "upstream DeFoG training process completed")
             if not runtime_diagnostics_path.is_file():
                 raise RuntimeError(
                     "DeFoG training worker did not publish runtime diagnostics."
@@ -1046,6 +1166,11 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                     molecular_statistics_path,
                 )
             source_checkpoint = _find_checkpoint(native_run)
+            _emit_progress(
+                progress,
+                "selected trained checkpoint: "
+                f"{source_checkpoint.relative_to(native_run)}",
+            )
             checkpoint_path = stage_train / "checkpoints" / "model.ckpt"
             checkpoint_path.parent.mkdir(parents=True)
             shutil.copy2(source_checkpoint, checkpoint_path)
@@ -1234,6 +1359,11 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 # cuda merely because gpus=1 would make an otherwise valid CPU
                 # fallback fail only after training had completed.
                 estimate_runtime.setdefault("device", "auto" if gpus > 0 else "cpu")
+                _emit_progress(
+                    progress,
+                    "generating the independent post-training source pool: "
+                    f"num_graphs={estimate_count}, seed={estimate_seed}",
+                )
                 estimate_config = DeFoGGeneratorConfig.from_dict(
                     {
                         "type": "defog",
@@ -1269,6 +1399,11 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                         f"{len(estimate_result.graphs)} post-training samples; "
                         f"expected {estimate_count}."
                     )
+                _emit_progress(
+                    progress,
+                    "post-training source-pool generation complete: "
+                    f"generated={len(estimate_result.graphs)}",
+                )
                 if native in SUPPORTED_MOLECULAR_DATASETS:
                     estimate_runtime_record = estimate_result.manifest.get("runtime")
                     if not isinstance(estimate_runtime_record, Mapping):
@@ -1611,6 +1746,10 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 "options": options,
             }
             _atomic_json(stage_train / "manifest.json", manifest)
+            _emit_progress(
+                progress,
+                f"publishing training artifacts to {layout.train_dir.resolve()}",
+            )
             _publish_directory(stage_train, layout.train_dir, overwrite=request.overwrite)
             _atomic_json(
                 layout.run_manifest_path,
@@ -1627,6 +1766,11 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                         else None
                     ),
                 },
+            )
+            _emit_progress(
+                progress,
+                "training transaction complete: "
+                f"checkpoint={layout.checkpoints_dir / 'model.ckpt'}",
             )
         except Exception as exc:
             try:
@@ -1745,6 +1889,14 @@ class DeFoGWrapper(BaseGeneratorWrapper):
         source_env = str(options.get("source_env", DEFOG_ROOT_ENV))
         python_env = str(options.get("python_env", DEFOG_PYTHON_ENV))
         runtime = dict(options.get("runtime", {}) or {})
+        progress = _runtime_progress_options(runtime)
+        _emit_progress(
+            progress,
+            "generation preflight: "
+            f"run_id={request.run.run_id}, generation_id="
+            f"{request.resolved_generation_id}, requested={request.num_graphs}, "
+            f"seed={request.generation_seed}",
+        )
         generation_source_identity: dict[str, Any] | None = None
         generation_python_environment: dict[str, Any] | None = None
         if managed_run:
@@ -1880,6 +2032,12 @@ class DeFoGWrapper(BaseGeneratorWrapper):
         started_at = _utc_now()
         started = time.monotonic()
         try:
+            _emit_progress(
+                progress,
+                "launching DeFoG checkpoint generation: "
+                f"dataset={native}, experiment={experiment}, "
+                f"batch_size={config.batch_size}",
+            )
             result = generate_defog_graphs(
                 config,
                 num_graphs=request.num_graphs,
@@ -1891,6 +2049,10 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                     f"DeFoG returned {len(result.graphs)} graphs; "
                     f"expected {request.num_graphs}."
                 )
+            _emit_progress(
+                progress,
+                f"checkpoint generation complete: generated={len(result.graphs)}",
+            )
             training_statistics = training_manifest.get("molecular_statistics")
             if managed_run and isinstance(training_statistics, Mapping):
                 result_runtime = result.manifest.get("runtime")
@@ -1998,6 +2160,10 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 "options": options,
             }
             _atomic_json(stage_generation / "manifest.json", manifest)
+            _emit_progress(
+                progress,
+                f"publishing generation artifacts to {target.resolve()}",
+            )
             _publish_directory(stage_generation, target, overwrite=request.overwrite)
         finally:
             if workspace.exists():
@@ -2007,6 +2173,11 @@ class DeFoGWrapper(BaseGeneratorWrapper):
         native_artifacts = [final_native / "defog_samples.npz"]
         if (final_native / "defog_manifest.json").is_file():
             native_artifacts.append(final_native / "defog_manifest.json")
+        _emit_progress(
+            progress,
+            "generation transaction complete: "
+            f"graphs={layout.generated_graphs_path(generation_id)}",
+        )
         return GenerationArtifacts(
             run_dir=layout.run_dir,
             generation_dir=target,

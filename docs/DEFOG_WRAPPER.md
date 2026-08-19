@@ -58,7 +58,17 @@ training = create_baseline("defog").train(
         run=run,
         dataset=dataset,
         options={
-            "runtime": {"gpus": 1, "cuda_visible_devices": "0"},
+            "runtime": {
+                "gpus": 1,
+                "cuda_visible_devices": "0",
+                "progress": {
+                    "enabled": True,
+                    "stream_output": True,
+                    "interval_seconds": 15,
+                    "epoch_interval": 1000,
+                    "generation_batch_interval": 1,
+                },
+            },
             "training_estimates": {
                 "enabled": True,
                 "seed": 43,
@@ -76,6 +86,15 @@ launches Hydra with a direct argument list and `shell=False`, and atomically
 publishes the final checkpoint, resolved configuration, converted data,
 provenance, and log. Sampling settings omitted from the request are inherited
 from the saved DeFoG configuration rather than replaced by generic defaults.
+
+When `runtime.progress.enabled` is true, the wrapper mirrors the persisted
+subprocess log to stderr and emits a heartbeat after
+`runtime.progress.interval_seconds`. The training worker additionally prints a
+stable epoch summary at the first, final, and every configured
+`epoch_interval`; when that value is omitted, it automatically emits roughly
+one hundred summaries over the full training horizon. Generation reports the
+completed sample count every `generation_batch_interval` batches. These
+messages do not alter stdout or the artifact manifests.
 
 The reference DeFoG entrypoint declares a DDP strategy even for one device.
 The isolated GraphER training worker replaces that strategy with Lightning's

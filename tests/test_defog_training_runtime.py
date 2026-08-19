@@ -194,3 +194,41 @@ def test_external_training_failure_surfaces_context_root_cause_and_action(
     assert "nvidia-smi" in lower_message
     assert "administrator" in lower_message or "reboot" in lower_message
     assert log_path.is_file()
+
+
+def test_external_training_progress_streams_the_persisted_log(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    wrapper = DeFoGWrapper()
+    working_directory = tmp_path / "defog" / "src"
+    working_directory.mkdir(parents=True)
+    log_path = tmp_path / "artifacts" / "train.log"
+    command = [sys.executable, "train.py"]
+
+    def fake_run(argv, **kwargs):
+        assert argv == command
+        kwargs["stdout"].write("epoch=1/3 loss=1.25\n")
+        kwargs["stdout"].flush()
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("grapher.models.defog.subprocess.run", fake_run)
+
+    wrapper._run_external(
+        command,
+        cwd=working_directory,
+        environment={"GRAPHER_DEFOG_DATASET": "comm20"},
+        log_path=log_path,
+        timeout_seconds=None,
+        label="DeFoG training",
+        progress_enabled=True,
+        stream_output=True,
+        progress_interval_seconds=1.0,
+    )
+
+    output = capsys.readouterr().err
+    assert "DeFoG training started" in output
+    assert "epoch=1/3 loss=1.25" in output
+    assert "DeFoG training completed" in output
+    assert "epoch=1/3 loss=1.25" in log_path.read_text(encoding="utf-8")

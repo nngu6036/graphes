@@ -166,6 +166,15 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --seed-id 42
 ```
 
+The runner now writes stage transitions, DeFoG subprocess output, epoch-level
+training updates, periodic liveness heartbeats, and completed generation-batch
+counts to stderr. The final artifact summary remains the only stdout payload,
+so it can still be redirected as JSON. Use
+`--no-stream-subprocess-output` to keep only the stable stage/heartbeat lines,
+or change their cadence with `--progress-interval-seconds`. For DeFoG
+experiments with very large epoch horizons, `--epoch-progress-interval N`
+controls the explicit epoch summaries.
+
 For a one-GPU run, the training worker replaces DeFoG's hard-coded DDP strategy
 with Lightning's single-device strategy, so NCCL is not initialized merely to
 train on one device. The worker prints its effective strategy and writes
