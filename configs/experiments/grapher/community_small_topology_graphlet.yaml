@@ -135,18 +135,20 @@ constructor:
 
 topology_refiner:
   mode: energy
-  steps: 40
-  proposal_budget: 256
-  valid_candidate_budget: 64
-  preserve_connectivity: true
-  selection: greedy
+  steps: 24
+  proposal_budget: 128
+  valid_candidate_budget: 32
   graphlet_weight: 1.0
+  graphlet_mass_weight: 0.0
   clustering_weight: 1.0
-  orbit_weight: 0.5
   accept_only_improving: true
   min_improvement: 0.00000001
   refresh_prediction_every: 1
   reject_revisited_states: true
+  preserve_connectivity: true
+  selection: greedy
+  orbit_weight: 1.0
+
 
 evaluation:
   inline_during_generation: false
