@@ -1,4 +1,4 @@
-experiment: ego_small_topology_graphlet_v2
+experiment: ego_small_topology_graphlet
 benchmark: ego_small
 seed: 42
 
@@ -93,7 +93,7 @@ topology_trajectory:
   max_repair_trials: 10000
 
 topology_predictor:
-  checkpoint_path: outputs/topology_grapher/ego_small_v2/seed_42/checkpoint.pt
+  checkpoint_path: outputs/topology_grapher/ego_small/seed_42/checkpoint.pt
   device: auto
   hidden_dim: 128
   edge_dim: 64

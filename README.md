@@ -537,8 +537,8 @@ interpreter, then train it through the common wrapper so a completed
 post-training output pool is published:
 
 ```bash
-export DEFOG=/absolute/path/to/DeFoG
-export DEFOG_PYTHON=/absolute/path/to/defog/environment/bin/python
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
   --dataset community_small \
