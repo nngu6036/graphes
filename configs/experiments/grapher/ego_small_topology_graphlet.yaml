@@ -69,7 +69,7 @@ topology_trajectory:
   proposal_budget: 192
   valid_candidate_budget: 64
   states_per_graph: 8
-  paths_per_graph: 1
+  paths_per_graph: 2
   source_randomization_steps: 0
   random_relabel_source: true
 
@@ -83,8 +83,8 @@ topology_trajectory:
   # subgraph mass, which is informative for small ego graphs.
   teacher_graphlet_weight: 0.5
   teacher_graphlet_mass_weight: 0.5
-  teacher_clustering_weight: 2.0
-  teacher_orbit_weight: 2.0
+  teacher_clustering_weight: 1.0
+  teacher_orbit_weight: 4.0
   teacher_min_improvement: 0.00001
   target_tolerance: 0.0
 
@@ -113,7 +113,7 @@ topology_predictor:
     graphlet_mass: 0.5
     clustering_mean: 1.0
     clustering_distribution: 1.0
-    orbit: 2.0
+    orbit: 4.0
   progress_interval: 5
 
 generation:
@@ -146,19 +146,15 @@ constructor:
 # clustering/orbit MMD in the previous run.
 topology_refiner:
   mode: energy
-  steps: 16
+  steps: 12
   proposal_budget: 256
   valid_candidate_budget: 128
-  preserve_connectivity: true
-  selection: greedy
-  temperature: 0.1
   graphlet_weight: 0.5
   graphlet_mass_weight: 0.5
-  clustering_weight: 2.0
-  orbit_weight: 2.0
+  clustering_weight: 1.0
+  orbit_weight: 4.0
   accept_only_improving: true
   min_improvement: 0.00001
-  sample_graphlet: false
   refresh_prediction_every: 1
   reject_revisited_states: true
 
