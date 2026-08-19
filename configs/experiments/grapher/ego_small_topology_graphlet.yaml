@@ -66,31 +66,23 @@ graphlet_prediction:
 topology_trajectory:
   storage: streaming
   steps: 16
-  proposal_budget: 192
-  valid_candidate_budget: 64
+
+  proposal_budget: 256
+  valid_candidate_budget: 128
+
   states_per_graph: 8
   paths_per_graph: 2
-  source_randomization_steps: 0
-  random_relabel_source: true
 
-  teacher_mode: soft
   teacher_temperature: 0.10
-  teacher_top_k: 1
-  teacher_sample_actions: false
+  teacher_top_k: 2
+  teacher_sample_actions: true
 
-  # Put more weight on the metrics that are currently failing. Graphlet mass is
-  # enabled because normalized graphlet histograms alone discard total connected
-  # subgraph mass, which is informative for small ego graphs.
   teacher_graphlet_weight: 0.5
   teacher_graphlet_mass_weight: 0.5
-  teacher_clustering_weight: 1.0
-  teacher_orbit_weight: 4.0
-  teacher_min_improvement: 0.00001
-  target_tolerance: 0.0
+  teacher_clustering_weight: 2.0
+  teacher_orbit_weight: 2.0
 
-  preserve_connectivity: true
-  ensure_connected_source: true
-  max_repair_trials: 10000
+  teacher_min_improvement: 0.00001
 
 topology_predictor:
   checkpoint_path: outputs/topology_grapher/ego_small/seed_42/checkpoint.pt
