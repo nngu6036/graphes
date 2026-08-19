@@ -146,15 +146,21 @@ constructor:
 # clustering/orbit MMD in the previous run.
 topology_refiner:
   mode: energy
-  steps: 12
+
   proposal_budget: 256
   valid_candidate_budget: 128
+
   graphlet_weight: 0.5
   graphlet_mass_weight: 0.5
-  clustering_weight: 1.0
-  orbit_weight: 4.0
+  clustering_weight: 2.0
+  orbit_weight: 2.0
+
+  preserve_connectivity: true
+  selection: greedy
   accept_only_improving: true
   min_improvement: 0.00001
+
+  sample_graphlet: false
   refresh_prediction_every: 1
   reject_revisited_states: true
 
