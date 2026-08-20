@@ -138,6 +138,7 @@ constructor:
 # clustering/orbit MMD in the previous run.
 topology_refiner:
   mode: energy
+  steps: 16
 
   proposal_budget: 256
   valid_candidate_budget: 128
@@ -151,9 +152,15 @@ topology_refiner:
   selection: greedy
   accept_only_improving: true
   min_improvement: 0.00001
+  min_relative_improvement: 0.0001
 
   sample_graphlet: false
-  refresh_prediction_every: 1
+  prediction_horizon:
+    mode: annealed
+    initial_k: 8
+    final_k: 1
+    schedule: exponential
+    refresh_on_plateau: true
   reject_revisited_states: true
 
 evaluation:

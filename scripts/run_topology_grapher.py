@@ -28,7 +28,10 @@ from grapher.models.dhvae_hh.degree_sampler import (
 )
 from grapher.properties.summary import configure_orca_executable
 from grapher.rewiring_mlp.generic.model import load_topology_checkpoint
-from grapher.rewiring_mlp.generic.refiner import refine_graph_with_topology_predictions
+from grapher.rewiring_mlp.generic.refiner import (
+    TopologyRefinerConfig,
+    refine_graph_with_topology_predictions,
+)
 from grapher.utils.io import ensure_dir, load_yaml, save_json, save_pickle
 
 
@@ -151,14 +154,10 @@ def main() -> None:
     if not bool(constructor_cfg.get("ensure_connected", True)):
         raise ValueError("Topology generation requires constructor.ensure_connected.")
     refiner_cfg = dict(config.get("topology_refiner", {}) or {})
-    if not bool(refiner_cfg.get("preserve_connectivity", True)):
+    refiner_settings = TopologyRefinerConfig.from_dict(refiner_cfg)
+    if not refiner_settings.preserve_connectivity:
         raise ValueError(
             "Topology generation requires topology_refiner.preserve_connectivity."
-        )
-    if int(refiner_cfg.get("refresh_prediction_every", 1)) != 1:
-        raise ValueError(
-            "The maintained topology generator refreshes its prediction after "
-            "every accepted swap."
         )
     coarse_graphs: list[nx.Graph] = []
     refined_graphs: list[nx.Graph] = []
@@ -220,7 +219,7 @@ def main() -> None:
             model=model,
             graphlet_basis=graphlet_basis,
             summary_config=summary_config,
-            refiner_config=refiner_cfg,
+            refiner_config=refiner_settings,
             device=model_device,
             rng=rng,
             return_trace=True,
@@ -243,6 +242,25 @@ def main() -> None:
             int(row.get("num_valid_candidates", 0)) for row in decision_rows
         )
         accepted = sum(bool(row.get("accepted")) for row in trace)
+        terminal_rows = [
+            row for row in trace if bool(row.get("terminal_stop", False))
+        ]
+        terminal_stop = bool(terminal_rows)
+        prediction_calls = max(
+            (int(row.get("prediction_calls", 0)) for row in trace),
+            default=0,
+        )
+        prediction_horizon_rows = [
+            row for row in trace if bool(row.get("prediction_refreshed", False))
+        ]
+        realized_prediction_horizons = [
+            int(row["prediction_horizon"])
+            for row in prediction_horizon_rows
+            if "prediction_horizon" in row
+        ]
+        plateau_refreshes = sum(
+            row.get("reason") == "prediction_plateau_refresh" for row in trace
+        )
         rejection_reasons: Counter[str] = Counter()
         rejection_reasons.update(generation_rejections)
         for row in decision_rows:
@@ -298,10 +316,23 @@ def main() -> None:
             "candidate_proposals": proposals,
             "candidate_passes": passes,
             "candidate_pass_rate": float(passes / max(proposals, 1)),
-            "stopped": float(bool(trace and not trace[-1].get("accepted", False))),
+            "prediction_calls": prediction_calls,
+            "accepted_swaps_per_prediction": float(
+                accepted / max(prediction_calls, 1)
+            ),
+            "mean_realized_prediction_horizon": (
+                float(np.mean(realized_prediction_horizons))
+                if realized_prediction_horizons
+                else 0.0
+            ),
+            "plateau_refreshes": plateau_refreshes,
+            "stopped": float(terminal_stop),
             "stop_opportunities": 1,
-            "stop_rate": float(
-                bool(trace and not trace[-1].get("accepted", False))
+            "stop_rate": float(terminal_stop),
+            "stop_reason": (
+                str(terminal_rows[-1].get("reason"))
+                if terminal_rows
+                else "maximum_accepted_steps"
             ),
             "generation_attempts": generation_attempt,
             "generation_successes": 1,
@@ -316,7 +347,8 @@ def main() -> None:
         print(
             f"graph={index + 1}/{num_generate} "
             f"n={refined.number_of_nodes()} m={refined.number_of_edges()} "
-            f"accepted_steps={accepted}",
+            f"accepted_steps={accepted} prediction_calls={prediction_calls} "
+            f"plateau_refreshes={plateau_refreshes}",
             flush=True,
         )
 
@@ -385,6 +417,24 @@ def main() -> None:
     ]
     trace_rows = [row for trace in traces for row in trace]
     accepted_rows = [row for row in trace_rows if bool(row.get("accepted"))]
+    prediction_refresh_rows = [
+        row for row in trace_rows if bool(row.get("prediction_refreshed", False))
+    ]
+    prediction_call_counts = [
+        max(
+            (int(row.get("prediction_calls", 0)) for row in trace),
+            default=0,
+        )
+        for trace in traces
+    ]
+    prediction_horizons = [
+        int(row["prediction_horizon"])
+        for row in prediction_refresh_rows
+        if "prediction_horizon" in row
+    ]
+    plateau_refresh_count = sum(
+        row.get("reason") == "prediction_plateau_refresh" for row in trace_rows
+    )
     diagnostics = {
         "pipeline_mode": "topology",
         "degree_preservation_rate": degree_preservation_rate(
@@ -432,6 +482,31 @@ def main() -> None:
         "all_accepted_moves_improve_frozen_energy": bool(
             all(float(row["energy_improvement"]) > 0.0 for row in accepted_rows)
         ),
+        "all_accepted_moves_pass_relative_threshold": bool(
+            all(
+                float(row.get("relative_energy_improvement", 0.0))
+                > float(refiner_settings.min_relative_improvement)
+                for row in accepted_rows
+            )
+        ),
+        "prediction_horizon_mode": refiner_settings.prediction_horizon_mode,
+        "prediction_horizon_schedule": (
+            refiner_settings.prediction_horizon_schedule
+        ),
+        "prediction_horizon_initial_k": (
+            refiner_settings.prediction_horizon_initial_k
+        ),
+        "prediction_horizon_final_k": (
+            refiner_settings.prediction_horizon_final_k
+        ),
+        "mean_realized_prediction_horizon": (
+            float(np.mean(prediction_horizons)) if prediction_horizons else 0.0
+        ),
+        "mean_prediction_calls": float(np.mean(prediction_call_counts)),
+        "mean_accepted_swaps_per_prediction_call": float(
+            sum(accepted_steps) / max(sum(prediction_call_counts), 1)
+        ),
+        "plateau_refresh_count": int(plateau_refresh_count),
         "predictor_graphlet_error": float(predictor_graphlet_error),
         "predictor_clustering_error": (
             float(predictor_clustering_error)
@@ -452,6 +527,17 @@ def main() -> None:
         "pipeline_mode": "topology",
         "checkpoint_format": checkpoint.get("format"),
         "degree_source": degree_source,
+        "prediction_horizon": {
+            "mode": refiner_settings.prediction_horizon_mode,
+            "initial_k": refiner_settings.prediction_horizon_initial_k,
+            "final_k": refiner_settings.prediction_horizon_final_k,
+            "schedule": refiner_settings.prediction_horizon_schedule,
+            "refresh_on_plateau": refiner_settings.refresh_on_plateau,
+            "min_improvement": refiner_settings.min_improvement,
+            "min_relative_improvement": (
+                refiner_settings.min_relative_improvement
+            ),
+        },
         "orca_exec": orca_exec,
         "num_generated": len(refined_graphs),
         "hh_source": coarse_metrics,

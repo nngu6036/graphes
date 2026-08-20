@@ -92,10 +92,32 @@ soft degree-consistency loss.
 
 ## Correction
 
-At each correction step, the predictor is called once. Its graphlet,
-clustering, and orbit outputs are frozen while all candidates are compared.
-Only a candidate with positive combined improvement may be accepted. The
-prediction is recomputed after an accepted swap.
+Generation uses an outer prediction loop and an inner rewiring loop. At outer
+iteration `t`, the predictor is called once and its graphlet, clustering, and
+orbit outputs are frozen. The refiner may then accept up to `K_t` valid swaps
+against that same target. `K_t` is configured by
+`topology_refiner.prediction_horizon` and can be fixed or annealed. The
+maintained experiment configs use an exponential cooling schedule: a larger
+startup horizon gives the first structural estimate several opportunities to
+move the coarse graph, while the horizon decreases toward one so the target is
+updated more frequently near the end of generation.
+
+For accepted-swap progress `p in [0, 1]`, the exponential schedule uses
+`K(p) = round(initial_k * (final_k / initial_k) ** p)`, clamped to at least one.
+Linear and cosine schedules are also supported.
+
+The inner loop ends when it reaches `K_t` or when no candidate passes both the
+absolute and relative improvement thresholds. If the frozen target reaches a
+plateau after at least one accepted swap and `refresh_on_plateau` is enabled,
+the predictor is called again from the new state rather than terminating the
+whole trajectory. A plateau immediately after a fresh prediction is a terminal
+STOP condition.
+
+The legacy `refresh_prediction_every` option remains supported as a fixed
+horizon. It is not used by the maintained topology experiment configs.
+
+This change is generation-only: teacher-trajectory construction and predictor
+training still supervise individual intermediate states as before.
 
 Every accepted action preserves:
 
@@ -104,10 +126,16 @@ Every accepted action preserves:
 - simplicity and undirectedness; and
 - connectivity.
 
-The improvement guarantee is step-local because the predictor changes after an
-accepted action. Finite candidate budgets, restricted reachability, and
-non-identifying summaries prevent a claim of global convergence or exact
-terminal recovery.
+Within one frozen-prediction block, every accepted action monotonically reduces
+the same structural energy. The guarantee resets when the predictor is
+refreshed, so there is still no global monotonicity claim across outer blocks.
+Finite candidate budgets, restricted reachability, and non-identifying
+summaries prevent a claim of global convergence or exact terminal recovery.
+
+The generation report records the realized prediction horizons, predictor-call
+count, accepted swaps per prediction, plateau refreshes, and both absolute and
+relative energy gains. These diagnostics allow a direct quality/runtime sweep
+over `initial_k`, `final_k`, and the cooling schedule.
 
 ## Maintained commands
 

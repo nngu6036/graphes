@@ -55,9 +55,52 @@ class TopologyRefinerConfig:
     orbit_weight: float = 0.0
     accept_only_improving: bool = True
     min_improvement: float = 1.0e-8
+    min_relative_improvement: float = 0.0
+    relative_improvement_epsilon: float = 1.0e-12
     sample_graphlet: bool = False
+    # Backward-compatible fixed prediction horizon. New configs should prefer
+    # the nested ``prediction_horizon`` block parsed below.
     refresh_prediction_every: int = 1
+    prediction_horizon_mode: str = "fixed"
+    prediction_horizon_initial_k: int = 1
+    prediction_horizon_final_k: int = 1
+    prediction_horizon_schedule: str = "constant"
+    refresh_on_plateau: bool = False
     reject_revisited_states: bool = True
+
+    def prediction_horizon_at(self, progress: float) -> int:
+        """Return the frozen-prediction rewiring budget at normalized progress.
+
+        ``progress`` is measured by accepted rewiring actions rather than raw
+        proposal attempts. In annealed mode the horizon starts large, then
+        decreases monotonically so the predictor is refreshed more frequently
+        near the end of refinement.
+        """
+
+        if self.prediction_horizon_mode == "fixed":
+            return int(self.refresh_prediction_every)
+
+        clipped = float(np.clip(progress, 0.0, 1.0))
+        start = float(self.prediction_horizon_initial_k)
+        end = float(self.prediction_horizon_final_k)
+        schedule = self.prediction_horizon_schedule
+        if schedule == "linear":
+            value = start + (end - start) * clipped
+        elif schedule == "cosine":
+            cooling = 0.5 * (1.0 + np.cos(np.pi * clipped))
+            value = end + (start - end) * cooling
+        elif schedule == "exponential":
+            # Both endpoints are positive by construction, so geometric
+            # interpolation is well defined and exactly reaches each endpoint.
+            value = start * ((end / start) ** clipped)
+        else:  # Defensive: from_dict validates this before generation starts.
+            raise ValueError(
+                f"Unknown prediction-horizon schedule: {schedule!r}."
+            )
+        # Round half up rather than using Python's bankers rounding. This keeps
+        # the schedule monotone while allowing the configured final horizon to
+        # become active before the very last accepted action.
+        return max(1, int(np.floor(value + 0.5)))
 
     @classmethod
     def from_dict(
@@ -80,6 +123,50 @@ class TopologyRefinerConfig:
                 valid_budget if valid_budget < 0 else max(valid_budget, 1) * 4,
             )
         )
+        legacy_refresh = int(values.get("refresh_prediction_every", 1))
+        horizon_data = values.get("prediction_horizon")
+        if horizon_data is None:
+            prediction_horizon_mode = "fixed"
+            prediction_horizon_initial_k = legacy_refresh
+            prediction_horizon_final_k = legacy_refresh
+            prediction_horizon_schedule = "constant"
+            refresh_on_plateau = bool(values.get("refresh_on_plateau", False))
+        else:
+            if not isinstance(horizon_data, dict):
+                raise ValueError(
+                    "topology_refiner.prediction_horizon must be a mapping."
+                )
+            horizon = dict(horizon_data)
+            prediction_horizon_mode = str(
+                horizon.get("mode", "annealed")
+            ).lower()
+            if prediction_horizon_mode in {"adaptive", "anneal"}:
+                prediction_horizon_mode = "annealed"
+            if prediction_horizon_mode == "fixed":
+                fixed_k = int(
+                    horizon.get(
+                        "k",
+                        horizon.get("initial_k", legacy_refresh),
+                    )
+                )
+                prediction_horizon_initial_k = fixed_k
+                prediction_horizon_final_k = fixed_k
+                prediction_horizon_schedule = "constant"
+                legacy_refresh = fixed_k
+            else:
+                prediction_horizon_initial_k = int(
+                    horizon.get("initial_k", legacy_refresh)
+                )
+                prediction_horizon_final_k = int(horizon.get("final_k", 1))
+                prediction_horizon_schedule = str(
+                    horizon.get("schedule", "exponential")
+                ).lower()
+                if prediction_horizon_schedule in {"geometric", "exp"}:
+                    prediction_horizon_schedule = "exponential"
+                legacy_refresh = prediction_horizon_initial_k
+            refresh_on_plateau = bool(
+                horizon.get("refresh_on_plateau", True)
+            )
         config = cls(
             steps=int(values.get("steps", 80)),
             proposal_budget=proposal_budget,
@@ -95,10 +182,19 @@ class TopologyRefinerConfig:
                 values.get("accept_only_improving", True)
             ),
             min_improvement=float(values.get("min_improvement", 1.0e-8)),
-            sample_graphlet=bool(values.get("sample_graphlet", False)),
-            refresh_prediction_every=int(
-                values.get("refresh_prediction_every", 1)
+            min_relative_improvement=float(
+                values.get("min_relative_improvement", 0.0)
             ),
+            relative_improvement_epsilon=float(
+                values.get("relative_improvement_epsilon", 1.0e-12)
+            ),
+            sample_graphlet=bool(values.get("sample_graphlet", False)),
+            refresh_prediction_every=legacy_refresh,
+            prediction_horizon_mode=prediction_horizon_mode,
+            prediction_horizon_initial_k=prediction_horizon_initial_k,
+            prediction_horizon_final_k=prediction_horizon_final_k,
+            prediction_horizon_schedule=prediction_horizon_schedule,
+            refresh_on_plateau=refresh_on_plateau,
             reject_revisited_states=bool(
                 values.get("reject_revisited_states", True)
             ),
@@ -134,6 +230,22 @@ class TopologyRefinerConfig:
             raise ValueError(
                 "topology_refiner.min_improvement must be finite and nonnegative."
             )
+        if (
+            not np.isfinite(config.min_relative_improvement)
+            or config.min_relative_improvement < 0.0
+        ):
+            raise ValueError(
+                "topology_refiner.min_relative_improvement must be finite and "
+                "nonnegative."
+            )
+        if (
+            not np.isfinite(config.relative_improvement_epsilon)
+            or config.relative_improvement_epsilon <= 0.0
+        ):
+            raise ValueError(
+                "topology_refiner.relative_improvement_epsilon must be finite "
+                "and positive."
+            )
         if not config.preserve_connectivity:
             raise ValueError(
                 "The decoupled generic topology path requires connectivity-"
@@ -146,6 +258,35 @@ class TopologyRefinerConfig:
             )
         if config.refresh_prediction_every <= 0:
             raise ValueError("refresh_prediction_every must be positive.")
+        if config.prediction_horizon_mode not in {"fixed", "annealed"}:
+            raise ValueError(
+                "topology_refiner.prediction_horizon.mode must be fixed or "
+                "annealed."
+            )
+        if config.prediction_horizon_initial_k <= 0:
+            raise ValueError(
+                "topology_refiner.prediction_horizon.initial_k must be positive."
+            )
+        if config.prediction_horizon_final_k <= 0:
+            raise ValueError(
+                "topology_refiner.prediction_horizon.final_k must be positive."
+            )
+        if (
+            config.prediction_horizon_mode == "annealed"
+            and config.prediction_horizon_initial_k
+            < config.prediction_horizon_final_k
+        ):
+            raise ValueError(
+                "Annealed prediction horizons require initial_k >= final_k."
+            )
+        if config.prediction_horizon_mode == "annealed" and (
+            config.prediction_horizon_schedule
+            not in {"linear", "cosine", "exponential"}
+        ):
+            raise ValueError(
+                "topology_refiner.prediction_horizon.schedule must be linear, "
+                "cosine, or exponential."
+            )
         return config
 
 
@@ -300,6 +441,13 @@ def score_topology_candidates(
         )
         orbit_gain = float(current_score["orbit"] - candidate_score["orbit"])
         structural_gain = float(current_score["total"] - candidate_score["total"])
+        relative_structural_gain = float(
+            structural_gain
+            / max(
+                abs(float(current_score["total"])),
+                float(cfg.relative_improvement_epsilon),
+            )
+        )
         rows.append(
             {
                 "action": action,
@@ -335,6 +483,7 @@ def score_topology_candidates(
                 "orbit_gain": orbit_gain,
                 "structural_gain": structural_gain,
                 "energy_improvement": structural_gain,
+                "relative_energy_improvement": relative_structural_gain,
             }
         )
     return rows
@@ -350,9 +499,15 @@ def _select_row(
         [float(row["energy_improvement"]) for row in rows],
         dtype=np.float64,
     )
+    relative_improvements = np.asarray(
+        [float(row["relative_energy_improvement"]) for row in rows],
+        dtype=np.float64,
+    )
     scores = np.concatenate([improvements, np.asarray([0.0])])
     if config.accept_only_improving:
-        scores[:-1][improvements <= float(config.min_improvement)] = -np.inf
+        eligible = improvements > float(config.min_improvement)
+        eligible &= relative_improvements > float(config.min_relative_improvement)
+        scores[:-1][~eligible] = -np.inf
         if np.any(np.isfinite(scores[:-1])):
             # STOP is feasible only when the constrained candidate set has no
             # positive-improvement move.
@@ -405,25 +560,41 @@ def refine_graph_with_topology_predictions(
     visited = {topology_state_key(current)}
     trace: list[dict[str, Any]] = []
     prediction: TopologyPrediction | None = None
-    accepted_since_prediction = cfg.refresh_prediction_every
+    accepted_steps = 0
+    accepted_since_prediction = 0
+    decision_step = 0
     prediction_calls = 0
+    prediction_block = -1
+    prediction_horizon = 1
+    prediction_progress = 0.0
+    prediction_time = 0.0
 
-    for step in range(cfg.steps):
+    while accepted_steps < cfg.steps:
         prediction_refreshed = False
         if (
             prediction is None
-            or accepted_since_prediction >= cfg.refresh_prediction_every
+            or accepted_since_prediction >= prediction_horizon
         ):
+            prediction_progress = float(
+                accepted_steps / max(cfg.steps - 1, 1)
+            )
+            # Preserve the predictor's existing t/T convention. The separate
+            # cooling progress above reaches one before the final action so the
+            # annealed K schedule can attain ``final_k`` without changing the
+            # time-conditioning scale seen during training.
+            prediction_time = float(accepted_steps / max(cfg.steps, 1))
+            prediction_horizon = cfg.prediction_horizon_at(prediction_progress)
             prediction = predictor(
                 model,
                 current,
-                time=float(step / max(cfg.steps, 1)),
+                time=prediction_time,
                 graphlet_basis=graphlet_basis,
                 device=device,
                 rng=generator,
                 sample_graphlet=cfg.sample_graphlet,
             )
             prediction_calls += 1
+            prediction_block += 1
             accepted_since_prediction = 0
             prediction_refreshed = True
 
@@ -440,11 +611,18 @@ def refine_graph_with_topology_predictions(
         if not candidates:
             trace.append(
                 {
-                    "step": step,
+                    "step": decision_step,
+                    "accepted_step": accepted_steps,
                     "accepted": False,
                     "reason": "explicit_stop_no_candidates",
+                    "terminal_stop": True,
                     "prediction_refreshed": prediction_refreshed,
                     "prediction_calls": prediction_calls,
+                    "prediction_block": prediction_block,
+                    "prediction_horizon": prediction_horizon,
+                    "prediction_progress": prediction_progress,
+                    "prediction_time": prediction_time,
+                    "inner_step": accepted_since_prediction,
                     **proposal_diagnostics,
                 }
             )
@@ -464,13 +642,27 @@ def refine_graph_with_topology_predictions(
             rng=generator,
         )
         if selected is None:
+            refresh_after_plateau = bool(
+                cfg.refresh_on_plateau and accepted_since_prediction > 0
+            )
             trace.append(
                 {
-                    "step": step,
+                    "step": decision_step,
+                    "accepted_step": accepted_steps,
                     "accepted": False,
-                    "reason": "explicit_stop_no_positive_structural_gain",
+                    "reason": (
+                        "prediction_plateau_refresh"
+                        if refresh_after_plateau
+                        else "explicit_stop_below_improvement_threshold"
+                    ),
+                    "terminal_stop": not refresh_after_plateau,
                     "prediction_refreshed": prediction_refreshed,
                     "prediction_calls": prediction_calls,
+                    "prediction_block": prediction_block,
+                    "prediction_horizon": prediction_horizon,
+                    "prediction_progress": prediction_progress,
+                    "prediction_time": prediction_time,
+                    "inner_step": accepted_since_prediction,
                     "stop_probability": stop_probability,
                     "selection_probabilities": probabilities,
                     "current_graphlet_discrepancy": float(
@@ -479,9 +671,26 @@ def refine_graph_with_topology_predictions(
                     "current_structural_discrepancy": float(
                         rows[0]["current_structural_discrepancy"]
                     ),
+                    "best_energy_improvement": float(
+                        max(row["energy_improvement"] for row in rows)
+                    ),
+                    "best_relative_energy_improvement": float(
+                        max(row["relative_energy_improvement"] for row in rows)
+                    ),
+                    "min_improvement": float(cfg.min_improvement),
+                    "min_relative_improvement": float(
+                        cfg.min_relative_improvement
+                    ),
                     **proposal_diagnostics,
                 }
             )
+            decision_step += 1
+            if refresh_after_plateau:
+                # The frozen prediction has reached a local plateau before its
+                # scheduled K budget. Re-estimate the target from the new state
+                # rather than terminating the whole generation trajectory.
+                prediction = None
+                continue
             break
 
         chosen = rows[selected]
@@ -498,15 +707,23 @@ def refine_graph_with_topology_predictions(
             raise AssertionError("A topology rewiring action broke connectivity.")
         current = candidate
         visited.add(topology_state_key(current))
+        accepted_steps += 1
         accepted_since_prediction += 1
         trace.append(
             {
-                "step": step,
+                "step": decision_step,
+                "accepted_step": accepted_steps,
                 "accepted": True,
                 "reason": "structural_improving_swap",
+                "terminal_stop": False,
                 "action": chosen["action"],
                 "prediction_refreshed": prediction_refreshed,
                 "prediction_calls": prediction_calls,
+                "prediction_block": prediction_block,
+                "prediction_horizon": prediction_horizon,
+                "prediction_progress": prediction_progress,
+                "prediction_time": prediction_time,
+                "inner_step": accepted_since_prediction,
                 "stop_probability": stop_probability,
                 "selected_action_probability": probabilities[selected],
                 "current_graphlet_discrepancy": float(
@@ -526,9 +743,17 @@ def refine_graph_with_topology_predictions(
                 "orbit_gain": float(chosen["orbit_gain"]),
                 "structural_gain": float(chosen["structural_gain"]),
                 "energy_improvement": float(chosen["energy_improvement"]),
+                "relative_energy_improvement": float(
+                    chosen["relative_energy_improvement"]
+                ),
+                "min_improvement": float(cfg.min_improvement),
+                "min_relative_improvement": float(
+                    cfg.min_relative_improvement
+                ),
                 **proposal_diagnostics,
             }
         )
+        decision_step += 1
 
     if return_trace:
         return current, trace

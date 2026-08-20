@@ -1,0 +1,25 @@
+
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
+  --output-dir outputs/topology_grapher/community_small/seed_42 \
+  --seed 42 \
+  --device gpu
+
+ PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
+  --output-dir outputs/topology_generation/community_small/seed_42 \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
+  --generated-dir outputs/topology_generation/community_small/seed_42 \
+  --output-dir outputs/topology_grapher/community_small/seed_42/evaluation
+
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.026004          0.037029      0.025194
+hh_source_to_test                   0.036058          0.262371      0.229840
+topology_final_to_test              0.036058          0.066420      0.103658

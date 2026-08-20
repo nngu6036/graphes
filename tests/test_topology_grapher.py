@@ -599,6 +599,100 @@ def test_topology_path_rejects_disconnected_inputs_and_configs() -> None:
         )
 
 
+def test_annealed_prediction_horizon_cools_monotonically() -> None:
+    config = TopologyRefinerConfig.from_dict(
+        {
+            "prediction_horizon": {
+                "mode": "annealed",
+                "initial_k": 8,
+                "final_k": 1,
+                "schedule": "exponential",
+                "refresh_on_plateau": True,
+            }
+        }
+    )
+
+    horizons = [
+        config.prediction_horizon_at(progress)
+        for progress in np.linspace(0.0, 1.0, 21)
+    ]
+    assert horizons[0] == 8
+    assert horizons[-1] == 1
+    assert horizons[-2] == 1
+    assert all(left >= right for left, right in zip(horizons, horizons[1:]))
+    assert config.refresh_on_plateau is True
+
+    with pytest.raises(ValueError, match="initial_k >= final_k"):
+        TopologyRefinerConfig.from_dict(
+            {
+                "prediction_horizon": {
+                    "mode": "annealed",
+                    "initial_k": 1,
+                    "final_k": 4,
+                }
+            }
+        )
+
+
+def test_annealed_horizon_reuses_one_prediction_for_multiple_swaps() -> None:
+    basis, summary_config = _basis(4)
+    source = nx.havel_hakimi_graph([3, 3, 2, 2, 2, 2])
+    first_action = (((0, 3), (1, 5)), ((0, 5), (1, 3)))
+    second_action = (((0, 1), (2, 3)), ((0, 3), (1, 2)))
+    target = apply_action(apply_action(source, first_action), second_action)
+    target_vector, target_mass = extract_topology_graphlet_target(
+        target,
+        graphlet_basis=basis,
+        summary_config=summary_config,
+    )
+    calls: list[nx.Graph] = []
+
+    def fake_predictor(_model, graph, **_kwargs):
+        calls.append(graph.copy())
+        return TopologyPrediction(
+            graphlet_target=target_vector,
+            graphlet_mass_target=target_mass,
+            graphlet_history=basis.unflatten_history(target_vector),
+            graphlet_connected_mass={
+                key: float(value) for key, value in zip(basis.sizes, target_mass)
+            },
+        )
+
+    _, trace = refine_graph_with_topology_predictions(
+        source,
+        model=None,
+        graphlet_basis=basis,
+        summary_config=summary_config,
+        refiner_config={
+            "mode": "energy",
+            "steps": 2,
+            "proposal_budget": -1,
+            "valid_candidate_budget": -1,
+            "preserve_connectivity": True,
+            "selection": "greedy",
+            "graphlet_weight": 1.0,
+            "graphlet_mass_weight": 0.0,
+            "accept_only_improving": True,
+            "prediction_horizon": {
+                "mode": "annealed",
+                "initial_k": 3,
+                "final_k": 1,
+                "schedule": "linear",
+                "refresh_on_plateau": True,
+            },
+        },
+        prediction_fn=fake_predictor,
+        rng=np.random.default_rng(0),
+        return_trace=True,
+    )
+
+    accepted = [row for row in trace if row.get("accepted")]
+    assert len(accepted) == 2
+    assert len(calls) == 1
+    assert [row["prediction_horizon"] for row in accepted] == [3, 3]
+    assert [row["prediction_calls"] for row in accepted] == [1, 1]
+
+
 def test_refiner_uses_frozen_graphlet_gain_and_refreshes_after_acceptance() -> None:
     basis, summary_config = _basis(4)
     source = nx.havel_hakimi_graph([3, 3, 2, 2, 2, 2])
@@ -634,9 +728,11 @@ def test_refiner_uses_frozen_graphlet_gain_and_refreshes_after_acceptance() -> N
     assert target_graph is not None
     assert target_vector is not None and target_mass is not None
     calls: list[nx.Graph] = []
+    prediction_times: list[float] = []
 
-    def fake_predictor(_model, graph, **_kwargs):
+    def fake_predictor(_model, graph, **kwargs):
         calls.append(graph.copy())
+        prediction_times.append(float(kwargs["time"]))
         return TopologyPrediction(
             graphlet_target=target_vector,
             graphlet_mass_target=target_mass,
@@ -680,6 +776,7 @@ def test_refiner_uses_frozen_graphlet_gain_and_refreshes_after_acceptance() -> N
     )
     assert len(calls) >= 2
     assert nx.utils.graphs_equal(calls[1], refined)
+    assert prediction_times[:2] == pytest.approx([0.0, 1.0 / 3.0])
     assert [source.degree(node) for node in sorted(source)] == [
         refined.degree(node) for node in sorted(refined)
     ]

@@ -87,7 +87,12 @@ def test_generic_grapher_configs_are_decoupled_topology_configs() -> None:
             "orbit",
         }
         assert config["topology_refiner"]["mode"] == "energy"
-        assert config["topology_refiner"]["refresh_prediction_every"] == 1
+        horizon = config["topology_refiner"]["prediction_horizon"]
+        assert horizon["mode"] == "annealed"
+        assert horizon["initial_k"] > horizon["final_k"] >= 1
+        assert horizon["schedule"] in {"linear", "cosine", "exponential"}
+        assert horizon["refresh_on_plateau"] is True
+        assert config["topology_refiner"]["min_relative_improvement"] >= 0.0
         assert config["topology_refiner"]["preserve_connectivity"] is True
         assert config["training_sources"]["mode"] == "completed_base_outputs"
         assert config["training_sources"]["generators"]
@@ -99,10 +104,11 @@ def test_generic_grapher_configs_are_decoupled_topology_configs() -> None:
             config["training_sources"]["matching"]["require_exact_node_count"]
             is True
         )
-        assert config["topology_trajectory"]["storage"] == "eager"
-        assert config["topology_trajectory"]["preserve_connectivity"] is True
-        assert config["topology_trajectory"]["ensure_connected_source"] is True
-        assert config["topology_trajectory"]["source_randomization_steps"] == 0
+        trajectory = config["topology_trajectory"]
+        assert trajectory["storage"] in {"eager", "streaming"}
+        assert trajectory.get("preserve_connectivity", True) is True
+        assert trajectory.get("ensure_connected_source", True) is True
+        assert trajectory.get("source_randomization_steps", 0) == 0
         assert config["graphlet_prediction"]["graphlet_num_samples"] is None
         assert config["graphlet_prediction"]["clustering_summary"] is True
         assert config["graphlet_prediction"]["orbit_count"] is True

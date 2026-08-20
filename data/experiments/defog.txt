@@ -1,0 +1,41 @@
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset ego_small \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_n_1024 \
+  --n-epochs 200000 \
+  --epoch-progress-interval 5000
+
+DEFOG_GENERATION_DIR="outputs/baselines/defog/community_small/seed_42/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_defog_corrector.yaml \
+  --generated-dir "$DEFOG_GENERATION_DIR" \
+  --generated-stage defog_seed_42_n_1024 \
+  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_42_n_1024"
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.026004          0.037029      0.025194
+defog_e800k_to_test                 0.057971          0.046759      0.065031
+
+
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset ego_small \
+  --num-samples 1024 \
+  --seed-id 43 \
+  --run-id seed_43_e200k \
+  --n-epochs 200000 \
+
+DEFOG_GENERATION_DIR="outputs/baselines/defog/community_small/seed_43/generations/seed_43_e200k"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_defog_corrector.yaml \
+  --generated-dir "$DEFOG_GENERATION_DIR" \
+  --generated-stage defog_seed_43_e200k \
+  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_43_e200k"
