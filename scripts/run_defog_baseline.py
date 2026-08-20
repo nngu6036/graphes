@@ -204,6 +204,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Suppress progress output and print only the final JSON summary.",
     )
+    parser.add_argument(
+        "--n-epochs",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Total DeFoG training horizon in epochs. This value overrides "
+            "n_epochs from --wrapper-config and the upstream experiment "
+            "default. When resuming, it is the total horizon rather than the "
+            "number of additional epochs."
+        ),
+    )
     return parser
 
 
@@ -221,6 +232,9 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
 
     _configure_upstream_environment(args)
     progress_enabled = not args.quiet
+    # getattr keeps run_pipeline compatible with tests or internal callers that
+    # construct argparse.Namespace objects created before --n-epochs existed.
+    n_epochs_override = getattr(args, "n_epochs", None)
     progress_options: dict[str, object] = {
         "enabled": progress_enabled,
         "stream_output": (
@@ -231,6 +245,18 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
     }
     if args.epoch_progress_interval is not None:
         progress_options["epoch_interval"] = args.epoch_progress_interval
+
+    # TrainRequest.options is deep-merged after the optional wrapper YAML, so
+    # the explicit CLI value takes precedence over both the YAML setting and
+    # DeFoG's upstream experiment default. Do not insert the key when the user
+    # omits --n-epochs; this preserves the existing wrapper/default behavior.
+    training_options: dict[str, object] = {
+        "training_estimates": {"enabled": True},
+        "runtime": {"progress": progress_options},
+    }
+    if n_epochs_override is not None:
+        training_options["n_epochs"] = n_epochs_override
+
     profile = DATASET_PROFILES[args.dataset]
     run = RunSpec.for_seed(
         model_id="defog",
@@ -251,6 +277,17 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
         f"native={profile.native_id}, run_id={run.run_id}, seed={args.seed_id}",
         enabled=progress_enabled,
     )
+    if n_epochs_override is not None:
+        _status(
+            f"using CLI training-horizon override: n_epochs={n_epochs_override}",
+            enabled=progress_enabled,
+        )
+    else:
+        _status(
+            "no CLI training-horizon override; using n_epochs from the "
+            "wrapper config or the upstream DeFoG experiment default",
+            enabled=progress_enabled,
+        )
     _status(
         f"checking prepared splits under {dataset.dataset_dir.resolve()}",
         enabled=progress_enabled,
@@ -270,10 +307,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
             run=run,
             dataset=dataset,
             config_path=args.wrapper_config,
-            options={
-                "training_estimates": {"enabled": True},
-                "runtime": {"progress": progress_options},
-            },
+            options=training_options,
             resume_from=args.resume_from,
             overwrite=args.overwrite,
         )
@@ -319,6 +353,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
         "serialized_dataset": profile.serialized_id,
         "native_dataset": profile.native_id,
         "seed_id": args.seed_id,
+        "n_epochs_cli_override": n_epochs_override,
         "run_id": run.run_id,
         "generation_id": args.generation_id
         or generation.generation_dir.name,

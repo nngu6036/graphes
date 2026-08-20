@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Sequence
@@ -65,30 +67,189 @@ def _load_graph_list(path: Path) -> list[nx.Graph]:
     return graphs
 
 
+def _load_json_mapping(path: Path) -> dict[str, Any] | None:
+    """Load an optional JSON object while rejecting malformed provenance."""
+
+    if not path.is_file():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read JSON manifest {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise TypeError(f"JSON manifest {path} must contain an object.")
+    return value
+
+
+def _normalize_stage_label(value: str, *, field: str) -> str:
+    """Convert a human/model label into a stable comparison-table token."""
+
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value).strip())
+    normalized = (
+        normalized.strip("_.-")
+        .lower()
+        .replace("-", "_")
+        .replace(".", "_")
+    )
+    if not normalized:
+        raise ValueError(f"{field} must contain at least one letter or digit.")
+    return normalized
+
+
+def _baseline_model_id(
+    graph_path: Path,
+    manifest: dict[str, Any] | None = None,
+) -> str | None:
+    """Infer a managed baseline model from its manifest or canonical path."""
+
+    if manifest is None:
+        manifest = _load_json_mapping(graph_path.parent / "manifest.json")
+    if isinstance(manifest, dict) and manifest.get("model_id"):
+        return _normalize_stage_label(
+            str(manifest["model_id"]),
+            field="generation manifest model_id",
+        )
+
+    parts = graph_path.expanduser().resolve(strict=False).parts
+    lowered = [part.lower() for part in parts]
+    if "baselines" in lowered:
+        index = lowered.index("baselines")
+        if index + 1 < len(parts):
+            return _normalize_stage_label(parts[index + 1], field="baseline model")
+    return None
+
+
+def resolve_generated_graph_path(
+    generated_dir: Path,
+    *,
+    generated_graphs: str | Path | None = None,
+) -> tuple[Path, dict[str, Any] | None, Path | None]:
+    """Resolve GraphER final outputs or a managed raw-baseline generation.
+
+    Managed baseline wrappers publish ``base_graphs.pkl`` and ``manifest.json``
+    in one generation directory.  GraphER correction runs instead publish
+    ``topology_refined_graphs.pkl`` (or the historical hybrid alias).  This
+    resolver supports both layouts without requiring callers to copy or rename
+    the baseline batch.
+    """
+
+    generated_dir = Path(generated_dir)
+    directory_manifest_path = generated_dir / "manifest.json"
+    directory_manifest = _load_json_mapping(directory_manifest_path)
+
+    if generated_graphs is not None:
+        path = Path(generated_graphs)
+        if not path.is_file():
+            raise FileNotFoundError(f"Generated graph file does not exist: {path}")
+        sibling_manifest_path = path.parent / "manifest.json"
+        sibling_manifest = _load_json_mapping(sibling_manifest_path)
+        if sibling_manifest is not None:
+            return path, sibling_manifest, sibling_manifest_path
+        if directory_manifest is not None:
+            return path, directory_manifest, directory_manifest_path
+        return path, None, None
+
+    candidates: list[Path] = [
+        generated_dir / "topology_refined_graphs.pkl",
+        generated_dir / "hybrid_refined_graphs.pkl",
+    ]
+    if directory_manifest is not None:
+        base_entry = directory_manifest.get("base_graphs")
+        if isinstance(base_entry, dict) and base_entry.get("path"):
+            manifest_graph_path = Path(str(base_entry["path"]))
+            if not manifest_graph_path.is_absolute():
+                manifest_graph_path = generated_dir / manifest_graph_path
+            candidates.append(manifest_graph_path)
+    candidates.append(generated_dir / "base_graphs.pkl")
+
+    deduplicated: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate.expanduser().resolve(strict=False))
+        if key not in seen:
+            deduplicated.append(candidate)
+            seen.add(key)
+
+    for candidate in deduplicated:
+        if not candidate.is_file():
+            continue
+        sibling_manifest_path = candidate.parent / "manifest.json"
+        sibling_manifest = _load_json_mapping(sibling_manifest_path)
+        if sibling_manifest is not None:
+            return candidate, sibling_manifest, sibling_manifest_path
+        if directory_manifest is not None:
+            return candidate, directory_manifest, directory_manifest_path
+        return candidate, None, None
+
+    attempted = "\n  - ".join(str(path) for path in deduplicated)
+    raise FileNotFoundError(
+        "Could not locate generated graphs. Checked:\n  - "
+        + attempted
+        + "\nPass --generated-graphs for a non-standard artifact path."
+    )
+
+
+def resolve_generated_stage(
+    config: dict[str, Any],
+    generated_path: Path,
+    *,
+    generation_manifest: dict[str, Any] | None = None,
+    explicit_stage: str | None = None,
+) -> str:
+    """Choose the report row label for raw baselines or corrected outputs."""
+
+    if explicit_stage is not None:
+        return _normalize_stage_label(explicit_stage, field="--generated-stage")
+
+    model_id = _baseline_model_id(generated_path, generation_manifest)
+    if model_id is not None:
+        return model_id
+
+    pipeline_stage = str(
+        (config.get("pipeline", {}) or {}).get("stage", "endpoint")
+    ).lower()
+    topology_stages = {"topology", "posthoc_correction", "topology_correction"}
+    return "topology_final" if pipeline_stage in topology_stages else "hybrid_final"
+
+
+def _same_artifact(left: Path | None, right: Path | None) -> bool:
+    if left is None or right is None:
+        return False
+    return left.expanduser().resolve(strict=False) == right.expanduser().resolve(
+        strict=False
+    )
+
+
 def resolve_base_graph_path(
     generated_dir: Path,
     *,
     base_graphs: str | Path | None = None,
     coarse_graphs: str | Path | None = None,
 ) -> tuple[Path | None, str | None]:
-    """Resolve a saved source stage without mislabelling DeFoG as HH."""
+    """Resolve a saved source stage without mislabelling managed baselines."""
 
     if base_graphs is not None and coarse_graphs is not None:
         raise ValueError("Use --base-graphs or --coarse-graphs, not both.")
     if base_graphs is not None:
         path = Path(base_graphs)
-        stage = "defog_base" if "defog" in path.name.lower() else "base"
-        return path, stage
+        model_id = _baseline_model_id(path)
+        return path, f"{model_id}_base" if model_id else "base"
     if coarse_graphs is not None:
         return Path(coarse_graphs), "hh_source"
+
     candidates = (
         (generated_dir / "defog_base_graphs.pkl", "defog_base"),
-        (generated_dir / "base_graphs.pkl", "base"),
+        (generated_dir / "base_graphs.pkl", None),
         (generated_dir / "coarse_graphs.pkl", "hh_source"),
     )
-    for path, stage in candidates:
-        if path.is_file():
-            return path, stage
+    for path, declared_stage in candidates:
+        if not path.is_file():
+            continue
+        if declared_stage is not None:
+            return path, declared_stage
+        model_id = _baseline_model_id(path)
+        return path, f"{model_id}_base" if model_id else "base"
     return None, None
 
 
@@ -493,7 +654,24 @@ def main() -> None:
     )
     parser.add_argument("--config", required=True)
     parser.add_argument("--generated-dir", required=True)
-    parser.add_argument("--generated-graphs", default=None)
+    parser.add_argument(
+        "--generated-graphs",
+        default=None,
+        help=(
+            "Optional explicit graph pickle. When omitted, the evaluator "
+            "auto-detects GraphER refined outputs or a managed baseline "
+            "generation's base_graphs.pkl."
+        ),
+    )
+    parser.add_argument(
+        "--generated-stage",
+        default=None,
+        help=(
+            "Optional comparison-row stage label, for example 'defog_800k'. "
+            "Managed baseline model IDs are inferred from manifest.json when "
+            "this option is omitted."
+        ),
+    )
     parser.add_argument("--base-graphs", default=None)
     parser.add_argument("--coarse-graphs", default=None)
     parser.add_argument("--output-dir", default=None)
@@ -512,20 +690,23 @@ def main() -> None:
 
     config = load_yaml(args.config)
     generated_dir = Path(args.generated_dir)
-    if args.generated_graphs:
-        generated_path = Path(args.generated_graphs)
-    else:
-        topology_path = generated_dir / "topology_refined_graphs.pkl"
-        generated_path = (
-            topology_path
-            if topology_path.is_file()
-            else generated_dir / "hybrid_refined_graphs.pkl"
-        )
+    (
+        generated_path,
+        generation_manifest,
+        generation_manifest_path,
+    ) = resolve_generated_graph_path(
+        generated_dir,
+        generated_graphs=args.generated_graphs,
+    )
     base_path, base_stage = resolve_base_graph_path(
         generated_dir,
         base_graphs=args.base_graphs,
         coarse_graphs=args.coarse_graphs,
     )
+    # A managed raw baseline stores its evaluated batch as base_graphs.pkl.
+    # Do not evaluate the same artifact twice as both the source and final row.
+    if _same_artifact(base_path, generated_path):
+        base_path, base_stage = None, None
     output_dir = ensure_dir(args.output_dir or generated_dir / "evaluation_report")
 
     evaluation_cfg = config.get("evaluation", {}) or {}
@@ -591,13 +772,19 @@ def main() -> None:
     reference = test_graphs[:reference_count]
     generated = generated_graphs[:generated_count]
     molecular = is_molecular_evaluation(dataset_cfg, generated_graphs)
-    pipeline_stage = str(
-        (config.get("pipeline", {}) or {}).get("stage", "endpoint")
-    ).lower()
-    topology_stages = {"topology", "posthoc_correction", "topology_correction"}
-    final_stage = (
-        "topology_final" if pipeline_stage in topology_stages else "hybrid_final"
+    final_stage = resolve_generated_stage(
+        config,
+        generated_path,
+        generation_manifest=generation_manifest,
+        explicit_stage=args.generated_stage,
     )
+    print(f"Generated graph input: {generated_path}", flush=True)
+    if generation_manifest_path is not None:
+        print(
+            f"Generation manifest: {generation_manifest_path}",
+            flush=True,
+        )
+    print(f"Generated stage label: {final_stage}", flush=True)
 
     rows: list[dict[str, Any]] = []
     if train_graphs:
@@ -700,6 +887,22 @@ def main() -> None:
             "compute_orbit": compute_orbit,
             "graphlet_backend": graphlet_backend,
             "generated_graphs": str(generated_path),
+            "generated_stage": final_stage,
+            "generation_manifest": (
+                str(generation_manifest_path)
+                if generation_manifest_path is not None
+                else None
+            ),
+            "generation_manifest_format": (
+                generation_manifest.get("format")
+                if generation_manifest is not None
+                else None
+            ),
+            "generation_model_id": (
+                generation_manifest.get("model_id")
+                if generation_manifest is not None
+                else None
+            ),
             "base_graphs": str(base_path) if base_path is not None else None,
             "base_stage": base_stage,
             "num_graphs_evaluated": len(generated),
