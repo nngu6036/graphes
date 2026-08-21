@@ -136,30 +136,27 @@ constructor:
 topology_refiner:
   mode: energy
   steps: 24
+
   proposal_budget: 128
   valid_candidate_budget: 32
+
   graphlet_weight: 1.0
   graphlet_mass_weight: 0.0
   clustering_weight: 1.0
+  orbit_weight: 1.0
+
   accept_only_improving: true
   min_improvement: 0.00000001
-  # Reject numerically positive moves whose gain is negligible relative to the
-  # current frozen structural energy.
   min_relative_improvement: 0.0001
 
-  # Freeze one summary prediction for an adaptive inner rewiring block. The
-  # startup block is deliberately long, then the horizon cools geometrically so
-  # the predictor is refreshed more often near the end of generation.
   prediction_horizon:
-    mode: annealed
-    initial_k: 8
-    final_k: 1
-    schedule: exponential
+    mode: fixed
+    k: 2
     refresh_on_plateau: true
+
   reject_revisited_states: true
   preserve_connectivity: true
   selection: greedy
-  orbit_weight: 1.0
 
 
 evaluation:
