@@ -23,3 +23,7 @@ Comparison                        Degree MMD    Clustering MMD     Orbit MMD
 train_to_test                       0.026004          0.037029      0.025194
 hh_source_to_test                   0.036058          0.262371      0.229840
 topology_final_to_test              0.036058          0.066420      0.103658
+
+
+adaptive K-rewiring
+
