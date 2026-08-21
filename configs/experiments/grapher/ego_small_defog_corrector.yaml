@@ -1,0 +1,127 @@
+experiment: ego_small_defog_corrector
+benchmark: ego_small
+seed: 43
+
+pipeline:
+  stage: posthoc_correction
+  factorization: frozen_defog_base_then_structural_summary_correction
+
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  # Use the complete held-out Ego-small split. Its MMD values can be unstable
+  # when the reference set is capped too aggressively.
+  max_reference_graphs: null
+  tune_on_split: val
+  final_split: test
+  reuse_identical_base_samples: true
+
+dataset:
+  name: ego_small
+  benchmark: ego_small
+  config_path: configs/datasets/ego_small.yaml
+  root: outputs/datasets
+  build_if_missing: false
+
+generation:
+  num_generate: 1024
+  # The current GraphER topology refiner accepts connected inputs only. Keep a
+  # disconnected DeFoG output unchanged so raw and corrected batches retain the
+  # same order, size, and degree distributions.
+  disconnected_policy: no_op_and_report
+
+base_generator:
+  type: defog
+  backend: subprocess
+  source_env: DEFOG
+  python_env: DEFOG_PYTHON
+
+  # DeFoG has no Ego-small-specific Hydra profile. The wrapper trains the
+  # data-driven comm20 architecture on GraphER's frozen Ego-small splits while
+  # retaining ego_small as the report-facing benchmark identity.
+  dataset: comm20
+  experiment: comm20
+
+  # This path matches the run shown in the current Ego-small training command:
+  #   --run-id seed_43_e200k --n-epochs 200000
+  checkpoint_path: outputs/baselines/defog/ego_small/seed_43_e200k/train/checkpoints/model.ckpt
+
+  # Reuse the exact persisted dataset and resolved Hydra configuration from the
+  # managed wrapper run. These fields are important for Ego-small because the
+  # native profile name is comm20 but the graph-size distribution is Ego-small.
+  dataset_datadir: outputs/baselines/defog/ego_small/seed_43_e200k/train/native_dataset
+  resolved_config_path: outputs/baselines/defog/ego_small/seed_43_e200k/train/resolved_config.yaml
+
+  # Set generated_path to a trusted DeFoG .pkl or neutral .npz export to reuse
+  # exactly the same raw samples across correction ablations. When using an NPZ,
+  # set manifest_path to its matching defog_manifest.json.
+  generated_path: null
+  manifest_path: null
+
+  sampling:
+    batch_size: 64
+    sample_steps: 1000
+    eta: 0.0
+    omega: 0.0
+    time_distortion: identity
+    rdb: general
+    rdb_crit: dummy
+
+  runtime:
+    device: auto
+    python_executable: null
+    cuda_visible_devices: null
+    timeout_seconds: 21600
+
+  dataset_contract:
+    split_alignment: managed_wrapper_run
+    note: >-
+      The configured checkpoint is expected to come from run_defog_baseline.py
+      trained on outputs/datasets/ego_small. Verify the training manifest and
+      split hashes before using the result in a report.
+
+degree_generator:
+  enabled: false
+
+constructor:
+  enabled: false
+
+topology_predictor:
+  # This must be a DeFoG-specific corrector trained from the completed output
+  # pool of the matching Ego-small DeFoG run, not a predictor trained only on
+  # Havel--Hakimi or another base generator.
+  checkpoint_path: outputs/topology_grapher/ego_small_defog/seed_43_e200k/checkpoint.pt
+  device: auto
+
+# Ego-small benefits from a relatively short horizon and a wider candidate
+# comparison. The weights follow the maintained Ego-small topology settings,
+# emphasizing clustering, orbit structure, and connected graphlet mass.
+topology_refiner:
+  mode: energy
+  steps: 16
+  proposal_budget: 256
+  valid_candidate_budget: 128
+  preserve_connectivity: true
+  selection: greedy
+  temperature: 0.1
+  graphlet_weight: 0.5
+  graphlet_mass_weight: 0.5
+  clustering_weight: 2.0
+  orbit_weight: 2.0
+  accept_only_improving: true
+  min_improvement: 0.00001
+  sample_graphlet: false
+  refresh_prediction_every: 1
+  reject_revisited_states: true
+
+evaluation:
+  inline_during_generation: false
+  orca_exec: null
+  compute_orbit: true
+  compute_graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 8192
