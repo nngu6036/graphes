@@ -32,7 +32,13 @@ from grapher.rewiring_mlp.generic.refiner import (
     TopologyRefinerConfig,
     refine_graph_with_topology_predictions,
 )
-from grapher.utils.io import ensure_dir, load_yaml, save_json, save_pickle
+from grapher.utils.io import (
+    apply_config_overrides,
+    ensure_dir,
+    load_yaml,
+    save_json,
+    save_pickle,
+)
 
 
 def _oracle_degree_summary(graph: nx.Graph) -> dict[str, Any]:
@@ -66,10 +72,25 @@ def main() -> None:
     parser.add_argument("--num-generate", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", default=None)
+    parser.add_argument(
+        "--set",
+        "--override",
+        dest="config_overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help=(
+            "Override any YAML option using a dotted path. Repeat this flag for "
+            "multiple values, e.g. --set topology_refiner.steps=40 --set "
+            "topology_refiner.prediction_horizon.initial_k=4. Values are parsed "
+            "as YAML, so booleans/lists/null/numbers keep their types."
+        ),
+    )
     args = parser.parse_args()
     run_started = time.perf_counter()
 
     config = load_yaml(args.config)
+    apply_config_overrides(config, args.config_overrides)
     pipeline_stage = str(
         (config.get("pipeline", {}) or {}).get("stage", "topology")
     ).lower()
@@ -78,7 +99,13 @@ def main() -> None:
     if config.get("categorical_state") or config.get("molecular_generation"):
         raise ValueError("The topology generator accepts generic datasets only.")
     seed = int(args.seed if args.seed is not None else config.get("seed", 0))
-    rng = np.random.default_rng(seed)
+    # Keep source construction statistically paired across refiner sweeps.
+    # Changing prediction horizon/candidate behavior may consume a different
+    # number of refiner RNG draws, so source and refiner randomness must not
+    # share one stream.
+    seed_sequence = np.random.SeedSequence(seed)
+    source_seed_sequence, refiner_seed_sequence = seed_sequence.spawn(2)
+    source_rng = np.random.default_rng(source_seed_sequence)
     torch.manual_seed(seed)
 
     dataset_cfg = dict(config.get("dataset", {}) or {})
@@ -98,6 +125,9 @@ def main() -> None:
     )
     if num_generate <= 0:
         raise ValueError("num_generate must be positive.")
+    # One refiner RNG stream per returned graph prevents a longer trajectory on
+    # graph i from shifting the candidate proposals used for graph i+1.
+    refiner_graph_seeds = refiner_seed_sequence.spawn(num_generate)
 
     predictor_cfg = dict(config.get("topology_predictor", {}) or {})
     checkpoint_path = args.checkpoint or predictor_cfg.get("checkpoint_path")
@@ -187,7 +217,7 @@ def main() -> None:
                 else:
                     if degree_sampler is None:
                         raise RuntimeError("Degree sampler was not initialized.")
-                    degree_summary = degree_sampler.sample(rng)
+                    degree_summary = degree_sampler.sample(source_rng)
             except RuntimeError:
                 generation_rejections["degree_prior_rejected"] += 1
                 continue
@@ -196,7 +226,7 @@ def main() -> None:
                 coarse = construct_coarse_graph(
                     degree_summary,
                     constructor_cfg,
-                    rng,
+                    source_rng,
                 )
                 assert_constructor_validity(
                     coarse,
@@ -221,7 +251,7 @@ def main() -> None:
             summary_config=summary_config,
             refiner_config=refiner_settings,
             device=model_device,
-            rng=rng,
+            rng=np.random.default_rng(refiner_graph_seeds[index]),
             return_trace=True,
         )
         runtime = float(time.perf_counter() - graph_started)
@@ -550,6 +580,11 @@ def main() -> None:
         "pipeline_records": pipeline_records,
         "traces": traces,
         "seed": seed,
+        "config_overrides": list(args.config_overrides),
+        "rng_streams": {
+            "source_and_refiner_decoupled": True,
+            "refiner_rng_per_graph": True,
+        },
         "config": config,
     }
     output_dir = ensure_dir(args.output_dir)

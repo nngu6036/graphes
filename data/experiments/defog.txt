@@ -26,7 +26,7 @@ export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
-  --dataset ego_small \
+  --dataset community_small \
   --num-samples 1024 \
   --seed-id 43 \
   --run-id seed_43_n_1024 \

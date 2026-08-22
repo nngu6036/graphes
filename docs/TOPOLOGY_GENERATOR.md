@@ -92,50 +92,57 @@ soft degree-consistency loss.
 
 ## Correction
 
-Generation uses an outer prediction loop and an inner rewiring loop. At outer
-iteration `t`, the predictor is called once and its graphlet, clustering, and
-orbit outputs are frozen. The refiner may then accept up to `K_t` valid swaps
-against that same target. `K_t` is configured by
-`topology_refiner.prediction_horizon` and can be fixed or annealed. The
-maintained experiment configs use an exponential cooling schedule: a larger
-startup horizon gives the first structural estimate several opportunities to
-move the coarse graph, while the horizon decreases toward one so the target is
-updated more frequently near the end of generation.
+Prediction-horizon reuse is **generation-only**. Predictor training and teacher
+trajectory construction continue to advance one accepted rewiring action per
+teacher step; `topology_trajectory` must not contain `prediction_horizon`,
+`refresh_prediction_every`, or `refresh_on_plateau`.
 
+The maintained `*_topology_graphlet.yaml` training configs use the closed-loop
+generation baseline `refresh_prediction_every: 1`. A separate
+`community_small_topology_graphlet_adaptive_k.yaml` config records the adaptive
+generation variant without changing how the predictor is trained.
+
+During generation, an optional outer prediction loop can freeze one structural
+prediction for up to `K_t` accepted swaps. `K_t` is configured by
+`topology_refiner.prediction_horizon`. Fixed and annealed horizons are supported.
 For accepted-swap progress `p in [0, 1]`, the exponential schedule uses
-`K(p) = round(initial_k * (final_k / initial_k) ** p)`, clamped to at least one.
-Linear and cosine schedules are also supported.
+`K(p) = round(initial_k * (final_k / initial_k) ** p)`, clamped to at least one;
+linear and cosine schedules are also available.
 
 The inner loop ends when it reaches `K_t` or when no candidate passes both the
-absolute and relative improvement thresholds. If the frozen target reaches a
+absolute and relative improvement thresholds. If a frozen target reaches a
 plateau after at least one accepted swap and `refresh_on_plateau` is enabled,
-the predictor is called again from the new state rather than terminating the
-whole trajectory. A plateau immediately after a fresh prediction is a terminal
-STOP condition.
+the predictor is refreshed from the current graph. A plateau immediately after
+a fresh prediction is a terminal STOP condition.
 
-The legacy `refresh_prediction_every` option remains supported as a fixed
-horizon. It is not used by the maintained topology experiment configs.
+`run_topology_grapher.py` accepts repeatable arbitrary YAML overrides with
+`--set KEY=VALUE` (alias `--override`). Dotted paths create/update nested
+configuration values and values are parsed as YAML. For example:
 
-This change is generation-only: teacher-trajectory construction and predictor
-training still supervise individual intermediate states as before.
+```bash
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
+  --output-dir outputs/topology_generation/community_small/k4/seed_42 \
+  --seed 42 \
+  --device gpu \
+  --set topology_refiner.prediction_horizon.mode=fixed \
+  --set topology_refiner.prediction_horizon.k=4 \
+  --set topology_refiner.prediction_horizon.refresh_on_plateau=true
+```
 
-Every accepted action preserves:
+The runner uses independent source-generation and refinement RNG streams, plus
+a per-graph refiner RNG stream. Therefore changing only refiner options such as
+`K` no longer shifts the later DH-VAE/HH source samples for the same run seed.
+This makes K sweeps properly paired at the source-graph level.
 
-- graph size and edge count;
-- every indexed node degree;
-- simplicity and undirectedness; and
-- connectivity.
+Every accepted action preserves graph size, edge count, every indexed node
+degree, simplicity, undirectedness, and connectivity. Within one frozen-target
+block every accepted action monotonically reduces the same structural energy;
+that guarantee resets when the predictor is refreshed.
 
-Within one frozen-prediction block, every accepted action monotonically reduces
-the same structural energy. The guarantee resets when the predictor is
-refreshed, so there is still no global monotonicity claim across outer blocks.
-Finite candidate budgets, restricted reachability, and non-identifying
-summaries prevent a claim of global convergence or exact terminal recovery.
-
-The generation report records the realized prediction horizons, predictor-call
-count, accepted swaps per prediction, plateau refreshes, and both absolute and
-relative energy gains. These diagnostics allow a direct quality/runtime sweep
-over `initial_k`, `final_k`, and the cooling schedule.
+The generation report records the effective config overrides, prediction
+horizons, predictor-call count, accepted swaps per prediction, plateau
+refreshes, and absolute/relative energy gains.
 
 ## Maintained commands
 

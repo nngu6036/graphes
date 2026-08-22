@@ -492,7 +492,27 @@ selected target subset.
 
 The maintained topology config points to the same managed DH-VAE checkpoint
 that produced the Rewiring-MLP training sources. Generation fails early if the
-base or corrector checkpoint is missing or incompatible.
+base or corrector checkpoint is missing or incompatible. The base topology
+config uses the closed-loop `K=1` prediction-refresh baseline. Adaptive/fixed
+prediction horizons are generation-only and can be supplied without cloning a
+YAML file via repeatable `--set KEY=VALUE` arguments, for example:
+
+```bash
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
+  --output-dir outputs/topology_generation/community_small/k2/seed_42 \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu \
+  --set topology_refiner.prediction_horizon.mode=fixed \
+  --set topology_refiner.prediction_horizon.k=2 \
+  --set topology_refiner.prediction_horizon.refresh_on_plateau=true
+```
+
+A reproducibility config for the annealed variant is also provided at
+`configs/experiments/grapher/community_small_topology_graphlet_adaptive_k.yaml`.
+Training does not use this horizon block; teacher trajectories always advance
+one accepted rewiring action per step.
 
 ### 5. Evaluate saved graphs
 

@@ -232,6 +232,19 @@ def main() -> None:
         )
 
     trajectory_cfg = dict(config.get("topology_trajectory", {}) or {})
+    generation_only_horizon_keys = {
+        "prediction_horizon",
+        "refresh_prediction_every",
+        "refresh_on_plateau",
+    }
+    misplaced_horizon_keys = generation_only_horizon_keys & set(trajectory_cfg)
+    if misplaced_horizon_keys:
+        raise ValueError(
+            "Adaptive/fixed prediction horizons are generation-only. Remove "
+            "these keys from topology_trajectory: "
+            f"{sorted(misplaced_horizon_keys)}. Training teacher trajectories "
+            "always advance one accepted rewiring action per teacher step."
+        )
     if not bool(trajectory_cfg.get("ensure_connected_source", True)) or not bool(
         trajectory_cfg.get("preserve_connectivity", True)
     ):
@@ -475,6 +488,13 @@ def main() -> None:
             "orbit_width": TOPOLOGY_ORBIT_WIDTH if summary_cfg.orbit_count else 0,
         },
         "training_sources": source_report,
+        "prediction_horizon_training": {
+            "enabled": False,
+            "reason": (
+                "Prediction horizon is generation-only; teacher trajectories "
+                "advance one accepted swap per step."
+            ),
+        },
         "active_losses": sorted(
             key
             for key, default in active_loss_defaults

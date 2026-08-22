@@ -149,10 +149,11 @@ topology_refiner:
   min_improvement: 0.00000001
   min_relative_improvement: 0.0001
 
-  prediction_horizon:
-    mode: fixed
-    k: 2
-    refresh_on_plateau: true
+  # Generation baseline: refresh the structural prediction after every
+  # accepted rewiring action. Adaptive K is generation-only and lives in a
+  # separate config / CLI override, not in the training configuration.
+  refresh_prediction_every: 1
+  refresh_on_plateau: false
 
   reject_revisited_states: true
   preserve_connectivity: true

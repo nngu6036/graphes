@@ -133,9 +133,9 @@ constructor:
   random_relabel: true
   max_repair_trials: 10000
 
-# Use a shorter horizon with a wider per-step search. The larger acceptance
-# threshold rejects tiny predictor-only gains that did not transfer to external
-# clustering/orbit MMD in the previous run.
+# Use a shorter total trajectory with a wider per-step search. The larger
+# acceptance threshold rejects tiny predictor-only gains that did not transfer
+# to external clustering/orbit MMD in the previous run.
 topology_refiner:
   mode: energy
   steps: 16
@@ -155,12 +155,12 @@ topology_refiner:
   min_relative_improvement: 0.0001
 
   sample_graphlet: false
-  prediction_horizon:
-    mode: annealed
-    initial_k: 8
-    final_k: 1
-    schedule: exponential
-    refresh_on_plateau: true
+  # Generation baseline: refresh the structural prediction after every
+  # accepted rewiring action. Adaptive K is generation-only and lives in a
+  # separate config / CLI override, not in the training configuration.
+  refresh_prediction_every: 1
+  refresh_on_plateau: false
+
   reject_revisited_states: true
 
 evaluation:

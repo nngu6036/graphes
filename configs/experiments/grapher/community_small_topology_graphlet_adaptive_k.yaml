@@ -1,5 +1,5 @@
-experiment: grid_topology_graphlet
-benchmark: grid
+experiment: community_small_topology_graphlet_adaptive_k
+benchmark: community_small
 seed: 42
 
 pipeline:
@@ -10,14 +10,15 @@ protocol:
   evaluation_seeds: [42, 43, 44]
   report_mean_and_std: true
   generated_graphs_per_seed: 1024
-  max_reference_graphs: 20
+  max_reference_graphs: null
   tune_on_split: val
   final_split: test
 
 dataset:
-  name: grid
-  benchmark: grid
-  config_path: configs/datasets/grid.yaml
+  # Community-small retains the historical serialized dataset name `sbm`.
+  name: sbm
+  benchmark: community_small
+  config_path: configs/datasets/community_small.yaml
   root: outputs/datasets
   build_if_missing: false
   max_train_graphs: null
@@ -38,7 +39,7 @@ training_sources:
     max_degree_cost: null
   generators:
     - id: dhvae_hh
-      manifest_path: outputs/baselines/dhvae_hh/grid/seed_{seed}/train/training_estimates/manifest.json
+      manifest_path: outputs/baselines/dhvae_hh/community_small/seed_{seed}/train/training_estimates/manifest.json
       artifact: estimated_graphs
       verify_sha256: true
 
@@ -58,33 +59,33 @@ graphlet_prediction:
   motif_proxy: false
   orbit_count: true
 
+# The teacher starts from a completed base-generator output and sees only
+# graph-level terminal summaries, never the terminal adjacency. It follows valid
+# degree-preserving swaps that improve the combined structural target.
 topology_trajectory:
-  # Only selected sparse NetworkX states are retained; candidates are scored
-  # and discarded, so eager caching avoids rebuilding teachers every epoch.
   storage: eager
-  steps: 12
-  proposal_budget: 96
-  valid_candidate_budget: 24
-  states_per_graph: 4
-  paths_per_graph: 1
+  steps: 24
+  proposal_budget: 128
+  valid_candidate_budget: 32
+  states_per_graph: 8
+  paths_per_graph: 2
   source_randomization_steps: 0
   random_relabel_source: true
+
   teacher_mode: soft
   teacher_temperature: 0.25
   teacher_top_k: 4
   teacher_sample_actions: true
+
   teacher_graphlet_weight: 1.0
-  teacher_graphlet_mass_weight: 0.0
   teacher_clustering_weight: 1.0
   teacher_orbit_weight: 1.0
-  teacher_min_improvement: 0.00000001
-  target_tolerance: 0.0
+
   preserve_connectivity: true
   ensure_connected_source: true
-  max_repair_trials: 10000
 
 topology_predictor:
-  checkpoint_path: outputs/topology_grapher/grid/seed_42/checkpoint.pt
+  checkpoint_path: outputs/topology_grapher/community_small/seed_42/checkpoint.pt
   device: auto
   hidden_dim: 128
   edge_dim: 64
@@ -93,8 +94,8 @@ topology_predictor:
   dropout: 0.0
   min_concentration: 0.05
   max_concentration: 50.0
-  batch_size: 1
-  epochs: 50
+  batch_size: 4
+  epochs: 100
   learning_rate: 0.0003
   weight_decay: 0.00001
   target_epsilon: 0.00001
@@ -116,7 +117,7 @@ generation:
 degree_generator:
   enabled: true
   type: degree_histogram_vae
-  checkpoint_path: outputs/baselines/dhvae_hh/grid/seed_42/train/checkpoints/checkpoint.pt
+  checkpoint_path: outputs/baselines/dhvae_hh/community_small/seed_42/train/checkpoints/checkpoint.pt
   device: auto
   deterministic: false
   sample_num_nodes: empirical
@@ -135,26 +136,33 @@ constructor:
 topology_refiner:
   mode: energy
   steps: 24
+
   proposal_budget: 128
   valid_candidate_budget: 32
-  preserve_connectivity: true
-  selection: greedy
-  temperature: 0.1
+
   graphlet_weight: 1.0
   graphlet_mass_weight: 0.0
   clustering_weight: 1.0
   orbit_weight: 1.0
+
   accept_only_improving: true
   min_improvement: 0.00000001
   min_relative_improvement: 0.0001
-  sample_graphlet: false
-  # Generation baseline: refresh the structural prediction after every
-  # accepted rewiring action. Adaptive K is generation-only and lives in a
-  # separate config / CLI override, not in the training configuration.
-  refresh_prediction_every: 1
-  refresh_on_plateau: false
+
+  # GENERATION-ONLY adaptive prediction horizon. Predictor training still
+  # advances one teacher rewiring per state and ignores this block. For K
+  # sweeps prefer run_topology_grapher.py --set ... instead of cloning YAMLs.
+  prediction_horizon:
+    mode: annealed
+    initial_k: 8
+    final_k: 1
+    schedule: exponential
+    refresh_on_plateau: true
 
   reject_revisited_states: true
+  preserve_connectivity: true
+  selection: greedy
+
 
 evaluation:
   inline_during_generation: false

@@ -63,6 +63,7 @@ def test_generic_grapher_configs_exist_for_every_readme_dataset() -> None:
     expected = {
         "ego_small_topology_graphlet.yaml",
         "community_small_topology_graphlet.yaml",
+        "community_small_topology_graphlet_adaptive_k.yaml",
         "grid_topology_graphlet.yaml",
     }
     assert expected <= {path.name for path in config_dir.glob("*.yaml")}
@@ -70,7 +71,12 @@ def test_generic_grapher_configs_exist_for_every_readme_dataset() -> None:
 
 def test_generic_grapher_configs_are_decoupled_topology_configs() -> None:
     config_dir = REPOSITORY_ROOT / "configs" / "experiments" / "grapher"
-    for path in sorted(config_dir.glob("*_topology_graphlet.yaml")):
+    base_names = {
+        "ego_small_topology_graphlet.yaml",
+        "community_small_topology_graphlet.yaml",
+        "grid_topology_graphlet.yaml",
+    }
+    for path in sorted(config_dir / name for name in base_names):
         config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
         assert config["pipeline"]["stage"] == "topology"
@@ -87,11 +93,12 @@ def test_generic_grapher_configs_are_decoupled_topology_configs() -> None:
             "orbit",
         }
         assert config["topology_refiner"]["mode"] == "energy"
-        horizon = config["topology_refiner"]["prediction_horizon"]
-        assert horizon["mode"] == "annealed"
-        assert horizon["initial_k"] > horizon["final_k"] >= 1
-        assert horizon["schedule"] in {"linear", "cosine", "exponential"}
-        assert horizon["refresh_on_plateau"] is True
+        # Maintained training configs use the closed-loop K=1 baseline.
+        # Adaptive prediction horizons are generation-only and live in a
+        # separately named config or command-line overrides.
+        assert "prediction_horizon" not in config["topology_refiner"]
+        assert config["topology_refiner"]["refresh_prediction_every"] == 1
+        assert config["topology_refiner"]["refresh_on_plateau"] is False
         assert config["topology_refiner"]["min_relative_improvement"] >= 0.0
         assert config["topology_refiner"]["preserve_connectivity"] is True
         assert config["training_sources"]["mode"] == "completed_base_outputs"
@@ -128,3 +135,23 @@ def test_generic_grapher_configs_are_decoupled_topology_configs() -> None:
         assert config["degree_generator"]["postprocess_policy"] == "reject_only"
         assert config["degree_generator"]["fallback"] == "error"
         assert config["constructor"]["ensure_connected"] is True
+
+
+def test_community_adaptive_k_config_is_generation_only() -> None:
+    path = (
+        REPOSITORY_ROOT
+        / "configs"
+        / "experiments"
+        / "grapher"
+        / "community_small_topology_graphlet_adaptive_k.yaml"
+    )
+    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    horizon = config["topology_refiner"]["prediction_horizon"]
+    assert horizon["mode"] == "annealed"
+    assert horizon["initial_k"] > horizon["final_k"] >= 1
+    assert horizon["schedule"] in {"linear", "cosine", "exponential"}
+    assert horizon["refresh_on_plateau"] is True
+    trajectory = config["topology_trajectory"]
+    assert "prediction_horizon" not in trajectory
+    assert "refresh_prediction_every" not in trajectory
+    assert "refresh_on_plateau" not in trajectory
