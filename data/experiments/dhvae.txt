@@ -1,0 +1,4 @@
+PYTHONPATH=src python scripts/run_dhvae_hh_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 42
