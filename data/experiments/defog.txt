@@ -61,7 +61,7 @@ DEFOG_GENERATION_DIR="outputs/baselines/defog/community_small/seed_44/generation
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/grapher/community_small_defog_corrector.yaml \
   --generated-dir "$DEFOG_GENERATION_DIR" \
-  --generated-stage defog_seed_44_n_1024 \
+  --generated-stage defog_seed_44 \
   --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_44_n_1024"
 
 
