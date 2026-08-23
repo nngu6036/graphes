@@ -1,0 +1,21 @@
+--- a/src/grapher/models/defog_molecular_codec.py
++++ b/src/grapher/models/defog_molecular_codec.py
+@@ -539,9 +539,15 @@
+         for node, atomic_number in enumerate(graph_atoms):
+             value = int(atomic_number)
+             graph.add_node(node, atomic_num=value, atom_type=value)
+-        for (source, target), bond_type in zip(
+-            graph_endpoints, graph_bonds, strict=True
+-        ):
++        if graph_endpoints.shape[0] != graph_bonds.shape[0]:
++            raise ValueError(
++                f"graph[{graph_index}] has mismatched edge endpoint and "
++                "bond-type counts."
++            )
++        # ``zip(..., strict=True)`` was introduced in Python 3.10, while the
++        # isolated DeFoG environment used by the wrapper may run Python 3.9.
++        # Keep the same strictness guarantee with an explicit length check.
++        for (source, target), bond_type in zip(graph_endpoints, graph_bonds):
+             semantic_bond = int(bond_type)
+             graph.add_edge(
+                 int(source),
