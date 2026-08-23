@@ -815,10 +815,10 @@ def refine_graph_with_spectral_predictions(
                 "next_spectrum_target": next_target.tolist(),
             }
 
+        move_kind = "improving"
         if selected is None:
             # F1: before treating this as terminal, optionally take the
             # least-harmful valid swap so the walk can cross a plateau.
-            move_kind = "improving"
             if (
                 cfg.allow_sideways_moves
                 and consecutive_sideways < cfg.max_consecutive_sideways

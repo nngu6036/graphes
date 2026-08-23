@@ -566,6 +566,77 @@ line, for example:
 --set topology_refiner.spectral_guidance.min_clean_mix=0.25
 ```
 
+### Dual spectral + graphlet-logit diffusion guidance
+
+The dual-guidance variant complements the global Laplacian-spectrum signal with
+local higher-order graphlet information.  For each graphlet order `k`, connected
+induced graphlet counts are divided by `C(n,k)` and augmented with one
+`disconnected` bin.  Each block is therefore a probability simplex over all
+induced `k`-node subsets.  The simplex is transformed to centered log-ratio
+(CLR) coordinates; the joint predictor estimates the clean CLR/logit state and
+a separate bridge derives the desired next graphlet state.
+
+The graph encoder is shared by both heads.  Generation ranks only valid
+connectivity- and degree-preserving double-edge swaps using the combined energy
+
+```text
+spectral_weight(t) * spectral_distance
++ graphlet_weight(t) * graphlet_CLR_distance
+```
+
+with a coarse-to-fine global-to-local schedule: spectrum dominates early and
+graphlet logits become stronger near the clean end of the trajectory. Candidate
+graphlet states use exact local-delta updates rather than a full recount.
+
+Train the joint predictor:
+
+```bash
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet.yaml \
+  --output-dir outputs/topology_grapher/community_small_spectral_graphlet/seed_42 \
+  --seed 42 \
+  --device gpu
+```
+
+For a small diagnostic generation run, enable detailed step logs:
+
+```bash
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet.yaml \
+  --output-dir outputs/topology_generation/community_small_spectral_graphlet/debug_seed_42 \
+  --num-generate 5 \
+  --seed 42 \
+  --device gpu \
+  --set topology_refiner.debug.enabled=true
+```
+
+The `[GraphER/SpectralGraphlet]` log reports the current step, prediction
+refresh/horizon, clean spectrum, per-order clean graphlet probabilities,
+spectral/graphlet bridge targets and clean mixes, global-to-local weights,
+candidate rejection counts, top candidate combined/spectral/graphlet gains,
+separate projection residuals, and the accepted graphlet state after each swap.
+
+Generate the full batch with the same configuration (debugging is disabled by
+default in the supplied high-budget config):
+
+```bash
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet.yaml \
+  --output-dir outputs/topology_generation/community_small_spectral_graphlet/seed_42 \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
+```
+
+Evaluate the saved graphs:
+
+```bash
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet.yaml \
+  --generated-dir outputs/topology_generation/community_small_spectral_graphlet/seed_42 \
+  --output-dir outputs/topology_grapher/community_small_spectral_graphlet/seed_42/evaluation
+```
+
 ### 5. Evaluate saved graphs
 
 ```bash

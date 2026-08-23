@@ -8,11 +8,16 @@ import numpy as np
 import torch
 
 from grapher.rewiring_mlp.core.rewiring import Action, make_action
+from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.data import (
     TopologyTrainingPair,
     _construct_source_from_degree_sequence,
     _randomly_relabel_topology_graph,
     normalize_topology_graph,
+)
+from grapher.rewiring_mlp.generic.graphlet_diffusion import (
+    extract_topology_graphlet_simplex,
+    graphlet_simplex_to_clr,
 )
 from grapher.rewiring_mlp.generic.rewiring import (
     propose_valid_topology_swaps,
@@ -32,6 +37,14 @@ class TopologySpectralExample:
     current_graph: nx.Graph
     time: float
     clean_spectrum_target: np.ndarray
+    # Optional graphlet-logit diffusion supervision. Each graphlet order is a
+    # probability simplex over connected graphlet classes plus one disconnected
+    # subset bin; CLR coordinates are the Euclidean diffusion variables.
+    current_graphlet_probabilities: np.ndarray | None = None
+    clean_graphlet_probabilities_target: np.ndarray | None = None
+    current_graphlet_logits: np.ndarray | None = None
+    clean_graphlet_logits_target: np.ndarray | None = None
+    graphlet_coordinate_mask: np.ndarray | None = None
     base_generator: str = "target_degree_havel_hakimi"
     source_index: int = -1
     target_index: int = -1
@@ -54,10 +67,18 @@ class TopologySpectralBatch:
     current_spectrum: torch.Tensor
     clean_spectrum_target: torch.Tensor
     spectrum_mask: torch.Tensor
+    current_graphlet_probabilities: torch.Tensor | None = None
+    clean_graphlet_probabilities_target: torch.Tensor | None = None
+    current_graphlet_logits: torch.Tensor | None = None
+    clean_graphlet_logits_target: torch.Tensor | None = None
+    graphlet_coordinate_mask: torch.Tensor | None = None
 
     def to(self, device: torch.device | str) -> "TopologySpectralBatch":
         return TopologySpectralBatch(
-            **{key: value.to(device) for key, value in self.__dict__.items()}
+            **{
+                key: (value.to(device) if isinstance(value, torch.Tensor) else value)
+                for key, value in self.__dict__.items()
+            }
         )
 
 
@@ -80,6 +101,38 @@ def collate_spectral_examples(
     current_spectra = np.zeros((batch_size, max_nodes), dtype=np.float32)
     clean_spectra = np.zeros((batch_size, max_nodes), dtype=np.float32)
     spectrum_mask = np.zeros((batch_size, max_nodes), dtype=np.bool_)
+
+    graphlet_widths = {
+        int(np.asarray(example.current_graphlet_logits).size)
+        for example in examples
+        if example.current_graphlet_logits is not None
+    }
+    if len(graphlet_widths) > 1:
+        raise ValueError("Graphlet-logit examples in one batch must share a fixed width.")
+    graphlet_width = next(iter(graphlet_widths), 0)
+    graphlet_enabled = graphlet_width > 0
+    if graphlet_enabled and any(example.current_graphlet_logits is None for example in examples):
+        raise ValueError("Cannot mix spectral-only and spectral+graphlet examples in one batch.")
+    current_graphlet_probabilities = (
+        np.zeros((batch_size, graphlet_width), dtype=np.float32)
+        if graphlet_enabled else None
+    )
+    clean_graphlet_probabilities = (
+        np.zeros((batch_size, graphlet_width), dtype=np.float32)
+        if graphlet_enabled else None
+    )
+    current_graphlet_logits = (
+        np.zeros((batch_size, graphlet_width), dtype=np.float32)
+        if graphlet_enabled else None
+    )
+    clean_graphlet_logits = (
+        np.zeros((batch_size, graphlet_width), dtype=np.float32)
+        if graphlet_enabled else None
+    )
+    graphlet_coordinate_mask = (
+        np.zeros((batch_size, graphlet_width), dtype=np.bool_)
+        if graphlet_enabled else None
+    )
 
     for index, example in enumerate(examples):
         graph = normalize_topology_graph(example.current_graph)
@@ -112,6 +165,26 @@ def collate_spectral_examples(
         current_spectra[index, :n] = current
         clean_spectra[index, :n] = target
         spectrum_mask[index, :n] = True
+        if graphlet_enabled:
+            assert current_graphlet_probabilities is not None
+            assert clean_graphlet_probabilities is not None
+            assert current_graphlet_logits is not None
+            assert clean_graphlet_logits is not None
+            assert graphlet_coordinate_mask is not None
+            arrays = [
+                np.asarray(example.current_graphlet_probabilities, dtype=np.float32).reshape(-1),
+                np.asarray(example.clean_graphlet_probabilities_target, dtype=np.float32).reshape(-1),
+                np.asarray(example.current_graphlet_logits, dtype=np.float32).reshape(-1),
+                np.asarray(example.clean_graphlet_logits_target, dtype=np.float32).reshape(-1),
+                np.asarray(example.graphlet_coordinate_mask, dtype=np.bool_).reshape(-1),
+            ]
+            if any(array.size != graphlet_width for array in arrays):
+                raise ValueError("Graphlet-logit target width mismatch during collation.")
+            current_graphlet_probabilities[index] = arrays[0]
+            clean_graphlet_probabilities[index] = arrays[1]
+            current_graphlet_logits[index] = arrays[2]
+            clean_graphlet_logits[index] = arrays[3]
+            graphlet_coordinate_mask[index] = arrays[4]
 
     return TopologySpectralBatch(
         adjacency=torch.from_numpy(adjacency),
@@ -123,6 +196,26 @@ def collate_spectral_examples(
         current_spectrum=torch.from_numpy(current_spectra),
         clean_spectrum_target=torch.from_numpy(clean_spectra),
         spectrum_mask=torch.from_numpy(spectrum_mask),
+        current_graphlet_probabilities=(
+            torch.from_numpy(current_graphlet_probabilities)
+            if current_graphlet_probabilities is not None else None
+        ),
+        clean_graphlet_probabilities_target=(
+            torch.from_numpy(clean_graphlet_probabilities)
+            if clean_graphlet_probabilities is not None else None
+        ),
+        current_graphlet_logits=(
+            torch.from_numpy(current_graphlet_logits)
+            if current_graphlet_logits is not None else None
+        ),
+        clean_graphlet_logits_target=(
+            torch.from_numpy(clean_graphlet_logits)
+            if clean_graphlet_logits is not None else None
+        ),
+        graphlet_coordinate_mask=(
+            torch.from_numpy(graphlet_coordinate_mask)
+            if graphlet_coordinate_mask is not None else None
+        ),
     )
 
 
@@ -492,6 +585,8 @@ def build_spectral_examples(
     *,
     trajectory_config: dict[str, Any] | None = None,
     spectral_config: dict[str, Any] | None = None,
+    graphlet_basis: TopologyGraphletBasis | None = None,
+    graphlet_logit_epsilon: float = 1.0e-5,
     seed: int = 0,
 ) -> tuple[list[TopologySpectralExample], dict[str, Any]]:
     """Create variable-length clean-spectrum supervision from actual graph states."""
@@ -539,6 +634,22 @@ def build_spectral_examples(
             matching_cost = 0.0
 
         target_spectrum = laplacian_eigenvalues(target)
+        target_graphlet_probabilities: np.ndarray | None = None
+        target_graphlet_logits: np.ndarray | None = None
+        target_graphlet_mask: np.ndarray | None = None
+        if graphlet_basis is not None:
+            target_graphlet_probabilities, target_graphlet_mask, _ = (
+                extract_topology_graphlet_simplex(
+                    target,
+                    graphlet_basis=graphlet_basis,
+                )
+            )
+            target_graphlet_logits = graphlet_simplex_to_clr(
+                target_graphlet_probabilities,
+                graphlet_basis=graphlet_basis,
+                epsilon=float(graphlet_logit_epsilon),
+                coordinate_mask=target_graphlet_mask,
+            )
         degree_sequence = [int(target.degree(node)) for node in target.nodes()]
         for _path in range(paths_per_graph):
             states, report = build_spectral_teacher_states(
@@ -617,11 +728,53 @@ def build_spectral_examples(
                         dtype=np.float32,
                     )
                     selected_index = int(decision.get("selected_index", -1))
+                current_graphlet_probabilities = None
+                current_graphlet_logits = None
+                current_graphlet_mask = None
+                if graphlet_basis is not None:
+                    current_graphlet_probabilities, current_graphlet_mask, _ = (
+                        extract_topology_graphlet_simplex(
+                            states[step],
+                            graphlet_basis=graphlet_basis,
+                        )
+                    )
+                    current_graphlet_logits = graphlet_simplex_to_clr(
+                        current_graphlet_probabilities,
+                        graphlet_basis=graphlet_basis,
+                        epsilon=float(graphlet_logit_epsilon),
+                        coordinate_mask=current_graphlet_mask,
+                    )
+                    if target_graphlet_mask is None or not np.array_equal(
+                        current_graphlet_mask, target_graphlet_mask
+                    ):
+                        raise AssertionError(
+                            "Source and clean graphlet coordinate masks must agree for equal-size graphs."
+                        )
                 examples.append(
                     TopologySpectralExample(
                         current_graph=states[step],
                         time=float(step / horizon),
                         clean_spectrum_target=target_spectrum.astype(np.float32).copy(),
+                        current_graphlet_probabilities=(
+                            None if current_graphlet_probabilities is None
+                            else current_graphlet_probabilities.astype(np.float32).copy()
+                        ),
+                        clean_graphlet_probabilities_target=(
+                            None if target_graphlet_probabilities is None
+                            else target_graphlet_probabilities.astype(np.float32).copy()
+                        ),
+                        current_graphlet_logits=(
+                            None if current_graphlet_logits is None
+                            else current_graphlet_logits.astype(np.float32).copy()
+                        ),
+                        clean_graphlet_logits_target=(
+                            None if target_graphlet_logits is None
+                            else target_graphlet_logits.astype(np.float32).copy()
+                        ),
+                        graphlet_coordinate_mask=(
+                            None if current_graphlet_mask is None
+                            else current_graphlet_mask.astype(np.bool_).copy()
+                        ),
                         base_generator=base_generator,
                         source_index=source_index,
                         target_index=target_index,
@@ -692,6 +845,8 @@ class TopologySpectralTrajectoryIterableDataset(torch.utils.data.IterableDataset
         *,
         trajectory_config: dict[str, Any] | None = None,
         spectral_config: dict[str, Any] | None = None,
+        graphlet_basis: TopologyGraphletBasis | None = None,
+        graphlet_logit_epsilon: float = 1.0e-5,
         seed: int = 0,
         shuffle_graphs: bool = True,
     ) -> None:
@@ -699,6 +854,8 @@ class TopologySpectralTrajectoryIterableDataset(torch.utils.data.IterableDataset
         self.graphs = tuple(graphs)
         self.trajectory_config = dict(trajectory_config or {})
         self.spectral_config = dict(spectral_config or {})
+        self.graphlet_basis = graphlet_basis
+        self.graphlet_logit_epsilon = float(graphlet_logit_epsilon)
         self.seed = int(seed)
         self.shuffle_graphs = bool(shuffle_graphs)
         self.epoch = 0
@@ -731,6 +888,8 @@ class TopologySpectralTrajectoryIterableDataset(torch.utils.data.IterableDataset
                 [self.graphs[int(graph_index)]],
                 trajectory_config=self.trajectory_config,
                 spectral_config=self.spectral_config,
+                graphlet_basis=self.graphlet_basis,
+                graphlet_logit_epsilon=self.graphlet_logit_epsilon,
                 seed=(
                     self.seed
                     + 1_000_003 * self.epoch

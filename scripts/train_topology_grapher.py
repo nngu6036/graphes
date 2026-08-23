@@ -31,8 +31,11 @@ from grapher.rewiring_mlp.generic.spectral_data import (
 )
 from grapher.rewiring_mlp.generic.spectral_model import (
     TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT,
+    TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT,
     TopologySpectralTransformerPredictor,
+    TopologySpectralGraphletTransformerPredictor,
     save_topology_spectral_checkpoint,
+    save_topology_spectral_graphlet_checkpoint,
 )
 from grapher.rewiring_mlp.generic.training_sources import (
     build_completed_base_training_pairs,
@@ -42,6 +45,12 @@ from grapher.utils.io import ensure_dir, load_yaml, save_json
 
 
 _SPECTRAL_TYPES = {"spectral", "spectral_transformer", "spectrum_transformer"}
+_SPECTRAL_GRAPHLET_TYPES = {
+    "spectral_graphlet",
+    "spectral_graphlet_transformer",
+    "spectral_graphlet_diffusion",
+    "dual_diffusion",
+}
 
 
 def _mean_metrics(rows: list[dict[str, float]]) -> dict[str, float]:
@@ -156,8 +165,9 @@ def _run_spectral_epoch(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Train GraphER topology guidance. Supports the maintained structural-"
-            "summary predictor and the variable-length Spectral Transformer."
+            "Train GraphER topology guidance. Supports structural-summary, "
+            "variable-length Spectral Transformer, and joint spectral + "
+            "graphlet-logit diffusion predictors."
         )
     )
     parser.add_argument("--config", required=True)
@@ -182,16 +192,18 @@ def main() -> None:
 
     predictor_cfg = dict(config.get("topology_predictor", {}) or {})
     predictor_type = str(predictor_cfg.get("type", "structural_summary")).lower()
+    spectral_graphlet_mode = predictor_type in _SPECTRAL_GRAPHLET_TYPES
     spectral_mode = predictor_type in _SPECTRAL_TYPES
-    if not spectral_mode and predictor_type not in {
+    spectral_family_mode = spectral_mode or spectral_graphlet_mode
+    if not spectral_family_mode and predictor_type not in {
         "structural_summary",
         "graphlet",
         "graphlet_predictor",
         "topology_graphlet",
     }:
         raise ValueError(
-            "Unknown topology_predictor.type. Use structural_summary or "
-            "spectral_transformer."
+            "Unknown topology_predictor.type. Use structural_summary, "
+            "spectral_transformer, or spectral_graphlet_transformer."
         )
 
     seed = int(args.seed if args.seed is not None else config.get("seed", 0))
@@ -222,7 +234,8 @@ def main() -> None:
         raise ValueError("Training and validation graph splits must be non-empty.")
 
     # Keep SummaryConfig in spectral checkpoints so existing evaluation code can
-    # use the same graphlet/orbit settings. It is not a Spectral Transformer target.
+    # use the same graphlet/orbit settings. In spectral+graphlet mode the fixed
+    # connected graphlet basis is also used by the graphlet-logit diffusion head.
     summary_data = dict(config.get("graphlet_prediction", {}) or {})
     if bool(summary_data.get("attributed", False)):
         raise ValueError("The generic topology stage cannot use attributed graphlets.")
@@ -232,13 +245,13 @@ def main() -> None:
     if not spectral_mode:
         if str(summary_data.get("estimator", "exact_connected_local_delta")).lower() != "exact_connected_local_delta":
             raise ValueError(
-                "Topology structural training requires estimator: "
+                "Topology structural and spectral+graphlet training require estimator: "
                 "exact_connected_local_delta."
             )
         summary_data["graphlet_history"] = True
         summary_cfg = SummaryConfig.from_dict(summary_data, train_graphs)
         if summary_cfg.graphlet_k_min < 3:
-            raise ValueError("Topology structural prediction requires graphlet_k_min >= 3.")
+            raise ValueError("Topology graphlet guidance requires graphlet_k_min >= 3.")
         graphlet_basis = TopologyGraphletBasis.fit_from_graphs(
             train_graphs,
             summary_data,
@@ -247,7 +260,7 @@ def main() -> None:
         )
         if summary_cfg.orbit_count and not {"3", "4"}.issubset(set(graphlet_basis.sizes)):
             raise ValueError(
-                "Orbit supervision requires graphlet_prediction to include sizes 3 and 4."
+                "Orbit supervision/evaluation requires graphlet sizes 3 and 4."
             )
 
     source_cfg_raw = config.get("training_sources")
@@ -262,11 +275,11 @@ def main() -> None:
             seed=seed,
         )
     elif source_mode in {"target_degree_havel_hakimi", "spectral_havel_hakimi"}:
-        if not spectral_mode:
+        if not spectral_family_mode:
             raise ValueError(
                 "training_sources.mode: target_degree_havel_hakimi is reserved for "
-                "spectral_transformer training because the clean spectrum must lie "
-                "in the same degree fibre as the HH source."
+                "spectral or spectral+graphlet training because the clean target "
+                "must lie in the same degree fibre as the HH source."
             )
         train_items = train_graphs
         val_items = val_graphs
@@ -326,7 +339,11 @@ def main() -> None:
             "training from completed base-generator outputs."
         )
 
-    guidance_name = "spectral_transformer" if spectral_mode else "structural_summary"
+    guidance_name = (
+        "spectral_graphlet_transformer" if spectral_graphlet_mode
+        else "spectral_transformer" if spectral_mode
+        else "structural_summary"
+    )
     print(
         f"Preparing {storage_mode} topology trajectories "
         f"(guidance={guidance_name}, train_pairs={len(train_items)}, "
@@ -335,12 +352,18 @@ def main() -> None:
     )
 
     spectral_cfg = dict(config.get("spectral_prediction", {}) or {})
-    if spectral_mode:
+    graphlet_diffusion_cfg = dict(config.get("graphlet_diffusion", {}) or {})
+    graphlet_logit_epsilon = float(graphlet_diffusion_cfg.get("logit_epsilon", 1.0e-5))
+    if spectral_family_mode:
+        if spectral_graphlet_mode and graphlet_basis is None:
+            raise AssertionError("Spectral+graphlet mode requires a graphlet basis.")
         if storage_mode == "streaming":
             train_examples = TopologySpectralTrajectoryIterableDataset(
                 train_items,
                 trajectory_config=trajectory_cfg,
                 spectral_config=spectral_cfg,
+                graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
+                graphlet_logit_epsilon=graphlet_logit_epsilon,
                 seed=seed,
                 shuffle_graphs=True,
             )
@@ -348,6 +371,8 @@ def main() -> None:
                 val_items,
                 trajectory_config=trajectory_cfg,
                 spectral_config=spectral_cfg,
+                graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
+                graphlet_logit_epsilon=graphlet_logit_epsilon,
                 seed=seed + 1,
                 shuffle_graphs=False,
             )
@@ -360,12 +385,16 @@ def main() -> None:
                 train_items,
                 trajectory_config=trajectory_cfg,
                 spectral_config=spectral_cfg,
+                graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
+                graphlet_logit_epsilon=graphlet_logit_epsilon,
                 seed=seed,
             )
             val_examples, val_teacher_report = build_spectral_examples(
                 val_items,
                 trajectory_config=trajectory_cfg,
                 spectral_config=spectral_cfg,
+                graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
+                graphlet_logit_epsilon=graphlet_logit_epsilon,
                 seed=seed + 1,
             )
             num_train_examples = len(train_examples)
@@ -418,25 +447,38 @@ def main() -> None:
     )
 
     device = resolve_torch_device(args.device or predictor_cfg.get("device", "auto"))
-    if spectral_mode:
-        model: Any = TopologySpectralTransformerPredictor(
-            hidden_dim=int(predictor_cfg.get("hidden_dim", 128)),
-            edge_dim=int(predictor_cfg.get("edge_dim", 64)),
-            graph_dim=int(predictor_cfg.get("graph_dim", 128)),
-            num_layers=int(predictor_cfg.get("num_layers", 4)),
-            spectral_dim=int(predictor_cfg.get("spectral_dim", 128)),
-            spectral_layers=int(predictor_cfg.get("spectral_layers", 3)),
-            spectral_heads=int(predictor_cfg.get("spectral_heads", 4)),
-            spectral_ff_dim=int(predictor_cfg.get("spectral_ff_dim", 256)),
-            dropout=float(predictor_cfg.get("dropout", 0.0)),
-            min_gap=float(predictor_cfg.get("min_gap", 1.0e-6)),
-            input_normalization=str(
+    if spectral_family_mode:
+        common_spectral_kwargs = {
+            "hidden_dim": int(predictor_cfg.get("hidden_dim", 128)),
+            "edge_dim": int(predictor_cfg.get("edge_dim", 64)),
+            "graph_dim": int(predictor_cfg.get("graph_dim", 128)),
+            "num_layers": int(predictor_cfg.get("num_layers", 4)),
+            "spectral_dim": int(predictor_cfg.get("spectral_dim", 128)),
+            "spectral_layers": int(predictor_cfg.get("spectral_layers", 3)),
+            "spectral_heads": int(predictor_cfg.get("spectral_heads", 4)),
+            "spectral_ff_dim": int(predictor_cfg.get("spectral_ff_dim", 256)),
+            "dropout": float(predictor_cfg.get("dropout", 0.0)),
+            "min_gap": float(predictor_cfg.get("min_gap", 1.0e-6)),
+            "input_normalization": str(
                 predictor_cfg.get(
                     "input_normalization",
                     spectral_cfg.get("normalization", "mean_degree"),
                 )
             ),
-        ).to(device)
+        }
+        if spectral_graphlet_mode:
+            assert graphlet_basis is not None
+            model = TopologySpectralGraphletTransformerPredictor(
+                graphlet_block_widths=graphlet_basis.simplex_block_widths,
+                graphlet_dim=int(predictor_cfg.get("graphlet_dim", 256)),
+                graphlet_dropout=float(
+                    predictor_cfg.get("graphlet_dropout", predictor_cfg.get("dropout", 0.05))
+                ),
+                graphlet_logit_epsilon=graphlet_logit_epsilon,
+                **common_spectral_kwargs,
+            ).to(device)
+        else:
+            model = TopologySpectralTransformerPredictor(**common_spectral_kwargs).to(device)
         collate_fn = collate_spectral_examples
     else:
         assert graphlet_basis is not None
@@ -483,7 +525,7 @@ def main() -> None:
         for key, value in (predictor_cfg.get("loss_weights", {}) or {}).items()
     }
 
-    if spectral_mode:
+    if spectral_family_mode:
         forbidden_loss_keys = {
             "node",
             "edge",
@@ -495,7 +537,7 @@ def main() -> None:
         } & set(loss_weights)
         if forbidden_loss_keys:
             raise ValueError(
-                "Spectral Transformer loss cannot contain structural-summary terms: "
+                "Spectral-family loss cannot contain legacy structural-summary terms: "
                 f"{sorted(forbidden_loss_keys)}"
             )
         active_loss_defaults = [
@@ -503,11 +545,15 @@ def main() -> None:
             ("moment2", 0.1),
             ("low_frequency", 0.0),
         ]
+        if spectral_graphlet_mode:
+            active_loss_defaults.extend(
+                [("graphlet_logit", 1.0), ("graphlet_probability", 0.25)]
+            )
         if not any(
             float(loss_weights.get(key, default)) != 0.0
             for key, default in active_loss_defaults
         ):
-            raise ValueError("At least one spectral prediction loss must be active.")
+            raise ValueError("At least one spectral/graphlet prediction loss must be active.")
         target_epsilon = None
     else:
         forbidden_loss_keys = {"node", "edge", "consistency"} & set(loss_weights)
@@ -537,7 +583,9 @@ def main() -> None:
     configured_checkpoint = predictor_cfg.get(
         "checkpoint_path",
         (
-            "outputs/topology_grapher/sbm_spectral/seed_42/checkpoint.pt"
+            "outputs/topology_grapher/sbm_spectral_graphlet/seed_42/checkpoint.pt"
+            if spectral_graphlet_mode
+            else "outputs/topology_grapher/sbm_spectral/seed_42/checkpoint.pt"
             if spectral_mode
             else "outputs/topology_grapher/sbm/seed_42/checkpoint.pt"
         ),
@@ -556,13 +604,20 @@ def main() -> None:
         f"epochs={epochs} checkpoint={checkpoint_path}",
         flush=True,
     )
-    if spectral_mode:
+    if spectral_family_mode:
         print(
             "Spectral Transformer: predicts all clean Laplacian eigenvalues jointly; "
             "variable graph sizes are handled by padded spectral tokens + mask; "
             "eigenvectors are not predicted.",
             flush=True,
         )
+        if spectral_graphlet_mode:
+            print(
+                "Graphlet-logit diffusion: each k-block is connected graphlet "
+                "probabilities + a disconnected bin, transformed to CLR logits; "
+                "the shared graph encoder predicts the clean graphlet logits.",
+                flush=True,
+            )
 
     history: list[dict[str, Any]] = []
     best_val = float("inf")
@@ -579,7 +634,7 @@ def main() -> None:
         ):
             val_examples.set_epoch(0)
 
-        if spectral_mode:
+        if spectral_family_mode:
             train_metrics = _run_spectral_epoch(
                 model,
                 train_loader,
@@ -622,7 +677,18 @@ def main() -> None:
         if val_metrics["loss"] < best_val:
             best_val = float(val_metrics["loss"])
             best_epoch = epoch
-            if spectral_mode:
+            if spectral_graphlet_mode:
+                assert graphlet_basis is not None
+                save_topology_spectral_graphlet_checkpoint(
+                    model,
+                    checkpoint_path,
+                    graphlet_basis=graphlet_basis,
+                    summary_config=summary_cfg,
+                    config=config,
+                    report=row,
+                    training_time_horizon=max(int(trajectory_cfg.get("steps", 32)), 1),
+                )
+            elif spectral_mode:
                 save_topology_spectral_checkpoint(
                     model,
                     checkpoint_path,
@@ -648,7 +714,12 @@ def main() -> None:
                 )
 
         if epoch == 1 or epoch % progress_interval == 0 or epoch == epochs:
-            if spectral_mode:
+            if spectral_family_mode:
+                extra = (
+                    f" graphlet_logit_rmse={val_metrics['graphlet_logit_rmse']:.5f}"
+                    f" graphlet_prob_mae={val_metrics['graphlet_probability_mae']:.5f}"
+                    if spectral_graphlet_mode else ""
+                )
                 print(
                     f"epoch={epoch:04d} "
                     f"train={train_metrics['loss']:.5f} "
@@ -657,7 +728,8 @@ def main() -> None:
                     f"spectral_nmae={val_metrics['spectral_normalized_mae']:.5f} "
                     f"spectral_mae={val_metrics['spectral_mae']:.5f} "
                     f"moment2_rel={val_metrics['spectral_moment2_relative_error']:.5f} "
-                    f"trace_mae={val_metrics['spectral_trace_mae']:.3e}",
+                    f"trace_mae={val_metrics['spectral_trace_mae']:.3e}"
+                    f"{extra}",
                     flush=True,
                 )
             else:
@@ -676,7 +748,7 @@ def main() -> None:
         TopologyTrajectoryIterableDataset,
         TopologySpectralTrajectoryIterableDataset,
     )
-    if spectral_mode:
+    if spectral_family_mode:
         predictor_targets: dict[str, Any] = {
             "clean_laplacian_eigenvalues": True,
             "prediction": "joint_one_shot",
@@ -686,10 +758,19 @@ def main() -> None:
             "sorted_by_positive_gaps": True,
             "trace_sum_lambda_equals_2m": True,
             "spectral_prediction": spectral_cfg,
+            "clean_graphlet_clr_logits": bool(spectral_graphlet_mode),
+            "graphlet_simplex_includes_disconnected_bin": bool(spectral_graphlet_mode),
+            "graphlet_logit_epsilon": (graphlet_logit_epsilon if spectral_graphlet_mode else None),
         }
-        graphlet_basis_report = None
-        report_format = "topology_spectral_training_v1"
-        checkpoint_format = TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT
+        graphlet_basis_report = (
+            graphlet_basis.to_dict() if spectral_graphlet_mode and graphlet_basis is not None else None
+        )
+        if spectral_graphlet_mode:
+            report_format = "topology_spectral_graphlet_training_v1"
+            checkpoint_format = TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT
+        else:
+            report_format = "topology_spectral_training_v1"
+            checkpoint_format = TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT
     else:
         assert graphlet_basis is not None
         predictor_targets = {
@@ -709,7 +790,11 @@ def main() -> None:
     report = {
         "format": report_format,
         "pipeline_mode": "topology",
-        "guidance_mode": "spectral" if spectral_mode else "structural_summary",
+        "guidance_mode": (
+            "spectral_graphlet" if spectral_graphlet_mode
+            else "spectral" if spectral_mode
+            else "structural_summary"
+        ),
         "predictor_type": predictor_type,
         "checkpoint_format": checkpoint_format,
         "best_epoch": best_epoch,

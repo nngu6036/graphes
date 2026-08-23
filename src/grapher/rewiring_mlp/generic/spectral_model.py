@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 from grapher.properties.summary import SummaryConfig
+from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.layers import TopologyMPNNLayer
 from grapher.rewiring_mlp.generic.spectral_data import TopologySpectralBatch
 from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir
 
 TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT = "topology_spectral_transformer_v1"
+TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT = "topology_spectral_graphlet_transformer_v1"
 
 
 class TopologySpectralTransformerPredictor(nn.Module):
@@ -280,8 +282,11 @@ class TopologySpectralTransformerPredictor(nn.Module):
         spectrum = spectrum * mask.to(spectrum.dtype)
         return spectrum
 
-    def forward(self, batch: TopologySpectralBatch) -> dict[str, torch.Tensor]:
-        graph_hidden = self._graph_context(batch)
+    def _spectral_outputs_from_graph_hidden(
+        self,
+        batch: TopologySpectralBatch,
+        graph_hidden: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
         mask = batch.spectrum_mask.bool()
         batch_size, width = mask.shape
         scale = self._spectrum_scale(batch)
@@ -317,14 +322,18 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "spectral_mask": mask,
         }
 
-    def loss(
+    def forward(self, batch: TopologySpectralBatch) -> dict[str, torch.Tensor]:
+        graph_hidden = self._graph_context(batch)
+        return self._spectral_outputs_from_graph_hidden(batch, graph_hidden)
+
+    def _spectral_loss_from_outputs(
         self,
         batch: TopologySpectralBatch,
+        outputs: dict[str, torch.Tensor],
         *,
         loss_weights: dict[str, float] | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         weights = dict(loss_weights or {})
-        outputs = self.forward(batch)
         predicted = outputs["clean_spectrum"]
         target = batch.clean_spectrum_target
         mask = batch.spectrum_mask.bool()
@@ -416,6 +425,20 @@ class TopologySpectralTransformerPredictor(nn.Module):
         }
         return total, metrics
 
+
+    def loss(
+        self,
+        batch: TopologySpectralBatch,
+        *,
+        loss_weights: dict[str, float] | None = None,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        outputs = self.forward(batch)
+        return self._spectral_loss_from_outputs(
+            batch,
+            outputs,
+            loss_weights=loss_weights,
+        )
+
     def model_config(self) -> dict[str, Any]:
         return {
             "hidden_dim": self.hidden_dim,
@@ -431,6 +454,212 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "input_normalization": self.input_normalization,
         }
 
+
+
+class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPredictor):
+    """Joint global-spectrum and local-graphlet x0 predictor.
+
+    The graph encoder is shared.  The spectral branch is the variable-length
+    Spectral Transformer.  For each graphlet order k, a residual MLP consumes
+    the shared graph context together with the current CLR/logit graphlet state
+    and predicts the clean CLR state in one shot.  A blockwise softmax maps the
+    predicted logits back to a valid graphlet probability simplex.
+    """
+
+    def __init__(
+        self,
+        *,
+        graphlet_block_widths: Sequence[int],
+        graphlet_dim: int = 256,
+        graphlet_dropout: float = 0.05,
+        graphlet_logit_epsilon: float = 1.0e-5,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.graphlet_block_widths = tuple(int(value) for value in graphlet_block_widths)
+        if not self.graphlet_block_widths or any(value <= 1 for value in self.graphlet_block_widths):
+            raise ValueError("graphlet_block_widths must contain simplex widths >= 2.")
+        self.graphlet_dim = int(graphlet_dim)
+        self.graphlet_dropout_p = float(graphlet_dropout)
+        self.graphlet_logit_epsilon = float(graphlet_logit_epsilon)
+        if self.graphlet_dim <= 0:
+            raise ValueError("graphlet_dim must be positive.")
+        if self.graphlet_logit_epsilon <= 0.0:
+            raise ValueError("graphlet_logit_epsilon must be positive.")
+        self.graphlet_slices: tuple[tuple[int, int], ...] = self._make_slices(
+            self.graphlet_block_widths
+        )
+        self.graphlet_heads = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(self.graph_dim + width, self.graphlet_dim),
+                    nn.SiLU(),
+                    nn.Dropout(self.graphlet_dropout_p),
+                    nn.Linear(self.graphlet_dim, self.graphlet_dim),
+                    nn.SiLU(),
+                    nn.Linear(self.graphlet_dim, width),
+                )
+                for width in self.graphlet_block_widths
+            ]
+        )
+
+    @staticmethod
+    def _make_slices(widths: Sequence[int]) -> tuple[tuple[int, int], ...]:
+        result: list[tuple[int, int]] = []
+        start = 0
+        for width in widths:
+            stop = start + int(width)
+            result.append((start, stop))
+            start = stop
+        return tuple(result)
+
+    @property
+    def graphlet_width(self) -> int:
+        return sum(self.graphlet_block_widths)
+
+    def _graphlet_outputs_from_graph_hidden(
+        self,
+        batch: TopologySpectralBatch,
+        graph_hidden: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        if batch.current_graphlet_logits is None or batch.graphlet_coordinate_mask is None:
+            raise ValueError(
+                "Spectral+graphlet prediction requires current graphlet CLR/logit inputs."
+            )
+        current = batch.current_graphlet_logits
+        mask = batch.graphlet_coordinate_mask.bool()
+        if current.shape[1] != self.graphlet_width:
+            raise ValueError(
+                f"Expected {self.graphlet_width} graphlet logits, received {current.shape[1]}."
+            )
+        clean_blocks: list[torch.Tensor] = []
+        probability_blocks: list[torch.Tensor] = []
+        residual_blocks: list[torch.Tensor] = []
+        for (start, stop), head in zip(self.graphlet_slices, self.graphlet_heads):
+            current_block = current[:, start:stop]
+            block_mask = mask[:, start:stop]
+            block_valid = block_mask.any(dim=1, keepdim=True)
+            residual = head(torch.cat([graph_hidden, current_block], dim=-1))
+            clean = current_block + residual
+            # CLR coordinates have an arbitrary additive gauge.  Centering makes
+            # the network target identifiable and matches the training transform.
+            clean = clean - clean.mean(dim=-1, keepdim=True)
+            clean = clean * block_valid.to(clean.dtype)
+            probability = torch.softmax(clean, dim=-1) * block_valid.to(clean.dtype)
+            clean_blocks.append(clean)
+            probability_blocks.append(probability)
+            residual_blocks.append(residual * block_valid.to(residual.dtype))
+        return {
+            "clean_graphlet_logits": torch.cat(clean_blocks, dim=-1),
+            "clean_graphlet_probabilities": torch.cat(probability_blocks, dim=-1),
+            "raw_graphlet_logit_residual": torch.cat(residual_blocks, dim=-1),
+            "graphlet_mask": mask,
+        }
+
+    def forward(self, batch: TopologySpectralBatch) -> dict[str, torch.Tensor]:
+        graph_hidden = self._graph_context(batch)
+        outputs = self._spectral_outputs_from_graph_hidden(batch, graph_hidden)
+        outputs.update(self._graphlet_outputs_from_graph_hidden(batch, graph_hidden))
+        return outputs
+
+    def loss(
+        self,
+        batch: TopologySpectralBatch,
+        *,
+        loss_weights: dict[str, float] | None = None,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        if (
+            batch.clean_graphlet_logits_target is None
+            or batch.clean_graphlet_probabilities_target is None
+            or batch.graphlet_coordinate_mask is None
+        ):
+            raise ValueError("Spectral+graphlet loss requires clean graphlet targets.")
+        weights = dict(loss_weights or {})
+        outputs = self.forward(batch)
+        spectral_total, metrics = self._spectral_loss_from_outputs(
+            batch,
+            outputs,
+            loss_weights=weights,
+        )
+        predicted_logits = outputs["clean_graphlet_logits"]
+        target_logits = batch.clean_graphlet_logits_target
+        predicted_prob = outputs["clean_graphlet_probabilities"]
+        target_prob = batch.clean_graphlet_probabilities_target
+        mask = batch.graphlet_coordinate_mask.bool()
+        mask_weight = mask.to(predicted_logits.dtype)
+        coordinate_count = mask_weight.sum().clamp_min(1.0)
+
+        graphlet_logit_loss = (
+            F.smooth_l1_loss(predicted_logits, target_logits, reduction="none")
+            * mask_weight
+        ).sum() / coordinate_count
+
+        probability_terms: list[torch.Tensor] = []
+        block_mae_terms: list[torch.Tensor] = []
+        for start, stop in self.graphlet_slices:
+            valid = mask[:, start:stop].any(dim=1)
+            if not torch.any(valid):
+                continue
+            pred = predicted_prob[valid, start:stop].clamp_min(1.0e-12)
+            target = target_prob[valid, start:stop]
+            target = target / target.sum(dim=-1, keepdim=True).clamp_min(1.0e-12)
+            # KL(target || prediction) is zero at a perfect prediction, unlike
+            # plain cross entropy whose entropy constant would otherwise make
+            # this auxiliary term difficult to interpret in training logs.
+            target_safe = target.clamp_min(1.0e-12)
+            probability_terms.append(
+                (target * (torch.log(target_safe) - torch.log(pred))).sum(dim=-1).mean()
+            )
+            block_mae_terms.append(torch.abs(pred - target).mean())
+        graphlet_probability_loss = (
+            torch.stack(probability_terms).mean()
+            if probability_terms
+            else predicted_logits.sum() * 0.0
+        )
+        probability_mae = (
+            torch.stack(block_mae_terms).mean()
+            if block_mae_terms
+            else predicted_logits.sum() * 0.0
+        )
+        graphlet_total = (
+            float(weights.get("graphlet_logit", 1.0)) * graphlet_logit_loss
+            + float(weights.get("graphlet_probability", 0.25)) * graphlet_probability_loss
+        )
+        total = spectral_total + graphlet_total
+        with torch.no_grad():
+            normalized_logit_rmse = torch.sqrt(
+                (((predicted_logits - target_logits).square()) * mask_weight).sum()
+                / coordinate_count
+            )
+            logit_mae = (
+                torch.abs(predicted_logits - target_logits) * mask_weight
+            ).sum() / coordinate_count
+        metrics = dict(metrics)
+        metrics.update(
+            {
+                "loss": float(total.detach().cpu()),
+                "spectral_component_loss": float(spectral_total.detach().cpu()),
+                "graphlet_component_loss": float(graphlet_total.detach().cpu()),
+                "graphlet_logit_loss": float(graphlet_logit_loss.detach().cpu()),
+                "graphlet_probability_loss": float(graphlet_probability_loss.detach().cpu()),
+                "graphlet_logit_rmse": float(normalized_logit_rmse.detach().cpu()),
+                "graphlet_logit_mae": float(logit_mae.detach().cpu()),
+                "graphlet_probability_mae": float(probability_mae.detach().cpu()),
+            }
+        )
+        return total, metrics
+
+    def model_config(self) -> dict[str, Any]:
+        config = super().model_config()
+        config.update(
+            {
+                "graphlet_block_widths": list(self.graphlet_block_widths),
+                "graphlet_dim": self.graphlet_dim,
+                "graphlet_dropout": self.graphlet_dropout_p,
+                "graphlet_logit_epsilon": self.graphlet_logit_epsilon,
+            }
+        )
+        return config
 
 def training_time_horizon_from_config(config: dict[str, Any] | None) -> int | None:
     """Return the horizon used to normalize the ``time`` feature during training.
@@ -509,3 +738,69 @@ def load_topology_spectral_checkpoint(
         checkpoint.get("summary_config", {}) or {}
     )
     return model, summary_config, checkpoint
+
+
+
+def save_topology_spectral_graphlet_checkpoint(
+    model: TopologySpectralGraphletTransformerPredictor,
+    path: str | Path,
+    *,
+    graphlet_basis: TopologyGraphletBasis,
+    summary_config: SummaryConfig | None = None,
+    config: dict[str, Any] | None = None,
+    report: dict[str, Any] | None = None,
+    training_time_horizon: int | None = None,
+) -> None:
+    path = Path(path)
+    ensure_dir(path.parent)
+    if training_time_horizon is None:
+        training_time_horizon = training_time_horizon_from_config(config)
+    if tuple(graphlet_basis.simplex_block_widths) != tuple(model.graphlet_block_widths):
+        raise ValueError("Graphlet basis simplex widths do not match the joint predictor.")
+    torch.save(
+        {
+            "format": TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT,
+            "pipeline_mode": "topology",
+            "guidance_mode": "spectral_graphlet",
+            "predictor_type": "spectral_graphlet_transformer",
+            "model_state_dict": model.state_dict(),
+            "model_config": model.model_config(),
+            "graphlet_basis": graphlet_basis.to_dict(),
+            "summary_config": (
+                dict(summary_config.__dict__) if summary_config is not None else {}
+            ),
+            "training_time_horizon": training_time_horizon,
+            "config": config or {},
+            "report": report or {},
+        },
+        path,
+    )
+
+
+def load_topology_spectral_graphlet_checkpoint(
+    path: str | Path,
+    *,
+    device: str | torch.device = "auto",
+) -> tuple[
+    TopologySpectralGraphletTransformerPredictor,
+    TopologyGraphletBasis,
+    SummaryConfig,
+    dict[str, Any],
+]:
+    resolved_device = resolve_torch_device(device) if isinstance(device, str) else device
+    checkpoint = torch.load(Path(path), map_location=resolved_device)
+    if checkpoint.get("format") != TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT:
+        raise ValueError(
+            "Checkpoint is not a topology spectral+graphlet predictor "
+            f"({TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT})."
+        )
+    basis = TopologyGraphletBasis.from_dict(dict(checkpoint.get("graphlet_basis", {}) or {}))
+    model = TopologySpectralGraphletTransformerPredictor(
+        **dict(checkpoint.get("model_config", {}) or {})
+    ).to(resolved_device)
+    if tuple(model.graphlet_block_widths) != tuple(basis.simplex_block_widths):
+        raise ValueError("Checkpoint graphlet model width does not match its stored basis.")
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+    summary_config = SummaryConfig.from_dict(checkpoint.get("summary_config", {}) or {})
+    return model, basis, summary_config, checkpoint

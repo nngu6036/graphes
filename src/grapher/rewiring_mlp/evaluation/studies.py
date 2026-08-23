@@ -1075,6 +1075,9 @@ _TOPOLOGY_STRUCTURAL_PIPELINE_FIELDS = frozenset(
 _TOPOLOGY_SPECTRAL_PIPELINE_FIELDS = frozenset(
     {*_TOPOLOGY_COMMON_PIPELINE_FIELDS, "spectral_error"}
 )
+_TOPOLOGY_SPECTRAL_GRAPHLET_PIPELINE_FIELDS = frozenset(
+    {*_TOPOLOGY_COMMON_PIPELINE_FIELDS, "spectral_error", "graphlet_error"}
+)
 _ENDPOINT_PIPELINE_FIELDS = frozenset(
     key for key in _PIPELINE_FIELD_GROUPS if key != "spectral_error"
 )
@@ -1127,7 +1130,14 @@ def aggregate_pipeline_diagnostics(
                 "guidance records."
             )
         guidance_mode = next(iter(guidance_modes))
-        if guidance_mode in {"spectral", "spectral_transformer", "spectral_guidance"}:
+        if guidance_mode in {
+            "spectral_graphlet",
+            "spectral_graphlet_transformer",
+            "spectral_graphlet_diffusion",
+            "dual_diffusion",
+        }:
+            required_fields = _TOPOLOGY_SPECTRAL_GRAPHLET_PIPELINE_FIELDS
+        elif guidance_mode in {"spectral", "spectral_transformer", "spectral_guidance"}:
             required_fields = _TOPOLOGY_SPECTRAL_PIPELINE_FIELDS
         else:
             required_fields = _TOPOLOGY_STRUCTURAL_PIPELINE_FIELDS

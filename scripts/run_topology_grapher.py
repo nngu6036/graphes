@@ -37,12 +37,18 @@ from grapher.rewiring_mlp.generic.refiner import (
 )
 from grapher.rewiring_mlp.generic.spectral_model import (
     TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT,
+    TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT,
     load_topology_spectral_checkpoint,
+    load_topology_spectral_graphlet_checkpoint,
     training_time_horizon_from_config,
 )
 from grapher.rewiring_mlp.generic.spectral_refiner import (
     SpectralRefinerConfig,
     refine_graph_with_spectral_predictions,
+)
+from grapher.rewiring_mlp.generic.spectral_graphlet_refiner import (
+    SpectralGraphletRefinerConfig,
+    refine_graph_with_spectral_graphlet_predictions,
 )
 from grapher.utils.io import (
     apply_config_overrides,
@@ -89,7 +95,8 @@ def main() -> None:
             "Generate generic graph topologies with DH-VAE/empirical degrees, "
             "connected Havel-Hakimi construction, and GraphER rewiring. The "
             "refiner is selected automatically from the checkpoint format "
-            "(structural-summary or Spectral Transformer guidance)."
+            "(structural-summary, spectral, or joint spectral + graphlet-logit "
+            "diffusion guidance)."
         )
     )
     parser.add_argument("--config", required=True)
@@ -160,7 +167,31 @@ def main() -> None:
     predictor_clustering_error: float | None = None
     predictor_orbit_log_error: float | None = None
     predictor_spectral_error: float | None = None
-    if checkpoint_format == TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT:
+    if checkpoint_format == TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT:
+        guidance_mode = "spectral_graphlet"
+        model, graphlet_basis, summary_config, checkpoint = (
+            load_topology_spectral_graphlet_checkpoint(
+                checkpoint_path,
+                device=device,
+            )
+        )
+        predictor_report = checkpoint.get("report", {}) or {}
+        predictor_spectral_error_raw = predictor_report.get(
+            "val_spectral_normalized_rmse",
+            predictor_report.get("val_spectral_normalized_mae"),
+        )
+        predictor_graphlet_error_raw = predictor_report.get(
+            "val_graphlet_logit_rmse",
+            predictor_report.get("val_graphlet_probability_mae"),
+        )
+        if predictor_spectral_error_raw is None or predictor_graphlet_error_raw is None:
+            raise ValueError(
+                "The spectral+graphlet checkpoint is missing held-out spectral "
+                "or graphlet-logit validation error."
+            )
+        predictor_spectral_error = float(predictor_spectral_error_raw)
+        predictor_graphlet_error = float(predictor_graphlet_error_raw)
+    elif checkpoint_format == TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT:
         guidance_mode = "spectral"
         model, summary_config, checkpoint = load_topology_spectral_checkpoint(
             checkpoint_path,
@@ -199,8 +230,9 @@ def main() -> None:
     else:
         raise ValueError(
             f"Unsupported topology checkpoint format {checkpoint_format!r}. "
-            f"Expected {TOPOLOGY_CHECKPOINT_FORMAT!r} or "
-            f"{TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT!r}."
+            f"Expected {TOPOLOGY_CHECKPOINT_FORMAT!r}, "
+            f"{TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT!r}, or "
+            f"{TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT!r}."
         )
     model_device = next(model.parameters()).device
 
@@ -234,7 +266,7 @@ def main() -> None:
         raise ValueError("Topology generation requires constructor.ensure_connected.")
 
     refiner_cfg = dict(config.get("topology_refiner", {}) or {})
-    if guidance_mode == "spectral":
+    if guidance_mode in {"spectral", "spectral_graphlet"}:
         # The `time` feature must be normalized by the horizon used during
         # training (topology_trajectory.steps), otherwise overriding
         # `topology_refiner.steps` silently rescales a model input.  Prefer the
@@ -247,8 +279,9 @@ def main() -> None:
                 checkpoint.get("config", {}) or {}
             )
         if training_horizon is None:
+            prefix = "[GraphER/SpectralGraphlet]" if guidance_mode == "spectral_graphlet" else "[GraphER/Spectral]"
             print(
-                "[GraphER/Spectral] WARNING: this checkpoint does not record a "
+                f"{prefix} WARNING: this checkpoint does not record a "
                 "training time horizon. Falling back to topology_refiner.steps "
                 f"({refiner_cfg.get('steps')}) as the `time` denominator. If "
                 "the checkpoint was trained with a different "
@@ -270,30 +303,52 @@ def main() -> None:
             refiner_cfg["time_horizon"] = training_horizon
             generation_steps = int(refiner_cfg.get("steps", 24))
             if generation_steps != training_horizon:
+                prefix = "[GraphER/SpectralGraphlet]" if guidance_mode == "spectral_graphlet" else "[GraphER/Spectral]"
                 print(
-                    "[GraphER/Spectral] topology_refiner.steps="
+                    f"{prefix} topology_refiner.steps="
                     f"{generation_steps} differs from the training horizon "
                     f"{training_horizon}; using {training_horizon} as the "
                     "`time` denominator so the step budget stays a pure "
                     "compute knob.",
                     flush=True,
                 )
-        refiner_settings: Any = SpectralRefinerConfig.from_dict(refiner_cfg)
+        if guidance_mode == "spectral_graphlet":
+            refiner_settings: Any = SpectralGraphletRefinerConfig.from_dict(refiner_cfg)
+            if graphlet_basis is None:
+                raise ValueError("Spectral+graphlet checkpoint is missing its graphlet basis.")
+            print(
+                "[GraphER/SpectralGraphlet] loaded joint Spectral Transformer + "
+                f"graphlet-logit checkpoint format={checkpoint_format} device={model_device}",
+                flush=True,
+            )
+            print(
+                "[GraphER/SpectralGraphlet] guidance: spectrum supplies global "
+                "denoising, graphlet CLR/logit diffusion supplies local higher-order "
+                "denoising, and exact local graphlet deltas score valid degree-preserving swaps.",
+                flush=True,
+            )
+        else:
+            refiner_settings = SpectralRefinerConfig.from_dict(refiner_cfg)
+            print(
+                "[GraphER/Spectral] loaded Spectral Transformer checkpoint "
+                f"format={checkpoint_format} device={model_device}",
+                flush=True,
+            )
+            print(
+                "[GraphER/Spectral] guidance: model predicts the full clean Laplacian "
+                "eigenvalue vector jointly; the bridge derives the next spectral target; "
+                "valid degree-preserving swaps project the graph toward that target.",
+                flush=True,
+            )
         if not refiner_settings.preserve_connectivity:
-            raise ValueError("Spectral topology generation requires connectivity preservation.")
-        print(
-            "[GraphER/Spectral] loaded Spectral Transformer checkpoint "
-            f"format={checkpoint_format} device={model_device}",
-            flush=True,
+            raise ValueError("Spectral-family topology generation requires connectivity preservation.")
+        debug_prefix = (
+            "[GraphER/SpectralGraphlet]"
+            if guidance_mode == "spectral_graphlet"
+            else "[GraphER/Spectral]"
         )
         print(
-            "[GraphER/Spectral] guidance: model predicts the full clean Laplacian "
-            "eigenvalue vector jointly; the bridge derives the next spectral target; "
-            "valid degree-preserving swaps project the graph toward that target.",
-            flush=True,
-        )
-        print(
-            "[GraphER/Spectral] debug="
+            f"{debug_prefix} debug="
             f"{refiner_settings.debug_enabled} print_every={refiner_settings.debug_print_every} "
             f"top_candidates={refiner_settings.debug_top_candidates} "
             f"spectrum_values={refiner_settings.debug_spectrum_values}",
@@ -347,7 +402,22 @@ def main() -> None:
                 f"rejections={dict(generation_rejections)}."
             )
 
-        if guidance_mode == "spectral":
+        if guidance_mode == "spectral_graphlet":
+            assert graphlet_basis is not None
+            refined, trace = refine_graph_with_spectral_graphlet_predictions(
+                coarse,
+                model=model,
+                graphlet_basis=graphlet_basis,
+                refiner_config=refiner_settings,
+                device=model_device,
+                rng=np.random.default_rng(refiner_graph_seeds[index]),
+                return_trace=True,
+                debug_context=(
+                    f"graph={index + 1}/{num_generate} "
+                    f"n={coarse.number_of_nodes()} m={coarse.number_of_edges()}"
+                ),
+            )
+        elif guidance_mode == "spectral":
             refined, trace = refine_graph_with_spectral_predictions(
                 coarse,
                 model=model,
@@ -454,7 +524,10 @@ def main() -> None:
             "end_to_end_yield": float(1.0 / generation_attempt),
             "rejection_reasons": dict(sorted(rejection_reasons.items())),
         }
-        if guidance_mode == "spectral":
+        if guidance_mode == "spectral_graphlet":
+            pipeline_record["spectral_error"] = float(predictor_spectral_error)
+            pipeline_record["graphlet_error"] = float(predictor_graphlet_error)
+        elif guidance_mode == "spectral":
             pipeline_record["spectral_error"] = float(predictor_spectral_error)
         else:
             pipeline_record.update(
@@ -582,7 +655,35 @@ def main() -> None:
         "runtime_seconds": float(time.perf_counter() - run_started),
         "inline_evaluation": inline_evaluation,
     }
-    if guidance_mode == "spectral":
+    if guidance_mode == "spectral_graphlet":
+        diagnostics.update(
+            {
+                "mean_accepted_spectral_gain": _mean_or_zero(accepted_rows, "spectral_gain"),
+                "mean_accepted_clean_spectral_gain": _mean_or_zero(accepted_rows, "clean_spectral_gain"),
+                "mean_accepted_graphlet_gain": _mean_or_zero(accepted_rows, "graphlet_gain"),
+                "mean_accepted_clean_graphlet_gain": _mean_or_zero(accepted_rows, "clean_graphlet_gain"),
+                "mean_projection_residual": _mean_or_zero(accepted_rows, "projection_residual"),
+                "mean_spectral_projection_residual": _mean_or_zero(accepted_rows, "spectral_projection_residual"),
+                "mean_graphlet_projection_residual": _mean_or_zero(accepted_rows, "graphlet_projection_residual"),
+                "mean_spectral_weight": _mean_or_zero(accepted_rows, "spectral_weight"),
+                "mean_graphlet_weight": _mean_or_zero(accepted_rows, "graphlet_weight"),
+                "mean_spectral_clean_mix": _mean_or_zero(accepted_rows, "spectral_clean_mix"),
+                "mean_graphlet_clean_mix": _mean_or_zero(accepted_rows, "graphlet_clean_mix"),
+                "mean_bridge_expansions": _mean_or_zero(accepted_rows, "bridge_expansions"),
+                "predictor_spectral_normalized_error": float(predictor_spectral_error),
+                "predictor_graphlet_logit_error": float(predictor_graphlet_error),
+                "spectral_distance": refiner_settings.distance,
+                "graphlet_distance": refiner_settings.graphlet_distance,
+                "spectral_normalization": refiner_settings.normalization,
+                "spectral_bridge_schedule": refiner_settings.bridge_schedule,
+                "graphlet_bridge_schedule": refiner_settings.graphlet_bridge_schedule,
+                "global_to_local_schedule": refiner_settings.guidance_weight_schedule,
+                "spectral_debug_enabled": refiner_settings.debug_enabled,
+            }
+        )
+        refresh_on_plateau = refiner_settings.refresh_on_prediction_plateau
+        report_format = "topology_spectral_graphlet_generation_v1"
+    elif guidance_mode == "spectral":
         diagnostics.update(
             {
                 "mean_accepted_spectral_gain": _mean_or_zero(accepted_rows, "spectral_gain"),
