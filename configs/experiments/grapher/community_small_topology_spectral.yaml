@@ -1,0 +1,195 @@
+experiment: community_small_topology_spectral
+benchmark: community_small
+seed: 42
+
+pipeline:
+  stage: topology
+  factorization: dhvae_hh_then_spectral_transformer_guided_degree_rewiring
+
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  max_reference_graphs: null
+  tune_on_split: val
+  final_split: test
+
+dataset:
+  # Community-small retains the historical serialized dataset name `sbm`.
+  name: sbm
+  benchmark: community_small
+  config_path: configs/datasets/community_small.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+  max_val_graphs: null
+
+# Spectral guidance is meaningful only inside one degree fibre: rewiring cannot
+# change the indexed degree sequence.  Therefore each clean training graph is
+# paired with an HH realization of that same degree sequence.
+training_sources:
+  mode: target_degree_havel_hakimi
+
+# Retained only for the standard external evaluation settings saved in the
+# checkpoint/report. These graphlet/orbit quantities are NOT predictor targets
+# for the Spectral Transformer.
+graphlet_prediction:
+  estimator: exact_connected_local_delta
+  graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: null
+  clustering_summary: true
+  clustering_bins: 20
+  spectral_summary: false
+  motif_proxy: false
+  orbit_count: true
+
+# Eigenvalue-only guidance. The target is the complete clean combinatorial-
+# Laplacian spectrum. Eigenvectors are never predicted or constrained.
+spectral_prediction:
+  require_same_degree_sequence: true
+  distance: rmse
+  normalization: mean_degree
+  low_frequency_weight: 1.0
+  low_frequency_cutoff: 0
+
+# Teacher states are real connected graphs obtained through valid
+# degree-preserving swaps.  The oracle teacher uses the target CLEAN spectrum
+# only to construct useful intermediate states for x0-prediction training.
+topology_trajectory:
+  storage: eager
+  steps: 24
+  proposal_budget: 128
+  valid_candidate_budget: 32
+  states_per_graph: 8
+  paths_per_graph: 2
+  source_randomization_steps: 0
+  random_relabel_source: true
+
+  teacher_mode: soft
+  teacher_temperature: 0.25
+  teacher_top_k: 4
+  teacher_sample_actions: true
+  teacher_min_improvement: 0.00000001
+  target_tolerance: 0.0
+
+  preserve_connectivity: true
+  ensure_connected_source: true
+  max_repair_trials: 10000
+
+topology_predictor:
+  type: spectral_transformer
+  checkpoint_path: outputs/topology_grapher/community_small_spectral/seed_42/checkpoint.pt
+  device: auto
+
+  # Graph-state encoder.
+  hidden_dim: 128
+  edge_dim: 64
+  graph_dim: 128
+  num_layers: 4
+
+  # Variable-length spectral tokens: one token/eigenvalue, padded+masked only
+  # for batching. All clean eigenvalues are predicted jointly in one forward pass.
+  spectral_dim: 128
+  spectral_layers: 3
+  spectral_heads: 4
+  spectral_ff_dim: 256
+  dropout: 0.0
+  min_gap: 0.000001
+  input_normalization: mean_degree
+
+  batch_size: 4
+  epochs: 100
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  loss_weights:
+    spectrum: 1.0
+    # Degree-preserving swaps also fix sum(lambda_i^2)=sum(d_i^2)+2m.
+    moment2: 0.1
+    low_frequency: 0.0
+    low_frequency_k: 4
+  progress_interval: 5
+
+generation:
+  degree_source: learned
+  num_generate: 1024
+  max_attempts_per_graph: 8
+  write_legacy_hybrid_alias: false
+
+degree_generator:
+  enabled: true
+  type: degree_histogram_vae
+  checkpoint_path: outputs/baselines/dhvae_hh/community_small/seed_42/train/checkpoints/checkpoint.pt
+  device: auto
+  deterministic: false
+  sample_num_nodes: empirical
+  max_resample: 500
+  parity_conditioned: true
+  max_parity_resample: 64
+  postprocess_policy: reject_only
+  fallback: error
+
+constructor:
+  type: havel_hakimi
+  ensure_connected: true
+  random_relabel: true
+  max_repair_trials: 10000
+
+topology_refiner:
+  mode: spectral
+  steps: 24
+  proposal_budget: 128
+  valid_candidate_budget: 32
+
+  preserve_connectivity: true
+  reject_revisited_states: true
+  selection: greedy
+  temperature: 0.1
+  accept_only_improving: true
+  min_improvement: 0.00000001
+  min_relative_improvement: 0.0001
+  relative_improvement_epsilon: 0.000000000001
+
+  # The predictor estimates the final clean spectrum. This scheduler converts
+  # that x0 prediction into the desired NEXT spectrum; rewiring projects the
+  # actual graph onto the closest reachable degree-preserving state.
+  spectral_guidance:
+    distance: rmse
+    normalization: mean_degree
+    low_frequency_weight: 1.0
+    low_frequency_cutoff: 0
+    schedule: linear
+    min_clean_mix: 0.15
+    max_clean_mix: 1.0
+    power: 2.0
+    expand_on_plateau: true
+    plateau_expand_factor: 2.0
+    max_plateau_expansions: 4
+
+  # Refresh the clean-spectrum prediction after every accepted swap by default.
+  # This remains generation-only and can be overridden with --set.
+  refresh_prediction_every: 1
+  refresh_on_plateau: true
+
+  # Detailed per-step generation log. Disable for large benchmark runs with:
+  #   --set topology_refiner.debug.enabled=false
+  debug:
+    enabled: true
+    print_every: 1
+    top_candidates: 3
+    spectrum_values: 12
+    store_spectra: false
+
+evaluation:
+  inline_during_generation: false
+  orca_exec: null
+  compute_orbit: true
+  compute_graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 8192

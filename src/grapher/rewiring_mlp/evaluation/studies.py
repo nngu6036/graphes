@@ -1051,6 +1051,7 @@ _PIPELINE_FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "predictor_nll": ("predictor_nll", "nll"),
     "predictor_macro_f1": ("predictor_macro_f1", "macro_f1"),
     "graphlet_error": ("graphlet_error",),
+    "spectral_error": ("spectral_error",),
     "consistency_residual": ("consistency_residual",),
     "invariant_feasible": ("invariant_feasible", "invariant_feasibility"),
     "constructor_success": ("constructor_success",),
@@ -1059,9 +1060,8 @@ _PIPELINE_FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "fallback_used": ("fallback_used", "silent_fallback"),
 }
 
-_TOPOLOGY_PIPELINE_FIELDS = frozenset(
+_TOPOLOGY_COMMON_PIPELINE_FIELDS = frozenset(
     {
-        "graphlet_error",
         "invariant_feasible",
         "constructor_success",
         "accepted_swaps",
@@ -1069,7 +1069,15 @@ _TOPOLOGY_PIPELINE_FIELDS = frozenset(
         "fallback_used",
     }
 )
-_ENDPOINT_PIPELINE_FIELDS = frozenset(_PIPELINE_FIELD_GROUPS)
+_TOPOLOGY_STRUCTURAL_PIPELINE_FIELDS = frozenset(
+    {*_TOPOLOGY_COMMON_PIPELINE_FIELDS, "graphlet_error"}
+)
+_TOPOLOGY_SPECTRAL_PIPELINE_FIELDS = frozenset(
+    {*_TOPOLOGY_COMMON_PIPELINE_FIELDS, "spectral_error"}
+)
+_ENDPOINT_PIPELINE_FIELDS = frozenset(
+    key for key in _PIPELINE_FIELD_GROUPS if key != "spectral_error"
+)
 
 
 def _first_present(record: Mapping[str, Any], names: Sequence[str]) -> Any | None:
@@ -1109,7 +1117,20 @@ def aggregate_pipeline_diagnostics(
         )
     pipeline_mode = next(iter(pipeline_modes))
     if pipeline_mode == "topology":
-        required_fields = _TOPOLOGY_PIPELINE_FIELDS
+        guidance_modes = {
+            str(record.get("guidance_mode", "structural_summary")).lower()
+            for record in records
+        }
+        if len(guidance_modes) != 1:
+            raise ValueError(
+                "Topology pipeline diagnostics cannot mix spectral and structural "
+                "guidance records."
+            )
+        guidance_mode = next(iter(guidance_modes))
+        if guidance_mode in {"spectral", "spectral_transformer", "spectral_guidance"}:
+            required_fields = _TOPOLOGY_SPECTRAL_PIPELINE_FIELDS
+        else:
+            required_fields = _TOPOLOGY_STRUCTURAL_PIPELINE_FIELDS
     elif pipeline_mode in {"endpoint", "attributed", "hybrid"}:
         required_fields = _ENDPOINT_PIPELINE_FIELDS
     else:

@@ -24,6 +24,16 @@ from grapher.rewiring_mlp.generic.model import (
     TopologyGraphletPredictor,
     save_topology_checkpoint,
 )
+from grapher.rewiring_mlp.generic.spectral_data import (
+    TopologySpectralTrajectoryIterableDataset,
+    build_spectral_examples,
+    collate_spectral_examples,
+)
+from grapher.rewiring_mlp.generic.spectral_model import (
+    TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT,
+    TopologySpectralTransformerPredictor,
+    save_topology_spectral_checkpoint,
+)
 from grapher.rewiring_mlp.generic.training_sources import (
     build_completed_base_training_pairs,
 )
@@ -31,12 +41,16 @@ from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir, load_yaml, save_json
 
 
+_SPECTRAL_TYPES = {"spectral", "spectral_transformer", "spectrum_transformer"}
+
+
 def _mean_metrics(rows: list[dict[str, float]]) -> dict[str, float]:
     if not rows:
         return {}
+    keys = sorted(set.intersection(*(set(row) for row in rows)))
     return {
-        key: float(np.mean([row[key] for row in rows]))
-        for key in rows[0]
+        key: float(np.mean([float(row[key]) for row in rows]))
+        for key in keys
     }
 
 
@@ -46,9 +60,7 @@ def _limited(values: list[Any], limit: int | None) -> list[Any]:
     return values[: int(limit)]
 
 
-def _streaming_teacher_report(
-    dataset: TopologyTrajectoryIterableDataset,
-) -> dict[str, Any]:
+def _streaming_teacher_report(dataset: Any) -> dict[str, Any]:
     rows = list(dataset.last_diagnostics)
     report: dict[str, Any] = {
         "storage": "streaming",
@@ -64,6 +76,8 @@ def _streaming_teacher_report(
         "mean_final_teacher_structural_discrepancy",
         "mean_initial_graphlet_discrepancy",
         "mean_final_teacher_graphlet_discrepancy",
+        "mean_initial_spectral_discrepancy",
+        "mean_final_teacher_spectral_discrepancy",
         "mean_accepted_teacher_steps",
         "teacher_stop_rate",
         "mean_valid_candidates",
@@ -78,7 +92,7 @@ def _streaming_teacher_report(
     return report
 
 
-def _run_epoch(
+def _run_structural_epoch(
     model: TopologyGraphletPredictor,
     loader: DataLoader,
     *,
@@ -111,11 +125,39 @@ def _run_epoch(
     return _mean_metrics(rows)
 
 
+def _run_spectral_epoch(
+    model: TopologySpectralTransformerPredictor,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+    optimizer: torch.optim.Optimizer | None,
+    loss_weights: dict[str, float],
+) -> dict[str, float]:
+    training = optimizer is not None
+    model.train(training)
+    rows: list[dict[str, float]] = []
+    context = torch.enable_grad() if training else torch.no_grad()
+    with context:
+        for batch in loader:
+            batch = batch.to(device)
+            loss, metrics = model.loss(batch, loss_weights=loss_weights)
+            if training:
+                assert optimizer is not None
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                optimizer.step()
+            rows.append(metrics)
+    if not rows:
+        raise RuntimeError("The spectral topology trajectory produced no examples.")
+    return _mean_metrics(rows)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Train the GraphER/Rewiring-MLP structural-summary predictor from "
-            "completed outputs of explicitly declared base generators."
+            "Train GraphER topology guidance. Supports the maintained structural-"
+            "summary predictor and the variable-length Spectral Transformer."
         )
     )
     parser.add_argument("--config", required=True)
@@ -129,15 +171,27 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_yaml(args.config)
-    pipeline_stage = str(
-        (config.get("pipeline", {}) or {}).get("stage", "topology")
-    ).lower()
+    pipeline_stage = str((config.get("pipeline", {}) or {}).get("stage", "topology")).lower()
     if pipeline_stage != "topology":
         raise ValueError("train_topology_grapher.py requires pipeline.stage: topology.")
     if config.get("categorical_state") or config.get("endpoint_predictor"):
         raise ValueError(
             "Topology training cannot define categorical_state or endpoint_predictor. "
             "Use the legacy attributed script until the attribute stage is migrated."
+        )
+
+    predictor_cfg = dict(config.get("topology_predictor", {}) or {})
+    predictor_type = str(predictor_cfg.get("type", "structural_summary")).lower()
+    spectral_mode = predictor_type in _SPECTRAL_TYPES
+    if not spectral_mode and predictor_type not in {
+        "structural_summary",
+        "graphlet",
+        "graphlet_predictor",
+        "topology_graphlet",
+    }:
+        raise ValueError(
+            "Unknown topology_predictor.type. Use structural_summary or "
+            "spectral_transformer."
         )
 
     seed = int(args.seed if args.seed is not None else config.get("seed", 0))
@@ -167,68 +221,79 @@ def main() -> None:
     if not train_graphs or not val_graphs:
         raise ValueError("Training and validation graph splits must be non-empty.")
 
+    # Keep SummaryConfig in spectral checkpoints so existing evaluation code can
+    # use the same graphlet/orbit settings. It is not a Spectral Transformer target.
     summary_data = dict(config.get("graphlet_prediction", {}) or {})
     if bool(summary_data.get("attributed", False)):
         raise ValueError("The generic topology stage cannot use attributed graphlets.")
-    if str(
-        summary_data.get("estimator", "exact_connected_local_delta")
-    ).lower() != "exact_connected_local_delta":
-        raise ValueError(
-            "Topology training requires estimator: exact_connected_local_delta."
-        )
-    summary_data["graphlet_history"] = True
     summary_cfg = SummaryConfig.from_dict(summary_data, train_graphs)
-    if summary_cfg.graphlet_k_min < 3:
-        raise ValueError("Topology structural prediction requires graphlet_k_min >= 3.")
-    graphlet_basis = TopologyGraphletBasis.fit_from_graphs(
-        train_graphs,
-        summary_data,
-        attributed=False,
-        seed=seed,
-    )
-    if summary_cfg.orbit_count and not {"3", "4"}.issubset(
-        set(graphlet_basis.sizes)
-    ):
-        raise ValueError(
-            "Orbit supervision requires graphlet_prediction to include sizes 3 and 4."
+
+    graphlet_basis: TopologyGraphletBasis | None = None
+    if not spectral_mode:
+        if str(summary_data.get("estimator", "exact_connected_local_delta")).lower() != "exact_connected_local_delta":
+            raise ValueError(
+                "Topology structural training requires estimator: "
+                "exact_connected_local_delta."
+            )
+        summary_data["graphlet_history"] = True
+        summary_cfg = SummaryConfig.from_dict(summary_data, train_graphs)
+        if summary_cfg.graphlet_k_min < 3:
+            raise ValueError("Topology structural prediction requires graphlet_k_min >= 3.")
+        graphlet_basis = TopologyGraphletBasis.fit_from_graphs(
+            train_graphs,
+            summary_data,
+            attributed=False,
+            seed=seed,
         )
+        if summary_cfg.orbit_count and not {"3", "4"}.issubset(set(graphlet_basis.sizes)):
+            raise ValueError(
+                "Orbit supervision requires graphlet_prediction to include sizes 3 and 4."
+            )
 
     source_cfg_raw = config.get("training_sources")
     if not isinstance(source_cfg_raw, dict):
-        raise ValueError(
-            "Topology-corrector training now requires training_sources with "
-            "mode: completed_base_outputs and at least one declared base-generator "
-            "manifest. The implicit Havel--Hakimi training source is disabled."
-        )
-    source_mode = str(
-        source_cfg_raw.get("mode", "completed_base_outputs")
-    ).lower()
+        raise ValueError("topology training requires a training_sources mapping.")
+    source_mode = str(source_cfg_raw.get("mode", "completed_base_outputs")).lower()
     if source_mode == "completed_base_outputs":
-        train_items, val_items, source_report = (
-            build_completed_base_training_pairs(
-                train_graphs,
-                val_graphs,
-                config=source_cfg_raw,
-                seed=seed,
-            )
+        train_items, val_items, source_report = build_completed_base_training_pairs(
+            train_graphs,
+            val_graphs,
+            config=source_cfg_raw,
+            seed=seed,
         )
+    elif source_mode in {"target_degree_havel_hakimi", "spectral_havel_hakimi"}:
+        if not spectral_mode:
+            raise ValueError(
+                "training_sources.mode: target_degree_havel_hakimi is reserved for "
+                "spectral_transformer training because the clean spectrum must lie "
+                "in the same degree fibre as the HH source."
+            )
+        train_items = train_graphs
+        val_items = val_graphs
+        source_report = {
+            "format": "target_degree_havel_hakimi_source_v1",
+            "mode": "target_degree_havel_hakimi",
+            "same_degree_sequence_by_construction": True,
+            "description": (
+                "Each target graph is paired with a connected Havel-Hakimi "
+                "realization of its own degree sequence."
+            ),
+        }
     elif source_mode == "legacy_havel_hakimi":
-        # The fallback is intentionally explicit and is retained only for
-        # reproducing old checkpoints, not for the post-correction protocol.
         train_items = train_graphs
         val_items = val_graphs
         source_report = {
             "format": "legacy_havel_hakimi_source_v1",
             "mode": source_mode,
             "warning": (
-                "This mode does not train on completed outputs from the declared "
-                "base generators."
+                "Compatibility mode. For new spectral training prefer "
+                "target_degree_havel_hakimi."
             ),
         }
     else:
         raise ValueError(
-            "training_sources.mode must be completed_base_outputs or the explicit "
-            "legacy_havel_hakimi compatibility mode."
+            "training_sources.mode must be completed_base_outputs, "
+            "target_degree_havel_hakimi (spectral), or legacy_havel_hakimi."
         )
 
     trajectory_cfg = dict(config.get("topology_trajectory", {}) or {})
@@ -241,9 +306,7 @@ def main() -> None:
     if misplaced_horizon_keys:
         raise ValueError(
             "Adaptive/fixed prediction horizons are generation-only. Remove "
-            "these keys from topology_trajectory: "
-            f"{sorted(misplaced_horizon_keys)}. Training teacher trajectories "
-            "always advance one accepted rewiring action per teacher step."
+            f"these keys from topology_trajectory: {sorted(misplaced_horizon_keys)}."
         )
     if not bool(trajectory_cfg.get("ensure_connected_source", True)) or not bool(
         trajectory_cfg.get("preserve_connectivity", True)
@@ -255,12 +318,6 @@ def main() -> None:
     storage_mode = str(trajectory_cfg.get("storage", "eager")).lower()
     if storage_mode not in {"eager", "streaming"}:
         raise ValueError("topology_trajectory.storage must be eager or streaming.")
-    print(
-        f"Preparing {storage_mode} topology trajectories "
-        f"(train_pairs={len(train_items)}, val_pairs={len(val_items)}, "
-        f"source_mode={source_mode})...",
-        flush=True,
-    )
     if source_mode == "completed_base_outputs" and int(
         trajectory_cfg.get("source_randomization_steps", 0)
     ) != 0:
@@ -268,86 +325,153 @@ def main() -> None:
             "topology_trajectory.source_randomization_steps must be 0 when "
             "training from completed base-generator outputs."
         )
-    if storage_mode == "streaming":
-        train_examples = TopologyTrajectoryIterableDataset(
-            train_items,
-            summary_config=summary_cfg,
-            graphlet_basis=graphlet_basis,
-            trajectory_config=trajectory_cfg,
-            seed=seed,
-            shuffle_graphs=True,
-        )
-        val_examples = TopologyTrajectoryIterableDataset(
-            val_items,
-            summary_config=summary_cfg,
-            graphlet_basis=graphlet_basis,
-            trajectory_config=trajectory_cfg,
-            seed=seed + 1,
-            shuffle_graphs=False,
-        )
-        train_teacher_report: dict[str, Any] = {"storage": "streaming"}
-        val_teacher_report: dict[str, Any] = {"storage": "streaming"}
-        num_train_examples = train_examples.estimated_examples
-        num_val_examples = val_examples.estimated_examples
+
+    guidance_name = "spectral_transformer" if spectral_mode else "structural_summary"
+    print(
+        f"Preparing {storage_mode} topology trajectories "
+        f"(guidance={guidance_name}, train_pairs={len(train_items)}, "
+        f"val_pairs={len(val_items)}, source_mode={source_mode})...",
+        flush=True,
+    )
+
+    spectral_cfg = dict(config.get("spectral_prediction", {}) or {})
+    if spectral_mode:
+        if storage_mode == "streaming":
+            train_examples = TopologySpectralTrajectoryIterableDataset(
+                train_items,
+                trajectory_config=trajectory_cfg,
+                spectral_config=spectral_cfg,
+                seed=seed,
+                shuffle_graphs=True,
+            )
+            val_examples = TopologySpectralTrajectoryIterableDataset(
+                val_items,
+                trajectory_config=trajectory_cfg,
+                spectral_config=spectral_cfg,
+                seed=seed + 1,
+                shuffle_graphs=False,
+            )
+            train_teacher_report: dict[str, Any] = {"storage": "streaming"}
+            val_teacher_report: dict[str, Any] = {"storage": "streaming"}
+            num_train_examples = train_examples.estimated_examples
+            num_val_examples = val_examples.estimated_examples
+        else:
+            train_examples, train_teacher_report = build_spectral_examples(
+                train_items,
+                trajectory_config=trajectory_cfg,
+                spectral_config=spectral_cfg,
+                seed=seed,
+            )
+            val_examples, val_teacher_report = build_spectral_examples(
+                val_items,
+                trajectory_config=trajectory_cfg,
+                spectral_config=spectral_cfg,
+                seed=seed + 1,
+            )
+            num_train_examples = len(train_examples)
+            num_val_examples = len(val_examples)
     else:
-        train_examples, train_teacher_report = build_topology_examples(
-            train_items,
-            summary_config=summary_cfg,
-            graphlet_basis=graphlet_basis,
-            trajectory_config=trajectory_cfg,
-            seed=seed,
-        )
-        val_examples, val_teacher_report = build_topology_examples(
-            val_items,
-            summary_config=summary_cfg,
-            graphlet_basis=graphlet_basis,
-            trajectory_config=trajectory_cfg,
-            seed=seed + 1,
-        )
-        num_train_examples = len(train_examples)
-        num_val_examples = len(val_examples)
+        assert graphlet_basis is not None
+        if storage_mode == "streaming":
+            train_examples = TopologyTrajectoryIterableDataset(
+                train_items,
+                summary_config=summary_cfg,
+                graphlet_basis=graphlet_basis,
+                trajectory_config=trajectory_cfg,
+                seed=seed,
+                shuffle_graphs=True,
+            )
+            val_examples = TopologyTrajectoryIterableDataset(
+                val_items,
+                summary_config=summary_cfg,
+                graphlet_basis=graphlet_basis,
+                trajectory_config=trajectory_cfg,
+                seed=seed + 1,
+                shuffle_graphs=False,
+            )
+            train_teacher_report = {"storage": "streaming"}
+            val_teacher_report = {"storage": "streaming"}
+            num_train_examples = train_examples.estimated_examples
+            num_val_examples = val_examples.estimated_examples
+        else:
+            train_examples, train_teacher_report = build_topology_examples(
+                train_items,
+                summary_config=summary_cfg,
+                graphlet_basis=graphlet_basis,
+                trajectory_config=trajectory_cfg,
+                seed=seed,
+            )
+            val_examples, val_teacher_report = build_topology_examples(
+                val_items,
+                summary_config=summary_cfg,
+                graphlet_basis=graphlet_basis,
+                trajectory_config=trajectory_cfg,
+                seed=seed + 1,
+            )
+            num_train_examples = len(train_examples)
+            num_val_examples = len(val_examples)
+
     print(
         "Topology examples (estimated for streaming): "
         f"train={num_train_examples} val={num_val_examples}",
         flush=True,
     )
 
-    predictor_cfg = dict(config.get("topology_predictor", {}) or {})
     device = resolve_torch_device(args.device or predictor_cfg.get("device", "auto"))
-    model = TopologyGraphletPredictor(
-        graphlet_slices=graphlet_basis.slices,
-        clustering_width=(
-            int(summary_cfg.clustering_bins)
-            if summary_cfg.clustering_summary
-            else 0
-        ),
-        orbit_width=(TOPOLOGY_ORBIT_WIDTH if summary_cfg.orbit_count else 0),
-        hidden_dim=int(predictor_cfg.get("hidden_dim", 128)),
-        edge_dim=int(predictor_cfg.get("edge_dim", 64)),
-        graph_dim=int(predictor_cfg.get("graph_dim", 128)),
-        num_layers=int(predictor_cfg.get("num_layers", 4)),
-        dropout=float(predictor_cfg.get("dropout", 0.0)),
-        min_concentration=float(predictor_cfg.get("min_concentration", 0.05)),
-        max_concentration=float(predictor_cfg.get("max_concentration", 50.0)),
-    ).to(device)
+    if spectral_mode:
+        model: Any = TopologySpectralTransformerPredictor(
+            hidden_dim=int(predictor_cfg.get("hidden_dim", 128)),
+            edge_dim=int(predictor_cfg.get("edge_dim", 64)),
+            graph_dim=int(predictor_cfg.get("graph_dim", 128)),
+            num_layers=int(predictor_cfg.get("num_layers", 4)),
+            spectral_dim=int(predictor_cfg.get("spectral_dim", 128)),
+            spectral_layers=int(predictor_cfg.get("spectral_layers", 3)),
+            spectral_heads=int(predictor_cfg.get("spectral_heads", 4)),
+            spectral_ff_dim=int(predictor_cfg.get("spectral_ff_dim", 256)),
+            dropout=float(predictor_cfg.get("dropout", 0.0)),
+            min_gap=float(predictor_cfg.get("min_gap", 1.0e-6)),
+            input_normalization=str(
+                predictor_cfg.get(
+                    "input_normalization",
+                    spectral_cfg.get("normalization", "mean_degree"),
+                )
+            ),
+        ).to(device)
+        collate_fn = collate_spectral_examples
+    else:
+        assert graphlet_basis is not None
+        model = TopologyGraphletPredictor(
+            graphlet_slices=graphlet_basis.slices,
+            clustering_width=(
+                int(summary_cfg.clustering_bins) if summary_cfg.clustering_summary else 0
+            ),
+            orbit_width=(TOPOLOGY_ORBIT_WIDTH if summary_cfg.orbit_count else 0),
+            hidden_dim=int(predictor_cfg.get("hidden_dim", 128)),
+            edge_dim=int(predictor_cfg.get("edge_dim", 64)),
+            graph_dim=int(predictor_cfg.get("graph_dim", 128)),
+            num_layers=int(predictor_cfg.get("num_layers", 4)),
+            dropout=float(predictor_cfg.get("dropout", 0.0)),
+            min_concentration=float(predictor_cfg.get("min_concentration", 0.05)),
+            max_concentration=float(predictor_cfg.get("max_concentration", 50.0)),
+        ).to(device)
+        collate_fn = collate_topology_examples
+
     batch_size = int(
-        args.batch_size
-        if args.batch_size is not None
-        else predictor_cfg.get("batch_size", 4)
+        args.batch_size if args.batch_size is not None else predictor_cfg.get("batch_size", 4)
     )
     train_loader = DataLoader(
         train_examples,
         batch_size=batch_size,
         shuffle=storage_mode == "eager",
         num_workers=0,
-        collate_fn=collate_topology_examples,
+        collate_fn=collate_fn,
     )
     val_loader = DataLoader(
         val_examples,
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
-        collate_fn=collate_topology_examples,
+        collate_fn=collate_fn,
     )
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -358,36 +482,65 @@ def main() -> None:
         str(key): float(value)
         for key, value in (predictor_cfg.get("loss_weights", {}) or {}).items()
     }
-    forbidden_loss_keys = {"node", "edge", "consistency"} & set(loss_weights)
-    if forbidden_loss_keys:
-        raise ValueError(
-            "Topology loss cannot contain endpoint terms: "
-            f"{sorted(forbidden_loss_keys)}"
-        )
-    active_loss_defaults = [
-        ("graphlet_mean", 1.0),
-        ("graphlet_distribution", 0.1),
-        ("graphlet_mass", 0.0),
-    ]
-    if summary_cfg.clustering_summary:
-        active_loss_defaults.extend(
-            [
-                ("clustering_mean", 1.0),
-                ("clustering_distribution", 0.1),
-            ]
-        )
-    if summary_cfg.orbit_count:
-        active_loss_defaults.append(("orbit", 1.0))
-    if not any(
-        float(loss_weights.get(key, default)) != 0.0
-        for key, default in active_loss_defaults
-    ):
-        raise ValueError("At least one topology structural loss must be active.")
-    target_epsilon = float(predictor_cfg.get("target_epsilon", 1.0e-5))
+
+    if spectral_mode:
+        forbidden_loss_keys = {
+            "node",
+            "edge",
+            "consistency",
+            "graphlet_mean",
+            "graphlet_distribution",
+            "clustering_mean",
+            "orbit",
+        } & set(loss_weights)
+        if forbidden_loss_keys:
+            raise ValueError(
+                "Spectral Transformer loss cannot contain structural-summary terms: "
+                f"{sorted(forbidden_loss_keys)}"
+            )
+        active_loss_defaults = [
+            ("spectrum", 1.0),
+            ("moment2", 0.1),
+            ("low_frequency", 0.0),
+        ]
+        if not any(
+            float(loss_weights.get(key, default)) != 0.0
+            for key, default in active_loss_defaults
+        ):
+            raise ValueError("At least one spectral prediction loss must be active.")
+        target_epsilon = None
+    else:
+        forbidden_loss_keys = {"node", "edge", "consistency"} & set(loss_weights)
+        if forbidden_loss_keys:
+            raise ValueError(
+                "Topology loss cannot contain endpoint terms: "
+                f"{sorted(forbidden_loss_keys)}"
+            )
+        active_loss_defaults = [
+            ("graphlet_mean", 1.0),
+            ("graphlet_distribution", 0.1),
+            ("graphlet_mass", 0.0),
+        ]
+        if summary_cfg.clustering_summary:
+            active_loss_defaults.extend(
+                [("clustering_mean", 1.0), ("clustering_distribution", 0.1)]
+            )
+        if summary_cfg.orbit_count:
+            active_loss_defaults.append(("orbit", 1.0))
+        if not any(
+            float(loss_weights.get(key, default)) != 0.0
+            for key, default in active_loss_defaults
+        ):
+            raise ValueError("At least one topology structural loss must be active.")
+        target_epsilon = float(predictor_cfg.get("target_epsilon", 1.0e-5))
 
     configured_checkpoint = predictor_cfg.get(
         "checkpoint_path",
-        "outputs/topology_grapher/sbm/seed_42/checkpoint.pt",
+        (
+            "outputs/topology_grapher/sbm_spectral/seed_42/checkpoint.pt"
+            if spectral_mode
+            else "outputs/topology_grapher/sbm/seed_42/checkpoint.pt"
+        ),
     )
     if args.output_dir:
         output_dir = ensure_dir(args.output_dir)
@@ -395,34 +548,71 @@ def main() -> None:
     else:
         checkpoint_path = Path(configured_checkpoint)
         output_dir = ensure_dir(checkpoint_path.parent)
-    epochs = int(
-        args.epochs if args.epochs is not None else predictor_cfg.get("epochs", 100)
-    )
+    epochs = int(args.epochs if args.epochs is not None else predictor_cfg.get("epochs", 100))
     progress_interval = max(int(predictor_cfg.get("progress_interval", 5)), 1)
+
+    print(
+        f"Training predictor={predictor_type} device={device} batch_size={batch_size} "
+        f"epochs={epochs} checkpoint={checkpoint_path}",
+        flush=True,
+    )
+    if spectral_mode:
+        print(
+            "Spectral Transformer: predicts all clean Laplacian eigenvalues jointly; "
+            "variable graph sizes are handled by padded spectral tokens + mask; "
+            "eigenvectors are not predicted.",
+            flush=True,
+        )
+
     history: list[dict[str, Any]] = []
     best_val = float("inf")
     best_epoch = 0
     for epoch in range(1, epochs + 1):
-        if isinstance(train_examples, TopologyTrajectoryIterableDataset):
+        if isinstance(
+            train_examples,
+            (TopologyTrajectoryIterableDataset, TopologySpectralTrajectoryIterableDataset),
+        ):
             train_examples.set_epoch(epoch - 1)
-        if isinstance(val_examples, TopologyTrajectoryIterableDataset):
+        if isinstance(
+            val_examples,
+            (TopologyTrajectoryIterableDataset, TopologySpectralTrajectoryIterableDataset),
+        ):
             val_examples.set_epoch(0)
-        train_metrics = _run_epoch(
-            model,
-            train_loader,
-            device=device,
-            optimizer=optimizer,
-            loss_weights=loss_weights,
-            target_epsilon=target_epsilon,
-        )
-        val_metrics = _run_epoch(
-            model,
-            val_loader,
-            device=device,
-            optimizer=None,
-            loss_weights=loss_weights,
-            target_epsilon=target_epsilon,
-        )
+
+        if spectral_mode:
+            train_metrics = _run_spectral_epoch(
+                model,
+                train_loader,
+                device=device,
+                optimizer=optimizer,
+                loss_weights=loss_weights,
+            )
+            val_metrics = _run_spectral_epoch(
+                model,
+                val_loader,
+                device=device,
+                optimizer=None,
+                loss_weights=loss_weights,
+            )
+        else:
+            assert target_epsilon is not None
+            train_metrics = _run_structural_epoch(
+                model,
+                train_loader,
+                device=device,
+                optimizer=optimizer,
+                loss_weights=loss_weights,
+                target_epsilon=target_epsilon,
+            )
+            val_metrics = _run_structural_epoch(
+                model,
+                val_loader,
+                device=device,
+                optimizer=None,
+                loss_weights=loss_weights,
+                target_epsilon=target_epsilon,
+            )
+
         row: dict[str, Any] = {
             "epoch": epoch,
             **{f"train_{key}": value for key, value in train_metrics.items()},
@@ -432,30 +622,90 @@ def main() -> None:
         if val_metrics["loss"] < best_val:
             best_val = float(val_metrics["loss"])
             best_epoch = epoch
-            save_topology_checkpoint(
-                model,
-                checkpoint_path,
-                graphlet_basis=graphlet_basis,
-                summary_config=summary_cfg,
-                config=config,
-                report=row,
-            )
+            if spectral_mode:
+                save_topology_spectral_checkpoint(
+                    model,
+                    checkpoint_path,
+                    summary_config=summary_cfg,
+                    config=config,
+                    report=row,
+                )
+            else:
+                assert graphlet_basis is not None
+                save_topology_checkpoint(
+                    model,
+                    checkpoint_path,
+                    graphlet_basis=graphlet_basis,
+                    summary_config=summary_cfg,
+                    config=config,
+                    report=row,
+                )
+
         if epoch == 1 or epoch % progress_interval == 0 or epoch == epochs:
-            print(
-                f"epoch={epoch:04d} "
-                f"train={train_metrics['loss']:.5f} "
-                f"val={val_metrics['loss']:.5f} "
-                f"graphlet_mae={val_metrics['graphlet_mae']:.5f} "
-                f"mass_mae={val_metrics['graphlet_mass_mae']:.5f} "
-                f"clustering_mae={val_metrics.get('clustering_mae', 0.0):.5f} "
-                f"orbit_log_mae={val_metrics.get('orbit_log_mae', 0.0):.5f}",
-                flush=True,
-            )
+            if spectral_mode:
+                print(
+                    f"epoch={epoch:04d} "
+                    f"train={train_metrics['loss']:.5f} "
+                    f"val={val_metrics['loss']:.5f} "
+                    f"spectral_nrmse={val_metrics['spectral_normalized_rmse']:.5f} "
+                    f"spectral_nmae={val_metrics['spectral_normalized_mae']:.5f} "
+                    f"spectral_mae={val_metrics['spectral_mae']:.5f} "
+                    f"moment2_rel={val_metrics['spectral_moment2_relative_error']:.5f} "
+                    f"trace_mae={val_metrics['spectral_trace_mae']:.3e}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"epoch={epoch:04d} "
+                    f"train={train_metrics['loss']:.5f} "
+                    f"val={val_metrics['loss']:.5f} "
+                    f"graphlet_mae={val_metrics['graphlet_mae']:.5f} "
+                    f"mass_mae={val_metrics['graphlet_mass_mae']:.5f} "
+                    f"clustering_mae={val_metrics.get('clustering_mae', 0.0):.5f} "
+                    f"orbit_log_mae={val_metrics.get('orbit_log_mae', 0.0):.5f}",
+                    flush=True,
+                )
+
+    streaming_types = (
+        TopologyTrajectoryIterableDataset,
+        TopologySpectralTrajectoryIterableDataset,
+    )
+    if spectral_mode:
+        predictor_targets: dict[str, Any] = {
+            "clean_laplacian_eigenvalues": True,
+            "prediction": "joint_one_shot",
+            "variable_length": "spectral_tokens_with_padding_mask",
+            "eigenvectors_predicted": False,
+            "lambda1_fixed_zero": True,
+            "sorted_by_positive_gaps": True,
+            "trace_sum_lambda_equals_2m": True,
+            "spectral_prediction": spectral_cfg,
+        }
+        graphlet_basis_report = None
+        report_format = "topology_spectral_training_v1"
+        checkpoint_format = TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT
+    else:
+        assert graphlet_basis is not None
+        predictor_targets = {
+            "graphlet_histogram": True,
+            "graphlet_connected_mass": True,
+            "clustering_histogram": bool(summary_cfg.clustering_summary),
+            "clustering_bins": (
+                int(summary_cfg.clustering_bins) if summary_cfg.clustering_summary else 0
+            ),
+            "orbit_count": bool(summary_cfg.orbit_count),
+            "orbit_width": TOPOLOGY_ORBIT_WIDTH if summary_cfg.orbit_count else 0,
+        }
+        graphlet_basis_report = graphlet_basis.to_dict()
+        report_format = "topology_structural_training_v2"
+        checkpoint_format = TOPOLOGY_CHECKPOINT_FORMAT
 
     report = {
-        "format": "topology_structural_training_v2",
+        "format": report_format,
         "pipeline_mode": "topology",
-        "checkpoint_format": TOPOLOGY_CHECKPOINT_FORMAT,
+        "guidance_mode": "spectral" if spectral_mode else "structural_summary",
+        "predictor_type": predictor_type,
+        "checkpoint_format": checkpoint_format,
         "best_epoch": best_epoch,
         "best_val_loss": best_val,
         "num_train_targets": len(train_graphs),
@@ -466,27 +716,16 @@ def main() -> None:
         "num_val_examples": num_val_examples,
         "train_teacher": (
             _streaming_teacher_report(train_examples)
-            if isinstance(train_examples, TopologyTrajectoryIterableDataset)
+            if isinstance(train_examples, streaming_types)
             else train_teacher_report
         ),
         "val_teacher": (
             _streaming_teacher_report(val_examples)
-            if isinstance(val_examples, TopologyTrajectoryIterableDataset)
+            if isinstance(val_examples, streaming_types)
             else val_teacher_report
         ),
-        "graphlet_basis": graphlet_basis.to_dict(),
-        "predictor_targets": {
-            "graphlet_histogram": True,
-            "graphlet_connected_mass": True,
-            "clustering_histogram": bool(summary_cfg.clustering_summary),
-            "clustering_bins": (
-                int(summary_cfg.clustering_bins)
-                if summary_cfg.clustering_summary
-                else 0
-            ),
-            "orbit_count": bool(summary_cfg.orbit_count),
-            "orbit_width": TOPOLOGY_ORBIT_WIDTH if summary_cfg.orbit_count else 0,
-        },
+        "graphlet_basis": graphlet_basis_report,
+        "predictor_targets": predictor_targets,
         "training_sources": source_report,
         "prediction_horizon_training": {
             "enabled": False,
@@ -503,7 +742,7 @@ def main() -> None:
         "history": history,
     }
     save_json(report, output_dir / "training_report.json")
-    print(f"Saved best Rewiring-MLP checkpoint: {checkpoint_path}", flush=True)
+    print(f"Saved best topology checkpoint: {checkpoint_path}", flush=True)
     print(f"Best epoch={best_epoch} val_loss={best_val:.6f}", flush=True)
 
 

@@ -514,6 +514,58 @@ A reproducibility config for the annealed variant is also provided at
 Training does not use this horizon block; teacher trajectories always advance
 one accepted rewiring action per step.
 
+### Alternative: Spectral Transformer-guided rewiring
+
+The spectral variant predicts the complete clean combinatorial-Laplacian
+eigenvalue vector jointly in one forward pass. Variable graph sizes are handled
+with one spectral token per eigenvalue plus padding masks; eigenvectors are not
+predicted. During generation, a bridge scheduler converts the clean-spectrum
+prediction into a next-step spectral target and valid double-edge swaps project
+the current graph toward that target while preserving every node degree and
+connectivity.
+
+Train the Spectral Transformer on HH realizations of each target graph's own
+degree sequence:
+
+```bash
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_spectral.yaml \
+  --output-dir outputs/topology_grapher/community_small_spectral/seed_42 \
+  --seed 42 \
+  --device gpu
+```
+
+Generate with per-step spectral debugging enabled by the supplied config:
+
+```bash
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_spectral.yaml \
+  --output-dir outputs/topology_generation/community_small_spectral/seed_42 \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
+```
+
+Debug lines are prefixed with `[GraphER/Spectral]` and report the current
+denoising step, prediction refresh/horizon, predicted clean spectrum, current
+spectrum, derived next target, bridge clean-mix/expansions, proposal and valid
+candidate counts, rejection reasons, top candidate spectral gains and
+projection residuals, and the accepted swap. For large production runs the log
+can be disabled without editing YAML:
+
+```bash
+--set topology_refiner.debug.enabled=false
+```
+
+Any spectral search/scheduler option can likewise be overridden from the command
+line, for example:
+
+```bash
+--set topology_refiner.steps=40 \
+--set topology_refiner.valid_candidate_budget=64 \
+--set topology_refiner.spectral_guidance.min_clean_mix=0.25
+```
+
 ### 5. Evaluate saved graphs
 
 ```bash

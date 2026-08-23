@@ -11,26 +11,37 @@ import networkx as nx
 import numpy as np
 import torch
 
+from grapher.data.io import load_dataset_splits
+from grapher.models.dhvae_hh.degree_sampler import (
+    EmpiricalDegreeSampler,
+    build_degree_sampler,
+)
 from grapher.models.dhvae_hh.havel_hakimi import (
     assert_constructor_validity,
     construct_coarse_graph,
 )
-from grapher.data.io import load_dataset_splits
+from grapher.properties.summary import configure_orca_executable
 from grapher.rewiring_mlp.evaluation.metrics import (
     degree_preservation_rate,
     degree_target_match_rate,
     evaluate_graph_sets,
 )
 from grapher.rewiring_mlp.evaluation.studies import aggregate_pipeline_diagnostics
-from grapher.models.dhvae_hh.degree_sampler import (
-    EmpiricalDegreeSampler,
-    build_degree_sampler,
+from grapher.rewiring_mlp.generic.model import (
+    TOPOLOGY_CHECKPOINT_FORMAT,
+    load_topology_checkpoint,
 )
-from grapher.properties.summary import configure_orca_executable
-from grapher.rewiring_mlp.generic.model import load_topology_checkpoint
 from grapher.rewiring_mlp.generic.refiner import (
     TopologyRefinerConfig,
     refine_graph_with_topology_predictions,
+)
+from grapher.rewiring_mlp.generic.spectral_model import (
+    TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT,
+    load_topology_spectral_checkpoint,
+)
+from grapher.rewiring_mlp.generic.spectral_refiner import (
+    SpectralRefinerConfig,
+    refine_graph_with_spectral_predictions,
 )
 from grapher.utils.io import (
     apply_config_overrides,
@@ -59,11 +70,25 @@ def _oracle_degree_summary(graph: nx.Graph) -> dict[str, Any]:
     }
 
 
+def _checkpoint_format(path: str | Path) -> str:
+    checkpoint = torch.load(Path(path), map_location="cpu")
+    if not isinstance(checkpoint, dict):
+        raise TypeError(f"Topology checkpoint must be a mapping: {path}")
+    return str(checkpoint.get("format", ""))
+
+
+def _mean_or_zero(rows: list[dict[str, Any]], key: str) -> float:
+    values = [float(row[key]) for row in rows if key in row and row[key] is not None]
+    return float(np.mean(values)) if values else 0.0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate generic graph topologies with DH-VAE, connected "
-            "Havel-Hakimi construction, and structural-summary GraphER rewiring."
+            "Generate generic graph topologies with DH-VAE/empirical degrees, "
+            "connected Havel-Hakimi construction, and GraphER rewiring. The "
+            "refiner is selected automatically from the checkpoint format "
+            "(structural-summary or Spectral Transformer guidance)."
         )
     )
     parser.add_argument("--config", required=True)
@@ -82,8 +107,8 @@ def main() -> None:
         help=(
             "Override any YAML option using a dotted path. Repeat this flag for "
             "multiple values, e.g. --set topology_refiner.steps=40 --set "
-            "topology_refiner.prediction_horizon.initial_k=4. Values are parsed "
-            "as YAML, so booleans/lists/null/numbers keep their types."
+            "topology_refiner.spectral_guidance.min_clean_mix=0.25. Values are "
+            "parsed as YAML, so booleans/lists/null/numbers keep their types."
         ),
     )
     args = parser.parse_args()
@@ -91,18 +116,13 @@ def main() -> None:
 
     config = load_yaml(args.config)
     apply_config_overrides(config, args.config_overrides)
-    pipeline_stage = str(
-        (config.get("pipeline", {}) or {}).get("stage", "topology")
-    ).lower()
+    pipeline_stage = str((config.get("pipeline", {}) or {}).get("stage", "topology")).lower()
     if pipeline_stage != "topology":
         raise ValueError("run_topology_grapher.py requires pipeline.stage: topology.")
     if config.get("categorical_state") or config.get("molecular_generation"):
         raise ValueError("The topology generator accepts generic datasets only.")
+
     seed = int(args.seed if args.seed is not None else config.get("seed", 0))
-    # Keep source construction statistically paired across refiner sweeps.
-    # Changing prediction horizon/candidate behavior may consume a different
-    # number of refiner RNG draws, so source and refiner randomness must not
-    # share one stream.
     seed_sequence = np.random.SeedSequence(seed)
     source_seed_sequence, refiner_seed_sequence = seed_sequence.spawn(2)
     source_rng = np.random.default_rng(source_seed_sequence)
@@ -125,8 +145,6 @@ def main() -> None:
     )
     if num_generate <= 0:
         raise ValueError("num_generate must be positive.")
-    # One refiner RNG stream per returned graph prevents a longer trajectory on
-    # graph i from shifting the candidate proposals used for graph i+1.
     refiner_graph_seeds = refiner_seed_sequence.spawn(num_generate)
 
     predictor_cfg = dict(config.get("topology_predictor", {}) or {})
@@ -134,20 +152,56 @@ def main() -> None:
     if not checkpoint_path:
         raise ValueError("topology_predictor.checkpoint_path is required.")
     device = args.device or predictor_cfg.get("device", "auto")
-    model, graphlet_basis, summary_config, checkpoint = load_topology_checkpoint(
-        checkpoint_path,
-        device=device,
-    )
-    model_device = next(model.parameters()).device
-    predictor_report = checkpoint.get("report", {}) or {}
-    predictor_graphlet_error = predictor_report.get("val_graphlet_mae")
-    if predictor_graphlet_error is None:
-        raise ValueError(
-            "The topology checkpoint is missing held-out val_graphlet_mae; "
-            "generate from a checkpoint selected by train_topology_grapher.py."
+    checkpoint_format = _checkpoint_format(checkpoint_path)
+
+    graphlet_basis = None
+    predictor_graphlet_error: float | None = None
+    predictor_clustering_error: float | None = None
+    predictor_orbit_log_error: float | None = None
+    predictor_spectral_error: float | None = None
+    if checkpoint_format == TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT:
+        guidance_mode = "spectral"
+        model, summary_config, checkpoint = load_topology_spectral_checkpoint(
+            checkpoint_path,
+            device=device,
         )
-    predictor_clustering_error = predictor_report.get("val_clustering_mae")
-    predictor_orbit_log_error = predictor_report.get("val_orbit_log_mae")
+        predictor_report = checkpoint.get("report", {}) or {}
+        predictor_spectral_error_raw = predictor_report.get(
+            "val_spectral_normalized_rmse",
+            predictor_report.get("val_spectral_normalized_mae"),
+        )
+        if predictor_spectral_error_raw is None:
+            raise ValueError(
+                "The spectral checkpoint is missing held-out "
+                "val_spectral_normalized_rmse/mae; generate from a checkpoint "
+                "selected by train_topology_grapher.py."
+            )
+        predictor_spectral_error = float(predictor_spectral_error_raw)
+    elif checkpoint_format == TOPOLOGY_CHECKPOINT_FORMAT:
+        guidance_mode = "structural_summary"
+        model, graphlet_basis, summary_config, checkpoint = load_topology_checkpoint(
+            checkpoint_path,
+            device=device,
+        )
+        predictor_report = checkpoint.get("report", {}) or {}
+        predictor_graphlet_error_raw = predictor_report.get("val_graphlet_mae")
+        if predictor_graphlet_error_raw is None:
+            raise ValueError(
+                "The topology checkpoint is missing held-out val_graphlet_mae; "
+                "generate from a checkpoint selected by train_topology_grapher.py."
+            )
+        predictor_graphlet_error = float(predictor_graphlet_error_raw)
+        clustering = predictor_report.get("val_clustering_mae")
+        orbit = predictor_report.get("val_orbit_log_mae")
+        predictor_clustering_error = None if clustering is None else float(clustering)
+        predictor_orbit_log_error = None if orbit is None else float(orbit)
+    else:
+        raise ValueError(
+            f"Unsupported topology checkpoint format {checkpoint_format!r}. "
+            f"Expected {TOPOLOGY_CHECKPOINT_FORMAT!r} or "
+            f"{TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT!r}."
+        )
+    model_device = next(model.parameters()).device
 
     degree_source = str(generation_cfg.get("degree_source", "learned")).lower()
     degree_cfg = dict(config.get("degree_generator", {}) or {})
@@ -163,41 +217,56 @@ def main() -> None:
             )
         if str(degree_cfg.get("fallback", "")).lower() != "error":
             raise ValueError(
-                "Learned topology generation requires degree_generator."
-                "fallback: error."
+                "Learned topology generation requires degree_generator.fallback: error."
             )
         degree_cfg["enabled"] = True
         degree_sampler = build_degree_sampler(degree_cfg, train_graphs, seed=seed)
     elif degree_source in {"empirical", "train_empirical"}:
-        degree_sampler = EmpiricalDegreeSampler.fit_from_graphs(
-            train_graphs,
-            seed=seed,
-        )
+        degree_sampler = EmpiricalDegreeSampler.fit_from_graphs(train_graphs, seed=seed)
     elif degree_source not in {"oracle", "test_oracle"}:
         raise ValueError(f"Unknown generation.degree_source: {degree_source!r}")
 
     constructor_cfg = dict(config.get("constructor", {}) or {})
     if str(constructor_cfg.get("type", "havel_hakimi")).lower() != "havel_hakimi":
-        raise ValueError(
-            "The generic topology stage requires Havel-Hakimi construction."
-        )
+        raise ValueError("The generic topology stage requires Havel-Hakimi construction.")
     if not bool(constructor_cfg.get("ensure_connected", True)):
         raise ValueError("Topology generation requires constructor.ensure_connected.")
+
     refiner_cfg = dict(config.get("topology_refiner", {}) or {})
-    refiner_settings = TopologyRefinerConfig.from_dict(refiner_cfg)
-    if not refiner_settings.preserve_connectivity:
-        raise ValueError(
-            "Topology generation requires topology_refiner.preserve_connectivity."
+    if guidance_mode == "spectral":
+        refiner_settings: Any = SpectralRefinerConfig.from_dict(refiner_cfg)
+        if not refiner_settings.preserve_connectivity:
+            raise ValueError("Spectral topology generation requires connectivity preservation.")
+        print(
+            "[GraphER/Spectral] loaded Spectral Transformer checkpoint "
+            f"format={checkpoint_format} device={model_device}",
+            flush=True,
         )
+        print(
+            "[GraphER/Spectral] guidance: model predicts the full clean Laplacian "
+            "eigenvalue vector jointly; the bridge derives the next spectral target; "
+            "valid degree-preserving swaps project the graph toward that target.",
+            flush=True,
+        )
+        print(
+            "[GraphER/Spectral] debug="
+            f"{refiner_settings.debug_enabled} print_every={refiner_settings.debug_print_every} "
+            f"top_candidates={refiner_settings.debug_top_candidates} "
+            f"spectrum_values={refiner_settings.debug_spectrum_values}",
+            flush=True,
+        )
+    else:
+        refiner_settings = TopologyRefinerConfig.from_dict(refiner_cfg)
+        if not refiner_settings.preserve_connectivity:
+            raise ValueError("Topology generation requires topology_refiner.preserve_connectivity.")
+
     coarse_graphs: list[nx.Graph] = []
     refined_graphs: list[nx.Graph] = []
     target_degree_sequences: list[list[int]] = []
     traces: list[list[dict[str, Any]]] = []
     graph_runtimes: list[float] = []
     pipeline_records: list[dict[str, Any]] = []
-    max_attempts_per_graph = int(
-        generation_cfg.get("max_attempts_per_graph", 8)
-    )
+    max_attempts_per_graph = int(generation_cfg.get("max_attempts_per_graph", 8))
     if max_attempts_per_graph <= 0:
         raise ValueError("generation.max_attempts_per_graph must be positive.")
 
@@ -208,9 +277,7 @@ def main() -> None:
             try:
                 if degree_source in {"oracle", "test_oracle"}:
                     if not reference_graphs:
-                        raise ValueError(
-                            "Oracle degree generation requires test graphs."
-                        )
+                        raise ValueError("Oracle degree generation requires test graphs.")
                     degree_summary = _oracle_degree_summary(
                         reference_graphs[index % len(reference_graphs)]
                     )
@@ -223,16 +290,8 @@ def main() -> None:
                 continue
 
             try:
-                coarse = construct_coarse_graph(
-                    degree_summary,
-                    constructor_cfg,
-                    source_rng,
-                )
-                assert_constructor_validity(
-                    coarse,
-                    degree_summary,
-                    require_connected=True,
-                )
+                coarse = construct_coarse_graph(degree_summary, constructor_cfg, source_rng)
+                assert_constructor_validity(coarse, degree_summary, require_connected=True)
             except (ValueError, RuntimeError, AssertionError):
                 generation_rejections["constructor_rejected"] += 1
                 continue
@@ -244,37 +303,45 @@ def main() -> None:
                 f"rejections={dict(generation_rejections)}."
             )
 
-        refined, trace = refine_graph_with_topology_predictions(
-            coarse,
-            model=model,
-            graphlet_basis=graphlet_basis,
-            summary_config=summary_config,
-            refiner_config=refiner_settings,
-            device=model_device,
-            rng=np.random.default_rng(refiner_graph_seeds[index]),
-            return_trace=True,
-        )
+        if guidance_mode == "spectral":
+            refined, trace = refine_graph_with_spectral_predictions(
+                coarse,
+                model=model,
+                refiner_config=refiner_settings,
+                device=model_device,
+                rng=np.random.default_rng(refiner_graph_seeds[index]),
+                return_trace=True,
+                debug_context=(
+                    f"graph={index + 1}/{num_generate} "
+                    f"n={coarse.number_of_nodes()} m={coarse.number_of_edges()}"
+                ),
+            )
+        else:
+            assert graphlet_basis is not None
+            refined, trace = refine_graph_with_topology_predictions(
+                coarse,
+                model=model,
+                graphlet_basis=graphlet_basis,
+                summary_config=summary_config,
+                refiner_config=refiner_settings,
+                device=model_device,
+                rng=np.random.default_rng(refiner_graph_seeds[index]),
+                return_trace=True,
+            )
+
         runtime = float(time.perf_counter() - graph_started)
         coarse_graphs.append(coarse)
         refined_graphs.append(refined)
-        target_degree_sequences.append(
-            [int(value) for value in degree_summary["degree_sequence"]]
-        )
+        target_degree_sequences.append([int(value) for value in degree_summary["degree_sequence"]])
         traces.append(trace)
         graph_runtimes.append(runtime)
-        sampling_diagnostics = dict(
-            degree_summary.get("sampling_diagnostics", {}) or {}
-        )
+        sampling_diagnostics = dict(degree_summary.get("sampling_diagnostics", {}) or {})
 
         decision_rows = [row for row in trace if "num_proposals" in row]
         proposals = sum(int(row.get("num_proposals", 0)) for row in decision_rows)
-        passes = sum(
-            int(row.get("num_valid_candidates", 0)) for row in decision_rows
-        )
+        passes = sum(int(row.get("num_valid_candidates", 0)) for row in decision_rows)
         accepted = sum(bool(row.get("accepted")) for row in trace)
-        terminal_rows = [
-            row for row in trace if bool(row.get("terminal_stop", False))
-        ]
+        terminal_rows = [row for row in trace if bool(row.get("terminal_stop", False))]
         terminal_stop = bool(terminal_rows)
         prediction_calls = max(
             (int(row.get("prediction_calls", 0)) for row in trace),
@@ -297,24 +364,13 @@ def main() -> None:
             rejection_reasons.update(
                 {
                     str(key): int(value)
-                    for key, value in (
-                        row.get("candidate_rejection_reasons", {}) or {}
-                    ).items()
+                    for key, value in (row.get("candidate_rejection_reasons", {}) or {}).items()
                 }
             )
-        pipeline_record = {
+
+        pipeline_record: dict[str, Any] = {
             "pipeline_mode": "topology",
-            "graphlet_error": float(predictor_graphlet_error),
-            "clustering_error": (
-                float(predictor_clustering_error)
-                if predictor_clustering_error is not None
-                else None
-            ),
-            "orbit_log_error": (
-                float(predictor_orbit_log_error)
-                if predictor_orbit_log_error is not None
-                else None
-            ),
+            "guidance_mode": guidance_mode,
             "invariant_feasible": 1.0,
             "constructor_success": 1.0,
             "accepted_swaps": accepted,
@@ -323,33 +379,18 @@ def main() -> None:
                 bool(sampling_diagnostics.get("fallback_used", False))
                 or bool(sampling_diagnostics.get("repair_used", False))
             ),
-            "degree_raw_graphical": float(
-                bool(sampling_diagnostics.get("raw_graphical", True))
-            ),
+            "degree_raw_graphical": float(bool(sampling_diagnostics.get("raw_graphical", True))),
             "degree_raw_connected_feasible": float(
-                bool(
-                    sampling_diagnostics.get(
-                        "raw_connected_feasible",
-                        True,
-                    )
-                )
+                bool(sampling_diagnostics.get("raw_connected_feasible", True))
             ),
-            "degree_sampling_attempts": int(
-                sampling_diagnostics.get("attempts_used", 1)
-            ),
-            "degree_repair_used": float(
-                bool(sampling_diagnostics.get("repair_used", False))
-            ),
-            "degree_repair_l1": int(
-                sampling_diagnostics.get("repair_l1_adjustment", 0)
-            ),
+            "degree_sampling_attempts": int(sampling_diagnostics.get("attempts_used", 1)),
+            "degree_repair_used": float(bool(sampling_diagnostics.get("repair_used", False))),
+            "degree_repair_l1": int(sampling_diagnostics.get("repair_l1_adjustment", 0)),
             "candidate_proposals": proposals,
             "candidate_passes": passes,
             "candidate_pass_rate": float(passes / max(proposals, 1)),
             "prediction_calls": prediction_calls,
-            "accepted_swaps_per_prediction": float(
-                accepted / max(prediction_calls, 1)
-            ),
+            "accepted_swaps_per_prediction": float(accepted / max(prediction_calls, 1)),
             "mean_realized_prediction_horizon": (
                 float(np.mean(realized_prediction_horizons))
                 if realized_prediction_horizons
@@ -369,16 +410,24 @@ def main() -> None:
             "end_to_end_yield": float(1.0 / generation_attempt),
             "rejection_reasons": dict(sorted(rejection_reasons.items())),
         }
-        if accepted > 0:
-            pipeline_record["proposals_per_accepted_swap"] = float(
-                proposals / accepted
+        if guidance_mode == "spectral":
+            pipeline_record["spectral_error"] = float(predictor_spectral_error)
+        else:
+            pipeline_record.update(
+                {
+                    "graphlet_error": float(predictor_graphlet_error),
+                    "clustering_error": predictor_clustering_error,
+                    "orbit_log_error": predictor_orbit_log_error,
+                }
             )
+        if accepted > 0:
+            pipeline_record["proposals_per_accepted_swap"] = float(proposals / accepted)
         pipeline_records.append(pipeline_record)
         print(
-            f"graph={index + 1}/{num_generate} "
+            f"graph={index + 1}/{num_generate} guidance={guidance_mode} "
             f"n={refined.number_of_nodes()} m={refined.number_of_edges()} "
             f"accepted_steps={accepted} prediction_calls={prediction_calls} "
-            f"plateau_refreshes={plateau_refreshes}",
+            f"plateau_refreshes={plateau_refreshes} runtime={runtime:.3f}s",
             flush=True,
         )
 
@@ -389,29 +438,18 @@ def main() -> None:
     refined_metrics: dict[str, Any] = {}
     if inline_evaluation:
         compute_orbit = bool(evaluation_cfg.get("compute_orbit", True))
-        graphlet_backend = str(
-            evaluation_cfg.get("graphlet_backend", "sampled")
-        ).lower()
+        graphlet_backend = str(evaluation_cfg.get("graphlet_backend", "sampled")).lower()
         if compute_orbit or graphlet_backend in {"orca", "exact_orca", "exact"}:
-            orca_exec = configure_orca_executable(
-                evaluation_cfg.get("orca_exec"),
-                required=True,
-            )
+            orca_exec = configure_orca_executable(evaluation_cfg.get("orca_exec"), required=True)
         references = reference_graphs[:num_generate] or reference_graphs
         metric_kwargs = {
             "compute_orbit": compute_orbit,
-            "compute_graphlet_history": bool(
-                evaluation_cfg.get("compute_graphlet_history", True)
-            ),
+            "compute_graphlet_history": bool(evaluation_cfg.get("compute_graphlet_history", True)),
             "graphlet_k_min": int(
-                evaluation_cfg.get(
-                    "graphlet_k_min", summary_config.graphlet_k_min
-                )
+                evaluation_cfg.get("graphlet_k_min", summary_config.graphlet_k_min)
             ),
             "graphlet_k_max": int(
-                evaluation_cfg.get(
-                    "graphlet_k_max", summary_config.graphlet_k_max
-                )
+                evaluation_cfg.get("graphlet_k_max", summary_config.graphlet_k_max)
             ),
             "graphlet_connected_only": bool(
                 evaluation_cfg.get(
@@ -420,41 +458,27 @@ def main() -> None:
                 )
             ),
             "graphlet_num_samples": evaluation_cfg.get(
-                "graphlet_num_samples", summary_config.graphlet_num_samples
+                "graphlet_num_samples",
+                summary_config.graphlet_num_samples,
             ),
             "graphlet_backend": graphlet_backend,
         }
-        coarse_metrics = evaluate_graph_sets(
-            references,
-            coarse_graphs,
-            train_graphs,
-            **metric_kwargs,
-        )
-        refined_metrics = evaluate_graph_sets(
-            references,
-            refined_graphs,
-            train_graphs,
-            **metric_kwargs,
-        )
+        coarse_metrics = evaluate_graph_sets(references, coarse_graphs, train_graphs, **metric_kwargs)
+        refined_metrics = evaluate_graph_sets(references, refined_graphs, train_graphs, **metric_kwargs)
 
     aggregated_pipeline = aggregate_pipeline_diagnostics(
         pipeline_records,
         require_complete=True,
         allow_fallback=False,
     )
-    accepted_steps = [
-        sum(bool(row.get("accepted")) for row in trace) for trace in traces
-    ]
+    accepted_steps = [sum(bool(row.get("accepted")) for row in trace) for trace in traces]
     trace_rows = [row for trace in traces for row in trace]
     accepted_rows = [row for row in trace_rows if bool(row.get("accepted"))]
     prediction_refresh_rows = [
         row for row in trace_rows if bool(row.get("prediction_refreshed", False))
     ]
     prediction_call_counts = [
-        max(
-            (int(row.get("prediction_calls", 0)) for row in trace),
-            default=0,
-        )
+        max((int(row.get("prediction_calls", 0)) for row in trace), default=0)
         for trace in traces
     ]
     prediction_horizons = [
@@ -465,12 +489,11 @@ def main() -> None:
     plateau_refresh_count = sum(
         row.get("reason") == "prediction_plateau_refresh" for row in trace_rows
     )
-    diagnostics = {
+
+    diagnostics: dict[str, Any] = {
         "pipeline_mode": "topology",
-        "degree_preservation_rate": degree_preservation_rate(
-            coarse_graphs,
-            refined_graphs,
-        ),
+        "guidance_mode": guidance_mode,
+        "degree_preservation_rate": degree_preservation_rate(coarse_graphs, refined_graphs),
         "constructor_target_degree_match_rate": degree_target_match_rate(
             coarse_graphs,
             target_degree_sequences,
@@ -489,26 +512,6 @@ def main() -> None:
             )
         ),
         "mean_accepted_steps": float(np.mean(accepted_steps)),
-        "mean_accepted_graphlet_gain": (
-            float(np.mean([row["graphlet_gain"] for row in accepted_rows]))
-            if accepted_rows
-            else 0.0
-        ),
-        "mean_accepted_clustering_gain": (
-            float(np.mean([row["clustering_gain"] for row in accepted_rows]))
-            if accepted_rows
-            else 0.0
-        ),
-        "mean_accepted_orbit_gain": (
-            float(np.mean([row["orbit_gain"] for row in accepted_rows]))
-            if accepted_rows
-            else 0.0
-        ),
-        "mean_accepted_structural_gain": (
-            float(np.mean([row["structural_gain"] for row in accepted_rows]))
-            if accepted_rows
-            else 0.0
-        ),
         "all_accepted_moves_improve_frozen_energy": bool(
             all(float(row["energy_improvement"]) > 0.0 for row in accepted_rows)
         ),
@@ -520,15 +523,9 @@ def main() -> None:
             )
         ),
         "prediction_horizon_mode": refiner_settings.prediction_horizon_mode,
-        "prediction_horizon_schedule": (
-            refiner_settings.prediction_horizon_schedule
-        ),
-        "prediction_horizon_initial_k": (
-            refiner_settings.prediction_horizon_initial_k
-        ),
-        "prediction_horizon_final_k": (
-            refiner_settings.prediction_horizon_final_k
-        ),
+        "prediction_horizon_schedule": refiner_settings.prediction_horizon_schedule,
+        "prediction_horizon_initial_k": refiner_settings.prediction_horizon_initial_k,
+        "prediction_horizon_final_k": refiner_settings.prediction_horizon_final_k,
         "mean_realized_prediction_horizon": (
             float(np.mean(prediction_horizons)) if prediction_horizons else 0.0
         ),
@@ -537,24 +534,61 @@ def main() -> None:
             sum(accepted_steps) / max(sum(prediction_call_counts), 1)
         ),
         "plateau_refresh_count": int(plateau_refresh_count),
-        "predictor_graphlet_error": float(predictor_graphlet_error),
-        "predictor_clustering_error": (
-            float(predictor_clustering_error)
-            if predictor_clustering_error is not None
-            else None
-        ),
-        "predictor_orbit_log_error": (
-            float(predictor_orbit_log_error)
-            if predictor_orbit_log_error is not None
-            else None
-        ),
         "mean_graph_runtime_seconds": float(np.mean(graph_runtimes)),
         "runtime_seconds": float(time.perf_counter() - run_started),
         "inline_evaluation": inline_evaluation,
     }
+    if guidance_mode == "spectral":
+        diagnostics.update(
+            {
+                "mean_accepted_spectral_gain": _mean_or_zero(accepted_rows, "spectral_gain"),
+                "mean_accepted_clean_spectral_gain": _mean_or_zero(
+                    accepted_rows,
+                    "clean_spectral_gain",
+                ),
+                "mean_projection_residual": _mean_or_zero(
+                    accepted_rows,
+                    "projection_residual",
+                ),
+                "mean_bridge_clean_mix": _mean_or_zero(accepted_rows, "clean_mix"),
+                "mean_bridge_expansions": _mean_or_zero(
+                    accepted_rows,
+                    "bridge_expansions",
+                ),
+                "predictor_spectral_normalized_error": float(predictor_spectral_error),
+                "spectral_distance": refiner_settings.distance,
+                "spectral_normalization": refiner_settings.normalization,
+                "spectral_bridge_schedule": refiner_settings.bridge_schedule,
+                "spectral_debug_enabled": refiner_settings.debug_enabled,
+            }
+        )
+        refresh_on_plateau = refiner_settings.refresh_on_prediction_plateau
+        report_format = "topology_spectral_generation_v1"
+    else:
+        diagnostics.update(
+            {
+                "mean_accepted_graphlet_gain": _mean_or_zero(accepted_rows, "graphlet_gain"),
+                "mean_accepted_clustering_gain": _mean_or_zero(
+                    accepted_rows,
+                    "clustering_gain",
+                ),
+                "mean_accepted_orbit_gain": _mean_or_zero(accepted_rows, "orbit_gain"),
+                "mean_accepted_structural_gain": _mean_or_zero(
+                    accepted_rows,
+                    "structural_gain",
+                ),
+                "predictor_graphlet_error": float(predictor_graphlet_error),
+                "predictor_clustering_error": predictor_clustering_error,
+                "predictor_orbit_log_error": predictor_orbit_log_error,
+            }
+        )
+        refresh_on_plateau = refiner_settings.refresh_on_plateau
+        report_format = "topology_structural_generation_v2"
+
     report = {
-        "format": "topology_structural_generation_v2",
+        "format": report_format,
         "pipeline_mode": "topology",
+        "guidance_mode": guidance_mode,
         "checkpoint_format": checkpoint.get("format"),
         "degree_source": degree_source,
         "prediction_horizon": {
@@ -562,17 +596,14 @@ def main() -> None:
             "initial_k": refiner_settings.prediction_horizon_initial_k,
             "final_k": refiner_settings.prediction_horizon_final_k,
             "schedule": refiner_settings.prediction_horizon_schedule,
-            "refresh_on_plateau": refiner_settings.refresh_on_plateau,
+            "refresh_on_plateau": refresh_on_plateau,
             "min_improvement": refiner_settings.min_improvement,
-            "min_relative_improvement": (
-                refiner_settings.min_relative_improvement
-            ),
+            "min_relative_improvement": refiner_settings.min_relative_improvement,
         },
         "orca_exec": orca_exec,
         "num_generated": len(refined_graphs),
         "hh_source": coarse_metrics,
         "topology_refined": refined_metrics,
-        # Compatibility aliases for existing report consumers.
         "coarse": coarse_metrics,
         "hybrid_refined": refined_metrics,
         "diagnostics": diagnostics,
