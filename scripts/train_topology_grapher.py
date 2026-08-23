@@ -629,6 +629,12 @@ def main() -> None:
                     summary_config=summary_cfg,
                     config=config,
                     report=row,
+                    # Record the denominator used for the `time` feature so
+                    # generation cannot silently rescale it via
+                    # `--set topology_refiner.steps=...`.
+                    training_time_horizon=max(
+                        int(trajectory_cfg.get("steps", 32)), 1
+                    ),
                 )
             else:
                 assert graphlet_basis is not None

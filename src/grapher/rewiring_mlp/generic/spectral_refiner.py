@@ -40,6 +40,11 @@ class SpectralPrediction:
 @dataclass(frozen=True)
 class SpectralRefinerConfig:
     steps: int = 24
+    # Denominator for the `time` feature.  Must match the horizon used to label
+    # training states (`topology_trajectory.steps`), NOT the generation step
+    # budget, otherwise the predictor sees a rescaled time input.  ``None``
+    # falls back to ``steps`` for backward compatibility with old checkpoints.
+    time_horizon: int | None = None
     proposal_budget: int = 128
     valid_candidate_budget: int = 32
     preserve_connectivity: bool = True
@@ -63,6 +68,17 @@ class SpectralRefinerConfig:
     expand_on_plateau: bool = True
     plateau_expand_factor: float = 2.0
     max_plateau_expansions: int = 4
+    # F1: greedy one-swap descent stalls at a local minimum after a few moves.
+    # When every candidate fails the improvement threshold even after clean-mix
+    # expansion, optionally take the least-harmful valid swap instead of
+    # stopping.  `sideways_tolerance` is in the same normalized units as the
+    # spectral distance.
+    allow_sideways_moves: bool = False
+    max_consecutive_sideways: int = 0
+    sideways_tolerance: float = 0.0
+    # Sideways moves can end on a worse state than the best one visited, so the
+    # best state is tracked and returned by default.
+    return_best_state: bool = True
 
     refresh_prediction_every: int = 1
     prediction_horizon_mode: str = "fixed"
@@ -76,6 +92,14 @@ class SpectralRefinerConfig:
     debug_top_candidates: int = 3
     debug_spectrum_values: int = 12
     debug_store_spectra: bool = False
+
+    @property
+    def resolved_time_horizon(self) -> int:
+        """Denominator for the `time` feature, defaulting to the step budget."""
+
+        if self.time_horizon is None:
+            return max(int(self.steps), 1)
+        return max(int(self.time_horizon), 1)
 
     @property
     def bridge(self) -> SpectralBridgeSchedule:
@@ -166,8 +190,12 @@ class SpectralRefinerConfig:
             )
 
         debug = dict(values.get("debug", {}) or {})
+        raw_time_horizon = values.get("time_horizon")
         config = cls(
             steps=int(values.get("steps", 24)),
+            time_horizon=(
+                None if raw_time_horizon is None else int(raw_time_horizon)
+            ),
             proposal_budget=proposal_budget,
             valid_candidate_budget=valid_budget,
             preserve_connectivity=bool(values.get("preserve_connectivity", True)),
@@ -199,6 +227,14 @@ class SpectralRefinerConfig:
             max_plateau_expansions=int(
                 guidance.get("max_plateau_expansions", 4)
             ),
+            allow_sideways_moves=bool(
+                guidance.get("allow_sideways_moves", False)
+            ),
+            max_consecutive_sideways=int(
+                guidance.get("max_consecutive_sideways", 0)
+            ),
+            sideways_tolerance=float(guidance.get("sideways_tolerance", 0.0)),
+            return_best_state=bool(values.get("return_best_state", True)),
             refresh_prediction_every=legacy_refresh,
             prediction_horizon_mode=horizon_mode,
             prediction_horizon_initial_k=horizon_initial,
@@ -213,6 +249,8 @@ class SpectralRefinerConfig:
         )
         if config.steps < 0:
             raise ValueError("topology_refiner.steps must be non-negative.")
+        if config.time_horizon is not None and config.time_horizon <= 0:
+            raise ValueError("topology_refiner.time_horizon must be positive.")
         if config.proposal_budget == 0 or config.valid_candidate_budget == 0:
             raise ValueError("Topology proposal budgets must be non-zero.")
         if config.selection not in {"greedy", "argmax", "softmax", "sample"}:
@@ -253,6 +291,23 @@ class SpectralRefinerConfig:
             )
         if config.max_plateau_expansions < 0:
             raise ValueError("max_plateau_expansions must be nonnegative.")
+        if config.max_consecutive_sideways < 0:
+            raise ValueError(
+                "spectral_guidance.max_consecutive_sideways must be nonnegative."
+            )
+        if (
+            not np.isfinite(config.sideways_tolerance)
+            or config.sideways_tolerance < 0.0
+        ):
+            raise ValueError(
+                "spectral_guidance.sideways_tolerance must be finite and "
+                "nonnegative."
+            )
+        if config.allow_sideways_moves and config.max_consecutive_sideways <= 0:
+            raise ValueError(
+                "spectral_guidance.allow_sideways_moves requires "
+                "max_consecutive_sideways > 0."
+            )
         if config.refresh_prediction_every <= 0:
             raise ValueError("refresh_prediction_every must be positive.")
         if config.prediction_horizon_mode not in {"fixed", "annealed"}:
@@ -422,6 +477,32 @@ def _select_row(
     )
 
 
+def _select_sideways_row(
+    rows: Sequence[dict[str, Any]],
+    *,
+    config: SpectralRefinerConfig,
+) -> int | None:
+    """Return the least-harmful candidate when no swap clears the threshold.
+
+    Used only as a plateau escape: the returned move does not improve the
+    spectral objective, but it lets the constrained walk leave a one-swap local
+    minimum instead of terminating there.  Candidates are already tabu-filtered
+    upstream, so any returned index is a state that has not been visited.
+    """
+
+    if not rows:
+        return None
+    tolerance = -float(config.sideways_tolerance)
+    eligible = [
+        index
+        for index, row in enumerate(rows)
+        if float(row["energy_improvement"]) >= tolerance
+    ]
+    if not eligible:
+        return None
+    return max(eligible, key=lambda index: float(rows[index]["energy_improvement"]))
+
+
 def _format_spectrum(values: np.ndarray, limit: int) -> str:
     array = np.asarray(values, dtype=np.float64).reshape(-1)
     limit = max(int(limit), 1)
@@ -483,6 +564,12 @@ def refine_graph_with_spectral_predictions(
     prediction: SpectralPrediction | None = None
     accepted_steps = 0
     accepted_since_prediction = 0
+    # F1: bounded plateau escape.  `best_graph` is tracked separately because a
+    # sideways move may terminate on a worse state than the best one visited.
+    consecutive_sideways = 0
+    sideways_accepted = 0
+    best_graph = current.copy()
+    best_clean_distance = float("inf")
     decision_step = 0
     prediction_calls = 0
     prediction_block = -1
@@ -495,7 +582,14 @@ def refine_graph_with_spectral_predictions(
         prediction_refreshed = False
         if prediction is None or accepted_since_prediction >= prediction_horizon:
             prediction_progress = float(accepted_steps / max(cfg.steps - 1, 1))
-            prediction_time = float(accepted_steps / max(cfg.steps, 1))
+            # `time` must use the TRAINING horizon, not the generation step
+            # budget: the predictor was supervised with
+            # time = step / topology_trajectory.steps.  Clipped to [0, 1]
+            # because a generation budget larger than the training horizon can
+            # otherwise push the feature outside its supervised range.
+            prediction_time = float(
+                min(accepted_steps / cfg.resolved_time_horizon, 1.0)
+            )
             prediction_horizon = cfg.prediction_horizon_at(prediction_progress)
             prediction = predictor(
                 model,
@@ -722,6 +816,30 @@ def refine_graph_with_spectral_predictions(
             }
 
         if selected is None:
+            # F1: before treating this as terminal, optionally take the
+            # least-harmful valid swap so the walk can cross a plateau.
+            move_kind = "improving"
+            if (
+                cfg.allow_sideways_moves
+                and consecutive_sideways < cfg.max_consecutive_sideways
+            ):
+                sideways_index = _select_sideways_row(rows, config=cfg)
+                if sideways_index is not None:
+                    selected = sideways_index
+                    move_kind = "sideways"
+                    _debug_print(
+                        cfg,
+                        decision_step,
+                        prefix,
+                        (
+                            f"SIDEWAYS consecutive={consecutive_sideways + 1}/"
+                            f"{cfg.max_consecutive_sideways} "
+                            f"gain={rows[selected]['energy_improvement']:.6f} "
+                            f"tolerance={cfg.sideways_tolerance:.6g}"
+                        ),
+                    )
+
+        if selected is None:
             refresh_after_plateau = bool(
                 cfg.refresh_on_prediction_plateau
                 and accepted_since_prediction > 0
@@ -806,6 +924,17 @@ def refine_graph_with_spectral_predictions(
         visited.add(topology_state_key(current))
         accepted_steps += 1
         accepted_since_prediction += 1
+        if move_kind == "sideways":
+            consecutive_sideways += 1
+            sideways_accepted += 1
+        else:
+            consecutive_sideways = 0
+        # Track the best state by distance to the predicted clean spectrum, so
+        # a plateau escape that ends worse cannot degrade the returned graph.
+        candidate_clean = float(chosen["candidate_clean_spectral_discrepancy"])
+        if candidate_clean < best_clean_distance:
+            best_clean_distance = candidate_clean
+            best_graph = current.copy()
         _debug_print(
             cfg,
             decision_step,
@@ -834,6 +963,7 @@ def refine_graph_with_spectral_predictions(
                 "accepted_step": accepted_steps,
                 "accepted": True,
                 "reason": "spectral_denoising_swap",
+                "move_kind": move_kind,
                 "terminal_stop": False,
                 "action": chosen["action"],
                 "prediction_refreshed": prediction_refreshed,
@@ -875,6 +1005,18 @@ def refine_graph_with_spectral_predictions(
         )
         decision_step += 1
 
+    # F1: with sideways moves enabled the final state is not necessarily the
+    # best one visited.  Returning the best keeps the plateau escape strictly
+    # non-harmful.  Degree preservation holds for every visited state, so this
+    # cannot violate the fibre constraint.
+    result = current
+    if cfg.return_best_state and sideways_accepted > 0:
+        result = best_graph
+        if [int(result.degree(node)) for node in sorted(result.nodes())] != (
+            initial_degrees
+        ):
+            raise AssertionError("The best spectral state changed indexed degrees.")
+
     if return_trace:
-        return current, trace
-    return current
+        return result, trace
+    return result

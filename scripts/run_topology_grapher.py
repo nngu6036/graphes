@@ -38,6 +38,7 @@ from grapher.rewiring_mlp.generic.refiner import (
 from grapher.rewiring_mlp.generic.spectral_model import (
     TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT,
     load_topology_spectral_checkpoint,
+    training_time_horizon_from_config,
 )
 from grapher.rewiring_mlp.generic.spectral_refiner import (
     SpectralRefinerConfig,
@@ -234,6 +235,49 @@ def main() -> None:
 
     refiner_cfg = dict(config.get("topology_refiner", {}) or {})
     if guidance_mode == "spectral":
+        # The `time` feature must be normalized by the horizon used during
+        # training (topology_trajectory.steps), otherwise overriding
+        # `topology_refiner.steps` silently rescales a model input.  Prefer the
+        # value recorded in the checkpoint; fall back to the training config
+        # embedded in the checkpoint for checkpoints written before this key
+        # existed.
+        training_horizon = checkpoint.get("training_time_horizon")
+        if training_horizon is None:
+            training_horizon = training_time_horizon_from_config(
+                checkpoint.get("config", {}) or {}
+            )
+        if training_horizon is None:
+            print(
+                "[GraphER/Spectral] WARNING: this checkpoint does not record a "
+                "training time horizon. Falling back to topology_refiner.steps "
+                f"({refiner_cfg.get('steps')}) as the `time` denominator. If "
+                "the checkpoint was trained with a different "
+                "topology_trajectory.steps, the predictor is being queried off "
+                "its supervised time range; retrain or set "
+                "topology_refiner.time_horizon explicitly.",
+                flush=True,
+            )
+        else:
+            training_horizon = int(training_horizon)
+            explicit = refiner_cfg.get("time_horizon")
+            if explicit is not None and int(explicit) != training_horizon:
+                raise ValueError(
+                    "topology_refiner.time_horizon "
+                    f"({int(explicit)}) disagrees with the horizon recorded in "
+                    f"the checkpoint ({training_horizon}). Remove the override "
+                    "or generate from a matching checkpoint."
+                )
+            refiner_cfg["time_horizon"] = training_horizon
+            generation_steps = int(refiner_cfg.get("steps", 24))
+            if generation_steps != training_horizon:
+                print(
+                    "[GraphER/Spectral] topology_refiner.steps="
+                    f"{generation_steps} differs from the training horizon "
+                    f"{training_horizon}; using {training_horizon} as the "
+                    "`time` denominator so the step budget stays a pure "
+                    "compute knob.",
+                    flush=True,
+                )
         refiner_settings: Any = SpectralRefinerConfig.from_dict(refiner_cfg)
         if not refiner_settings.preserve_connectivity:
             raise ValueError("Spectral topology generation requires connectivity preservation.")

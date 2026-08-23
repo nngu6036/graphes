@@ -14,7 +14,10 @@ from grapher.rewiring_mlp.generic.data import (
     _randomly_relabel_topology_graph,
     normalize_topology_graph,
 )
-from grapher.rewiring_mlp.generic.rewiring import propose_valid_topology_swaps
+from grapher.rewiring_mlp.generic.rewiring import (
+    propose_valid_topology_swaps,
+    topology_state_key,
+)
 from grapher.rewiring_mlp.generic.spectral import (
     degree_spectral_moments,
     laplacian_eigenvalues,
@@ -164,6 +167,10 @@ def build_spectral_teacher_states(
     teacher_sample_actions: bool,
     teacher_min_improvement: float = 0.0,
     target_tolerance: float = 0.0,
+    teacher_allow_sideways: bool = False,
+    teacher_max_consecutive_sideways: int = 0,
+    teacher_sideways_tolerance: float = 0.0,
+    teacher_tabu: bool = True,
     distance_metric: str = "rmse",
     distance_normalization: str = "mean_degree",
     low_frequency_weight: float = 1.0,
@@ -196,6 +203,15 @@ def build_spectral_teacher_states(
         raise ValueError("target_tolerance must be finite and nonnegative.")
     if not np.isfinite(low_frequency_weight) or low_frequency_weight <= 0.0:
         raise ValueError("low_frequency_weight must be finite and positive.")
+    if int(teacher_max_consecutive_sideways) < 0:
+        raise ValueError("teacher_max_consecutive_sideways must be nonnegative.")
+    if (
+        not np.isfinite(teacher_sideways_tolerance)
+        or teacher_sideways_tolerance < 0.0
+    ):
+        raise ValueError(
+            "teacher_sideways_tolerance must be finite and nonnegative."
+        )
 
     target = normalize_topology_graph(target_graph)
     if target.number_of_nodes() > 1 and not nx.is_connected(target):
@@ -268,6 +284,17 @@ def build_spectral_teacher_states(
     if mode not in {"hard", "soft"}:
         raise ValueError("teacher_mode must be 'hard' or 'soft'.")
 
+    # F1: greedy one-swap descent on the spectral distance reaches a local
+    # minimum after a handful of moves.  A tabu set plus bounded sideways moves
+    # lets the teacher traverse flat regions instead of terminating there.
+    visited: set[bytes] = {topology_state_key(current)}
+    consecutive_sideways = 0
+    sideways_accepted = 0
+    # Sideways moves can end on a worse state than the best one seen, so the
+    # best state is tracked explicitly and reported alongside the final one.
+    best_distance = initial_distance
+    best_state_index = 0
+
     for step in range(max(int(steps), 0)):
         current_spectrum = laplacian_eigenvalues(current)
         current_distance = spectral_distance(
@@ -300,6 +327,7 @@ def build_spectral_teacher_states(
                 valid_candidate_budget=int(valid_candidate_budget),
                 preserve_connectivity=bool(preserve_connectivity),
                 rng=rng,
+                excluded_states=visited if teacher_tabu else None,
             )
         )
         candidate_distances: list[float] = []
@@ -336,8 +364,30 @@ def build_spectral_teacher_states(
 
         stop_index = len(candidates)
         distribution = np.zeros(stop_index + 1, dtype=np.float64)
+        move_kind = "improving"
         if not improving:
-            distribution[stop_index] = 1.0
+            # F1: no strictly improving swap.  Rather than terminating at the
+            # local minimum, optionally take the least-harmful valid move so
+            # the walk can cross a plateau.  `sideways_tolerance` is expressed
+            # in the same normalized units as the spectral distance.
+            sideways = [
+                index
+                for index, value in enumerate(improvements)
+                if value >= -float(teacher_sideways_tolerance)
+            ]
+            can_step_sideways = (
+                bool(teacher_allow_sideways)
+                and bool(sideways)
+                and consecutive_sideways < int(teacher_max_consecutive_sideways)
+            )
+            if can_step_sideways:
+                best_sideways = max(
+                    sideways, key=lambda index: improvements[index]
+                )
+                distribution[best_sideways] = 1.0
+                move_kind = "sideways"
+            else:
+                distribution[stop_index] = 1.0
         elif mode == "hard":
             best = max(improvements[index] for index in improving)
             maxima = [
@@ -378,16 +428,31 @@ def build_spectral_teacher_states(
                 "distribution": distribution.tolist(),
                 "selected_index": selected_index,
                 "stop_index": stop_index,
+                "move_kind": move_kind,
                 "current_spectral_discrepancy": current_distance,
                 **proposal_diagnostics,
             }
         )
         if selected_index == stop_index:
-            stop_reason = "no_improving_spectral_swap"
+            stop_reason = (
+                "no_improving_spectral_swap"
+                if not teacher_allow_sideways
+                else "no_improving_or_sideways_spectral_swap"
+            )
             break
         current = candidate_graphs[candidates[selected_index]]
         states.append(current.copy())
         accepted += 1
+        visited.add(topology_state_key(current))
+        if move_kind == "sideways":
+            consecutive_sideways += 1
+            sideways_accepted += 1
+        else:
+            consecutive_sideways = 0
+        step_distance = current_distance - improvements[selected_index]
+        if step_distance < best_distance:
+            best_distance = float(step_distance)
+            best_state_index = len(states) - 1
 
     final_distance = distance(current)
     report = {
@@ -396,6 +461,9 @@ def build_spectral_teacher_states(
         "final_teacher_spectral_discrepancy": float(final_distance),
         "teacher_spectral_reduction": float(initial_distance - final_distance),
         "accepted_teacher_steps": int(accepted),
+        "accepted_sideways_steps": int(sideways_accepted),
+        "best_teacher_spectral_discrepancy": float(best_distance),
+        "best_teacher_state_index": int(best_state_index),
         "teacher_stop_reason": stop_reason,
         "teacher_stop_selected": stop_reason != "max_steps",
         "teacher_decisions": decisions,
@@ -491,6 +559,16 @@ def build_spectral_examples(
                 teacher_sample_actions=bool(cfg.get("teacher_sample_actions", False)),
                 teacher_min_improvement=float(cfg.get("teacher_min_improvement", 0.0)),
                 target_tolerance=float(cfg.get("target_tolerance", 0.0)),
+                teacher_allow_sideways=bool(
+                    cfg.get("teacher_allow_sideways", False)
+                ),
+                teacher_max_consecutive_sideways=int(
+                    cfg.get("teacher_max_consecutive_sideways", 0)
+                ),
+                teacher_sideways_tolerance=float(
+                    cfg.get("teacher_sideways_tolerance", 0.0)
+                ),
+                teacher_tabu=bool(cfg.get("teacher_tabu", True)),
                 distance_metric=str(spec_cfg.get("distance", "rmse")),
                 distance_normalization=str(
                     spec_cfg.get("normalization", "mean_degree")

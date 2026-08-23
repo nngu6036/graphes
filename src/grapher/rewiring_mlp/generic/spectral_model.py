@@ -432,6 +432,20 @@ class TopologySpectralTransformerPredictor(nn.Module):
         }
 
 
+def training_time_horizon_from_config(config: dict[str, Any] | None) -> int | None:
+    """Return the horizon used to normalize the ``time`` feature during training.
+
+    ``build_spectral_examples`` labels each teacher state with
+    ``time = step / topology_trajectory.steps``.  Generation must divide by the
+    same constant or the predictor sees a systematically rescaled time input.
+    """
+
+    trajectory = dict((config or {}).get("topology_trajectory", {}) or {})
+    if "steps" not in trajectory:
+        return None
+    return max(int(trajectory["steps"]), 1)
+
+
 def save_topology_spectral_checkpoint(
     model: TopologySpectralTransformerPredictor,
     path: str | Path,
@@ -439,9 +453,12 @@ def save_topology_spectral_checkpoint(
     summary_config: SummaryConfig | None = None,
     config: dict[str, Any] | None = None,
     report: dict[str, Any] | None = None,
+    training_time_horizon: int | None = None,
 ) -> None:
     path = Path(path)
     ensure_dir(path.parent)
+    if training_time_horizon is None:
+        training_time_horizon = training_time_horizon_from_config(config)
     torch.save(
         {
             "format": TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT,
@@ -453,6 +470,11 @@ def save_topology_spectral_checkpoint(
             "summary_config": (
                 dict(summary_config.__dict__) if summary_config is not None else {}
             ),
+            # The denominator used for the `time` feature during training.
+            # run_topology_grapher.py reuses this so that `topology_refiner.steps`
+            # stays a pure compute knob instead of silently reparameterizing the
+            # predictor input.
+            "training_time_horizon": training_time_horizon,
             "config": config or {},
             "report": report or {},
         },
