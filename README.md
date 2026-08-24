@@ -524,8 +524,12 @@ prediction into a next-step spectral target and valid double-edge swaps project
 the current graph toward that target while preserving every node degree and
 connectivity.
 
-Train the Spectral Transformer on HH realizations of each target graph's own
-degree sequence:
+Training no longer builds a rewiring teacher trajectory. For every clean graph,
+GraphER constructs only the same-degree HH source endpoint, samples stochastic
+continuous Brownian-bridge states between the source and clean spectra, and
+trains the Spectral Transformer to predict the clean spectrum from those
+continuous states. Intermediate diffusion states need not correspond to actual
+graphs.
 
 ```bash
 PYTHONPATH=src python scripts/train_topology_grapher.py \
@@ -576,7 +580,14 @@ induced `k`-node subsets.  The simplex is transformed to centered log-ratio
 (CLR) coordinates; the joint predictor estimates the clean CLR/logit state and
 a separate bridge derives the desired next graphlet state.
 
-The graph encoder is shared by both heads.  Generation ranks only valid
+Training follows the same separation for both channels: only the HH/base and
+clean endpoint graphs are materialized. Spectral eigenvalues and graphlet CLR
+logits are diffused directly in continuous summary space; no rewiring operation
+is used to create predictor training states. The fixed source graph and source
+summaries are conditioning inputs. With `summary_diffusion.storage: streaming`,
+new diffusion times and Gaussian bridge noise are resampled every epoch.
+
+The source-graph encoder is shared by both heads. Generation ranks only valid
 connectivity- and degree-preserving double-edge swaps using the combined energy
 
 ```text
@@ -592,8 +603,8 @@ Train the joint predictor:
 
 ```bash
 PYTHONPATH=src python scripts/train_topology_grapher.py \
-  --config configs/experiments/grapher/community_small_topology_spectral_graphlet.yaml \
-  --output-dir outputs/topology_grapher/community_small_spectral_graphlet/seed_42 \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --output-dir outputs/topology_grapher/community_small_spectral_graphlet_v2/seed_42 \
   --seed 42 \
   --device gpu
 ```
@@ -602,8 +613,8 @@ For a small diagnostic generation run, enable detailed step logs:
 
 ```bash
 PYTHONPATH=src python scripts/run_topology_grapher.py \
-  --config configs/experiments/grapher/community_small_topology_spectral_graphlet.yaml \
-  --output-dir outputs/topology_generation/community_small_spectral_graphlet/debug_seed_42 \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --output-dir outputs/topology_generation/community_small_spectral_graphlet_v2/debug_seed_42 \
   --num-generate 5 \
   --seed 42 \
   --device gpu \
@@ -621,8 +632,8 @@ default in the supplied high-budget config):
 
 ```bash
 PYTHONPATH=src python scripts/run_topology_grapher.py \
-  --config configs/experiments/grapher/community_small_topology_spectral_graphlet.yaml \
-  --output-dir outputs/topology_generation/community_small_spectral_graphlet/seed_42 \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --output-dir outputs/topology_generation/community_small_spectral_graphlet_v2/seed_42 \
   --num-generate 1024 \
   --seed 42 \
   --device gpu
@@ -632,9 +643,9 @@ Evaluate the saved graphs:
 
 ```bash
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/community_small_topology_spectral_graphlet.yaml \
-  --generated-dir outputs/topology_generation/community_small_spectral_graphlet/seed_42 \
-  --output-dir outputs/topology_grapher/community_small_spectral_graphlet/seed_42/evaluation
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --generated-dir outputs/topology_generation/community_small_spectral_graphlet_v2/seed_42 \
+  --output-dir outputs/topology_grapher/community_small_spectral_graphlet_v2/seed_42/evaluation
 ```
 
 ### 5. Evaluate saved graphs

@@ -1,87 +1,79 @@
 # Spectral + Graphlet-Logit Diffusion Guidance
 
-This implementation extends the spectral GraphER topology generator with a
-second denoising channel for local higher-order structure.
+GraphER separates a **continuous stochastic diffusion trajectory in structural-summary space** from a **discrete degree-preserving rewiring trajectory in graph space**.  They are not assumed to be equivalent.
 
-## State representation
+## Training: diffuse summaries, do not rewire
 
-The actual state is always a simple connected graph in the fixed indexed-degree
-fibre. For every state `G_t` the joint predictor receives the graph, normalized
-time, the current Laplacian eigenvalue sequence, and graphlet CLR/logit states.
-It predicts the clean targets in one forward pass:
+For each clean graph `G*`, training constructs only the same-degree HH/base endpoint `G_src`.  It extracts
 
-- `lambda_hat_0`: the full clean Laplacian spectrum, produced by the variable-
-  length Spectral Transformer;
-- `z_hat_{k,0}`: clean graphlet CLR/logits for every configured order `k`.
+- `Lambda_src`, `Lambda_0`: source and clean Laplacian eigenvalue vectors;
+- `z_src,k`, `z_0,k`: source and clean graphlet CLR/logit vectors.
 
-Eigenvectors are neither predicted nor fixed.
+At normalized progress `s in [0,1]` (`0=source`, `1=clean`), the predictor input is sampled directly from an endpoint-conditioned Brownian bridge:
+
+`x_s = (1-alpha_s) x_src + alpha_s x_0 + sigma sqrt(alpha_s(1-alpha_s)) eps`.
+
+No intermediate graph is constructed.  In particular, the continuous state does **not** have to be the spectrum or graphlet distribution of any realizable graph.
+
+For spectra, optional noise projection fixes `lambda_1=0` and keeps the trace `sum(lambda)=2m`; ordering and higher moments are deliberately allowed to leave the graph-realizable manifold.  For graphlets, Gaussian noise is centered separately in each CLR block so every block remains in the zero-sum CLR gauge.
+
+The network is an `x0` predictor.  It receives the continuous current summary, the explicit source endpoint summary, normalized diffusion progress, and a fixed source-graph context.  It predicts the clean spectrum and clean graphlet logits jointly.
+
+`summary_diffusion.storage: streaming` is recommended because it resamples time/noise every epoch instead of reusing a fixed cache.
+
+## Generation: diffusion proposes, rewiring projects
+
+Generation starts from the HH/base graph.  At each reverse-progress step the current **actual graph** is mapped to its spectrum and graphlet logits, the network predicts clean summaries, and the bridge scheduler proposes the next continuous summary target.  GraphER then selects one or more valid double-edge swaps whose realized summaries are closest to that target.
+
+Thus the two state sequences are distinct:
+
+- continuous guide: `Z_src -> ... -> Z_t -> ... -> Z_0`;
+- discrete graph: `G_src -> ... -> G_t -> ... -> G_final`.
+
+Generally `Z(G_t) != Z_t`.  Their distance is the projection residual and is reported as a diagnostic.
 
 ## Graphlet simplex and logits
 
-For graphlet order `k`, each connected induced graphlet count is divided by
-`C(n,k)`. A final `disconnected` coordinate contains the remaining probability
-mass. Therefore each block is a proper probability simplex over all induced
-`k`-node subsets. The block is transformed to centered log-ratio coordinates
-using a small smoothing epsilon. A blockwise softmax maps predicted CLR/logits
-back to probabilities.
+For graphlet order `k`, every connected induced graphlet count is divided by `C(n,k)`. A final `disconnected` coordinate contains the remaining probability mass. Each block is therefore a proper probability simplex over induced `k`-node subsets.  A centered log-ratio (CLR) transform maps the simplex to Euclidean coordinates for diffusion; blockwise softmax maps logits back to probabilities.
 
-This representation preserves both graphlet composition and connected-subgraph
-mass, which the older connected-only normalized histogram discarded.
+## Candidate energy
 
-## Denoising and rewiring
-
-The spectral and graphlet targets each use an x0-style deterministic bridge from
-the current state toward the corresponding predicted clean state. Candidate
-swaps are scored by
+Valid degree-preserving swaps are scored by
 
 `w_spec(t) * D_spec + w_graphlet(t) * D_CLR`.
 
-A configurable global-to-local schedule gives the spectrum the larger weight
-early in generation and shifts emphasis to graphlet structure later. Only valid
-degree-preserving double-edge swaps are considered, so hard invariants are never
-relaxed by either learned target.
-
-Candidate graphlet states use the existing exact local-delta update. The full
-graphlet histogram is not recomputed for every candidate.
+A global-to-local schedule can emphasize spectrum early and graphlets later. Candidate graphlet states use the exact local-delta update; the full graphlet histogram is not recomputed for every candidate.
 
 ## Debugging
 
-Set `topology_refiner.debug.enabled=true`. Lines prefixed with
-`[GraphER/SpectralGraphlet]` report prediction refreshes, clean targets, current
-and next targets, spectral/graphlet weights and bridge mixes, candidate counts,
-rejection reasons, top candidate combined/spectral/graphlet gains, separate
-projection residuals, and accepted states.
+Set `topology_refiner.debug.enabled=true`.  `[GraphER/SpectralGraphlet]` lines report clean predictions, current/next targets, global/local weights, candidate counts, per-channel gains, projection residuals, and accepted swaps.
 
-## Community-small commands
+## Community-small v2 commands
 
 Train:
 
 ```bash
 PYTHONPATH=src python scripts/train_topology_grapher.py \
-  --config configs/experiments/grapher/community_small_topology_spectral_graphlet.yaml \
-  --output-dir outputs/topology_grapher/community_small_spectral_graphlet/seed_42 \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --output-dir outputs/topology_grapher/community_small_spectral_graphlet_v2/seed_42 \
   --seed 42 \
   --device gpu
 ```
 
-Debug a small batch:
+The startup log should contain:
 
-```bash
-PYTHONPATH=src python scripts/run_topology_grapher.py \
-  --config configs/experiments/grapher/community_small_topology_spectral_graphlet.yaml \
-  --output-dir outputs/topology_generation/community_small_spectral_graphlet/debug_seed_42 \
-  --num-generate 5 \
-  --seed 42 \
-  --device gpu \
-  --set topology_refiner.debug.enabled=true
+```text
+[GraphER/DiffusionTraining] training path: source summary -> stochastic continuous Brownian bridge -> clean summary; rewiring is generation-only projection ...
 ```
 
-Full generation:
+It should **not** say that spectral-family teacher rewiring trajectories are being prepared.
+
+Generate:
 
 ```bash
 PYTHONPATH=src python scripts/run_topology_grapher.py \
-  --config configs/experiments/grapher/community_small_topology_spectral_graphlet.yaml \
-  --output-dir outputs/topology_generation/community_small_spectral_graphlet/seed_42 \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --output-dir outputs/topology_generation/community_small_spectral_graphlet_v2/seed_42 \
   --num-generate 1024 \
   --seed 42 \
   --device gpu
@@ -91,7 +83,7 @@ Evaluate:
 
 ```bash
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/community_small_topology_spectral_graphlet.yaml \
-  --generated-dir outputs/topology_generation/community_small_spectral_graphlet/seed_42 \
-  --output-dir outputs/topology_grapher/community_small_spectral_graphlet/seed_42/evaluation
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --generated-dir outputs/topology_generation/community_small_spectral_graphlet_v2/seed_42 \
+  --output-dir outputs/topology_grapher/community_small_spectral_graphlet_v2/seed_42/evaluation
 ```

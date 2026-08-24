@@ -171,9 +171,20 @@ def predict_clean_spectrum_and_graphlets(
     time: float,
     device: torch.device | str,
     graphlet_logit_epsilon: float,
+    conditioning_graph: nx.Graph | None = None,
+    source_spectrum: np.ndarray | None = None,
+    source_graphlet_probabilities: np.ndarray | None = None,
+    source_graphlet_logits: np.ndarray | None = None,
 ) -> SpectralGraphletPrediction:
     model.eval()
     n = graph.number_of_nodes()
+    context_graph = graph if conditioning_graph is None else conditioning_graph
+    current_spectrum = laplacian_eigenvalues(graph)
+    source_spectrum_values = (
+        laplacian_eigenvalues(context_graph)
+        if source_spectrum is None
+        else np.asarray(source_spectrum, dtype=np.float64).reshape(-1)
+    )
     current_prob, current_mask, _ = extract_topology_graphlet_simplex(
         graph,
         graphlet_basis=graphlet_basis,
@@ -184,13 +195,32 @@ def predict_clean_spectrum_and_graphlets(
         epsilon=graphlet_logit_epsilon,
         coordinate_mask=current_mask,
     )
+    if source_graphlet_probabilities is None or source_graphlet_logits is None:
+        source_prob, source_mask, _ = extract_topology_graphlet_simplex(
+            context_graph, graphlet_basis=graphlet_basis
+        )
+        if not np.array_equal(source_mask, current_mask):
+            raise AssertionError("Source/current graphlet masks must match for equal-size graphs.")
+        source_logits = graphlet_simplex_to_clr(
+            source_prob,
+            graphlet_basis=graphlet_basis,
+            epsilon=graphlet_logit_epsilon,
+            coordinate_mask=source_mask,
+        )
+    else:
+        source_prob = np.asarray(source_graphlet_probabilities, dtype=np.float64).reshape(-1)
+        source_logits = np.asarray(source_graphlet_logits, dtype=np.float64).reshape(-1)
     example = TopologySpectralExample(
-        current_graph=graph,
+        current_graph=context_graph,
         time=float(time),
+        current_spectrum=current_spectrum.astype(np.float32),
+        source_spectrum=source_spectrum_values.astype(np.float32),
         clean_spectrum_target=np.zeros(n, dtype=np.float32),
         current_graphlet_probabilities=current_prob.astype(np.float32),
+        source_graphlet_probabilities=source_prob.astype(np.float32),
         clean_graphlet_probabilities_target=current_prob.astype(np.float32),
         current_graphlet_logits=current_logits.astype(np.float32),
+        source_graphlet_logits=source_logits.astype(np.float32),
         clean_graphlet_logits_target=current_logits.astype(np.float32),
         graphlet_coordinate_mask=current_mask.astype(np.bool_),
     )
@@ -202,7 +232,7 @@ def predict_clean_spectrum_and_graphlets(
     trace, second = spectrum_moments(clean_spectrum)
     return SpectralGraphletPrediction(
         clean_spectrum=clean_spectrum,
-        current_spectrum=laplacian_eigenvalues(graph),
+        current_spectrum=current_spectrum,
         clean_graphlet_logits=clean_logits,
         clean_graphlet_probabilities=clean_prob,
         current_graphlet_logits=current_logits,
@@ -480,6 +510,17 @@ def refine_graph_with_spectral_graphlet_predictions(
         raise ValueError("Joint predictor graphlet widths do not match the configured graphlet basis.")
     generator = rng if rng is not None else np.random.default_rng(0)
     current = normalize_topology_graph(graph)
+    conditioning_graph = current.copy()
+    source_spectrum = laplacian_eigenvalues(conditioning_graph)
+    source_probabilities, source_graphlet_mask, _ = extract_topology_graphlet_simplex(
+        conditioning_graph, graphlet_basis=graphlet_basis
+    )
+    source_graphlet_logits = graphlet_simplex_to_clr(
+        source_probabilities,
+        graphlet_basis=graphlet_basis,
+        epsilon=cfg.graphlet_logit_epsilon,
+        coordinate_mask=source_graphlet_mask,
+    )
     if current.number_of_nodes() > 1 and not nx.is_connected(current):
         raise ValueError("Spectral+graphlet refinement requires a connected source graph.")
     initial_degrees = [int(current.degree(node)) for node in sorted(current.nodes())]
@@ -504,7 +545,7 @@ def refine_graph_with_spectral_graphlet_predictions(
         prediction_refreshed = False
         if prediction is None or accepted_since_prediction >= prediction_horizon:
             prediction_progress = float(accepted_steps / max(cfg.steps - 1, 1))
-            prediction_time = float(min(accepted_steps / cfg.resolved_time_horizon, 1.0))
+            prediction_time = prediction_progress
             prediction_horizon = cfg.prediction_horizon_at(prediction_progress)
             if prediction_fn is None:
                 prediction = predict_clean_spectrum_and_graphlets(
@@ -514,6 +555,10 @@ def refine_graph_with_spectral_graphlet_predictions(
                     time=prediction_time,
                     device=device,
                     graphlet_logit_epsilon=cfg.graphlet_logit_epsilon,
+                    conditioning_graph=conditioning_graph,
+                    source_spectrum=source_spectrum,
+                    source_graphlet_probabilities=source_probabilities,
+                    source_graphlet_logits=source_graphlet_logits,
                 )
             else:
                 prediction = prediction_fn(
@@ -523,6 +568,10 @@ def refine_graph_with_spectral_graphlet_predictions(
                     time=prediction_time,
                     device=device,
                     graphlet_logit_epsilon=cfg.graphlet_logit_epsilon,
+                    conditioning_graph=conditioning_graph,
+                    source_spectrum=source_spectrum,
+                    source_graphlet_probabilities=source_probabilities,
+                    source_graphlet_logits=source_graphlet_logits,
                 )
             prediction_calls += 1
             prediction_block += 1

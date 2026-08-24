@@ -267,51 +267,53 @@ def main() -> None:
 
     refiner_cfg = dict(config.get("topology_refiner", {}) or {})
     if guidance_mode in {"spectral", "spectral_graphlet"}:
-        # The `time` feature must be normalized by the horizon used during
-        # training (topology_trajectory.steps), otherwise overriding
-        # `topology_refiner.steps` silently rescales a model input.  Prefer the
-        # value recorded in the checkpoint; fall back to the training config
-        # embedded in the checkpoint for checkpoints written before this key
-        # existed.
-        training_horizon = checkpoint.get("training_time_horizon")
-        if training_horizon is None:
-            training_horizon = training_time_horizon_from_config(
-                checkpoint.get("config", {}) or {}
+        time_parameterization = str(
+            checkpoint.get("time_parameterization", "") or ""
+        ).lower()
+        if time_parameterization == "normalized_diffusion_progress_0_source_1_clean":
+            # V2 checkpoints are queried with normalized reverse progress in
+            # [0,1].  Generation step budget is therefore a pure projection
+            # compute knob and never rescales the neural time input.
+            refiner_cfg.pop("time_horizon", None)
+            prefix = (
+                "[GraphER/SpectralGraphlet]"
+                if guidance_mode == "spectral_graphlet"
+                else "[GraphER/Spectral]"
             )
-        if training_horizon is None:
-            prefix = "[GraphER/SpectralGraphlet]" if guidance_mode == "spectral_graphlet" else "[GraphER/Spectral]"
             print(
-                f"{prefix} WARNING: this checkpoint does not record a "
-                "training time horizon. Falling back to topology_refiner.steps "
-                f"({refiner_cfg.get('steps')}) as the `time` denominator. If "
-                "the checkpoint was trained with a different "
-                "topology_trajectory.steps, the predictor is being queried off "
-                "its supervised time range; retrain or set "
-                "topology_refiner.time_horizon explicitly.",
+                f"{prefix} predictor time=normalized diffusion progress "
+                "(0=source, 1=clean); independent of topology_refiner.steps.",
                 flush=True,
             )
         else:
-            training_horizon = int(training_horizon)
-            explicit = refiner_cfg.get("time_horizon")
-            if explicit is not None and int(explicit) != training_horizon:
-                raise ValueError(
-                    "topology_refiner.time_horizon "
-                    f"({int(explicit)}) disagrees with the horizon recorded in "
-                    f"the checkpoint ({training_horizon}). Remove the override "
-                    "or generate from a matching checkpoint."
+            # Legacy v1 checkpoints normalized time by topology_trajectory.steps.
+            training_horizon = checkpoint.get("training_time_horizon")
+            if training_horizon is None:
+                training_horizon = training_time_horizon_from_config(
+                    checkpoint.get("config", {}) or {}
                 )
-            refiner_cfg["time_horizon"] = training_horizon
-            generation_steps = int(refiner_cfg.get("steps", 24))
-            if generation_steps != training_horizon:
-                prefix = "[GraphER/SpectralGraphlet]" if guidance_mode == "spectral_graphlet" else "[GraphER/Spectral]"
+            if training_horizon is None:
+                prefix = (
+                    "[GraphER/SpectralGraphlet]"
+                    if guidance_mode == "spectral_graphlet"
+                    else "[GraphER/Spectral]"
+                )
                 print(
-                    f"{prefix} topology_refiner.steps="
-                    f"{generation_steps} differs from the training horizon "
-                    f"{training_horizon}; using {training_horizon} as the "
-                    "`time` denominator so the step budget stays a pure "
-                    "compute knob.",
+                    f"{prefix} WARNING: legacy checkpoint has no training time "
+                    "horizon; falling back to topology_refiner.steps.",
                     flush=True,
                 )
+            else:
+                training_horizon = int(training_horizon)
+                explicit = refiner_cfg.get("time_horizon")
+                if explicit is not None and int(explicit) != training_horizon:
+                    raise ValueError(
+                        "topology_refiner.time_horizon "
+                        f"({int(explicit)}) disagrees with the legacy checkpoint "
+                        f"horizon ({training_horizon})."
+                    )
+                refiner_cfg["time_horizon"] = training_horizon
+
         if guidance_mode == "spectral_graphlet":
             refiner_settings: Any = SpectralGraphletRefinerConfig.from_dict(refiner_cfg)
             if graphlet_basis is None:

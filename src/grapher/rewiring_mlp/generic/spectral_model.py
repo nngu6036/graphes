@@ -14,8 +14,8 @@ from grapher.rewiring_mlp.generic.spectral_data import TopologySpectralBatch
 from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir
 
-TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT = "topology_spectral_transformer_v1"
-TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT = "topology_spectral_graphlet_transformer_v1"
+TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT = "topology_spectral_transformer_v2"
+TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT = "topology_spectral_graphlet_transformer_v2"
 
 
 class TopologySpectralTransformerPredictor(nn.Module):
@@ -103,10 +103,12 @@ class TopologySpectralTransformerPredictor(nn.Module):
             nn.SiLU(),
         )
 
-        # [normalized current lambda_i, normalized rank i/(n-1), time,
-        #  normalized graph size, valid-token flag]
+        # [normalized current lambda_i, normalized source lambda_i,
+        #  normalized rank i/(n-1), diffusion progress, normalized graph size,
+        #  valid-token flag].  The source endpoint is explicit because training
+        #  samples continuous bridge states rather than intermediate graphs.
         self.spectral_token_in = nn.Sequential(
-            nn.Linear(5, self.spectral_dim),
+            nn.Linear(6, self.spectral_dim),
             nn.SiLU(),
             nn.Linear(self.spectral_dim, self.spectral_dim),
         )
@@ -291,6 +293,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
         batch_size, width = mask.shape
         scale = self._spectrum_scale(batch)
         normalized_lambda = batch.current_spectrum / scale.unsqueeze(1)
+        normalized_source_lambda = batch.source_spectrum / scale.unsqueeze(1)
 
         indices = torch.arange(width, device=mask.device, dtype=normalized_lambda.dtype)
         denom = (batch.graph_size - 1.0).clamp_min(1.0).unsqueeze(1)
@@ -299,6 +302,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
         token_features = torch.stack(
             [
                 normalized_lambda,
+                normalized_source_lambda,
                 rank,
                 batch.time.unsqueeze(1).expand(batch_size, width),
                 size_feature.unsqueeze(1).expand(batch_size, width),
@@ -492,7 +496,7 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
         self.graphlet_heads = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(self.graph_dim + width, self.graphlet_dim),
+                    nn.Linear(self.graph_dim + 2 * width, self.graphlet_dim),
                     nn.SiLU(),
                     nn.Dropout(self.graphlet_dropout_p),
                     nn.Linear(self.graphlet_dim, self.graphlet_dim),
@@ -522,11 +526,16 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
         batch: TopologySpectralBatch,
         graph_hidden: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        if batch.current_graphlet_logits is None or batch.graphlet_coordinate_mask is None:
+        if (
+            batch.current_graphlet_logits is None
+            or batch.source_graphlet_logits is None
+            or batch.graphlet_coordinate_mask is None
+        ):
             raise ValueError(
                 "Spectral+graphlet prediction requires current graphlet CLR/logit inputs."
             )
         current = batch.current_graphlet_logits
+        source = batch.source_graphlet_logits
         mask = batch.graphlet_coordinate_mask.bool()
         if current.shape[1] != self.graphlet_width:
             raise ValueError(
@@ -537,9 +546,10 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
         residual_blocks: list[torch.Tensor] = []
         for (start, stop), head in zip(self.graphlet_slices, self.graphlet_heads):
             current_block = current[:, start:stop]
+            source_block = source[:, start:stop]
             block_mask = mask[:, start:stop]
             block_valid = block_mask.any(dim=1, keepdim=True)
-            residual = head(torch.cat([graph_hidden, current_block], dim=-1))
+            residual = head(torch.cat([graph_hidden, current_block, source_block], dim=-1))
             clean = current_block + residual
             # CLR coordinates have an arbitrary additive gauge.  Centering makes
             # the network target identifiable and matches the training transform.
@@ -664,9 +674,9 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
 def training_time_horizon_from_config(config: dict[str, Any] | None) -> int | None:
     """Return the horizon used to normalize the ``time`` feature during training.
 
-    ``build_spectral_examples`` labels each teacher state with
-    ``time = step / topology_trajectory.steps``.  Generation must divide by the
-    same constant or the predictor sees a systematically rescaled time input.
+    Deprecated compatibility helper for pre-v2 checkpoints.  V2 spectral
+    models use normalized diffusion progress directly in [0, 1], independent of
+    the generation rewiring budget.
     """
 
     trajectory = dict((config or {}).get("topology_trajectory", {}) or {})
@@ -686,8 +696,6 @@ def save_topology_spectral_checkpoint(
 ) -> None:
     path = Path(path)
     ensure_dir(path.parent)
-    if training_time_horizon is None:
-        training_time_horizon = training_time_horizon_from_config(config)
     torch.save(
         {
             "format": TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT,
@@ -704,6 +712,7 @@ def save_topology_spectral_checkpoint(
             # stays a pure compute knob instead of silently reparameterizing the
             # predictor input.
             "training_time_horizon": training_time_horizon,
+            "time_parameterization": "normalized_diffusion_progress_0_source_1_clean",
             "config": config or {},
             "report": report or {},
         },
@@ -753,8 +762,6 @@ def save_topology_spectral_graphlet_checkpoint(
 ) -> None:
     path = Path(path)
     ensure_dir(path.parent)
-    if training_time_horizon is None:
-        training_time_horizon = training_time_horizon_from_config(config)
     if tuple(graphlet_basis.simplex_block_widths) != tuple(model.graphlet_block_widths):
         raise ValueError("Graphlet basis simplex widths do not match the joint predictor.")
     torch.save(
@@ -770,6 +777,7 @@ def save_topology_spectral_graphlet_checkpoint(
                 dict(summary_config.__dict__) if summary_config is not None else {}
             ),
             "training_time_horizon": training_time_horizon,
+            "time_parameterization": "normalized_diffusion_progress_0_source_1_clean",
             "config": config or {},
             "report": report or {},
         },

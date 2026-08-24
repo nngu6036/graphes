@@ -72,34 +72,38 @@ graphlet_diffusion:
     "4": 2.5
     "5": 0.75
 
-# High-coverage real graph trajectories. The current implementation uses the
-# clean spectrum for teacher search, while both clean spectrum and clean
-# graphlet logits supervise every visited state. Bounded sideways moves help
-# cross shallow spectral plateaus and give the graphlet head broader states.
-topology_trajectory:
-  storage: eager
-  steps: 160
-  proposal_budget: 1024
-  valid_candidate_budget: 256
-  states_per_graph: 40
-  paths_per_graph: 8
+# Predictor training follows a stochastic continuous bridge in summary space.
+# No rewiring trajectory is constructed during training.  The only materialized
+# graphs are the two endpoints: the same-degree HH source and the clean graph.
+# Intermediate spectral/graphlet states are continuous and need not correspond
+# to any realizable graph.  Streaming mode resamples new bridge noise every epoch.
+summary_diffusion:
+  storage: streaming
+  bridge: brownian_endpoint_conditioned
+  schedule: cosine
+  power: 2.0
 
+  # Spectrum noise is expressed relative to the mean-degree spectral scale.
+  # Zero-sum noise on lambda_2:n preserves trace=2m, while higher moments and
+  # ordering are intentionally free to leave the graph-realizable manifold.
+  spectral_sigma: 0.20
+  preserve_spectral_trace: true
+  fix_spectral_lambda1: true
+
+  # CLR logits live in Euclidean coordinates. Noise is centered independently
+  # inside each graphlet-order block so the CLR gauge remains zero-sum.
+  graphlet_sigma: 0.35
+
+  # 32 x 2 stochastic states per endpoint pair per epoch.
+  samples_per_graph: 32
+  paths_per_graph: 2
+  time_sampling: stratified
+  min_progress: 0.0
+  max_progress: 1.0
+
+  # HH source construction only; these are not trajectory/search settings.
   source_randomization_steps: 0
   random_relabel_source: true
-
-  teacher_mode: soft
-  teacher_temperature: 0.05
-  teacher_top_k: 8
-  teacher_sample_actions: true
-  teacher_min_improvement: 0.000000001
-  target_tolerance: 0.0
-
-  teacher_allow_sideways: true
-  teacher_max_consecutive_sideways: 2
-  teacher_sideways_tolerance: 0.001
-  teacher_tabu: true
-
-  preserve_connectivity: true
   ensure_connected_source: true
   max_repair_trials: 10000
 
@@ -108,7 +112,8 @@ topology_predictor:
   checkpoint_path: outputs/topology_grapher/community_small_spectral_graphlet_v2/seed_42/checkpoint.pt
   device: auto
 
-  # Shared graph-state encoder.
+  # Shared source-endpoint encoder. The graph context is always the fixed HH/base
+  # source; continuous current spectrum/graphlet states are separate inputs.
   hidden_dim: 256
   edge_dim: 128
   graph_dim: 256

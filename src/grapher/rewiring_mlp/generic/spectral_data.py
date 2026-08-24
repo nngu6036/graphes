@@ -17,11 +17,17 @@ from grapher.rewiring_mlp.generic.data import (
 )
 from grapher.rewiring_mlp.generic.graphlet_diffusion import (
     extract_topology_graphlet_simplex,
+    graphlet_clr_to_simplex,
     graphlet_simplex_to_clr,
 )
 from grapher.rewiring_mlp.generic.rewiring import (
     propose_valid_topology_swaps,
     topology_state_key,
+)
+from grapher.rewiring_mlp.generic.summary_diffusion import (
+    SummaryDiffusionConfig,
+    sample_graphlet_clr_bridge_marginal,
+    sample_spectral_bridge_marginal,
 )
 from grapher.rewiring_mlp.generic.spectral import (
     degree_spectral_moments,
@@ -34,15 +40,22 @@ from grapher.rewiring_mlp.generic.spectral import (
 
 @dataclass
 class TopologySpectralExample:
+    # ``current_graph`` is the fixed source/conditioning graph for diffusion
+    # training.  During generation it is likewise the initial HH/base graph;
+    # the continuous/current summary state is carried separately below.
     current_graph: nx.Graph
     time: float
     clean_spectrum_target: np.ndarray
+    current_spectrum: np.ndarray | None = None
+    source_spectrum: np.ndarray | None = None
     # Optional graphlet-logit diffusion supervision. Each graphlet order is a
     # probability simplex over connected graphlet classes plus one disconnected
     # subset bin; CLR coordinates are the Euclidean diffusion variables.
     current_graphlet_probabilities: np.ndarray | None = None
+    source_graphlet_probabilities: np.ndarray | None = None
     clean_graphlet_probabilities_target: np.ndarray | None = None
     current_graphlet_logits: np.ndarray | None = None
+    source_graphlet_logits: np.ndarray | None = None
     clean_graphlet_logits_target: np.ndarray | None = None
     graphlet_coordinate_mask: np.ndarray | None = None
     base_generator: str = "target_degree_havel_hakimi"
@@ -65,11 +78,14 @@ class TopologySpectralBatch:
     graph_size: torch.Tensor
     time: torch.Tensor
     current_spectrum: torch.Tensor
+    source_spectrum: torch.Tensor
     clean_spectrum_target: torch.Tensor
     spectrum_mask: torch.Tensor
     current_graphlet_probabilities: torch.Tensor | None = None
+    source_graphlet_probabilities: torch.Tensor | None = None
     clean_graphlet_probabilities_target: torch.Tensor | None = None
     current_graphlet_logits: torch.Tensor | None = None
+    source_graphlet_logits: torch.Tensor | None = None
     clean_graphlet_logits_target: torch.Tensor | None = None
     graphlet_coordinate_mask: torch.Tensor | None = None
 
@@ -99,6 +115,7 @@ def collate_spectral_examples(
     graph_sizes = np.zeros(batch_size, dtype=np.float32)
     times = np.zeros(batch_size, dtype=np.float32)
     current_spectra = np.zeros((batch_size, max_nodes), dtype=np.float32)
+    source_spectra = np.zeros((batch_size, max_nodes), dtype=np.float32)
     clean_spectra = np.zeros((batch_size, max_nodes), dtype=np.float32)
     spectrum_mask = np.zeros((batch_size, max_nodes), dtype=np.bool_)
 
@@ -117,11 +134,19 @@ def collate_spectral_examples(
         np.zeros((batch_size, graphlet_width), dtype=np.float32)
         if graphlet_enabled else None
     )
+    source_graphlet_probabilities = (
+        np.zeros((batch_size, graphlet_width), dtype=np.float32)
+        if graphlet_enabled else None
+    )
     clean_graphlet_probabilities = (
         np.zeros((batch_size, graphlet_width), dtype=np.float32)
         if graphlet_enabled else None
     )
     current_graphlet_logits = (
+        np.zeros((batch_size, graphlet_width), dtype=np.float32)
+        if graphlet_enabled else None
+    )
+    source_graphlet_logits = (
         np.zeros((batch_size, graphlet_width), dtype=np.float32)
         if graphlet_enabled else None
     )
@@ -152,39 +177,66 @@ def collate_spectral_examples(
         )
         graph_sizes[index] = float(n)
         times[index] = float(np.clip(example.time, 0.0, 1.0))
-        current = laplacian_eigenvalues(graph).astype(np.float32)
+        graph_spectrum = laplacian_eigenvalues(graph).astype(np.float32)
+        current = (
+            graph_spectrum
+            if example.current_spectrum is None
+            else np.asarray(example.current_spectrum, dtype=np.float32).reshape(-1)
+        )
+        source_spectrum = (
+            graph_spectrum
+            if example.source_spectrum is None
+            else np.asarray(example.source_spectrum, dtype=np.float32).reshape(-1)
+        )
         target = np.asarray(
             example.clean_spectrum_target,
             dtype=np.float32,
         ).reshape(-1)
-        if current.size != n or target.size != n:
+        if current.size != n or source_spectrum.size != n or target.size != n:
             raise ValueError(
                 "Spectral examples must contain exactly one eigenvalue per node: "
-                f"current={current.size}, target={target.size}, n={n}."
+                f"current={current.size}, source={source_spectrum.size}, target={target.size}, n={n}."
             )
         current_spectra[index, :n] = current
+        source_spectra[index, :n] = source_spectrum
         clean_spectra[index, :n] = target
         spectrum_mask[index, :n] = True
         if graphlet_enabled:
             assert current_graphlet_probabilities is not None
+            assert source_graphlet_probabilities is not None
             assert clean_graphlet_probabilities is not None
             assert current_graphlet_logits is not None
+            assert source_graphlet_logits is not None
             assert clean_graphlet_logits is not None
             assert graphlet_coordinate_mask is not None
+            source_prob_value = (
+                example.current_graphlet_probabilities
+                if example.source_graphlet_probabilities is None
+                else example.source_graphlet_probabilities
+            )
+            source_logit_value = (
+                example.current_graphlet_logits
+                if example.source_graphlet_logits is None
+                else example.source_graphlet_logits
+            )
             arrays = [
                 np.asarray(example.current_graphlet_probabilities, dtype=np.float32).reshape(-1),
+                np.asarray(source_prob_value, dtype=np.float32).reshape(-1),
                 np.asarray(example.clean_graphlet_probabilities_target, dtype=np.float32).reshape(-1),
                 np.asarray(example.current_graphlet_logits, dtype=np.float32).reshape(-1),
+                np.asarray(source_logit_value, dtype=np.float32).reshape(-1),
                 np.asarray(example.clean_graphlet_logits_target, dtype=np.float32).reshape(-1),
                 np.asarray(example.graphlet_coordinate_mask, dtype=np.bool_).reshape(-1),
             ]
             if any(array.size != graphlet_width for array in arrays):
                 raise ValueError("Graphlet-logit target width mismatch during collation.")
             current_graphlet_probabilities[index] = arrays[0]
-            clean_graphlet_probabilities[index] = arrays[1]
-            current_graphlet_logits[index] = arrays[2]
-            clean_graphlet_logits[index] = arrays[3]
-            graphlet_coordinate_mask[index] = arrays[4]
+            source_graphlet_probabilities[index] = arrays[1]
+            clean_graphlet_probabilities[index] = arrays[2]
+            current_graphlet_logits[index] = arrays[3]
+            source_graphlet_logits[index] = arrays[4]
+            clean_graphlet_logits[index] = arrays[5]
+            graphlet_coordinate_mask[index] = arrays[6]
 
     return TopologySpectralBatch(
         adjacency=torch.from_numpy(adjacency),
@@ -194,11 +246,16 @@ def collate_spectral_examples(
         graph_size=torch.from_numpy(graph_sizes),
         time=torch.from_numpy(times),
         current_spectrum=torch.from_numpy(current_spectra),
+        source_spectrum=torch.from_numpy(source_spectra),
         clean_spectrum_target=torch.from_numpy(clean_spectra),
         spectrum_mask=torch.from_numpy(spectrum_mask),
         current_graphlet_probabilities=(
             torch.from_numpy(current_graphlet_probabilities)
             if current_graphlet_probabilities is not None else None
+        ),
+        source_graphlet_probabilities=(
+            torch.from_numpy(source_graphlet_probabilities)
+            if source_graphlet_probabilities is not None else None
         ),
         clean_graphlet_probabilities_target=(
             torch.from_numpy(clean_graphlet_probabilities)
@@ -207,6 +264,10 @@ def collate_spectral_examples(
         current_graphlet_logits=(
             torch.from_numpy(current_graphlet_logits)
             if current_graphlet_logits is not None else None
+        ),
+        source_graphlet_logits=(
+            torch.from_numpy(source_graphlet_logits)
+            if source_graphlet_logits is not None else None
         ),
         clean_graphlet_logits_target=(
             torch.from_numpy(clean_graphlet_logits)
@@ -759,11 +820,19 @@ def build_spectral_examples(
                             None if current_graphlet_probabilities is None
                             else current_graphlet_probabilities.astype(np.float32).copy()
                         ),
+                        source_graphlet_probabilities=(
+                            None if current_graphlet_probabilities is None
+                            else current_graphlet_probabilities.astype(np.float32).copy()
+                        ),
                         clean_graphlet_probabilities_target=(
                             None if target_graphlet_probabilities is None
                             else target_graphlet_probabilities.astype(np.float32).copy()
                         ),
                         current_graphlet_logits=(
+                            None if current_graphlet_logits is None
+                            else current_graphlet_logits.astype(np.float32).copy()
+                        ),
+                        source_graphlet_logits=(
                             None if current_graphlet_logits is None
                             else current_graphlet_logits.astype(np.float32).copy()
                         ),
@@ -887,6 +956,322 @@ class TopologySpectralTrajectoryIterableDataset(torch.utils.data.IterableDataset
             examples, diagnostics = build_spectral_examples(
                 [self.graphs[int(graph_index)]],
                 trajectory_config=self.trajectory_config,
+                spectral_config=self.spectral_config,
+                graphlet_basis=self.graphlet_basis,
+                graphlet_logit_epsilon=self.graphlet_logit_epsilon,
+                seed=(
+                    self.seed
+                    + 1_000_003 * self.epoch
+                    + 10_007 * int(graph_index)
+                    + position
+                ),
+            )
+            if worker is None:
+                self.last_diagnostics.append(diagnostics)
+            yield from examples
+
+
+def _resolve_spectral_diffusion_endpoints(
+    raw_item: nx.Graph | TopologyTrainingPair,
+    *,
+    source_config: dict[str, Any],
+    require_same_degree_sequence: bool,
+    rng: np.random.Generator,
+) -> tuple[nx.Graph, nx.Graph, dict[str, Any]]:
+    """Resolve a fixed source graph and clean target for summary diffusion.
+
+    Unlike the legacy teacher-trajectory builder, this helper never rewires the
+    source.  It only constructs/loads the two bridge endpoints.
+    """
+
+    if isinstance(raw_item, TopologyTrainingPair):
+        source = normalize_topology_graph(raw_item.source_graph)
+        target = normalize_topology_graph(raw_item.target_graph)
+        metadata = {
+            "source_mode": "completed_base_output",
+            "base_generator": str(raw_item.base_generator),
+            "source_index": int(raw_item.source_index),
+            "target_index": int(raw_item.target_index),
+            "matching_cost": float(raw_item.matching_cost),
+        }
+    else:
+        target = normalize_topology_graph(raw_item)
+        degree_sequence = [int(target.degree(node)) for node in target.nodes()]
+        source = _construct_source_from_degree_sequence(
+            degree_sequence,
+            ensure_connected=bool(source_config.get("ensure_connected_source", True)),
+            max_repair_trials=int(source_config.get("max_repair_trials", 10000)),
+            random_relabel=bool(source_config.get("random_relabel_source", True)),
+            source_randomization_steps=int(source_config.get("source_randomization_steps", 0)),
+            rng=rng,
+        )
+        metadata = {
+            "source_mode": "target_degree_havel_hakimi",
+            "base_generator": "target_degree_havel_hakimi",
+            "source_index": -1,
+            "target_index": -1,
+            "matching_cost": 0.0,
+        }
+
+    if source.number_of_nodes() != target.number_of_nodes():
+        raise ValueError("Summary-diffusion source and target must have identical graph size.")
+    if source.number_of_nodes() > 1 and not nx.is_connected(source):
+        raise ValueError("Summary-diffusion source graph must be connected.")
+    if target.number_of_nodes() > 1 and not nx.is_connected(target):
+        raise ValueError("Summary-diffusion clean target must be connected.")
+    if require_same_degree_sequence:
+        assert_same_degree_fibre(source, target)
+    return source, target, metadata
+
+
+def build_spectral_diffusion_examples(
+    graphs: Sequence[nx.Graph | TopologyTrainingPair],
+    *,
+    diffusion_config: dict[str, Any] | None = None,
+    source_config: dict[str, Any] | None = None,
+    spectral_config: dict[str, Any] | None = None,
+    graphlet_basis: TopologyGraphletBasis | None = None,
+    graphlet_logit_epsilon: float = 1.0e-5,
+    seed: int = 0,
+) -> tuple[list[TopologySpectralExample], dict[str, Any]]:
+    """Sample continuous stochastic summary-diffusion training states.
+
+    Training follows the diffusion bridge directly.  Only the source and clean
+    endpoint graphs are materialized.  Intermediate states are continuous
+    Laplacian-spectrum / graphlet-CLR vectors and are *not* obtained by rewiring
+    or assumed to correspond to any realizable graph.
+    """
+
+    diff_values = dict(diffusion_config or {})
+    diff_cfg = SummaryDiffusionConfig.from_dict(diff_values)
+    source_cfg = dict(source_config or {})
+    spec_cfg = dict(spectral_config or {})
+    rng = np.random.default_rng(int(seed))
+    require_same_degree_sequence = bool(
+        spec_cfg.get("require_same_degree_sequence", True)
+    )
+    samples_per_graph = max(int(diff_values.get("samples_per_graph", 32)), 1)
+    paths_per_graph = max(int(diff_values.get("paths_per_graph", 1)), 1)
+
+    examples: list[TopologySpectralExample] = []
+    endpoint_reports: list[dict[str, Any]] = []
+    spectral_noise_rms: list[float] = []
+    graphlet_noise_rms: list[float] = []
+    sample_id = 0
+
+    for raw_item in graphs:
+        source, target, metadata = _resolve_spectral_diffusion_endpoints(
+            raw_item,
+            source_config=source_cfg,
+            require_same_degree_sequence=require_same_degree_sequence,
+            rng=rng,
+        )
+        source_spectrum = laplacian_eigenvalues(source)
+        clean_spectrum = laplacian_eigenvalues(target)
+        scale = spectral_scale(source, mode=str(spec_cfg.get("normalization", "mean_degree")))
+
+        source_prob = source_logits = clean_prob = clean_logits = graphlet_mask = None
+        if graphlet_basis is not None:
+            source_prob, source_mask, _ = extract_topology_graphlet_simplex(
+                source,
+                graphlet_basis=graphlet_basis,
+            )
+            clean_prob, clean_mask, _ = extract_topology_graphlet_simplex(
+                target,
+                graphlet_basis=graphlet_basis,
+            )
+            if not np.array_equal(source_mask, clean_mask):
+                raise AssertionError(
+                    "Equal-size source and clean graphs must share graphlet coordinate masks."
+                )
+            graphlet_mask = source_mask
+            source_logits = graphlet_simplex_to_clr(
+                source_prob,
+                graphlet_basis=graphlet_basis,
+                epsilon=float(graphlet_logit_epsilon),
+                coordinate_mask=graphlet_mask,
+            )
+            clean_logits = graphlet_simplex_to_clr(
+                clean_prob,
+                graphlet_basis=graphlet_basis,
+                epsilon=float(graphlet_logit_epsilon),
+                coordinate_mask=graphlet_mask,
+            )
+
+        endpoint_reports.append(
+            {
+                **metadata,
+                "num_nodes": int(source.number_of_nodes()),
+                "spectral_endpoint_distance": spectral_distance(
+                    source_spectrum,
+                    clean_spectrum,
+                    metric=str(spec_cfg.get("distance", "rmse")),
+                    scale=scale,
+                    low_frequency_weight=float(spec_cfg.get("low_frequency_weight", 1.0)),
+                    low_frequency_cutoff=int(spec_cfg.get("low_frequency_cutoff", 0)),
+                ),
+            }
+        )
+
+        for path in range(paths_per_graph):
+            progresses = diff_cfg.sample_progresses(samples_per_graph, rng=rng)
+            for local_index, progress in enumerate(progresses):
+                current_spectrum, spec_diag = sample_spectral_bridge_marginal(
+                    source_spectrum,
+                    clean_spectrum,
+                    progress=float(progress),
+                    sigma=diff_cfg.spectral_sigma,
+                    scale=scale,
+                    preserve_trace=diff_cfg.preserve_spectral_trace,
+                    fix_lambda1=diff_cfg.fix_spectral_lambda1,
+                    schedule=diff_cfg,
+                    rng=rng,
+                )
+                spectral_noise_rms.append(float(spec_diag["noise_rms"]))
+
+                current_prob = current_logits = None
+                if graphlet_basis is not None:
+                    assert source_logits is not None
+                    assert clean_logits is not None
+                    assert graphlet_mask is not None
+                    current_logits, graph_diag = sample_graphlet_clr_bridge_marginal(
+                        source_logits,
+                        clean_logits,
+                        progress=float(progress),
+                        sigma=diff_cfg.graphlet_sigma,
+                        graphlet_basis=graphlet_basis,
+                        coordinate_mask=graphlet_mask,
+                        schedule=diff_cfg,
+                        rng=rng,
+                    )
+                    current_prob = graphlet_clr_to_simplex(
+                        current_logits,
+                        graphlet_basis=graphlet_basis,
+                        coordinate_mask=graphlet_mask,
+                    )
+                    graphlet_noise_rms.append(float(graph_diag["noise_rms"]))
+
+                examples.append(
+                    TopologySpectralExample(
+                        # Fixed source graph is conditioning context.  It is NOT
+                        # an intermediate rewired graph.
+                        current_graph=source.copy(),
+                        time=float(progress),
+                        current_spectrum=current_spectrum.astype(np.float32),
+                        source_spectrum=source_spectrum.astype(np.float32),
+                        clean_spectrum_target=clean_spectrum.astype(np.float32),
+                        current_graphlet_probabilities=(
+                            None if current_prob is None else current_prob.astype(np.float32)
+                        ),
+                        source_graphlet_probabilities=(
+                            None if source_prob is None else source_prob.astype(np.float32)
+                        ),
+                        clean_graphlet_probabilities_target=(
+                            None if clean_prob is None else clean_prob.astype(np.float32)
+                        ),
+                        current_graphlet_logits=(
+                            None if current_logits is None else current_logits.astype(np.float32)
+                        ),
+                        source_graphlet_logits=(
+                            None if source_logits is None else source_logits.astype(np.float32)
+                        ),
+                        clean_graphlet_logits_target=(
+                            None if clean_logits is None else clean_logits.astype(np.float32)
+                        ),
+                        graphlet_coordinate_mask=(
+                            None if graphlet_mask is None else graphlet_mask.astype(np.bool_)
+                        ),
+                        base_generator=str(metadata["base_generator"]),
+                        source_index=int(metadata["source_index"]),
+                        target_index=int(metadata["target_index"]),
+                        matching_cost=float(metadata["matching_cost"]),
+                        trajectory_id=sample_id,
+                        step=local_index,
+                    )
+                )
+            sample_id += 1
+
+    diagnostics = {
+        "format": "summary_diffusion_training_states_v1",
+        "training_state_source": "continuous_summary_diffusion",
+        "rewiring_used_for_training_states": False,
+        "num_graphs": len(graphs),
+        "num_paths": len(graphs) * paths_per_graph,
+        "num_examples": len(examples),
+        "samples_per_graph": samples_per_graph,
+        "paths_per_graph": paths_per_graph,
+        "bridge": "brownian_endpoint_conditioned",
+        "schedule": diff_cfg.schedule,
+        "spectral_sigma": diff_cfg.spectral_sigma,
+        "graphlet_sigma": diff_cfg.graphlet_sigma if graphlet_basis is not None else None,
+        "preserve_spectral_trace": diff_cfg.preserve_spectral_trace,
+        "fix_spectral_lambda1": diff_cfg.fix_spectral_lambda1,
+        "mean_spectral_noise_rms": float(np.mean(spectral_noise_rms)) if spectral_noise_rms else 0.0,
+        "mean_graphlet_noise_rms": float(np.mean(graphlet_noise_rms)) if graphlet_noise_rms else 0.0,
+        "mean_endpoint_spectral_discrepancy": (
+            float(np.mean([row["spectral_endpoint_distance"] for row in endpoint_reports]))
+            if endpoint_reports else 0.0
+        ),
+        "source_modes": sorted({str(row["source_mode"]) for row in endpoint_reports}),
+        "base_generators": sorted({str(row["base_generator"]) for row in endpoint_reports}),
+    }
+    return examples, diagnostics
+
+
+class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset):
+    """Resample stochastic continuous summary-diffusion states every epoch."""
+
+    def __init__(
+        self,
+        graphs: Sequence[nx.Graph | TopologyTrainingPair],
+        *,
+        diffusion_config: dict[str, Any] | None = None,
+        source_config: dict[str, Any] | None = None,
+        spectral_config: dict[str, Any] | None = None,
+        graphlet_basis: TopologyGraphletBasis | None = None,
+        graphlet_logit_epsilon: float = 1.0e-5,
+        seed: int = 0,
+        shuffle_graphs: bool = True,
+    ) -> None:
+        super().__init__()
+        self.graphs = tuple(graphs)
+        self.diffusion_config = dict(diffusion_config or {})
+        self.source_config = dict(source_config or {})
+        self.spectral_config = dict(spectral_config or {})
+        self.graphlet_basis = graphlet_basis
+        self.graphlet_logit_epsilon = float(graphlet_logit_epsilon)
+        self.seed = int(seed)
+        self.shuffle_graphs = bool(shuffle_graphs)
+        self.epoch = 0
+        self.last_diagnostics: list[dict[str, Any]] = []
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
+    @property
+    def estimated_examples(self) -> int:
+        return (
+            len(self.graphs)
+            * max(int(self.diffusion_config.get("samples_per_graph", 32)), 1)
+            * max(int(self.diffusion_config.get("paths_per_graph", 1)), 1)
+        )
+
+    def __iter__(self):
+        worker = torch.utils.data.get_worker_info()
+        worker_id = worker.id if worker is not None else 0
+        worker_count = worker.num_workers if worker is not None else 1
+        indices = np.arange(len(self.graphs), dtype=np.int64)
+        generator = np.random.default_rng(self.seed + 1_000_003 * self.epoch)
+        if self.shuffle_graphs:
+            generator.shuffle(indices)
+        indices = indices[worker_id::worker_count]
+        if worker is None:
+            self.last_diagnostics = []
+        for position, graph_index in enumerate(indices):
+            examples, diagnostics = build_spectral_diffusion_examples(
+                [self.graphs[int(graph_index)]],
+                diffusion_config=self.diffusion_config,
+                source_config=self.source_config,
                 spectral_config=self.spectral_config,
                 graphlet_basis=self.graphlet_basis,
                 graphlet_logit_epsilon=self.graphlet_logit_epsilon,

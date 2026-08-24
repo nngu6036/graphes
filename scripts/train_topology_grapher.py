@@ -25,8 +25,8 @@ from grapher.rewiring_mlp.generic.model import (
     save_topology_checkpoint,
 )
 from grapher.rewiring_mlp.generic.spectral_data import (
-    TopologySpectralTrajectoryIterableDataset,
-    build_spectral_examples,
+    TopologySpectralDiffusionIterableDataset,
+    build_spectral_diffusion_examples,
     collate_spectral_examples,
 )
 from grapher.rewiring_mlp.generic.spectral_model import (
@@ -87,6 +87,9 @@ def _streaming_teacher_report(dataset: Any) -> dict[str, Any]:
         "mean_final_teacher_graphlet_discrepancy",
         "mean_initial_spectral_discrepancy",
         "mean_final_teacher_spectral_discrepancy",
+        "mean_endpoint_spectral_discrepancy",
+        "mean_spectral_noise_rms",
+        "mean_graphlet_noise_rms",
         "mean_accepted_teacher_steps",
         "teacher_stop_rate",
         "mean_valid_candidates",
@@ -310,88 +313,163 @@ def main() -> None:
         )
 
     trajectory_cfg = dict(config.get("topology_trajectory", {}) or {})
-    generation_only_horizon_keys = {
-        "prediction_horizon",
-        "refresh_prediction_every",
-        "refresh_on_plateau",
-    }
-    misplaced_horizon_keys = generation_only_horizon_keys & set(trajectory_cfg)
-    if misplaced_horizon_keys:
-        raise ValueError(
-            "Adaptive/fixed prediction horizons are generation-only. Remove "
-            f"these keys from topology_trajectory: {sorted(misplaced_horizon_keys)}."
-        )
-    if not bool(trajectory_cfg.get("ensure_connected_source", True)) or not bool(
-        trajectory_cfg.get("preserve_connectivity", True)
-    ):
-        raise ValueError(
-            "Topology trajectories require ensure_connected_source: true and "
-            "preserve_connectivity: true."
-        )
-    storage_mode = str(trajectory_cfg.get("storage", "eager")).lower()
-    if storage_mode not in {"eager", "streaming"}:
-        raise ValueError("topology_trajectory.storage must be eager or streaming.")
-    if source_mode == "completed_base_outputs" and int(
-        trajectory_cfg.get("source_randomization_steps", 0)
-    ) != 0:
-        raise ValueError(
-            "topology_trajectory.source_randomization_steps must be 0 when "
-            "training from completed base-generator outputs."
-        )
-
-    guidance_name = (
-        "spectral_graphlet_transformer" if spectral_graphlet_mode
-        else "spectral_transformer" if spectral_mode
-        else "structural_summary"
-    )
-    print(
-        f"Preparing {storage_mode} topology trajectories "
-        f"(guidance={guidance_name}, train_pairs={len(train_items)}, "
-        f"val_pairs={len(val_items)}, source_mode={source_mode})...",
-        flush=True,
-    )
-
+    diffusion_cfg = dict(config.get("summary_diffusion", {}) or {})
     spectral_cfg = dict(config.get("spectral_prediction", {}) or {})
+
+    # Spectral-family predictors are trained from continuous stochastic bridge
+    # states in summary space.  Rewiring trajectories are intentionally NOT
+    # constructed during training.  Legacy topology_trajectory remains active
+    # only for the structural-summary model.
+    if spectral_family_mode:
+        storage_mode = str(
+            diffusion_cfg.get("storage", trajectory_cfg.get("storage", "streaming"))
+        ).lower()
+        if storage_mode not in {"eager", "streaming"}:
+            raise ValueError("summary_diffusion.storage must be eager or streaming.")
+        if not diffusion_cfg:
+            # Backward-compatible defaults, while making the semantic change
+            # explicit in the log/report.
+            diffusion_cfg = {
+                "storage": storage_mode,
+                "schedule": "cosine",
+                "spectral_sigma": 0.20,
+                "graphlet_sigma": 0.35,
+                "samples_per_graph": max(int(trajectory_cfg.get("states_per_graph", 32)), 1),
+                "paths_per_graph": max(int(trajectory_cfg.get("paths_per_graph", 1)), 1),
+                "time_sampling": "stratified",
+                "preserve_spectral_trace": True,
+                "fix_spectral_lambda1": True,
+            }
+            print(
+                "[GraphER/DiffusionTraining] summary_diffusion is absent; using "
+                "v2 Brownian-bridge defaults and mapping legacy states_per_graph/"
+                "paths_per_graph to diffusion samples. Rewiring teacher settings "
+                "are ignored for spectral-family training.",
+                flush=True,
+            )
+        source_construction_cfg = {
+            "ensure_connected_source": bool(
+                diffusion_cfg.get(
+                    "ensure_connected_source",
+                    config.get("constructor", {}).get("ensure_connected", True),
+                )
+            ),
+            "random_relabel_source": bool(
+                diffusion_cfg.get(
+                    "random_relabel_source",
+                    config.get("constructor", {}).get("random_relabel", True),
+                )
+            ),
+            "max_repair_trials": int(
+                diffusion_cfg.get(
+                    "max_repair_trials",
+                    config.get("constructor", {}).get("max_repair_trials", 10000),
+                )
+            ),
+            "source_randomization_steps": int(
+                diffusion_cfg.get("source_randomization_steps", 0)
+            ),
+        }
+        if source_mode == "completed_base_outputs" and source_construction_cfg["source_randomization_steps"] != 0:
+            raise ValueError(
+                "summary_diffusion.source_randomization_steps must be 0 for completed base outputs."
+            )
+        guidance_name = (
+            "spectral_graphlet_transformer" if spectral_graphlet_mode else "spectral_transformer"
+        )
+        print(
+            f"Preparing {storage_mode} continuous summary-diffusion samples "
+            f"(guidance={guidance_name}, train_pairs={len(train_items)}, "
+            f"val_pairs={len(val_items)}, source_mode={source_mode})...",
+            flush=True,
+        )
+        print(
+            "[GraphER/DiffusionTraining] training path: source summary -> "
+            "stochastic continuous Brownian bridge -> clean summary; "
+            "rewiring is generation-only projection and is not used to create training states.",
+            flush=True,
+        )
+    else:
+        generation_only_horizon_keys = {
+            "prediction_horizon",
+            "refresh_prediction_every",
+            "refresh_on_plateau",
+        }
+        misplaced_horizon_keys = generation_only_horizon_keys & set(trajectory_cfg)
+        if misplaced_horizon_keys:
+            raise ValueError(
+                "Adaptive/fixed prediction horizons are generation-only. Remove "
+                f"these keys from topology_trajectory: {sorted(misplaced_horizon_keys)}."
+            )
+        if not bool(trajectory_cfg.get("ensure_connected_source", True)) or not bool(
+            trajectory_cfg.get("preserve_connectivity", True)
+        ):
+            raise ValueError(
+                "Topology trajectories require ensure_connected_source: true and "
+                "preserve_connectivity: true."
+            )
+        storage_mode = str(trajectory_cfg.get("storage", "eager")).lower()
+        if storage_mode not in {"eager", "streaming"}:
+            raise ValueError("topology_trajectory.storage must be eager or streaming.")
+        if source_mode == "completed_base_outputs" and int(
+            trajectory_cfg.get("source_randomization_steps", 0)
+        ) != 0:
+            raise ValueError(
+                "topology_trajectory.source_randomization_steps must be 0 when "
+                "training from completed base-generator outputs."
+            )
+        guidance_name = "structural_summary"
+        print(
+            f"Preparing {storage_mode} topology trajectories "
+            f"(guidance={guidance_name}, train_pairs={len(train_items)}, "
+            f"val_pairs={len(val_items)}, source_mode={source_mode})...",
+            flush=True,
+        )
+
     graphlet_diffusion_cfg = dict(config.get("graphlet_diffusion", {}) or {})
     graphlet_logit_epsilon = float(graphlet_diffusion_cfg.get("logit_epsilon", 1.0e-5))
     if spectral_family_mode:
         if spectral_graphlet_mode and graphlet_basis is None:
             raise AssertionError("Spectral+graphlet mode requires a graphlet basis.")
         if storage_mode == "streaming":
-            train_examples = TopologySpectralTrajectoryIterableDataset(
+            train_examples = TopologySpectralDiffusionIterableDataset(
                 train_items,
-                trajectory_config=trajectory_cfg,
+                diffusion_config=diffusion_cfg,
+                source_config=source_construction_cfg,
                 spectral_config=spectral_cfg,
                 graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
                 seed=seed,
                 shuffle_graphs=True,
             )
-            val_examples = TopologySpectralTrajectoryIterableDataset(
+            val_examples = TopologySpectralDiffusionIterableDataset(
                 val_items,
-                trajectory_config=trajectory_cfg,
+                diffusion_config=diffusion_cfg,
+                source_config=source_construction_cfg,
                 spectral_config=spectral_cfg,
                 graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
                 seed=seed + 1,
                 shuffle_graphs=False,
             )
-            train_teacher_report: dict[str, Any] = {"storage": "streaming"}
-            val_teacher_report: dict[str, Any] = {"storage": "streaming"}
+            train_teacher_report: dict[str, Any] = {"storage": "streaming", "training_state_source": "continuous_summary_diffusion"}
+            val_teacher_report: dict[str, Any] = {"storage": "streaming", "training_state_source": "continuous_summary_diffusion"}
             num_train_examples = train_examples.estimated_examples
             num_val_examples = val_examples.estimated_examples
         else:
-            train_examples, train_teacher_report = build_spectral_examples(
+            train_examples, train_teacher_report = build_spectral_diffusion_examples(
                 train_items,
-                trajectory_config=trajectory_cfg,
+                diffusion_config=diffusion_cfg,
+                source_config=source_construction_cfg,
                 spectral_config=spectral_cfg,
                 graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
                 seed=seed,
             )
-            val_examples, val_teacher_report = build_spectral_examples(
+            val_examples, val_teacher_report = build_spectral_diffusion_examples(
                 val_items,
-                trajectory_config=trajectory_cfg,
+                diffusion_config=diffusion_cfg,
+                source_config=source_construction_cfg,
                 spectral_config=spectral_cfg,
                 graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
@@ -441,8 +519,12 @@ def main() -> None:
             num_val_examples = len(val_examples)
 
     print(
-        "Topology examples (estimated for streaming): "
-        f"train={num_train_examples} val={num_val_examples}",
+        (
+            "Summary-diffusion examples (estimated for streaming): "
+            if spectral_family_mode
+            else "Topology trajectory examples (estimated for streaming): "
+        )
+        + f"train={num_train_examples} val={num_val_examples}",
         flush=True,
     )
 
@@ -614,8 +696,9 @@ def main() -> None:
         if spectral_graphlet_mode:
             print(
                 "Graphlet-logit diffusion: each k-block is connected graphlet "
-                "probabilities + a disconnected bin, transformed to CLR logits; "
-                "the shared graph encoder predicts the clean graphlet logits.",
+                "probabilities + a disconnected bin, transformed to CLR logits. "
+                "Training inputs are stochastic continuous bridge logits, not "
+                "graphlet summaries from a rewiring trajectory.",
                 flush=True,
             )
 
@@ -625,12 +708,12 @@ def main() -> None:
     for epoch in range(1, epochs + 1):
         if isinstance(
             train_examples,
-            (TopologyTrajectoryIterableDataset, TopologySpectralTrajectoryIterableDataset),
+            (TopologyTrajectoryIterableDataset, TopologySpectralDiffusionIterableDataset),
         ):
             train_examples.set_epoch(epoch - 1)
         if isinstance(
             val_examples,
-            (TopologyTrajectoryIterableDataset, TopologySpectralTrajectoryIterableDataset),
+            (TopologyTrajectoryIterableDataset, TopologySpectralDiffusionIterableDataset),
         ):
             val_examples.set_epoch(0)
 
@@ -686,7 +769,7 @@ def main() -> None:
                     summary_config=summary_cfg,
                     config=config,
                     report=row,
-                    training_time_horizon=max(int(trajectory_cfg.get("steps", 32)), 1),
+                    training_time_horizon=None,
                 )
             elif spectral_mode:
                 save_topology_spectral_checkpoint(
@@ -695,12 +778,7 @@ def main() -> None:
                     summary_config=summary_cfg,
                     config=config,
                     report=row,
-                    # Record the denominator used for the `time` feature so
-                    # generation cannot silently rescale it via
-                    # `--set topology_refiner.steps=...`.
-                    training_time_horizon=max(
-                        int(trajectory_cfg.get("steps", 32)), 1
-                    ),
+                    training_time_horizon=None,
                 )
             else:
                 assert graphlet_basis is not None
@@ -746,11 +824,14 @@ def main() -> None:
 
     streaming_types = (
         TopologyTrajectoryIterableDataset,
-        TopologySpectralTrajectoryIterableDataset,
+        TopologySpectralDiffusionIterableDataset,
     )
     if spectral_family_mode:
         predictor_targets: dict[str, Any] = {
             "clean_laplacian_eigenvalues": True,
+            "training_state_source": "continuous_summary_diffusion",
+            "rewiring_used_for_training_states": False,
+            "summary_diffusion": diffusion_cfg,
             "prediction": "joint_one_shot",
             "variable_length": "spectral_tokens_with_padding_mask",
             "eigenvectors_predicted": False,
@@ -766,10 +847,10 @@ def main() -> None:
             graphlet_basis.to_dict() if spectral_graphlet_mode and graphlet_basis is not None else None
         )
         if spectral_graphlet_mode:
-            report_format = "topology_spectral_graphlet_training_v1"
+            report_format = "topology_spectral_graphlet_training_v2"
             checkpoint_format = TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT
         else:
-            report_format = "topology_spectral_training_v1"
+            report_format = "topology_spectral_training_v2"
             checkpoint_format = TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT
     else:
         assert graphlet_basis is not None
@@ -787,6 +868,21 @@ def main() -> None:
         report_format = "topology_structural_training_v2"
         checkpoint_format = TOPOLOGY_CHECKPOINT_FORMAT
 
+    state_train_report = (
+        _streaming_teacher_report(train_examples)
+        if isinstance(train_examples, streaming_types)
+        else train_teacher_report
+    )
+    state_val_report = (
+        _streaming_teacher_report(val_examples)
+        if isinstance(val_examples, streaming_types)
+        else val_teacher_report
+    )
+    state_report_fields = (
+        {"train_diffusion": state_train_report, "val_diffusion": state_val_report}
+        if spectral_family_mode
+        else {"train_teacher": state_train_report, "val_teacher": state_val_report}
+    )
     report = {
         "format": report_format,
         "pipeline_mode": "topology",
@@ -805,24 +901,19 @@ def main() -> None:
         "num_val_pairs": len(val_items),
         "num_train_examples": num_train_examples,
         "num_val_examples": num_val_examples,
-        "train_teacher": (
-            _streaming_teacher_report(train_examples)
-            if isinstance(train_examples, streaming_types)
-            else train_teacher_report
-        ),
-        "val_teacher": (
-            _streaming_teacher_report(val_examples)
-            if isinstance(val_examples, streaming_types)
-            else val_teacher_report
-        ),
+        **state_report_fields,
         "graphlet_basis": graphlet_basis_report,
         "predictor_targets": predictor_targets,
         "training_sources": source_report,
         "prediction_horizon_training": {
             "enabled": False,
             "reason": (
-                "Prediction horizon is generation-only; teacher trajectories "
-                "advance one accepted swap per step."
+                "Spectral-family training samples continuous summary diffusion "
+                "states and has no rewiring trajectory; prediction horizon is "
+                "generation-only."
+                if spectral_family_mode
+                else "Structural-summary teacher trajectories advance one accepted "
+                "swap per step; prediction horizon remains generation-only."
             ),
         },
         "active_losses": sorted(

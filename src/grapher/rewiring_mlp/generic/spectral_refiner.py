@@ -335,17 +335,28 @@ def predict_clean_spectrum(
     *,
     time: float,
     device: torch.device | str,
+    conditioning_graph: nx.Graph | None = None,
+    source_spectrum: np.ndarray | None = None,
     **_: Any,
 ) -> SpectralPrediction:
     """Predict all clean eigenvalues jointly for one variable-size graph."""
 
     model.eval()
     n = graph.number_of_nodes()
+    context_graph = graph if conditioning_graph is None else conditioning_graph
+    current_spectrum = laplacian_eigenvalues(graph)
+    source_values = (
+        laplacian_eigenvalues(context_graph)
+        if source_spectrum is None
+        else np.asarray(source_spectrum, dtype=np.float64).reshape(-1)
+    )
     batch = collate_spectral_examples(
         [
             TopologySpectralExample(
-                current_graph=graph,
+                current_graph=context_graph,
                 time=float(time),
+                current_spectrum=current_spectrum.astype(np.float32),
+                source_spectrum=source_values.astype(np.float32),
                 clean_spectrum_target=np.zeros(n, dtype=np.float32),
             )
         ]
@@ -354,7 +365,7 @@ def predict_clean_spectrum(
     predicted = outputs["clean_spectrum"][0, :n].detach().cpu().numpy().astype(
         np.float64
     )
-    current = batch.current_spectrum[0, :n].detach().cpu().numpy().astype(np.float64)
+    current = current_spectrum.astype(np.float64)
     trace, second = spectrum_moments(predicted)
     return SpectralPrediction(
         clean_spectrum=predicted,
@@ -556,6 +567,8 @@ def refine_graph_with_spectral_predictions(
     generator = rng if rng is not None else np.random.default_rng(0)
     predictor = prediction_fn or predict_clean_spectrum
     current = normalize_topology_graph(graph)
+    conditioning_graph = current.copy()
+    source_spectrum = laplacian_eigenvalues(conditioning_graph)
     if current.number_of_nodes() > 1 and not nx.is_connected(current):
         raise ValueError("Spectral refinement requires a connected source graph.")
     initial_degrees = [int(current.degree(node)) for node in sorted(current.nodes())]
@@ -582,21 +595,28 @@ def refine_graph_with_spectral_predictions(
         prediction_refreshed = False
         if prediction is None or accepted_since_prediction >= prediction_horizon:
             prediction_progress = float(accepted_steps / max(cfg.steps - 1, 1))
-            # `time` must use the TRAINING horizon, not the generation step
-            # budget: the predictor was supervised with
-            # time = step / topology_trajectory.steps.  Clipped to [0, 1]
-            # because a generation budget larger than the training horizon can
-            # otherwise push the feature outside its supervised range.
-            prediction_time = float(
-                min(accepted_steps / cfg.resolved_time_horizon, 1.0)
-            )
+            # V2 predictors are trained on normalized diffusion progress: 0 is
+            # the HH/base source endpoint and 1 is the clean endpoint.  This is
+            # independent of the number of rewiring projection steps.
+            prediction_time = prediction_progress
             prediction_horizon = cfg.prediction_horizon_at(prediction_progress)
-            prediction = predictor(
-                model,
-                current,
-                time=prediction_time,
-                device=device,
-            )
+            if prediction_fn is None:
+                prediction = predictor(
+                    model,
+                    current,
+                    time=prediction_time,
+                    device=device,
+                    conditioning_graph=conditioning_graph,
+                    source_spectrum=source_spectrum,
+                )
+            else:
+                # Preserve the lightweight custom-predictor testing/debug API.
+                prediction = predictor(
+                    model,
+                    current,
+                    time=prediction_time,
+                    device=device,
+                )
             if prediction.clean_spectrum.size != current.number_of_nodes():
                 raise ValueError(
                     "Spectral predictor returned the wrong number of eigenvalues."

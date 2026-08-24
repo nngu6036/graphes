@@ -25,5 +25,38 @@ hh_source_to_test                   0.036058          0.262371      0.229840
 topology_final_to_test              0.036058          0.066420      0.103658
 
 
-adaptive K-rewiring
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_spectral.yaml \
+  --output-dir outputs/topology_grapher/community_small_spectral_highbudget/seed_42 \
+  --seed 42 \
+  --device gpu
 
+
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_spectral.yaml \
+  --output-dir outputs/topology_generation/community_small_spectral_highbudget_k256/seed_42 \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu \
+  --set topology_predictor.checkpoint_path=outputs/topology_grapher/community_small_spectral_highbudget/seed_42/checkpoint.pt \
+  --set topology_refiner.steps=96 \
+  --set topology_refiner.proposal_budget=1024 \
+  --set topology_refiner.valid_candidate_budget=256 \
+  --set topology_refiner.min_relative_improvement=0.00001 \
+  --set topology_refiner.spectral_guidance.max_plateau_expansions=10
+
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_spectral.yaml \
+  --generated-dir outputs/topology_generation/community_small_spectral_highbudget_k256/seed_42 \
+  --output-dir outputs/topology_grapher/community_small_spectral_highbudget_k256/seed_42/evaluation
+
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_e300 \
+  --n-epochs 300 \
+  --wrapper-config configs/baselines/defog_zinc_paper_sampling.yaml \
+  --epoch-progress-interval 1
