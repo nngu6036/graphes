@@ -15,7 +15,6 @@ from typing import Any, List, Optional, Sequence, Tuple
 from common import (
     atomic_json,
     build_components,
-    install_upstream_runtime_patches,
     load_json,
     seed_everything,
     status,
@@ -244,7 +243,6 @@ def main() -> None:
             int(cfg.model.diffusion_steps),
         )
     )
-    install_upstream_runtime_patches()
     _, model_kwargs, _ = build_components(
         cfg, molecular_statistics=statistics
     )

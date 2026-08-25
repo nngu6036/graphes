@@ -235,7 +235,20 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --output-dir \
     outputs/baselines/defog/qm9/seed_43/generations/seed_44_n_1024/evaluation
 
-
+Molecular evaluation
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1011
+  num_invalid_generated_molecules: 13
+  validity_without_correction: 0.9873046875
+  uniqueness_rate: 0.9960435212660732
+  unique_valid_count: 1007
+  novelty_rate: 0.25521350546176763
+  novel_unique_valid_count: 257
+  nspdk_mmd: 1.9870636841086912e-05
+  nspdk_mmd_valid_only: 1.9676847670456867e-05
+  fcd: None
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1011
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
   --dataset zinc \

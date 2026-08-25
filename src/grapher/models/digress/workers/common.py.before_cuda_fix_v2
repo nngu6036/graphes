@@ -47,61 +47,6 @@ def seed_everything(seed: int) -> None:
         pl.seed_everything(int(seed))
 
 
-def install_upstream_runtime_patches() -> None:
-    """Install compatibility fixes without modifying the DiGress checkout.
-
-    DiGress imports its utility module as ``src.utils``. Importing the same
-    file as top-level ``utils`` creates a second module object, so patching that
-    alias does not affect ``diffusion_model_discrete``. Patch the canonical
-    ``src.utils`` module and any already-loaded legacy alias.
-
-    The attached ``encode_no_edge`` implementation creates its diagonal mask
-    on CPU and applies it to a rank-4 CUDA tensor through advanced indexing.
-    PyTorch 2.0.x can fail there with an internal size assertion. The
-    replacement creates the mask on ``E.device`` and uses ``masked_fill_``.
-    """
-    import torch
-    from src import utils as digress_utils
-
-    def encode_no_edge(E: Any) -> Any:
-        if E.dim() != 4:
-            raise ValueError(
-                "DiGress edge tensor must have shape [B, N, N, C], "
-                f"received {tuple(E.shape)}."
-            )
-        if E.shape[-1] == 0:
-            return E
-
-        no_edge = torch.sum(E, dim=-1) == 0
-        first_channel = E[..., 0]
-        first_channel[no_edge] = 1
-        E[..., 0] = first_channel
-
-        diagonal = torch.eye(
-            E.shape[1],
-            dtype=torch.bool,
-            device=E.device,
-        ).unsqueeze(0).expand(E.shape[0], -1, -1)
-        E.masked_fill_(diagonal.unsqueeze(-1), 0)
-        return E
-
-    digress_utils.encode_no_edge = encode_no_edge
-
-    legacy_utils = sys.modules.get("utils")
-    if legacy_utils is not None and legacy_utils is not digress_utils:
-        legacy_utils.encode_no_edge = encode_no_edge
-
-    if digress_utils.encode_no_edge is not encode_no_edge:
-        raise RuntimeError(
-            "Failed to install the DiGress encode_no_edge compatibility patch."
-        )
-
-    status(
-        "Installed DiGress CUDA indexing compatibility patch on "
-        f"{digress_utils.__name__} ({getattr(digress_utils, '__file__', None)})."
-    )
-
-
 def _safe_override(value: str) -> str:
     text = str(value)
     if not text or any(character in text for character in "\x00\r\n"):

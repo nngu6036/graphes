@@ -1,0 +1,67 @@
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_e200k \
+  --wrapper-config configs/baselines/digress_community_small.yaml
+
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_e200k \
+  --wrapper-config configs/baselines/digress_community_small.yaml 
+
+GEN_DIR="outputs/baselines/digress/community_small/seed_42_e200k/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
+  --run-id seed_42_e200k \
+  --seed-id 42 \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset ego_small \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_e200k \
+  --wrapper-config configs/baselines/digress_ego_small.yaml
+
+GEN_DIR="outputs/baselines/digress/ego_small/seed_42_e200k/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/ego_small_topology_graphlet.yaml \
+  --generated-dir "$GEN_DIR" \
+  --generated-stage digress_e200k \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset qm9 \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_e1000 \
+  --wrapper-config configs/baselines/digress_qm9.yaml
+
+GEN_DIR="outputs/baselines/digress/qm9/seed_42_e1000/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+  --fcd-device auto
