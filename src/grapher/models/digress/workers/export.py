@@ -15,6 +15,7 @@ from typing import Any, List, Optional, Sequence, Tuple
 from common import (
     atomic_json,
     build_components,
+    install_discrete_model_runtime_patches,
     install_upstream_runtime_patches,
     load_json,
     seed_everything,
@@ -253,6 +254,7 @@ def main() -> None:
     import torch_geometric
     import pytorch_lightning as pl
 
+    install_discrete_model_runtime_patches(DiscreteDenoisingDiffusion)
     model = DiscreteDenoisingDiffusion(cfg=cfg, **model_kwargs)
     device = _device(args.device)
     _load_state(model, checkpoint, device)

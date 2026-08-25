@@ -24,8 +24,9 @@ from typing import Any, Mapping, Optional, Sequence
 from common import (
     atomic_json,
     build_components,
-    install_upstream_runtime_patches,
     compose_config,
+    install_discrete_model_runtime_patches,
+    install_upstream_runtime_patches,
     seed_everything,
     status,
 )
@@ -280,6 +281,7 @@ def main() -> None:
     )
     datamodule, model_kwargs, molecular_statistics = build_components(cfg)
     model_class = _build_model_class()
+    install_discrete_model_runtime_patches(model_class)
     model = model_class(cfg=cfg, **model_kwargs)
 
     callbacks = [

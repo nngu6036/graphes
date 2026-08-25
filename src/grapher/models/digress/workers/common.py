@@ -186,9 +186,199 @@ def install_upstream_runtime_patches() -> None:
             "Failed to install the DiGress categorical-sampling compatibility patch."
         )
 
+    def mask_distributions(
+        true_X: Any,
+        true_E: Any,
+        pred_X: Any,
+        pred_E: Any,
+        node_mask: Any,
+    ) -> Tuple[Any, Any, Any, Any]:
+        """Mask categorical distributions without vector-valued CUDA indexing."""
+
+        node_tensors = (true_X, pred_X)
+        edge_tensors = (true_E, pred_E)
+        if any(tensor.dim() != 3 for tensor in node_tensors):
+            raise ValueError("DiGress node distributions must have shape [B, N, C].")
+        if any(tensor.dim() != 4 for tensor in edge_tensors):
+            raise ValueError(
+                "DiGress edge distributions must have shape [B, N, N, C]."
+            )
+
+        batch_size, num_nodes = true_X.shape[:2]
+        expected_nodes = (batch_size, num_nodes)
+        expected_edges = (batch_size, num_nodes, num_nodes)
+        if any(tuple(tensor.shape[:2]) != expected_nodes for tensor in node_tensors):
+            raise ValueError("DiGress node distribution shapes are incompatible.")
+        if any(tuple(tensor.shape[:3]) != expected_edges for tensor in edge_tensors):
+            raise ValueError("DiGress edge distribution shapes are incompatible.")
+        if tuple(node_mask.shape) != expected_nodes:
+            raise ValueError(
+                "DiGress node mask must have shape [B, N], "
+                f"received {tuple(node_mask.shape)}."
+            )
+        if any(int(tensor.shape[-1]) == 0 for tensor in node_tensors + edge_tensors):
+            raise ValueError("DiGress categorical distributions cannot be empty.")
+        devices = {tensor.device for tensor in node_tensors + edge_tensors}
+        if len(devices) != 1:
+            raise ValueError("DiGress distributions must use one common device.")
+
+        device = true_X.device
+        valid_nodes = node_mask.to(device=device, dtype=torch.bool)
+        invalid_nodes = ~valid_nodes
+        valid_edges = valid_nodes.unsqueeze(1) & valid_nodes.unsqueeze(2)
+        off_diagonal = ~torch.eye(
+            num_nodes,
+            dtype=torch.bool,
+            device=device,
+        ).unsqueeze(0)
+        invalid_edges = ~(valid_edges & off_diagonal)
+
+        def mask_and_normalize(tensor: Any, invalid: Any) -> Any:
+            tensor.masked_fill_(invalid.unsqueeze(-1), 0)
+            tensor[..., 0].masked_fill_(invalid, 1)
+            smoothed = tensor + 1e-7
+            return smoothed / smoothed.sum(dim=-1, keepdim=True)
+
+        true_X_out = mask_and_normalize(true_X, invalid_nodes)
+        pred_X_out = mask_and_normalize(pred_X, invalid_nodes)
+        true_E_out = mask_and_normalize(true_E, invalid_edges)
+        pred_E_out = mask_and_normalize(pred_E, invalid_edges)
+        return true_X_out, true_E_out, pred_X_out, pred_E_out
+
+    digress_diffusion_utils.mask_distributions = mask_distributions
+    if (
+        legacy_diffusion_utils is not None
+        and legacy_diffusion_utils is not digress_diffusion_utils
+    ):
+        legacy_diffusion_utils.mask_distributions = mask_distributions
+
+    if digress_diffusion_utils.mask_distributions is not mask_distributions:
+        raise RuntimeError(
+            "Failed to install the DiGress distribution-masking compatibility patch."
+        )
+
     status(
         "Installed DiGress CUDA indexing compatibility patches on "
         f"{digress_utils.__name__} and {digress_diffusion_utils.__name__}."
+    )
+
+
+def _mask_reconstruction_distributions(
+    node_probabilities: Any,
+    edge_probabilities: Any,
+    node_mask: Any,
+) -> Tuple[Any, Any]:
+    """Apply DiGress reconstruction masks without CUDA advanced indexing."""
+
+    import torch
+
+    if node_probabilities.dim() != 3:
+        raise ValueError(
+            "DiGress reconstruction node probabilities must have shape [B, N, C]."
+        )
+    if edge_probabilities.dim() != 4:
+        raise ValueError(
+            "DiGress reconstruction edge probabilities must have shape "
+            "[B, N, N, C]."
+        )
+    batch_size, num_nodes = node_probabilities.shape[:2]
+    if tuple(edge_probabilities.shape[:3]) != (
+        batch_size,
+        num_nodes,
+        num_nodes,
+    ):
+        raise ValueError("DiGress reconstruction probability shapes are incompatible.")
+    if tuple(node_mask.shape) != (batch_size, num_nodes):
+        raise ValueError(
+            "DiGress reconstruction node mask must have shape [B, N], "
+            f"received {tuple(node_mask.shape)}."
+        )
+    if node_probabilities.device != edge_probabilities.device:
+        raise ValueError(
+            "DiGress reconstruction probabilities must use one common device."
+        )
+
+    device = node_probabilities.device
+    valid_nodes = node_mask.to(device=device, dtype=torch.bool)
+    valid_edges = valid_nodes.unsqueeze(1) & valid_nodes.unsqueeze(2)
+    diagonal = torch.eye(
+        num_nodes,
+        dtype=torch.bool,
+        device=device,
+    ).unsqueeze(0)
+    invalid_edges = (~valid_edges) | diagonal
+    node_probabilities.masked_fill_((~valid_nodes).unsqueeze(-1), 1)
+    edge_probabilities.masked_fill_(invalid_edges.unsqueeze(-1), 1)
+    return node_probabilities, edge_probabilities
+
+
+def install_discrete_model_runtime_patches(model_class: Any) -> None:
+    """Patch CUDA-sensitive masking in the upstream discrete Lightning model."""
+
+    if getattr(model_class, "_grapher_cuda_indexing_patch", False):
+        return
+
+    def reconstruction_logp(
+        self: Any,
+        t: Any,
+        X: Any,
+        E: Any,
+        node_mask: Any,
+    ) -> Any:
+        import torch
+        from torch.nn import functional as F
+
+        from src import utils
+        from src.diffusion import diffusion_utils
+
+        t_zeros = torch.zeros_like(t)
+        beta_0 = self.noise_schedule(t_zeros)
+        Q0 = self.transition_model.get_Qt(beta_t=beta_0, device=self.device)
+        probX0 = X @ Q0.X
+        probE0 = E @ Q0.E.unsqueeze(1)
+
+        sampled0 = diffusion_utils.sample_discrete_features(
+            probX=probX0,
+            probE=probE0,
+            node_mask=node_mask,
+        )
+        X0 = F.one_hot(sampled0.X, num_classes=self.Xdim_output).float()
+        E0 = F.one_hot(sampled0.E, num_classes=self.Edim_output).float()
+        y0 = sampled0.y
+        if X.shape != X0.shape or E.shape != E0.shape:
+            raise RuntimeError(
+                "DiGress reconstruction sampling returned incompatible shapes."
+            )
+
+        sampled_0 = utils.PlaceHolder(X=X0, E=E0, y=y0).mask(node_mask)
+        noisy_data = {
+            "X_t": sampled_0.X,
+            "E_t": sampled_0.E,
+            "y_t": sampled_0.y,
+            "node_mask": node_mask,
+            "t": torch.zeros(X0.shape[0], 1).type_as(y0),
+        }
+        extra_data = self.compute_extra_data(noisy_data)
+        pred0 = self.forward(noisy_data, extra_data, node_mask)
+        probX0 = F.softmax(pred0.X, dim=-1)
+        probE0 = F.softmax(pred0.E, dim=-1)
+        proby0 = F.softmax(pred0.y, dim=-1)
+        probX0, probE0 = _mask_reconstruction_distributions(
+            probX0,
+            probE0,
+            node_mask,
+        )
+        return utils.PlaceHolder(X=probX0, E=probE0, y=proby0)
+
+    model_class.reconstruction_logp = reconstruction_logp
+    model_class._grapher_cuda_indexing_patch = True
+    if model_class.reconstruction_logp is not reconstruction_logp:
+        raise RuntimeError(
+            "Failed to install the DiGress reconstruction compatibility patch."
+        )
+    status(
+        "Installed DiGress reconstruction CUDA indexing compatibility patch on "
+        f"{model_class.__module__}.{model_class.__name__}."
     )
 
 

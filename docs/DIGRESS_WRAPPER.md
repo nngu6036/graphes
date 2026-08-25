@@ -142,11 +142,12 @@ YAML values. `--n-epochs` is the total Lightning horizon; when resuming, it is
 not interpreted as an additional number of epochs.
 
 The isolated workers install in-memory compatibility replacements for
-DiGress's CUDA boolean-index assignments in `src.utils.encode_no_edge()` and
-`src.diffusion.diffusion_utils.sample_discrete_features()`. The replacements
-use device-local broadcast masks and leave the external DiGress checkout
-unchanged. This avoids PyTorch 2.0.x `Indexing.cu` size assertions during both
-training noise sampling and generation.
+DiGress's CUDA boolean-index assignments in `src.utils.encode_no_edge()`,
+`src.diffusion.diffusion_utils.sample_discrete_features()`,
+`src.diffusion.diffusion_utils.mask_distributions()`, and the discrete model's
+`reconstruction_logp()`. The replacements use device-local broadcast masks and
+leave the external DiGress checkout unchanged. This avoids PyTorch 2.0.x
+`Indexing.cu` size assertions during training, validation, and generation.
 
 ## Train and generate
 
