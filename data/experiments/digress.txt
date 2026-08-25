@@ -6,14 +6,6 @@ PYTHONPATH=src python scripts/run_digress_baseline.py \
   --num-samples 1024 \
   --seed-id 42 \
   --run-id seed_42_e200k \
-  --wrapper-config configs/baselines/digress_community_small.yaml
-
-
-PYTHONPATH=src python scripts/run_digress_baseline.py \
-  --dataset community_small \
-  --num-samples 1024 \
-  --seed-id 42 \
-  --run-id seed_42_e200k \
   --wrapper-config configs/baselines/digress_community_small.yaml 
 
 GEN_DIR="outputs/baselines/digress/community_small/seed_42_e200k/generations/seed_42_n_1024"

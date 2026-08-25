@@ -55,13 +55,15 @@ def install_upstream_runtime_patches() -> None:
     alias does not affect ``diffusion_model_discrete``. Patch the canonical
     ``src.utils`` module and any already-loaded legacy alias.
 
-    The attached ``encode_no_edge`` implementation creates its diagonal mask
-    on CPU and applies it to a rank-4 CUDA tensor through advanced indexing.
-    PyTorch 2.0.x can fail there with an internal size assertion. The
-    replacement creates the mask on ``E.device`` and uses ``masked_fill_``.
+    The attached ``encode_no_edge`` and ``sample_discrete_features``
+    implementations apply boolean masks to rank-4 CUDA tensors through
+    advanced indexing. PyTorch 2.0.x can fail there with an internal size
+    assertion. The replacements create masks on the tensor device and use
+    broadcasted ``masked_fill_`` operations.
     """
     import torch
     from src import utils as digress_utils
+    from src.diffusion import diffusion_utils as digress_diffusion_utils
 
     def encode_no_edge(E: Any) -> Any:
         if E.dim() != 4:
@@ -96,9 +98,97 @@ def install_upstream_runtime_patches() -> None:
             "Failed to install the DiGress encode_no_edge compatibility patch."
         )
 
+    def sample_discrete_features(
+        probX: Any,
+        probE: Any,
+        node_mask: Any,
+    ) -> Any:
+        """Sample categorical graph state without CUDA advanced indexing."""
+
+        if probX.dim() != 3:
+            raise ValueError(
+                "DiGress node probabilities must have shape [B, N, C], "
+                f"received {tuple(probX.shape)}."
+            )
+        if probE.dim() != 4:
+            raise ValueError(
+                "DiGress edge probabilities must have shape [B, N, N, C], "
+                f"received {tuple(probE.shape)}."
+            )
+        batch_size, num_nodes, node_classes = probX.shape
+        expected_edge_prefix = (batch_size, num_nodes, num_nodes)
+        if tuple(probE.shape[:3]) != expected_edge_prefix:
+            raise ValueError(
+                "DiGress node/edge probability shapes are incompatible: "
+                f"nodes={tuple(probX.shape)}, edges={tuple(probE.shape)}."
+            )
+        if tuple(node_mask.shape) != (batch_size, num_nodes):
+            raise ValueError(
+                "DiGress node mask must have shape [B, N], "
+                f"received {tuple(node_mask.shape)}."
+            )
+        edge_classes = int(probE.shape[-1])
+        if node_classes == 0 or edge_classes == 0:
+            raise ValueError("DiGress categorical probability tensors cannot be empty.")
+        if probX.device != probE.device:
+            raise ValueError(
+                "DiGress node and edge probabilities must use the same device."
+            )
+
+        valid_nodes = node_mask.to(device=probX.device, dtype=torch.bool)
+        probX.masked_fill_(
+            (~valid_nodes).unsqueeze(-1),
+            1.0 / int(node_classes),
+        )
+        sampled_nodes = probX.reshape(batch_size * num_nodes, -1).multinomial(1)
+        sampled_nodes = sampled_nodes.reshape(batch_size, num_nodes)
+
+        valid_edges = valid_nodes.unsqueeze(1) & valid_nodes.unsqueeze(2)
+        diagonal = torch.eye(
+            num_nodes,
+            dtype=torch.bool,
+            device=probE.device,
+        ).unsqueeze(0)
+        invalid_edges = (~valid_edges) | diagonal
+        probE.masked_fill_(
+            invalid_edges.unsqueeze(-1),
+            1.0 / edge_classes,
+        )
+        sampled_edges = probE.reshape(
+            batch_size * num_nodes * num_nodes,
+            -1,
+        ).multinomial(1)
+        sampled_edges = sampled_edges.reshape(batch_size, num_nodes, num_nodes)
+        sampled_edges = torch.triu(sampled_edges, diagonal=1)
+        sampled_edges = sampled_edges + sampled_edges.transpose(1, 2)
+
+        empty_global = torch.zeros(
+            (batch_size, 0),
+            dtype=sampled_nodes.dtype,
+            device=sampled_nodes.device,
+        )
+        return digress_diffusion_utils.PlaceHolder(
+            X=sampled_nodes,
+            E=sampled_edges,
+            y=empty_global,
+        )
+
+    digress_diffusion_utils.sample_discrete_features = sample_discrete_features
+    legacy_diffusion_utils = sys.modules.get("diffusion.diffusion_utils")
+    if (
+        legacy_diffusion_utils is not None
+        and legacy_diffusion_utils is not digress_diffusion_utils
+    ):
+        legacy_diffusion_utils.sample_discrete_features = sample_discrete_features
+
+    if digress_diffusion_utils.sample_discrete_features is not sample_discrete_features:
+        raise RuntimeError(
+            "Failed to install the DiGress categorical-sampling compatibility patch."
+        )
+
     status(
-        "Installed DiGress CUDA indexing compatibility patch on "
-        f"{digress_utils.__name__} ({getattr(digress_utils, '__file__', None)})."
+        "Installed DiGress CUDA indexing compatibility patches on "
+        f"{digress_utils.__name__} and {digress_diffusion_utils.__name__}."
     )
 
 
