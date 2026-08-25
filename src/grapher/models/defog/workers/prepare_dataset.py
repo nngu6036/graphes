@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Convert trusted GraphER generic-graph splits into DeFoG raw tensors.
+"""Internal worker converting GraphER generic splits into DeFoG raw tensors.
 
 This worker runs with the DeFoG interpreter.  It intentionally imports no
 GraphER modules, which prevents DeFoG's bare ``models`` and ``datasets``

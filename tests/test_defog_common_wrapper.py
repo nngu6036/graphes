@@ -12,7 +12,7 @@ import networkx as nx
 import pytest
 
 from grapher.models import DatasetReference, GenerateRequest, RunSpec, TrainRequest
-from grapher.models.defog import (
+from grapher.models.defog.wrapper import (
     GENERATION_MANIFEST_FORMAT,
     TRAINING_MANIFEST_FORMAT,
     TRAINING_ESTIMATES_MANIFEST_FORMAT,
@@ -213,7 +213,7 @@ def test_training_publishes_common_artifacts(
         )
 
     monkeypatch.setattr(wrapper, "_run_external", fake_external)
-    monkeypatch.setattr("grapher.models.defog.generate_defog_graphs", fake_generate)
+    monkeypatch.setattr("grapher.models.defog.wrapper.generate_defog_graphs", fake_generate)
     artifacts = wrapper.train(request)
 
     assert len(calls) == 2
@@ -359,7 +359,7 @@ def test_generation_serializes_exact_ordered_batch(monkeypatch, tmp_path) -> Non
             manifest={"format": "defog_generic_topology_v1", "exported_samples": 2},
         )
 
-    monkeypatch.setattr("grapher.models.defog.generate_defog_graphs", fake_generate)
+    monkeypatch.setattr("grapher.models.defog.wrapper.generate_defog_graphs", fake_generate)
     artifacts = DeFoGWrapper().generate(request)
 
     with artifacts.graphs_path.open("rb") as handle:
@@ -402,7 +402,7 @@ def test_same_seed_distinct_run_ids_publish_independent_batches(
             manifest={"format": "defog_generic_topology_v1", "exported_samples": 1},
         )
 
-    monkeypatch.setattr("grapher.models.defog.generate_defog_graphs", fake_generate)
+    monkeypatch.setattr("grapher.models.defog.wrapper.generate_defog_graphs", fake_generate)
     artifacts = []
     for run_id in ("replicate_a", "replicate_b"):
         run = RunSpec.for_seed(
@@ -495,7 +495,7 @@ def test_generation_recovers_training_configuration(monkeypatch, tmp_path) -> No
             manifest={"format": "defog_generic_topology_v1", "exported_samples": 1},
         )
 
-    monkeypatch.setattr("grapher.models.defog.generate_defog_graphs", fake_generate)
+    monkeypatch.setattr("grapher.models.defog.wrapper.generate_defog_graphs", fake_generate)
     artifacts = DeFoGWrapper().generate(
         GenerateRequest(
             run=run,
@@ -640,7 +640,7 @@ def test_molecular_train_and_generate_dispatch_and_manifest_semantics(
         command = list(command)
         calls.append((command, kwargs))
         if kwargs["label"] == "DeFoG dataset preparation":
-            assert Path(command[1]).name == "defog_prepare_molecular_dataset_worker.py"
+            assert Path(command[1]).name == "prepare_molecular_dataset.py"
             assert command[command.index("--dataset") + 1] == benchmark_id
             manifest_path = Path(command[command.index("--manifest") + 1])
             native_root = Path(command[command.index("--output-root") + 1])
@@ -719,7 +719,7 @@ def test_molecular_train_and_generate_dispatch_and_manifest_semantics(
     assert train_manifest["run_id"] == run_id
     assert train_manifest["training_estimates"] == {"enabled": False}
     assert Path(train_manifest["commands"]["prepare"][1]).name == (
-        "defog_prepare_molecular_dataset_worker.py"
+        "prepare_molecular_dataset.py"
     )
     assert training.run_dir == (
         tmp_path
@@ -764,7 +764,7 @@ def test_molecular_train_and_generate_dispatch_and_manifest_semantics(
             },
         )
 
-    monkeypatch.setattr("grapher.models.defog.generate_defog_graphs", fake_generate)
+    monkeypatch.setattr("grapher.models.defog.wrapper.generate_defog_graphs", fake_generate)
     generation = wrapper.generate(
         GenerateRequest(
             run=run,
@@ -809,5 +809,5 @@ def test_molecular_defaults_and_preparation_worker(
     assert resolved in {"qm9", "zinc"}
     assert _default_experiment(resolved) == experiment
     assert _prepare_worker_path(resolved).name == (
-        "defog_prepare_molecular_dataset_worker.py"
+        "prepare_molecular_dataset.py"
     )

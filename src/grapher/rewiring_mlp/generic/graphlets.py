@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections import Counter
 from functools import lru_cache
+import itertools
 from math import comb
-from typing import Any
+from typing import Any, Sequence
 
 import networkx as nx
 import numpy as np
@@ -346,6 +347,112 @@ def _connected_supersets_from_edge(
     return subsets if int(k) >= 2 else set()
 
 
+def _edge_positions(k: int) -> tuple[tuple[int, int], ...]:
+    return tuple((i, j) for i in range(int(k)) for j in range(i + 1, int(k)))
+
+
+@lru_cache(maxsize=8)
+def _mask_permutation_maps(k: int) -> tuple[tuple[int, ...], ...]:
+    """Bit-position maps for every permutation of a small k-node graph."""
+
+    pairs = _edge_positions(k)
+    pair_index = {edge: idx for idx, edge in enumerate(pairs)}
+    maps: list[tuple[int, ...]] = []
+    for permutation in itertools.permutations(range(int(k))):
+        mapped: list[int] = []
+        for left, right in pairs:
+            u, v = sorted((permutation[left], permutation[right]))
+            mapped.append(pair_index[(u, v)])
+        maps.append(tuple(mapped))
+    return tuple(maps)
+
+
+def _canonical_edge_mask(mask: int, k: int) -> int:
+    best: int | None = None
+    for mapping in _mask_permutation_maps(int(k)):
+        permuted = 0
+        for source_bit, target_bit in enumerate(mapping):
+            if (int(mask) >> source_bit) & 1:
+                permuted |= 1 << target_bit
+        if best is None or permuted < best:
+            best = permuted
+    return int(best or 0)
+
+
+def _edge_mask_is_connected(mask: int, k: int) -> bool:
+    k = int(k)
+    if k <= 1:
+        return True
+    adjacency = [0] * k
+    for bit, (left, right) in enumerate(_edge_positions(k)):
+        if (int(mask) >> bit) & 1:
+            adjacency[left] |= 1 << right
+            adjacency[right] |= 1 << left
+    seen = 1
+    frontier = 1
+    while frontier:
+        reached = 0
+        for node in range(k):
+            if (frontier >> node) & 1:
+                reached |= adjacency[node]
+        frontier = reached & ~seen
+        seen |= frontier
+    return seen == (1 << k) - 1
+
+
+def _graph_from_edge_mask(mask: int, k: int) -> nx.Graph:
+    graph = nx.Graph()
+    graph.add_nodes_from(range(int(k)))
+    for bit, edge in enumerate(_edge_positions(int(k))):
+        if (int(mask) >> bit) & 1:
+            graph.add_edge(*edge)
+    return graph
+
+
+@lru_cache(maxsize=8)
+def _topology_graphlet_key_lookup(k: int) -> tuple[str | None, ...]:
+    """Exact O(1) topology canonicalization lookup for small graphlets.
+
+    A k-node induced graph has only 2^(k choose 2) labelled adjacency masks
+    (1024 masks for k=5).  Generation scores thousands of local candidate
+    graphlets, so repeatedly constructing NetworkX subgraphs and enumerating
+    k! permutations is unnecessarily expensive.  Build the full mask lookup
+    once, using the checkpoint-compatible canonicalizer only for the small
+    number of distinct canonical masks, then use integer lookup thereafter.
+    """
+
+    k = int(k)
+    num_masks = 1 << (k * (k - 1) // 2)
+    canonicalizer = default_topology_canonicalizer()
+    canonical_to_key: dict[int, str] = {}
+    result: list[str | None] = [None] * num_masks
+    for mask in range(num_masks):
+        if not _edge_mask_is_connected(mask, k):
+            continue
+        canonical_mask = _canonical_edge_mask(mask, k)
+        key = canonical_to_key.get(canonical_mask)
+        if key is None:
+            key = canonicalizer.canonical_graph6(
+                _graph_from_edge_mask(canonical_mask, k)
+            )
+            canonical_to_key[canonical_mask] = key
+        result[mask] = key
+    return tuple(result)
+
+
+def _induced_edge_mask(graph: nx.Graph, nodes: Sequence[int]) -> int:
+    ordered = tuple(sorted(int(node) for node in nodes))
+    mask = 0
+    bit = 0
+    for left in range(len(ordered)):
+        u = ordered[left]
+        for right in range(left + 1, len(ordered)):
+            if graph.has_edge(u, ordered[right]):
+                mask |= 1 << bit
+            bit += 1
+    return mask
+
+
 def candidate_topology_graphlet_counts(
     graph: nx.Graph,
     candidate: nx.Graph,
@@ -354,15 +461,21 @@ def candidate_topology_graphlet_counts(
     current_counts: TopologyGraphletCounts,
     graphlet_basis: TopologyGraphletBasis,
 ) -> TopologyGraphletCounts:
-    """Update exact graphlet counts using only switch-affected local subsets."""
+    """Update exact graphlet counts using only switch-affected local subsets.
+
+    The current global histogram is stateful.  For each affected k-node subset
+    we classify the before/after induced graph through a precomputed integer
+    adjacency-mask lookup.  This is exact but avoids NetworkX subgraph copies,
+    connectivity checks, and factorial canonicalization in the candidate loop.
+    """
 
     removed, added = action
-    canonicalizer = default_topology_canonicalizer()
     result: TopologyGraphletCounts = {
         key: dict(counts) for key, counts in current_counts.items()
     }
     for key in graphlet_basis.sizes:
         k = int(key)
+        lookup = _topology_graphlet_key_lookup(k)
         affected: set[frozenset[int]] = set()
         for edge in removed:
             affected.update(_connected_supersets_from_edge(graph, edge, k))
@@ -370,12 +483,12 @@ def candidate_topology_graphlet_counts(
             affected.update(_connected_supersets_from_edge(candidate, edge, k))
         delta: Counter[str] = Counter()
         for subset in affected:
-            before = graph.subgraph(subset)
-            after = candidate.subgraph(subset)
-            if nx.is_connected(before):
-                delta[canonicalizer.canonical_graph6(before)] -= 1
-            if nx.is_connected(after):
-                delta[canonicalizer.canonical_graph6(after)] += 1
+            before_key = lookup[_induced_edge_mask(graph, subset)]
+            after_key = lookup[_induced_edge_mask(candidate, subset)]
+            if before_key is not None:
+                delta[before_key] -= 1
+            if after_key is not None:
+                delta[after_key] += 1
         updated = Counter(result.get(key, {}))
         updated.update(delta)
         if any(value < 0 for value in updated.values()):

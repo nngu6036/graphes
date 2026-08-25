@@ -12,7 +12,7 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from grapher.models.defog_backend import (
+from grapher.models.defog.backend import (
     DEFOG_EXPORT_FORMAT,
     DeFoGGeneratorConfig,
     _worker_environment,
@@ -22,7 +22,7 @@ from grapher.models.defog_backend import (
     resolve_defog_root,
 )
 from scripts import run_defog_grapher
-from scripts.defog_export_worker import encode_generic_samples
+from grapher.models.defog.workers.export import encode_generic_samples
 from scripts.evaluate_graph_generation_report import resolve_base_graph_path
 
 

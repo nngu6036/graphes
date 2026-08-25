@@ -197,3 +197,137 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --train-split train \
   --output-dir \
     outputs/baselines/defog/qm9/seed_43/generations/seed_43_n_1024/evaluation
+
+
+Molecular evaluation
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1013
+  num_invalid_generated_molecules: 11
+  validity_without_correction: 0.9892578125
+  uniqueness_rate: 0.9940769990128332
+  unique_valid_count: 1007
+  novelty_rate: 0.26216484607745777
+  novel_unique_valid_count: 264
+  nspdk_mmd: 2.456079776663046e-05
+  nspdk_mmd_valid_only: 2.5941648018554044e-05
+  fcd: None
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1013
+
+
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset qm9 \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --run-id seed_44 \
+  --n-epochs 1000 \
+  --epoch-progress-interval 10
+
+
+  PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs \
+    outputs/baselines/defog/qm9/seed_44/generations/seed_44_n_1024/base_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir \
+    outputs/baselines/defog/qm9/seed_43/generations/seed_44_n_1024/evaluation
+
+
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_e300 \
+  --n-epochs 300 \
+  --wrapper-config configs/baselines/defog_zinc_paper_sampling.yaml \
+  --epoch-progress-interval 1
+
+
+GEN_DIR="outputs/baselines/defog/zinc/seed_42_e300/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation"
+
+
+  Molecular evaluation
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 977
+  num_invalid_generated_molecules: 47
+  validity_without_correction: 0.9541015625
+  uniqueness_rate: 1.0
+  unique_valid_count: 977
+  novelty_rate: 1.0
+  novel_unique_valid_count: 977
+  nspdk_mmd: 0.0006518988235405961
+  nspdk_mmd_valid_only: 0.0006612800736168162
+  fcd: None
+  fcd_num_reference_molecules: 915
+  fcd_num_valid_generated_molecules: 977
+
+
+
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 43 \
+  --run-id seed_43_e300 \
+  --n-epochs 300 \
+  --wrapper-config configs/baselines/defog_zinc_paper_sampling.yaml \
+  --epoch-progress-interval 1
+  
+
+GEN_DIR="outputs/baselines/defog/zinc/seed_43_e300/generations/seed_43_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation"
+
+  Molecular evaluation
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 973
+  num_invalid_generated_molecules: 51
+  validity_without_correction: 0.9501953125
+  uniqueness_rate: 1.0
+  unique_valid_count: 973
+  novelty_rate: 1.0
+  novel_unique_valid_count: 973
+  nspdk_mmd: 0.0006427853972682708
+  nspdk_mmd_valid_only: 0.0006451268839738828
+  fcd: None
+  fcd_num_reference_molecules: 915
+  fcd_num_valid_generated_molecules: 973
+
+
+  PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --run-id seed_44_e300 \
+  --n-epochs 300 \
+  --wrapper-config configs/baselines/defog_zinc_paper_sampling.yaml \
+  --epoch-progress-interval 1
+  
+
+GEN_DIR="outputs/baselines/defog/zinc/seed_44_e300/generations/seed_44_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation"

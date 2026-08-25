@@ -1,4 +1,4 @@
-"""Isolated DeFoG base-generator adapter for GraphER graph batches.
+"""Isolated DeFoG base-generator backend for GraphER graph batches.
 
 The attached DeFoG reference implementation is not an installable, namespaced
 library: it mixes ``src.*`` imports with bare ``datasets``/``models`` imports
@@ -329,7 +329,7 @@ def resolve_defog_python(
 
 
 def _worker_path() -> Path:
-    path = Path(__file__).resolve().parents[3] / "scripts" / "defog_export_worker.py"
+    path = Path(__file__).resolve().parent / "workers" / "export.py"
     if not path.is_file():
         raise FileNotFoundError(f"Missing DeFoG export worker: {path}")
     return path
@@ -557,7 +557,7 @@ def load_defog_export(
                         )
                     normalized_dataset = str(encoded_dataset.item()).lower()
     if normalized_dataset in SUPPORTED_MOLECULAR_DATASETS:
-        from grapher.models.defog_molecular_codec import (
+        from grapher.models.defog.molecular_codec import (
             MODEL_REPRESENTATION,
             load_molecular_export,
         )

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Launch upstream DeFoG training with GraphER's artifact safeguards."""
+"""Internal worker for DeFoG training with GraphER's artifact safeguards."""
 
 from __future__ import annotations
 
@@ -505,7 +505,10 @@ def main() -> None:
             flush=True,
         )
     if dataset in {"qm9", "zinc"}:
-        from defog_molecular_runtime import install_dataset_info_patch
+        if __package__:
+            from .molecular_runtime import install_dataset_info_patch
+        else:
+            from molecular_runtime import install_dataset_info_patch
 
         install_dataset_info_patch(dataset)
     _install_single_device_strategy()

@@ -7,7 +7,15 @@ from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKER_PATH = ROOT / "scripts" / "defog_prepare_molecular_dataset_worker.py"
+WORKER_PATH = (
+    ROOT
+    / "src"
+    / "grapher"
+    / "models"
+    / "defog"
+    / "workers"
+    / "prepare_molecular_dataset.py"
+)
 SPEC = importlib.util.spec_from_file_location("defog_molecular_worker", WORKER_PATH)
 assert SPEC is not None and SPEC.loader is not None
 WORKER = importlib.util.module_from_spec(SPEC)

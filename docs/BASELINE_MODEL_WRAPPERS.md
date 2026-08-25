@@ -40,9 +40,18 @@ src/grapher/models/
 │   └── evaluation.py
 ├── digress.py
 ├── catflow.py
-├── defog.py
-├── defog_backend.py
-├── defog_molecular_codec.py
+├── defog/
+│   ├── __init__.py
+│   ├── wrapper.py
+│   ├── backend.py
+│   ├── runtime.py
+│   ├── molecular_codec.py
+│   └── workers/
+│       ├── export.py
+│       ├── train.py
+│       ├── prepare_dataset.py
+│       ├── prepare_molecular_dataset.py
+│       └── molecular_runtime.py
 ├── hog_diff.py
 └── flagg.py
 ```
@@ -50,7 +59,7 @@ src/grapher/models/
 The project-owned DH-VAE+HH implementation is colocated with its wrapper. Thin
 compatibility modules preserve its former import and CLI paths. Third-party
 implementations remain external; for example, `DeFoGWrapper` delegates to
-`grapher.models.defog_backend` rather than replace its validated subprocess and NPZ
+`grapher.models.defog.backend` rather than replace its validated subprocess and NPZ
 export code.
 
 ## Public interface
@@ -205,7 +214,7 @@ HOG-Diff, and FLAGG remain explicit placeholders. Unimplemented methods raise
 adapter must not leave a partial run that looks like evidence.
 
 `scripts/run_dhvae_hh_baseline.py` provides a thin train-then-generate command
-over the common wrapper. The former DH-VAE+HH compatibility CLIs and the
-isolated DeFoG workers remain available. Molecular preparation for DeFoG is
-performed by `scripts/defog_prepare_molecular_dataset_worker.py`; it records
-the exact source representation and, for ZINC, the verified Kekule model view.
+over the common wrapper. The former DH-VAE+HH compatibility CLIs remain
+available. Internal isolated DeFoG workers live under
+`grapher.models.defog.workers`; molecular preparation records the exact source
+representation and, for ZINC, the verified Kekule model view.

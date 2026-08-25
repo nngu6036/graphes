@@ -5,7 +5,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from scripts import defog_molecular_runtime as runtime
+from grapher.models.defog.workers import molecular_runtime as runtime
 
 
 class _TopLevelDatasetInfos:

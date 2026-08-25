@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Convert GraphER molecular splits into DeFoG's native PyG artifacts.
+"""Internal worker converting molecular splits into DeFoG PyG artifacts.
 
 This program is intentionally executed with the isolated DeFoG interpreter.
 It accepts only trusted GraphER pickle files containing ordered NetworkX graph

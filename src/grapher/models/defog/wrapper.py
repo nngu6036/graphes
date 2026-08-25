@@ -1,4 +1,4 @@
-"""GraphER-facing wrapper for the external DeFoG implementation.
+"""GraphER-facing wrapper implementation for the external DeFoG project.
 
 The wrapper supports generic and molecular graph datasets. DeFoG is invoked in an
 isolated subprocess because its source tree uses un-namespaced imports that can
@@ -382,11 +382,11 @@ def _dataset_profile(benchmark_id: str, native_dataset: str) -> dict[str, str]:
 
 def _prepare_worker_path(native_dataset: str) -> Path:
     filename = (
-        "defog_prepare_molecular_dataset_worker.py"
+        "prepare_molecular_dataset.py"
         if native_dataset in SUPPORTED_MOLECULAR_DATASETS
-        else "defog_prepare_dataset_worker.py"
+        else "prepare_dataset.py"
     )
-    path = Path(__file__).resolve().parents[3] / "scripts" / filename
+    path = Path(__file__).resolve().parent / "workers" / filename
     if not path.is_file():
         raise FileNotFoundError(f"Missing DeFoG dataset worker: {path}")
     return path
@@ -397,7 +397,7 @@ def _training_entrypoint(defog_root: Path, native_dataset: str) -> Path:
         raise ValueError(f"Unsupported DeFoG training dataset {native_dataset!r}.")
     if not (defog_root / "src" / "main.py").is_file():
         raise FileNotFoundError(f"Missing upstream DeFoG entrypoint under {defog_root}.")
-    path = Path(__file__).resolve().parents[3] / "scripts" / "defog_train_worker.py"
+    path = Path(__file__).resolve().parent / "workers" / "train.py"
     if not path.is_file():
         raise FileNotFoundError(f"Missing DeFoG training entrypoint: {path}")
     return path
@@ -544,7 +544,7 @@ def generate_defog_graphs(*args: Any, **kwargs: Any) -> Any:
     without importing NumPy, NetworkX, Torch, or any upstream dependency.
     """
 
-    from grapher.models.defog_backend import generate_defog_graphs as generate
+    from grapher.models.defog.backend import generate_defog_graphs as generate
 
     return generate(*args, **kwargs)
 
@@ -657,7 +657,7 @@ def _external_failure_hint(output: str) -> str | None:
         return (
             "Detected an NCCL/distributed-runtime failure. A one-device run "
             "should log `Disabled one-device DDP` before Trainer starts. Confirm "
-            "that scripts/defog_train_worker.py is the updated GraphER worker "
+            "that grapher.models.defog.workers.train is the updated worker "
             "and inspect the saved runtime diagnostics."
         )
     if classification == "cuda_unavailable":
@@ -872,7 +872,7 @@ class DeFoGWrapper(BaseGeneratorWrapper):
             request.dataset.benchmark_id,
             options.get("native_dataset") or request.dataset.native_id,
         )
-        from grapher.models.defog_runtime import (
+        from grapher.models.defog.runtime import (
             resolve_defog_python,
             resolve_defog_root,
         )
@@ -1324,7 +1324,7 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 "enabled": estimates_enabled,
             }
             if estimates_enabled:
-                from grapher.models.defog_backend import DeFoGGeneratorConfig
+                from grapher.models.defog.backend import DeFoGGeneratorConfig
 
                 estimate_count = int(
                     estimate_options.get(
@@ -1901,7 +1901,7 @@ class DeFoGWrapper(BaseGeneratorWrapper):
         generation_python_environment: dict[str, Any] | None = None
         if managed_run:
             _verify_managed_generation_assets(layout, training_manifest)
-            from grapher.models.defog_runtime import (
+            from grapher.models.defog.runtime import (
                 resolve_defog_python,
                 resolve_defog_root,
             )
@@ -1948,7 +1948,7 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 "A managed DeFoG run cannot change native_dataset during "
                 "generation. Use a new RunSpec for a different profile."
             )
-        from grapher.models.defog_backend import DeFoGGeneratorConfig
+        from grapher.models.defog.backend import DeFoGGeneratorConfig
 
         training_upstream = training_manifest.get("upstream", {})
         if not isinstance(training_upstream, Mapping):

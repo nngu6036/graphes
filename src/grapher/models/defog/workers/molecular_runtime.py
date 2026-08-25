@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Runtime patches that adapt DeFoG molecular priors to GraphER splits.
+"""Runtime helpers adapting DeFoG molecular priors to GraphER splits.
 
 The attached DeFoG dataset-info classes contain statistics from their original
 full QM9/ZINC benchmarks. Wrapper training may use different, explicitly

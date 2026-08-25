@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run DeFoG sampling in its own environment and emit a neutral graph batch.
+"""Internal worker that runs DeFoG sampling and emits a neutral graph batch.
 
 The worker intentionally imports no GraphER modules. DeFoG's source tree uses
 both ``src.*`` and unqualified imports, so the parent process supplies only the
@@ -355,7 +355,10 @@ def _model_parts(
 
     if dataset_name in MOLECULAR_ATOMIC_NUMBERS:
         if molecular_statistics is not None:
-            from defog_molecular_runtime import apply_cached_statistics
+            if __package__:
+                from .molecular_runtime import apply_cached_statistics
+            else:
+                from molecular_runtime import apply_cached_statistics
 
             apply_cached_statistics(
                 dataset_infos,
@@ -363,7 +366,10 @@ def _model_parts(
                 dataset=dataset_name,
             )
         else:
-            from defog_molecular_runtime import apply_empirical_statistics
+            if __package__:
+                from .molecular_runtime import apply_empirical_statistics
+            else:
+                from molecular_runtime import apply_empirical_statistics
 
             apply_empirical_statistics(
                 dataset_infos,

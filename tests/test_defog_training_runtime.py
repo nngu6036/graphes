@@ -7,8 +7,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from grapher.models.defog import DeFoGWrapper
-from scripts import defog_train_worker
+from grapher.models.defog.wrapper import DeFoGWrapper
+from grapher.models.defog.workers import train as defog_train_worker
 
 
 def _fake_lightning_module() -> tuple[ModuleType, type]:
@@ -169,7 +169,7 @@ def test_external_training_failure_surfaces_context_root_cause_and_action(
         kwargs["stdout"].flush()
         return SimpleNamespace(returncode=17)
 
-    monkeypatch.setattr("grapher.models.defog.subprocess.run", fake_run)
+    monkeypatch.setattr("grapher.models.defog.wrapper.subprocess.run", fake_run)
 
     with pytest.raises(RuntimeError) as captured:
         wrapper._run_external(
@@ -213,7 +213,7 @@ def test_external_training_progress_streams_the_persisted_log(
         kwargs["stdout"].flush()
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr("grapher.models.defog.subprocess.run", fake_run)
+    monkeypatch.setattr("grapher.models.defog.wrapper.subprocess.run", fake_run)
 
     wrapper._run_external(
         command,

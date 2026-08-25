@@ -356,11 +356,6 @@ docs/
   TOPOLOGY_GENERATOR.md        Detailed topology data flow and guarantees
   DESIGN_CONTRACT.md           Proposal-to-implementation contract
 scripts/
-  defog_export_worker.py
-  defog_prepare_dataset_worker.py
-  defog_prepare_molecular_dataset_worker.py
-  defog_molecular_runtime.py
-  defog_train_worker.py
   prepare_generic_dataset.py
   train_degree_generator.py
   evaluate_degree_generator.py
@@ -375,11 +370,17 @@ src/grapher/rewiring_mlp/       Rewiring MLP implementation and support code
   molecular/                    Molecular constraints and typed invariants
   evaluation/                   Raw/corrected metrics and study utilities
 src/grapher/models/dhvae_hh/    DH-VAE, samplers, HH constructors, and CLIs
-src/grapher/models/defog.py     Common DeFoG train/generate wrapper
-src/grapher/models/defog_backend.py
-                                Isolated subprocess and neutral-export boundary
-src/grapher/models/defog_molecular_codec.py
-                                Strict QM9/ZINC semantic graph codec
+src/grapher/models/defog/       DeFoG integration package
+  wrapper.py                    Common train/generate wrapper
+  backend.py                    Isolated subprocess and neutral-export boundary
+  runtime.py                    External source/interpreter resolution
+  molecular_codec.py           Strict QM9/ZINC semantic graph codec
+  workers/                      Internal isolated subprocess entrypoints
+    export.py                   Neutral DeFoG sampling/export worker
+    train.py                    Training worker and runtime safeguards
+    prepare_dataset.py          Generic-graph conversion worker
+    prepare_molecular_dataset.py Molecular conversion worker
+    molecular_runtime.py        Molecular prior runtime patches
 tests/                          Generic and retained legacy regression tests
 ```
 

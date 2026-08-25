@@ -6,7 +6,7 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from grapher.models.defog_molecular_codec import (
+from grapher.models.defog.molecular_codec import (
     MODEL_REPRESENTATION,
     MOLECULAR_EXPORT_FORMAT,
     SOURCE_REPRESENTATION,

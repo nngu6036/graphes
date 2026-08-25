@@ -15,6 +15,7 @@ from grapher.rewiring_mlp.generic.graphlet_diffusion import (
     candidate_graphlet_logits_from_counts,
     extract_topology_graphlet_simplex,
     graphlet_clr_to_simplex,
+    graphlet_simplex_from_counts,
     graphlet_logit_distance,
     graphlet_simplex_to_clr,
 )
@@ -175,6 +176,7 @@ def predict_clean_spectrum_and_graphlets(
     source_spectrum: np.ndarray | None = None,
     source_graphlet_probabilities: np.ndarray | None = None,
     source_graphlet_logits: np.ndarray | None = None,
+    current_graphlet_counts: TopologyGraphletCounts | None = None,
 ) -> SpectralGraphletPrediction:
     model.eval()
     n = graph.number_of_nodes()
@@ -185,10 +187,17 @@ def predict_clean_spectrum_and_graphlets(
         if source_spectrum is None
         else np.asarray(source_spectrum, dtype=np.float64).reshape(-1)
     )
-    current_prob, current_mask, _ = extract_topology_graphlet_simplex(
-        graph,
-        graphlet_basis=graphlet_basis,
-    )
+    if current_graphlet_counts is None:
+        current_prob, current_mask, _ = extract_topology_graphlet_simplex(
+            graph,
+            graphlet_basis=graphlet_basis,
+        )
+    else:
+        current_prob, current_mask = graphlet_simplex_from_counts(
+            current_graphlet_counts,
+            num_nodes=graph.number_of_nodes(),
+            graphlet_basis=graphlet_basis,
+        )
     current_logits = graphlet_simplex_to_clr(
         current_prob,
         graphlet_basis=graphlet_basis,
@@ -280,12 +289,74 @@ def _select_row(
     )
 
 
-def score_spectral_graphlet_candidates(
+def prepare_spectral_graphlet_candidate_states(
     graph: nx.Graph,
     candidates: Sequence[Action],
     *,
     candidate_graphs: dict[Action, nx.Graph],
     current_graphlet_counts: TopologyGraphletCounts,
+    graphlet_basis: TopologyGraphletBasis,
+    config: SpectralGraphletRefinerConfig,
+) -> dict[str, Any]:
+    """Compute target-independent candidate summaries exactly once.
+
+    Plateau expansion changes only the continuous denoising target.  Candidate
+    spectra and candidate graphlet states depend only on the current graph and
+    swap action, so recomputing them after every bridge expansion multiplies
+    the most expensive work without changing the candidates.  This cache is
+    local to one rewiring decision and is rebuilt only after the graph changes.
+    """
+
+    current_spectrum = laplacian_eigenvalues(graph)
+    scale = spectral_scale(graph, mode=config.normalization)
+    current_prob, current_mask = graphlet_simplex_from_counts(
+        current_graphlet_counts,
+        num_nodes=graph.number_of_nodes(),
+        graphlet_basis=graphlet_basis,
+    )
+    current_logits = graphlet_simplex_to_clr(
+        current_prob,
+        graphlet_basis=graphlet_basis,
+        epsilon=config.graphlet_logit_epsilon,
+        coordinate_mask=current_mask,
+    )
+    prepared_rows: list[dict[str, Any]] = []
+    for action in candidates:
+        candidate = candidate_graphs[action]
+        spectrum = laplacian_eigenvalues(candidate)
+        candidate_logits, candidate_prob, candidate_counts = (
+            candidate_graphlet_logits_from_counts(
+                graph,
+                candidate,
+                action,
+                current_counts=current_graphlet_counts,
+                graphlet_basis=graphlet_basis,
+                epsilon=config.graphlet_logit_epsilon,
+            )
+        )
+        prepared_rows.append(
+            {
+                "action": action,
+                "candidate_graph": candidate,
+                "candidate_spectrum": spectrum,
+                "candidate_graphlet_logits": candidate_logits,
+                "candidate_graphlet_probabilities": candidate_prob,
+                "candidate_graphlet_counts": candidate_counts,
+            }
+        )
+    return {
+        "current_spectrum": current_spectrum,
+        "current_graphlet_probabilities": current_prob,
+        "current_graphlet_logits": current_logits,
+        "current_graphlet_mask": current_mask,
+        "spectral_scale": float(scale),
+        "rows": prepared_rows,
+    }
+
+
+def score_prepared_spectral_graphlet_candidates(
+    prepared: Mapping[str, Any],
+    *,
     graphlet_basis: TopologyGraphletBasis,
     clean_spectrum: np.ndarray,
     next_spectrum_target: np.ndarray,
@@ -296,8 +367,11 @@ def score_spectral_graphlet_candidates(
     graphlet_weight: float,
     config: SpectralGraphletRefinerConfig,
 ) -> list[dict[str, Any]]:
-    current_spectrum = laplacian_eigenvalues(graph)
-    scale = spectral_scale(graph, mode=config.normalization)
+    """Rescore cached candidate summaries against one bridge target."""
+
+    current_spectrum = np.asarray(prepared["current_spectrum"], dtype=np.float64)
+    current_logits = np.asarray(prepared["current_graphlet_logits"], dtype=np.float64)
+    scale = float(prepared["spectral_scale"])
     current_spectral = spectral_distance(
         current_spectrum,
         next_spectrum_target,
@@ -313,22 +387,6 @@ def score_spectral_graphlet_candidates(
         scale=scale,
         low_frequency_weight=config.low_frequency_weight,
         low_frequency_cutoff=config.low_frequency_cutoff,
-    )
-    current_prob, current_mask = None, None
-    # Counts are stateful.  Reconstructing the simplex is cheap and avoids a
-    # full graphlet recount; candidate states use exact local delta updates.
-    from grapher.rewiring_mlp.generic.graphlet_diffusion import graphlet_simplex_from_counts
-
-    current_prob, current_mask = graphlet_simplex_from_counts(
-        current_graphlet_counts,
-        num_nodes=graph.number_of_nodes(),
-        graphlet_basis=graphlet_basis,
-    )
-    current_logits = graphlet_simplex_to_clr(
-        current_prob,
-        graphlet_basis=graphlet_basis,
-        epsilon=config.graphlet_logit_epsilon,
-        coordinate_mask=current_mask,
     )
     current_graphlet = graphlet_logit_distance(
         current_logits,
@@ -352,9 +410,9 @@ def score_spectral_graphlet_candidates(
     )
 
     rows: list[dict[str, Any]] = []
-    for action in candidates:
-        candidate = candidate_graphs[action]
-        spectrum = laplacian_eigenvalues(candidate)
+    for cached in prepared["rows"]:
+        spectrum = np.asarray(cached["candidate_spectrum"], dtype=np.float64)
+        candidate_logits = np.asarray(cached["candidate_graphlet_logits"], dtype=np.float64)
         candidate_spectral = spectral_distance(
             spectrum,
             next_spectrum_target,
@@ -370,14 +428,6 @@ def score_spectral_graphlet_candidates(
             scale=scale,
             low_frequency_weight=config.low_frequency_weight,
             low_frequency_cutoff=config.low_frequency_cutoff,
-        )
-        candidate_logits, candidate_prob, candidate_counts = candidate_graphlet_logits_from_counts(
-            graph,
-            candidate,
-            action,
-            current_counts=current_graphlet_counts,
-            graphlet_basis=graphlet_basis,
-            epsilon=config.graphlet_logit_epsilon,
         )
         candidate_graphlet = graphlet_logit_distance(
             candidate_logits,
@@ -404,14 +454,9 @@ def score_spectral_graphlet_candidates(
         relative = float(
             gain / max(abs(current_energy), float(config.relative_improvement_epsilon))
         )
-        rows.append(
+        row = dict(cached)
+        row.update(
             {
-                "action": action,
-                "candidate_graph": candidate,
-                "candidate_spectrum": spectrum,
-                "candidate_graphlet_logits": candidate_logits,
-                "candidate_graphlet_probabilities": candidate_prob,
-                "candidate_graphlet_counts": candidate_counts,
                 "spectral_weight": float(spectral_weight),
                 "graphlet_weight": float(graphlet_weight),
                 "current_spectral_discrepancy": float(current_spectral),
@@ -437,8 +482,48 @@ def score_spectral_graphlet_candidates(
                 "relative_energy_improvement": relative,
             }
         )
+        rows.append(row)
     return rows
 
+
+def score_spectral_graphlet_candidates(
+    graph: nx.Graph,
+    candidates: Sequence[Action],
+    *,
+    candidate_graphs: dict[Action, nx.Graph],
+    current_graphlet_counts: TopologyGraphletCounts,
+    graphlet_basis: TopologyGraphletBasis,
+    clean_spectrum: np.ndarray,
+    next_spectrum_target: np.ndarray,
+    clean_graphlet_logits: np.ndarray,
+    next_graphlet_logits_target: np.ndarray,
+    graphlet_coordinate_mask: np.ndarray,
+    spectral_weight: float,
+    graphlet_weight: float,
+    config: SpectralGraphletRefinerConfig,
+) -> list[dict[str, Any]]:
+    """Backward-compatible one-shot candidate preparation and scoring."""
+
+    prepared = prepare_spectral_graphlet_candidate_states(
+        graph,
+        candidates,
+        candidate_graphs=candidate_graphs,
+        current_graphlet_counts=current_graphlet_counts,
+        graphlet_basis=graphlet_basis,
+        config=config,
+    )
+    return score_prepared_spectral_graphlet_candidates(
+        prepared,
+        graphlet_basis=graphlet_basis,
+        clean_spectrum=clean_spectrum,
+        next_spectrum_target=next_spectrum_target,
+        clean_graphlet_logits=clean_graphlet_logits,
+        next_graphlet_logits_target=next_graphlet_logits_target,
+        graphlet_coordinate_mask=graphlet_coordinate_mask,
+        spectral_weight=spectral_weight,
+        graphlet_weight=graphlet_weight,
+        config=config,
+    )
 
 def _format_spectrum(values: np.ndarray, limit: int) -> str:
     array = np.asarray(values, dtype=np.float64).reshape(-1)
@@ -512,8 +597,10 @@ def refine_graph_with_spectral_graphlet_predictions(
     current = normalize_topology_graph(graph)
     conditioning_graph = current.copy()
     source_spectrum = laplacian_eigenvalues(conditioning_graph)
-    source_probabilities, source_graphlet_mask, _ = extract_topology_graphlet_simplex(
-        conditioning_graph, graphlet_basis=graphlet_basis
+    source_probabilities, source_graphlet_mask, source_graphlet_counts = (
+        extract_topology_graphlet_simplex(
+            conditioning_graph, graphlet_basis=graphlet_basis
+        )
     )
     source_graphlet_logits = graphlet_simplex_to_clr(
         source_probabilities,
@@ -524,10 +611,13 @@ def refine_graph_with_spectral_graphlet_predictions(
     if current.number_of_nodes() > 1 and not nx.is_connected(current):
         raise ValueError("Spectral+graphlet refinement requires a connected source graph.")
     initial_degrees = [int(current.degree(node)) for node in sorted(current.nodes())]
-    _prob, _mask, current_counts = extract_topology_graphlet_simplex(
-        current,
-        graphlet_basis=graphlet_basis,
-    )
+    # The refinement starts from the same graph as the fixed source context,
+    # so reuse its exact count cache instead of recounting graphlets.  Every
+    # accepted candidate below then advances this cache with an exact local
+    # delta update.
+    current_counts: TopologyGraphletCounts = {
+        key: dict(counts) for key, counts in source_graphlet_counts.items()
+    }
     visited = {topology_state_key(current)}
     trace: list[dict[str, Any]] = []
     prediction: SpectralGraphletPrediction | None = None
@@ -559,6 +649,7 @@ def refine_graph_with_spectral_graphlet_predictions(
                     source_spectrum=source_spectrum,
                     source_graphlet_probabilities=source_probabilities,
                     source_graphlet_logits=source_graphlet_logits,
+                    current_graphlet_counts=current_counts,
                 )
             else:
                 prediction = prediction_fn(
@@ -572,6 +663,7 @@ def refine_graph_with_spectral_graphlet_predictions(
                     source_spectrum=source_spectrum,
                     source_graphlet_probabilities=source_probabilities,
                     source_graphlet_logits=source_graphlet_logits,
+                    current_graphlet_counts=current_counts,
                 )
             prediction_calls += 1
             prediction_block += 1
@@ -628,9 +720,6 @@ def refine_graph_with_spectral_graphlet_predictions(
         progress = float(accepted_steps / max(cfg.steps - 1, 1))
         spectral_weight, graphlet_weight = cfg.guidance_weights_at(progress)
         current_spectrum = laplacian_eigenvalues(current)
-        current_prob, current_mask = None, None
-        from grapher.rewiring_mlp.generic.graphlet_diffusion import graphlet_simplex_from_counts
-
         current_prob, current_mask = graphlet_simplex_from_counts(
             current_counts,
             num_nodes=current.number_of_nodes(),
@@ -683,6 +772,19 @@ def refine_graph_with_spectral_graphlet_predictions(
             _debug_print(cfg, decision_step, prefix, "stop reason=no_valid_candidates")
             break
 
+        # Candidate graph structure is fixed throughout plateau expansion.
+        # Precompute each candidate spectrum and exact local-delta graphlet
+        # state once, then only rescore the cached summaries as the continuous
+        # bridge target moves toward the predicted clean endpoint.
+        prepared_candidates = prepare_spectral_graphlet_candidate_states(
+            current,
+            candidates,
+            candidate_graphs=candidate_graphs,
+            current_graphlet_counts=current_counts,
+            graphlet_basis=graphlet_basis,
+            config=cfg,
+        )
+
         expansion_count = 0
         rows: list[dict[str, Any]] = []
         selected: int | None = None
@@ -701,11 +803,8 @@ def refine_graph_with_spectral_graphlet_predictions(
                 prediction.clean_graphlet_logits,
                 graphlet_mix,
             )
-            rows = score_spectral_graphlet_candidates(
-                current,
-                candidates,
-                candidate_graphs=candidate_graphs,
-                current_graphlet_counts=current_counts,
+            rows = score_prepared_spectral_graphlet_candidates(
+                prepared_candidates,
                 graphlet_basis=graphlet_basis,
                 clean_spectrum=prediction.clean_spectrum,
                 next_spectrum_target=next_spectrum,
