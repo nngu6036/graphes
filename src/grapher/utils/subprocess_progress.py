@@ -62,6 +62,7 @@ class SubprocessLogReporter:
         stream_output: bool = False,
         interval_seconds: float = 30.0,
         output: TextIO | None = None,
+        prefix: str = "GraphER/DeFoG",
     ) -> None:
         if interval_seconds <= 0:
             raise ValueError("progress interval_seconds must be positive.")
@@ -71,6 +72,10 @@ class SubprocessLogReporter:
         self.stream_output = bool(stream_output)
         self.interval_seconds = float(interval_seconds)
         self.output = output or sys.stderr
+        normalized_prefix = str(prefix).strip()
+        if not normalized_prefix or any(ch in normalized_prefix for ch in "\x00\r\n[]"):
+            raise ValueError("progress prefix must be a non-empty bracket-safe string.")
+        self.prefix = normalized_prefix
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._started = 0.0
@@ -91,7 +96,7 @@ class SubprocessLogReporter:
         self._offset = max(int(start_offset), 0)
         mode = "streaming output" if self.stream_output else "heartbeat only"
         self._write_line(
-            f"[GraphER/DeFoG] {self.label} started ({mode}); "
+            f"[{self.prefix}] {self.label} started ({mode}); "
             f"log={self.log_path.resolve()}"
         )
         self._thread = threading.Thread(
@@ -141,7 +146,7 @@ class SubprocessLogReporter:
         fragment = _last_log_fragment(self.log_path)
         suffix = f"; last_output={fragment!r}" if fragment else ""
         self._write_line(
-            f"[GraphER/DeFoG] {self.label} still running; "
+            f"[{self.prefix}] {self.label} still running; "
             f"elapsed={_format_elapsed(now - self._started)}; "
             f"log_bytes={size}{suffix}"
         )
@@ -156,6 +161,6 @@ class SubprocessLogReporter:
             self._thread.join(timeout=2.0)
         elapsed = _format_elapsed(time.monotonic() - self._started)
         self._write_line(
-            f"[GraphER/DeFoG] {self.label} {status}; elapsed={elapsed}; "
+            f"[{self.prefix}] {self.label} {status}; elapsed={elapsed}; "
             f"log={self.log_path.resolve()}"
         )

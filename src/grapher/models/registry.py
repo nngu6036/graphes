@@ -9,7 +9,7 @@ from grapher.models.base import BaseGeneratorWrapper
 
 _WRAPPER_PATHS: Final[dict[str, str]] = {
     "dhvae_hh": "grapher.models.dhvae_hh.wrapper:DHVAEHHWrapper",
-    "digress": "grapher.models.digress:DiGressWrapper",
+    "digress": "grapher.models.digress.wrapper:DiGressWrapper",
     "catflow": "grapher.models.catflow:CatFlowWrapper",
     "defog": "grapher.models.defog.wrapper:DeFoGWrapper",
     "hog_diff": "grapher.models.hog_diff:HOGDiffWrapper",

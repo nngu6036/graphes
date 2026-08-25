@@ -331,3 +331,19 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --reference-split test \
   --train-split train \
   --output-dir "$GEN_DIR/evaluation"
+
+
+Molecular evaluation
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 977
+  num_invalid_generated_molecules: 47
+  validity_without_correction: 0.9541015625
+  uniqueness_rate: 1.0
+  unique_valid_count: 977
+  novelty_rate: 1.0
+  novel_unique_valid_count: 977
+  nspdk_mmd: 0.0006045195876225945
+  nspdk_mmd_valid_only: 0.0006105182788791186
+  fcd: None
+  fcd_num_reference_molecules: 9150
+  fcd_num_valid_generated_molecules: 9770

@@ -78,7 +78,7 @@ Third-party model code remains in its own pinned repository and environment.
 | Wrapper ID | Model | Wrapper status | Intended backend |
 | --- | --- | --- | --- |
 | `dhvae_hh` | DH-VAE + randomized HH | Ready: generic, QM9, and ZINC | Project-owned trainer, invariant sampler, and exact constructor |
-| `digress` | DiGress | Placeholder | Isolated external repository |
+| `digress` | DiGress | Ready: Community-small, Ego-small, Grid, and QM9 | Isolated training plus schema-validated neutral-NPZ generation |
 | `catflow` | CatFlow | Placeholder | Isolated external repository |
 | `defog` | DeFoG | Ready: generic, QM9, and ZINC | Isolated training plus schema-validated neutral-NPZ generation |
 | `hog_diff` | HOG-Diff | Placeholder | Isolated external repository |
@@ -128,8 +128,9 @@ baseline artifact path.
 
 The complete API, manifest requirements, and implementation checklist are in
 [`docs/BASELINE_MODEL_WRAPPERS.md`](docs/BASELINE_MODEL_WRAPPERS.md).
-The DeFoG-specific setup, training-estimate semantics, and examples are in
-[`docs/DEFOG_WRAPPER.md`](docs/DEFOG_WRAPPER.md).
+The DiGress and DeFoG integration details are in
+[`docs/DIGRESS_WRAPPER.md`](docs/DIGRESS_WRAPPER.md) and
+[`docs/DEFOG_WRAPPER.md`](docs/DEFOG_WRAPPER.md), respectively.
 
 To train DH-VAE+HH on Community-small and generate 1,024 raw graphs:
 
@@ -151,6 +152,40 @@ one-to-one coupling within exact node-count strata using Hungarian assignment
 on the normalized sorted-degree profile. Clustering, orbit, and graphlet
 summaries are explicitly excluded from the matching cost and remain held-out
 prediction targets.
+
+To train DiGress on the prepared Community-small split and generate 1,024
+raw graphs, point the wrapper at the attached external repository and its
+isolated interpreter:
+
+```bash
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_e200k \
+  --wrapper-config configs/baselines/digress_community_small.yaml
+```
+
+Evaluate that managed batch with the common generic-graph evaluator:
+
+```bash
+GEN_DIR="outputs/baselines/digress/community_small/seed_42_e200k/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
+
+The evaluator reads the managed generation manifest, auto-detects
+`base_graphs.pkl`, and labels the comparison row `digress_to_test`.
+
+The attached DiGress source has no ZINC configuration. The maintained wrapper
+supports Community-small, Ego-small, Grid, and heavy-atom QM9 and records any
+compatibility architecture separately from the benchmark identity.
 
 To train DeFoG on the prepared Community-small split and then generate 1,024
 raw graphs, keep GraphER in its own environment and point the wrapper at the
@@ -361,8 +396,10 @@ scripts/
   evaluate_degree_generator.py
   train_topology_grapher.py
   run_topology_grapher.py
+  run_digress_baseline.py
   run_defog_grapher.py
   evaluate_graph_generation_report.py
+  evaluate_generated_molecules.py
 src/grapher/rewiring_mlp/       Rewiring MLP implementation and support code
   generic/                      Generic structural-summary corrector
   attributed/                   Attribute-aware corrector
@@ -370,6 +407,17 @@ src/grapher/rewiring_mlp/       Rewiring MLP implementation and support code
   molecular/                    Molecular constraints and typed invariants
   evaluation/                   Raw/corrected metrics and study utilities
 src/grapher/models/dhvae_hh/    DH-VAE, samplers, HH constructors, and CLIs
+src/grapher/models/digress/     DiGress integration package
+  wrapper.py                    Common train/generate wrapper
+  backend.py                    Isolated generation and neutral-export boundary
+  codec.py                      Strict generic/QM9 neutral graph codec
+  runtime.py                    External source/interpreter resolution
+  workers/                      Internal isolated subprocess entrypoints
+    common.py                   Hydra composition and upstream component factory
+    train.py                    Training worker and checkpoint publication
+    export.py                   Exact-count sample/export worker
+    prepare_dataset.py          Generic-graph conversion worker
+    prepare_molecular_dataset.py QM9 conversion worker
 src/grapher/models/defog/       DeFoG integration package
   wrapper.py                    Common train/generate wrapper
   backend.py                    Isolated subprocess and neutral-export boundary

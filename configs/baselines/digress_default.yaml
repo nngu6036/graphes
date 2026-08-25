@@ -1,0 +1,22 @@
+digress:
+  # Dataset and experiment are selected by run_digress_baseline.py.
+  num_workers: 0
+  check_val_every_n_epochs: 10
+  save_every_n_epochs: 100
+  generation_batch_size: 64
+  hydra_overrides: []
+
+  training_estimates:
+    enabled: true
+
+  runtime:
+    gpus: 1
+    cuda_visible_devices: null
+    python_executable: null
+    timeout_seconds: null
+    device: auto
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+      generation_batch_interval: 1

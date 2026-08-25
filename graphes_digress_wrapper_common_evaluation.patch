@@ -1,0 +1,4901 @@
+diff --git a/README.md b/README.md
+index 43f0820..61add95 100644
+--- a/README.md
++++ b/README.md
+@@ -78,7 +78,7 @@ Third-party model code remains in its own pinned repository and environment.
+ | Wrapper ID | Model | Wrapper status | Intended backend |
+ | --- | --- | --- | --- |
+ | `dhvae_hh` | DH-VAE + randomized HH | Ready: generic, QM9, and ZINC | Project-owned trainer, invariant sampler, and exact constructor |
+-| `digress` | DiGress | Placeholder | Isolated external repository |
++| `digress` | DiGress | Ready: Community-small, Ego-small, Grid, and QM9 | Isolated training plus schema-validated neutral-NPZ generation |
+ | `catflow` | CatFlow | Placeholder | Isolated external repository |
+ | `defog` | DeFoG | Ready: generic, QM9, and ZINC | Isolated training plus schema-validated neutral-NPZ generation |
+ | `hog_diff` | HOG-Diff | Placeholder | Isolated external repository |
+@@ -128,8 +128,9 @@ baseline artifact path.
+ 
+ The complete API, manifest requirements, and implementation checklist are in
+ [`docs/BASELINE_MODEL_WRAPPERS.md`](docs/BASELINE_MODEL_WRAPPERS.md).
+-The DeFoG-specific setup, training-estimate semantics, and examples are in
+-[`docs/DEFOG_WRAPPER.md`](docs/DEFOG_WRAPPER.md).
++The DiGress and DeFoG integration details are in
++[`docs/DIGRESS_WRAPPER.md`](docs/DIGRESS_WRAPPER.md) and
++[`docs/DEFOG_WRAPPER.md`](docs/DEFOG_WRAPPER.md), respectively.
+ 
+ To train DH-VAE+HH on Community-small and generate 1,024 raw graphs:
+ 
+@@ -152,6 +153,40 @@ on the normalized sorted-degree profile. Clustering, orbit, and graphlet
+ summaries are explicitly excluded from the matching cost and remain held-out
+ prediction targets.
+ 
++To train DiGress on the prepared Community-small split and generate 1,024
++raw graphs, point the wrapper at the attached external repository and its
++isolated interpreter:
++
++```bash
++export DIGRESS=/home/quang/DiGress
++export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
++
++PYTHONPATH=src python scripts/run_digress_baseline.py \
++  --dataset community_small \
++  --num-samples 1024 \
++  --seed-id 42 \
++  --run-id seed_42_e200k \
++  --wrapper-config configs/baselines/digress_community_small.yaml
++```
++
++Evaluate that managed batch with the common generic-graph evaluator:
++
++```bash
++GEN_DIR="outputs/baselines/digress/community_small/seed_42_e200k/generations/seed_42_n_1024"
++
++PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
++  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
++  --generated-dir "$GEN_DIR" \
++  --output-dir "$GEN_DIR/evaluation_report"
++```
++
++The evaluator reads the managed generation manifest, auto-detects
++`base_graphs.pkl`, and labels the comparison row `digress_to_test`.
++
++The attached DiGress source has no ZINC configuration. The maintained wrapper
++supports Community-small, Ego-small, Grid, and heavy-atom QM9 and records any
++compatibility architecture separately from the benchmark identity.
++
+ To train DeFoG on the prepared Community-small split and then generate 1,024
+ raw graphs, keep GraphER in its own environment and point the wrapper at the
+ isolated DeFoG interpreter:
+@@ -361,8 +396,10 @@ scripts/
+   evaluate_degree_generator.py
+   train_topology_grapher.py
+   run_topology_grapher.py
++  run_digress_baseline.py
+   run_defog_grapher.py
+   evaluate_graph_generation_report.py
++  evaluate_generated_molecules.py
+ src/grapher/rewiring_mlp/       Rewiring MLP implementation and support code
+   generic/                      Generic structural-summary corrector
+   attributed/                   Attribute-aware corrector
+@@ -370,6 +407,17 @@ src/grapher/rewiring_mlp/       Rewiring MLP implementation and support code
+   molecular/                    Molecular constraints and typed invariants
+   evaluation/                   Raw/corrected metrics and study utilities
+ src/grapher/models/dhvae_hh/    DH-VAE, samplers, HH constructors, and CLIs
++src/grapher/models/digress/     DiGress integration package
++  wrapper.py                    Common train/generate wrapper
++  backend.py                    Isolated generation and neutral-export boundary
++  codec.py                      Strict generic/QM9 neutral graph codec
++  runtime.py                    External source/interpreter resolution
++  workers/                      Internal isolated subprocess entrypoints
++    common.py                   Hydra composition and upstream component factory
++    train.py                    Training worker and checkpoint publication
++    export.py                   Exact-count sample/export worker
++    prepare_dataset.py          Generic-graph conversion worker
++    prepare_molecular_dataset.py QM9 conversion worker
+ src/grapher/models/defog/       DeFoG integration package
+   wrapper.py                    Common train/generate wrapper
+   backend.py                    Isolated subprocess and neutral-export boundary
+diff --git a/configs/baselines/digress_community_small.yaml b/configs/baselines/digress_community_small.yaml
+new file mode 100644
+index 0000000..c3b59c2
+--- /dev/null
++++ b/configs/baselines/digress_community_small.yaml
+@@ -0,0 +1,27 @@
++digress:
++  native_dataset: comm20
++  experiment: comm20
++
++  # The attached upstream comm20 configuration uses 1,000,000 epochs. GraphES
++  # uses a 200k budget by default; increase this only after validation evidence.
++  n_epochs: 200000
++  batch_size: 256
++  num_workers: 0
++  check_val_every_n_epochs: 1000
++  save_every_n_epochs: 10000
++  generation_batch_size: 64
++
++  training_estimates:
++    enabled: true
++    # Omit num_graphs to match the 140-graph training split automatically.
++
++  runtime:
++    gpus: 1
++    cuda_visible_devices: "0"
++    device: auto
++    progress:
++      enabled: true
++      stream_output: true
++      interval_seconds: 15
++      epoch_interval: 2000
++      generation_batch_interval: 1
+diff --git a/configs/baselines/digress_default.yaml b/configs/baselines/digress_default.yaml
+new file mode 100644
+index 0000000..aa1dca3
+--- /dev/null
++++ b/configs/baselines/digress_default.yaml
+@@ -0,0 +1,22 @@
++digress:
++  # Dataset and experiment are selected by run_digress_baseline.py.
++  num_workers: 0
++  check_val_every_n_epochs: 10
++  save_every_n_epochs: 100
++  generation_batch_size: 64
++  hydra_overrides: []
++
++  training_estimates:
++    enabled: true
++
++  runtime:
++    gpus: 1
++    cuda_visible_devices: null
++    python_executable: null
++    timeout_seconds: null
++    device: auto
++    progress:
++      enabled: true
++      stream_output: true
++      interval_seconds: 15
++      generation_batch_interval: 1
+diff --git a/configs/baselines/digress_ego_small.yaml b/configs/baselines/digress_ego_small.yaml
+new file mode 100644
+index 0000000..3b0d792
+--- /dev/null
++++ b/configs/baselines/digress_ego_small.yaml
+@@ -0,0 +1,25 @@
++digress:
++  # The attached source has no Ego-small profile; its generic data loader is
++  # data-driven, so GraphES reuses the comm20 architecture only.
++  native_dataset: comm20
++  experiment: comm20
++  n_epochs: 200000
++  batch_size: 256
++  num_workers: 0
++  check_val_every_n_epochs: 1000
++  save_every_n_epochs: 10000
++  generation_batch_size: 64
++
++  training_estimates:
++    enabled: true
++
++  runtime:
++    gpus: 1
++    cuda_visible_devices: "0"
++    device: auto
++    progress:
++      enabled: true
++      stream_output: true
++      interval_seconds: 15
++      epoch_interval: 2000
++      generation_batch_interval: 1
+diff --git a/configs/baselines/digress_grid.yaml b/configs/baselines/digress_grid.yaml
+new file mode 100644
+index 0000000..adbf0b5
+--- /dev/null
++++ b/configs/baselines/digress_grid.yaml
+@@ -0,0 +1,25 @@
++digress:
++  # Grid uses the attached planar model architecture and generic loader, but is
++  # trained only on GraphES's frozen Grid splits.
++  native_dataset: planar
++  experiment: planar
++  n_epochs: 100000
++  batch_size: 32
++  num_workers: 0
++  check_val_every_n_epochs: 100
++  save_every_n_epochs: 5000
++  generation_batch_size: 16
++
++  training_estimates:
++    enabled: true
++
++  runtime:
++    gpus: 1
++    cuda_visible_devices: "0"
++    device: auto
++    progress:
++      enabled: true
++      stream_output: true
++      interval_seconds: 15
++      epoch_interval: 1000
++      generation_batch_interval: 1
+diff --git a/configs/baselines/digress_qm9.yaml b/configs/baselines/digress_qm9.yaml
+new file mode 100644
+index 0000000..6e25f9b
+--- /dev/null
++++ b/configs/baselines/digress_qm9.yaml
+@@ -0,0 +1,27 @@
++digress:
++  native_dataset: qm9
++  experiment: qm9_no_h
++  n_epochs: 1000
++  batch_size: 1024
++  num_workers: 8
++  check_val_every_n_epochs: 5
++  save_every_n_epochs: 100
++  generation_batch_size: 256
++
++  # The wrapper recomputes node-count, atom, edge, and valency priors from the
++  # exact GraphES train/validation artifacts rather than using bundled QM9 data.
++  training_estimates:
++    enabled: true
++    num_graphs: 1024
++    batch_size: 256
++
++  runtime:
++    gpus: 1
++    cuda_visible_devices: "0"
++    device: auto
++    progress:
++      enabled: true
++      stream_output: true
++      interval_seconds: 15
++      epoch_interval: 10
++      generation_batch_interval: 1
+diff --git a/docs/BASELINE_MODEL_WRAPPERS.md b/docs/BASELINE_MODEL_WRAPPERS.md
+index 0650893..bbec02d 100644
+--- a/docs/BASELINE_MODEL_WRAPPERS.md
++++ b/docs/BASELINE_MODEL_WRAPPERS.md
+@@ -38,7 +38,18 @@ src/grapher/models/
+ │   ├── typed_constructor.py
+ │   ├── training.py
+ │   └── evaluation.py
+-├── digress.py
++├── digress/
++│   ├── __init__.py
++│   ├── wrapper.py
++│   ├── backend.py
++│   ├── codec.py
++│   ├── runtime.py
++│   └── workers/
++│       ├── common.py
++│       ├── train.py
++│       ├── export.py
++│       ├── prepare_dataset.py
++│       └── prepare_molecular_dataset.py
+ ├── catflow.py
+ ├── defog/
+ │   ├── __init__.py
+@@ -207,14 +218,18 @@ The DH-VAE+HH wrapper implements training and exact-count generation for
+ generic graphs and attributed QM9/ZINC molecular graphs using the existing
+ project-owned trainer, invariant samplers, and constructors. The DeFoG wrapper
+ implements isolated training, post-training estimate export, and generation
+-for the same domains. Its neutral backend validates the dataset-specific
+-schema before publishing GraphER-facing NetworkX batches. DiGress, CatFlow,
+-HOG-Diff, and FLAGG remain explicit placeholders. Unimplemented methods raise
+-`BaselineNotImplementedError` before creating any directories; an incomplete
+-adapter must not leave a partial run that looks like evidence.
+-
+-`scripts/run_dhvae_hh_baseline.py` provides a thin train-then-generate command
+-over the common wrapper. The former DH-VAE+HH compatibility CLIs remain
+-available. Internal isolated DeFoG workers live under
+-`grapher.models.defog.workers`; molecular preparation records the exact source
+-representation and, for ZINC, the verified Kekule model view.
++for the same domains. DiGress is also complete for Community-small, Ego-small,
++Grid, and heavy-atom QM9. Both external wrappers export neutral numeric NPZ
++batches and validate dataset-specific schemas before publishing GraphER-facing
++NetworkX graphs. CatFlow, HOG-Diff, and FLAGG remain explicit placeholders.
++Unimplemented methods raise `BaselineNotImplementedError` before creating any
++directories; an incomplete adapter must not leave a partial run that looks
++like evidence.
++
++`scripts/run_dhvae_hh_baseline.py`, `scripts/run_defog_baseline.py`, and
++`scripts/run_digress_baseline.py` provide thin train-then-generate commands over
++the common wrappers. Internal isolated workers live under their corresponding
++`grapher.models.<model>.workers` package. DiGress-specific setup and commands
++are documented in `docs/DIGRESS_WRAPPER.md`; DeFoG molecular preparation
++records the exact source representation and, for ZINC, the verified Kekule
++model view.
+diff --git a/docs/DIGRESS_WRAPPER.md b/docs/DIGRESS_WRAPPER.md
+new file mode 100644
+index 0000000..5e042af
+--- /dev/null
++++ b/docs/DIGRESS_WRAPPER.md
+@@ -0,0 +1,310 @@
++# DiGress baseline wrapper
++
++`grapher.models.digress.DiGressWrapper` implements the common GraphER
++`train()` and `generate()` contract for the attached external DiGress source
++snapshot. The upstream repository remains external and executes in its own
++Python environment. GraphER communicates with it through command-line worker
++processes and a validated numeric NPZ export rather than importing DiGress into
++the GraphER process.
++
++## Environment
++
++```bash
++export DIGRESS=/absolute/path/to/DiGress
++export DIGRESS_PYTHON=/absolute/path/to/digress-env/bin/python
++export PYTHONPATH=src
++```
++
++The DiGress environment must contain the dependencies required by the attached
++source tree, including PyTorch, PyTorch Lightning, Hydra/OmegaConf,
++PyTorch-Geometric, NetworkX, and the model-specific scientific packages. QM9
++additionally requires RDKit.
++
++The wrapper does not require the DiGress and GraphER environments to use the
++same package versions. All upstream imports occur in the isolated interpreter.
++
++## Supported datasets
++
++| GraphER benchmark | Prepared directory | Native DiGress profile | Scope |
++| --- | --- | --- | --- |
++| `community_small` | `outputs/datasets/sbm` | dataset/experiment `comm20` | Generic topology |
++| `ego_small` | `outputs/datasets/ego_small` | `comm20` compatibility architecture | Generic topology |
++| `grid` | `outputs/datasets/grid` | `planar` compatibility architecture | Generic topology |
++| `qm9` | `outputs/datasets/qm9_attributed` | dataset `qm9`, experiment `qm9_no_h` | Heavy-atom attributed molecules |
++
++The attached DiGress snapshot has no ZINC dataset or experiment configuration,
++so `DiGressWrapper` deliberately rejects ZINC instead of silently substituting
++another molecular benchmark.
++
++Ego-small and Grid use the attached source's data-driven generic loader with a
++declared architecture profile. The wrapper still trains exclusively on the
++immutable GraphER split and records the report-facing benchmark separately
++from the native compatibility profile.
++
++## Package layout
++
++All DiGress-specific integration code is under the model package, following the
++DeFoG package convention:
++
++```text
++src/grapher/models/digress/
++├── __init__.py
++├── wrapper.py
++├── backend.py
++├── codec.py
++├── runtime.py
++└── workers/
++    ├── common.py
++    ├── prepare_dataset.py
++    ├── prepare_molecular_dataset.py
++    ├── train.py
++    └── export.py
++```
++
++The public orchestration entrypoint remains model-specific, while evaluation
++uses the repository's common artifact-driven evaluators:
++
++```text
++scripts/run_digress_baseline.py
++scripts/evaluate_graph_generation_report.py
++scripts/evaluate_generated_molecules.py
++```
++
++## Design and source-specific safeguards
++
++The attached upstream entrypoint is not invoked directly. Its `main.py`
++imports optional packages unconditionally and configures DDP even for a
++single-device run. The isolated training worker instead composes the same
++Hydra experiment, constructs the upstream data module and
++`DiscreteDenoisingDiffusion` model, and launches Lightning with a single-device
++strategy.
++
++The wrapper also addresses these source-specific issues:
++
++- GraphER split files are converted without modifying the original
++  `train.pkl`, `val.pkl`, or `test.pkl` artifacts.
++- Generic processed PyG files are written directly because the attached
++  `SpectreGraphDataset.process()` duplicates each graph in this source
++  snapshot.
++- Expensive validation-time graph sampling, visualization, and final
++  `trainer.test()` generation are disabled during managed training. The
++  validation likelihood loop remains available at the configured cadence.
++- QM9 node-count, atom-type, edge-type, and valency priors are recomputed from
++  the exact converted GraphER splits rather than copied from bundled DiGress
++  data.
++- Generation calls the upstream model's `sample_batch()` method, exports only
++  numeric arrays, then decodes and validates them in GraphER.
++- Generated samples are not filtered, repaired, or silently replaced. Invalid
++  or disconnected raw outputs remain evaluation outcomes.
++
++## Configuration files
++
++Maintained wrapper configurations are available under `configs/baselines/`:
++
++```text
++digress_default.yaml
++digress_community_small.yaml
++digress_ego_small.yaml
++digress_grid.yaml
++digress_qm9.yaml
++```
++
++A wrapper configuration has a top-level `digress` section. For example:
++
++```yaml
++digress:
++  native_dataset: comm20
++  experiment: comm20
++  n_epochs: 200000
++  batch_size: 256
++  num_workers: 0
++  check_val_every_n_epochs: 1000
++  save_every_n_epochs: 10000
++  generation_batch_size: 64
++
++  training_estimates:
++    enabled: true
++
++  runtime:
++    gpus: 1
++    cuda_visible_devices: "0"
++    device: auto
++    progress:
++      enabled: true
++      stream_output: true
++      interval_seconds: 15
++      epoch_interval: 2000
++      generation_batch_interval: 1
++```
++
++CLI values such as `--n-epochs` and `--batch-size` override the corresponding
++YAML values. `--n-epochs` is the total Lightning horizon; when resuming, it is
++not interpreted as an additional number of epochs.
++
++## Train and generate
++
++### Community-small
++
++```bash
++PYTHONPATH=src python scripts/run_digress_baseline.py \
++  --dataset community_small \
++  --num-samples 1024 \
++  --seed-id 42 \
++  --run-id seed_42_e200k \
++  --wrapper-config configs/baselines/digress_community_small.yaml
++```
++
++### Ego-small
++
++```bash
++PYTHONPATH=src python scripts/run_digress_baseline.py \
++  --dataset ego_small \
++  --num-samples 1024 \
++  --seed-id 42 \
++  --run-id seed_42_e200k \
++  --wrapper-config configs/baselines/digress_ego_small.yaml
++```
++
++### Grid
++
++```bash
++PYTHONPATH=src python scripts/run_digress_baseline.py \
++  --dataset grid \
++  --num-samples 1024 \
++  --seed-id 42 \
++  --run-id seed_42_e100k \
++  --wrapper-config configs/baselines/digress_grid.yaml
++```
++
++### QM9
++
++```bash
++PYTHONPATH=src python scripts/run_digress_baseline.py \
++  --dataset qm9 \
++  --num-samples 1024 \
++  --seed-id 42 \
++  --run-id seed_42_e1000 \
++  --wrapper-config configs/baselines/digress_qm9.yaml
++```
++
++The runner prints human-readable progress to stderr and one final JSON artifact
++summary to stdout. Useful CLI overrides include:
++
++```text
++--n-epochs
++--batch-size
++--generation-batch-size
++--num-workers
++--check-val-every-n-epochs
++--save-every-n-epochs
++--resume-from
++--skip-training-estimates
++--training-estimate-count
++--epoch-progress-interval
++```
++
++## Evaluation
++
++DiGress publishes the same managed `base_graphs.pkl` and `manifest.json`
++contract as the other baseline wrappers. Evaluation therefore uses the common
++model-agnostic scripts directly; there is no DiGress-specific evaluator.
++
++### Generic graphs
++
++```bash
++GEN_DIR="outputs/baselines/digress/community_small/seed_42_e200k/generations/seed_42_n_1024"
++
++PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
++  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
++  --generated-dir "$GEN_DIR" \
++  --output-dir "$GEN_DIR/evaluation_report"
++```
++
++The evaluator auto-detects `base_graphs.pkl` and reads `model_id: digress` from
++the generation manifest. For Ego-small or Grid, change the generation path and
++use the matching `ego_small_topology_graphlet.yaml` or
++`grid_topology_graphlet.yaml` configuration. Use `--max-graphs` only for a
++smoke evaluation.
++
++### QM9
++
++```bash
++GEN_DIR="outputs/baselines/digress/qm9/seed_42_e1000/generations/seed_42_n_1024"
++
++PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
++  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
++  --dataset-root outputs/datasets \
++  --dataset qm9_attributed \
++  --reference-split test \
++  --train-split train \
++  --output-dir "$GEN_DIR/evaluation" \
++  --fcd-device auto
++```
++
++This reports RDKit validity, uniqueness, novelty, NSPDK, and FCD when its
++optional dependency is available. Add `--skip-fcd` when the environment lacks
++a compatible FCD package.
++
++## Artifact layout
++
++```text
++outputs/baselines/digress/<benchmark>/<run_id>/
++├── run.json
++├── train/
++│   ├── checkpoints/model.ckpt
++│   ├── dataset_conversion.json
++│   ├── manifest.json
++│   ├── molecular_statistics.json       # QM9 only
++│   ├── native_dataset/
++│   ├── resolved_config.yaml
++│   ├── train.log
++│   └── training_estimates/
++│       ├── estimated_graphs.pkl
++│       ├── ground_truth_graphs.pkl
++│       ├── ground_truth_model_view.pkl  # QM9 only
++│       ├── manifest.json
++│       └── native/
++├── failures/                            # created only after failed attempts
++│   └── attempt-<id>/
++└── generations/<generation_id>/
++    ├── base_graphs.pkl
++    ├── generate.log
++    ├── manifest.json
++    └── native/
++        ├── digress_samples.npz
++        └── digress_manifest.json
++```
++
++The post-training estimate pool is an independent unconditional sample, not an
++index-aligned reconstruction of the training set. Its manifest therefore
++records `pairing.status: unpaired`. A separate declared matching operation must
++create Rewiring-MLP supervision pairs.
++
++## Neutral export schema
++
++The isolated exporter writes format `digress_graph_batch_v1` with numeric
++arrays:
++
++```text
++node_offsets
++node_types
++edge_offsets
++edge_endpoints
++edge_types
++```
++
++`allow_pickle=False` is used when GraphER loads this file. The decoder verifies
++graph counts, offsets, node/edge vocabularies, endpoint ranges, duplicate
++edges, and self-loops before constructing the ordered `base_graphs.pkl` batch.
++
++## Limitations
++
++- Only the attached discrete DiGress model is wrapped; the continuous model is
++  outside this integration.
++- ZINC, MOSES, GuacaMol, and explicit-hydrogen QM9 are not exposed by the
++  current GraphER runner.
++- Grid and Ego-small use declared compatibility architectures because this
++  source snapshot has no native profiles for those benchmark names.
++- A complete GPU train-and-generate run still depends on a working external
++  DiGress environment; repository unit tests validate the wrapper boundary and
++  neutral codec without reproducing a full long-running training job.
+diff --git a/scripts/run_digress_baseline.py b/scripts/run_digress_baseline.py
+new file mode 100755
+index 0000000..6c0559a
+--- /dev/null
++++ b/scripts/run_digress_baseline.py
+@@ -0,0 +1,297 @@
++#!/usr/bin/env python
++"""Train DiGress on a prepared GraphER dataset and generate one raw batch."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import os
++import sys
++from dataclasses import dataclass
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Sequence
++
++from grapher.models import (
++    DatasetReference,
++    GenerateRequest,
++    RunSpec,
++    TrainRequest,
++    create_baseline,
++)
++
++
++@dataclass(frozen=True)
++class DatasetProfile:
++    serialized_id: str
++    native_id: str
++    experiment: str
++
++
++DATASET_PROFILES: dict[str, DatasetProfile] = {
++    "community_small": DatasetProfile("sbm", "comm20", "comm20"),
++    "ego_small": DatasetProfile("ego_small", "comm20", "comm20"),
++    "grid": DatasetProfile("grid", "planar", "planar"),
++    "qm9": DatasetProfile("qm9_attributed", "qm9", "qm9_no_h"),
++}
++
++
++def _positive_int(raw: str) -> int:
++    value = int(raw)
++    if value <= 0:
++        raise argparse.ArgumentTypeError("value must be a positive integer")
++    return value
++
++
++def _nonnegative_int(raw: str) -> int:
++    value = int(raw)
++    if value < 0:
++        raise argparse.ArgumentTypeError("value must be non-negative")
++    return value
++
++
++def _positive_float(raw: str) -> float:
++    value = float(raw)
++    if value <= 0:
++        raise argparse.ArgumentTypeError("value must be positive")
++    return value
++
++
++def _status(message: str, *, enabled: bool = True) -> None:
++    if not enabled:
++        return
++    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
++    print(
++        f"[run_digress_baseline {timestamp}] {message}",
++        file=sys.stderr,
++        flush=True,
++    )
++
++
++def build_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(
++        description=(
++            "Train the DiGress baseline through its isolated GraphER wrapper, "
++            "then generate and serialize an exact raw graph batch."
++        )
++    )
++    parser.add_argument(
++        "--dataset", required=True, choices=tuple(DATASET_PROFILES)
++    )
++    parser.add_argument("--num-samples", required=True, type=_positive_int)
++    parser.add_argument(
++        "--seed-id", "--seed", dest="seed_id", required=True, type=_nonnegative_int
++    )
++    parser.add_argument(
++        "--dataset-root", type=Path, default=Path("outputs/datasets")
++    )
++    parser.add_argument(
++        "--output-root", type=Path, default=Path("outputs/baselines")
++    )
++    parser.add_argument("--run-id", default=None)
++    parser.add_argument("--generation-id", default=None)
++    parser.add_argument("--wrapper-config", type=Path, default=None)
++    parser.add_argument("--resume-from", type=Path, default=None)
++    parser.add_argument("--digress-root", type=Path, default=None)
++    parser.add_argument("--digress-python", type=Path, default=None)
++    parser.add_argument("--overwrite", action="store_true")
++    parser.add_argument(
++        "--n-epochs",
++        type=_positive_int,
++        default=None,
++        help=(
++            "Total DiGress training horizon. When resuming, this is the total "
++            "horizon rather than the number of additional epochs."
++        ),
++    )
++    parser.add_argument("--batch-size", type=_positive_int, default=None)
++    parser.add_argument(
++        "--generation-batch-size", type=_positive_int, default=None
++    )
++    parser.add_argument("--num-workers", type=_nonnegative_int, default=None)
++    parser.add_argument(
++        "--check-val-every-n-epochs", type=_positive_int, default=None
++    )
++    parser.add_argument("--save-every-n-epochs", type=_positive_int, default=None)
++    parser.add_argument(
++        "--skip-training-estimates",
++        action="store_true",
++        help="Do not generate the independent post-training source pool.",
++    )
++    parser.add_argument(
++        "--training-estimate-count", type=_positive_int, default=None
++    )
++    parser.add_argument(
++        "--progress-interval-seconds", type=_positive_float, default=15.0
++    )
++    parser.add_argument("--epoch-progress-interval", type=_positive_int, default=None)
++    parser.add_argument(
++        "--generation-progress-every-batches", type=_positive_int, default=1
++    )
++    parser.add_argument("--no-stream-subprocess-output", action="store_true")
++    parser.add_argument("--quiet", action="store_true")
++    return parser
++
++
++def _configure_environment(args: argparse.Namespace) -> None:
++    if args.digress_root is not None:
++        os.environ["DIGRESS"] = str(args.digress_root.expanduser().resolve())
++    if args.digress_python is not None:
++        os.environ["DIGRESS_PYTHON"] = str(
++            args.digress_python.expanduser().resolve()
++        )
++
++
++def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
++    _configure_environment(args)
++    progress_enabled = not args.quiet
++    profile = DATASET_PROFILES[args.dataset]
++    progress: dict[str, object] = {
++        "enabled": progress_enabled,
++        "stream_output": (
++            progress_enabled and not args.no_stream_subprocess_output
++        ),
++        "interval_seconds": args.progress_interval_seconds,
++        "generation_batch_interval": args.generation_progress_every_batches,
++    }
++    if args.epoch_progress_interval is not None:
++        progress["epoch_interval"] = args.epoch_progress_interval
++
++    training_estimates: dict[str, object] = {
++        "enabled": not args.skip_training_estimates
++    }
++    if args.training_estimate_count is not None:
++        training_estimates["num_graphs"] = args.training_estimate_count
++    training_options: dict[str, object] = {
++        "experiment": profile.experiment,
++        "training_estimates": training_estimates,
++        "runtime": {"progress": progress},
++    }
++    for key in (
++        "n_epochs",
++        "batch_size",
++        "num_workers",
++        "check_val_every_n_epochs",
++        "save_every_n_epochs",
++        "generation_batch_size",
++    ):
++        value = getattr(args, key)
++        if value is not None:
++            training_options[key] = value
++
++    run = RunSpec.for_seed(
++        model_id="digress",
++        dataset_id=args.dataset,
++        seed=args.seed_id,
++        run_id=args.run_id,
++        output_root=args.output_root,
++    )
++    dataset = DatasetReference(
++        benchmark_id=args.dataset,
++        root=args.dataset_root,
++        serialized_id=profile.serialized_id,
++        native_id=profile.native_id,
++    )
++    _status(
++        "resolved run: "
++        f"dataset={args.dataset}, serialized={profile.serialized_id}, "
++        f"native={profile.native_id}, experiment={profile.experiment}, "
++        f"run_id={run.run_id}, seed={args.seed_id}",
++        enabled=progress_enabled,
++    )
++    dataset.require_prepared()
++    wrapper = create_baseline("digress")
++    _status(
++        "prepared dataset found; starting DiGress training. Durable log will be "
++        f"published at {run.layout.training_log_path.resolve()}",
++        enabled=progress_enabled,
++    )
++    training = wrapper.train(
++        TrainRequest(
++            run=run,
++            dataset=dataset,
++            config_path=args.wrapper_config,
++            options=training_options,
++            resume_from=args.resume_from,
++            overwrite=args.overwrite,
++        )
++    )
++    _status(
++        f"training completed: checkpoint={training.checkpoint_path.resolve()}",
++        enabled=progress_enabled,
++    )
++    generation_options: dict[str, object] = {
++        "runtime": {"progress": progress}
++    }
++    if args.generation_batch_size is not None:
++        generation_options["generation_batch_size"] = args.generation_batch_size
++    generation = wrapper.generate(
++        GenerateRequest(
++            run=run,
++            checkpoint_path=training.checkpoint_path,
++            num_graphs=args.num_samples,
++            generation_seed=args.seed_id,
++            generation_id=args.generation_id,
++            options=generation_options,
++            overwrite=args.overwrite,
++        )
++    )
++    if generation.num_generated != args.num_samples:
++        raise RuntimeError(
++            f"DiGress generated {generation.num_generated}; expected "
++            f"{args.num_samples}."
++        )
++    _status(
++        f"generation completed: graphs={generation.graphs_path.resolve()}",
++        enabled=progress_enabled,
++    )
++    return {
++        "status": "complete",
++        "model": "digress",
++        "dataset": args.dataset,
++        "serialized_dataset": profile.serialized_id,
++        "native_dataset": profile.native_id,
++        "experiment": profile.experiment,
++        "seed_id": args.seed_id,
++        "run_id": run.run_id,
++        "generation_id": generation.generation_dir.name,
++        "num_samples": generation.num_generated,
++        "run_dir": str(training.run_dir.resolve()),
++        "checkpoint": str(training.checkpoint_path.resolve()),
++        "training_manifest": str(training.manifest_path.resolve()),
++        "training_estimated_graphs": (
++            str(training.estimated_graphs_path.resolve())
++            if training.estimated_graphs_path is not None
++            else None
++        ),
++        "training_ground_truth_graphs": (
++            str(training.ground_truth_graphs_path.resolve())
++            if training.ground_truth_graphs_path is not None
++            else None
++        ),
++        "training_ground_truth_model_view": (
++            str(training.ground_truth_model_view_graphs_path.resolve())
++            if training.ground_truth_model_view_graphs_path is not None
++            else None
++        ),
++        "generated_graphs": str(generation.graphs_path.resolve()),
++        "generation_manifest": str(generation.manifest_path.resolve()),
++        "graphs_sha256": generation.graphs_sha256,
++    }
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    try:
++        summary = run_pipeline(args)
++    except Exception as exc:
++        _status(
++            f"FAILED: {type(exc).__name__}: {exc}", enabled=not args.quiet
++        )
++        raise
++    print(json.dumps(summary, indent=2, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/src/grapher/models/digress.py b/src/grapher/models/digress.py
+deleted file mode 100644
+index e8c25f3..0000000
+--- a/src/grapher/models/digress.py
++++ /dev/null
+@@ -1,14 +0,0 @@
+-"""GraphER wrapper placeholder for DiGress."""
+-
+-from grapher.models.base import BaselineCapabilities, PlaceholderBaseGeneratorWrapper
+-
+-
+-class DiGressWrapper(PlaceholderBaseGeneratorWrapper):
+-    model_id = "digress"
+-    display_name = "DiGress"
+-    capabilities = BaselineCapabilities(
+-        domains=frozenset({"generic", "attributed"}),
+-        isolation="subprocess",
+-        status="placeholder",
+-    )
+-
+diff --git a/src/grapher/models/digress/__init__.py b/src/grapher/models/digress/__init__.py
+new file mode 100644
+index 0000000..8211514
+--- /dev/null
++++ b/src/grapher/models/digress/__init__.py
+@@ -0,0 +1,5 @@
++"""Isolated DiGress integration for GraphER."""
++
++from grapher.models.digress.wrapper import DiGressWrapper
++
++__all__ = ["DiGressWrapper"]
+diff --git a/src/grapher/models/digress/backend.py b/src/grapher/models/digress/backend.py
+new file mode 100644
+index 0000000..df5ccb6
+--- /dev/null
++++ b/src/grapher/models/digress/backend.py
+@@ -0,0 +1,242 @@
++"""Validated subprocess backend for DiGress generation."""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++import subprocess
++import time
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping
++
++import networkx as nx
++
++from grapher.models.digress.codec import load_digress_export
++from grapher.utils.subprocess_progress import SubprocessLogReporter
++
++
++@dataclass(frozen=True)
++class DiGressGenerationResult:
++    graphs: list[nx.Graph]
++    export_path: Path
++    manifest_path: Path
++    log_path: Path
++    export_sha256: str
++    manifest: Mapping[str, Any]
++
++
++def _sha256(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as handle:
++        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _read_json(path: Path) -> dict[str, Any]:
++    value = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(value, dict):
++        raise TypeError(f"Expected JSON object: {path}")
++    return value
++
++
++def _tail(path: Path, *, lines: int = 200) -> str:
++    if not path.is_file():
++        return ""
++    return "\n".join(
++        path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
++    )
++
++
++def _worker_path() -> Path:
++    path = Path(__file__).resolve().parent / "workers" / "export.py"
++    if not path.is_file():
++        raise FileNotFoundError(f"Missing DiGress export worker: {path}")
++    return path
++
++
++def _environment(
++    digress_root: Path,
++    *,
++    seed: int,
++    cuda_visible_devices: str | None,
++) -> dict[str, str]:
++    environment = dict(os.environ)
++    environment.update(
++        {
++            "PYTHONPATH": os.pathsep.join(
++                [str(digress_root), str(digress_root / "src")]
++            ),
++            "PYTHONHASHSEED": str(int(seed)),
++            "PYTHONUNBUFFERED": "1",
++            "WANDB_MODE": "disabled",
++            "WANDB_DISABLED": "true",
++            "HYDRA_FULL_ERROR": "1",
++            "MPLBACKEND": "Agg",
++            "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
++        }
++    )
++    if cuda_visible_devices is not None:
++        environment["CUDA_VISIBLE_DEVICES"] = str(cuda_visible_devices)
++    return environment
++
++
++def generate_digress_graphs(
++    *,
++    digress_root: str | Path,
++    python_executable: str | Path,
++    dataset: str,
++    dataset_datadir: str | Path,
++    resolved_config_path: str | Path,
++    checkpoint_path: str | Path,
++    output_dir: str | Path,
++    num_graphs: int,
++    generation_seed: int,
++    batch_size: int,
++    molecular_statistics_path: str | Path | None = None,
++    device: str = "auto",
++    cuda_visible_devices: str | None = None,
++    timeout_seconds: float | None = None,
++    progress_enabled: bool = False,
++    stream_output: bool = False,
++    progress_interval_seconds: float = 30.0,
++    generation_progress_every_batches: int = 1,
++) -> DiGressGenerationResult:
++    """Run the isolated exporter and decode its neutral NPZ output."""
++
++    root = Path(digress_root).expanduser().resolve()
++    python = Path(python_executable).expanduser().resolve()
++    dataset_dir = Path(dataset_datadir).expanduser().resolve()
++    config = Path(resolved_config_path).expanduser().resolve()
++    checkpoint = Path(checkpoint_path).expanduser().resolve()
++    destination = Path(output_dir).expanduser().resolve()
++    if not python.is_file():
++        raise FileNotFoundError(f"Missing DiGress Python executable: {python}")
++    for required in (dataset_dir, config, checkpoint):
++        if not required.exists():
++            raise FileNotFoundError(required)
++    if int(num_graphs) <= 0 or int(batch_size) <= 0:
++        raise ValueError("num_graphs and batch_size must be positive.")
++    if timeout_seconds is not None and float(timeout_seconds) <= 0:
++        raise ValueError("timeout_seconds must be positive.")
++
++    destination.mkdir(parents=True, exist_ok=True)
++    export_path = destination / "digress_samples.npz"
++    manifest_path = destination / "digress_manifest.json"
++    log_path = destination / "digress.log"
++    command = [
++        str(python),
++        str(_worker_path()),
++        "--digress-root",
++        str(root),
++        "--dataset",
++        str(dataset),
++        "--dataset-datadir",
++        str(dataset_dir),
++        "--config",
++        str(config),
++        "--checkpoint",
++        str(checkpoint),
++        "--output",
++        str(export_path),
++        "--manifest",
++        str(manifest_path),
++        "--num-graphs",
++        str(int(num_graphs)),
++        "--batch-size",
++        str(int(batch_size)),
++        "--seed",
++        str(int(generation_seed)),
++        "--progress-every-batches",
++        str(int(generation_progress_every_batches)),
++        "--device",
++        str(device),
++    ]
++    if molecular_statistics_path is not None:
++        statistics = Path(molecular_statistics_path).expanduser().resolve()
++        if not statistics.is_file():
++            raise FileNotFoundError(statistics)
++        command.extend(["--molecular-statistics", str(statistics)])
++
++    environment = _environment(
++        root,
++        seed=generation_seed,
++        cuda_visible_devices=cuda_visible_devices,
++    )
++    reporter = SubprocessLogReporter(
++        label="DiGress generation worker",
++        log_path=log_path,
++        enabled=progress_enabled,
++        stream_output=stream_output,
++        interval_seconds=progress_interval_seconds,
++        prefix="GraphER/DiGress",
++    )
++    log_path.parent.mkdir(parents=True, exist_ok=True)
++    with log_path.open("w", encoding="utf-8") as log_file:
++        reporter.start(start_offset=0)
++        try:
++            completed = subprocess.run(
++                command,
++                cwd=str(root / "src"),
++                env=environment,
++                stdout=log_file,
++                stderr=subprocess.STDOUT,
++                timeout=timeout_seconds,
++                check=False,
++                shell=False,
++                start_new_session=True,
++            )
++        except subprocess.TimeoutExpired as exc:
++            reporter.stop(status="timed out")
++            raise RuntimeError(
++                "DiGress generation timed out.\n"
++                f"Log: {log_path}\nCommand: {json.dumps(command)}\n"
++                f"Last output:\n{_tail(log_path)}"
++            ) from exc
++        except BaseException:
++            reporter.stop(status="failed")
++            raise
++        else:
++            reporter.stop(
++                status=(
++                    "completed"
++                    if completed.returncode == 0
++                    else f"failed with exit code {completed.returncode}"
++                )
++            )
++    if completed.returncode != 0:
++        raise RuntimeError(
++            f"DiGress generation exited with code {completed.returncode}.\n"
++            f"Log: {log_path}\nCommand: {json.dumps(command)}\n"
++            f"Last output:\n{_tail(log_path)}"
++        )
++    for artifact in (export_path, manifest_path):
++        if not artifact.is_file():
++            raise RuntimeError(f"DiGress exporter did not publish {artifact}.")
++    manifest = _read_json(manifest_path)
++    if manifest.get("format") != "grapher_digress_export_v1":
++        raise RuntimeError("Unsupported DiGress export manifest format.")
++    if int(manifest.get("num_generated", -1)) != int(num_graphs):
++        raise RuntimeError(
++            "DiGress export count mismatch: "
++            f"manifest={manifest.get('num_generated')}, requested={num_graphs}."
++        )
++    expected_hash = str((manifest.get("output") or {}).get("sha256", ""))
++    observed_hash = _sha256(export_path)
++    if not expected_hash or expected_hash != observed_hash:
++        raise RuntimeError("DiGress neutral export SHA-256 mismatch.")
++    graphs = load_digress_export(export_path, dataset=dataset)
++    if len(graphs) != int(num_graphs):
++        raise RuntimeError(
++            f"Decoded {len(graphs)} DiGress graphs; expected {num_graphs}."
++        )
++    return DiGressGenerationResult(
++        graphs=graphs,
++        export_path=export_path,
++        manifest_path=manifest_path,
++        log_path=log_path,
++        export_sha256=observed_hash,
++        manifest=manifest,
++    )
+diff --git a/src/grapher/models/digress/codec.py b/src/grapher/models/digress/codec.py
+new file mode 100644
+index 0000000..82f2720
+--- /dev/null
++++ b/src/grapher/models/digress/codec.py
+@@ -0,0 +1,190 @@
++"""Neutral, pickle-free DiGress graph-batch codec.
++
++The external DiGress process exports compact numeric arrays.  GraphER validates
++those arrays in its own environment before constructing NetworkX graphs.  This
++keeps the incompatible upstream dependency stack outside the GraphER process
++and avoids loading third-party pickle artifacts.
++"""
++
++from __future__ import annotations
++
++from pathlib import Path
++from typing import Final
++
++import networkx as nx
++import numpy as np
++
++DIGRESS_EXPORT_FORMAT: Final[str] = "digress_graph_batch_v1"
++SUPPORTED_DATASETS: Final[frozenset[str]] = frozenset(
++    {"comm20", "planar", "sbm", "qm9"}
++)
++GENERIC_DATASETS: Final[frozenset[str]] = frozenset(
++    {"comm20", "planar", "sbm"}
++)
++QM9_ATOMIC_NUMBERS: Final[tuple[int, ...]] = (6, 7, 8, 9)
++BOND_ORDERS: Final[dict[int, float]] = {1: 1.0, 2: 2.0, 3: 3.0, 4: 1.5}
++
++
++def _integer_array(
++    arrays: np.lib.npyio.NpzFile,
++    name: str,
++    *,
++    ndim: int,
++) -> np.ndarray:
++    if name not in arrays.files:
++        raise ValueError(f"DiGress export is missing array {name!r}.")
++    value = np.asarray(arrays[name])
++    if value.ndim != ndim:
++        raise ValueError(
++            f"DiGress export array {name!r} has shape {value.shape}; "
++            f"expected {ndim} dimensions."
++        )
++    if value.dtype.kind not in {"i", "u"}:
++        raise TypeError(
++            f"DiGress export array {name!r} must be integral, got {value.dtype}."
++        )
++    return value.astype(np.int64, copy=False)
++
++
++def _validate_offsets(offsets: np.ndarray, *, total: int, name: str) -> None:
++    if offsets.ndim != 1 or offsets.size < 2:
++        raise ValueError(f"{name} must contain at least [0, total].")
++    if int(offsets[0]) != 0 or int(offsets[-1]) != int(total):
++        raise ValueError(
++            f"{name} endpoints are invalid: first={offsets[0]}, "
++            f"last={offsets[-1]}, total={total}."
++        )
++    if np.any(offsets[1:] < offsets[:-1]):
++        raise ValueError(f"{name} must be non-decreasing.")
++
++
++def load_digress_export(path: str | Path, *, dataset: str) -> list[nx.Graph]:
++    """Load one validated neutral export as ordered NetworkX graphs."""
++
++    dataset_name = str(dataset).lower()
++    if dataset_name not in SUPPORTED_DATASETS:
++        raise ValueError(
++            f"Unsupported DiGress dataset {dataset!r}; supported datasets are "
++            f"{sorted(SUPPORTED_DATASETS)}."
++        )
++    export_path = Path(path)
++    if not export_path.is_file():
++        raise FileNotFoundError(f"Missing DiGress export: {export_path}")
++
++    with np.load(export_path, allow_pickle=False) as arrays:
++        node_offsets = _integer_array(arrays, "node_offsets", ndim=1)
++        node_types = _integer_array(arrays, "node_types", ndim=1)
++        edge_offsets = _integer_array(arrays, "edge_offsets", ndim=1)
++        endpoints = _integer_array(arrays, "edge_endpoints", ndim=2)
++        edge_types = _integer_array(arrays, "edge_types", ndim=1)
++        if endpoints.shape[1:] != (2,):
++            raise ValueError(
++                "DiGress edge_endpoints must have shape (num_edges, 2), got "
++                f"{endpoints.shape}."
++            )
++        if endpoints.shape[0] != edge_types.shape[0]:
++            raise ValueError(
++                "DiGress export has mismatched endpoint and edge-type counts."
++            )
++        _validate_offsets(node_offsets, total=node_types.size, name="node_offsets")
++        _validate_offsets(edge_offsets, total=edge_types.size, name="edge_offsets")
++        if node_offsets.size != edge_offsets.size:
++            raise ValueError(
++                "DiGress node_offsets and edge_offsets describe different graph counts."
++            )
++
++    graphs: list[nx.Graph] = []
++    graph_count = int(node_offsets.size - 1)
++    for graph_index in range(graph_count):
++        node_start, node_end = (
++            int(node_offsets[graph_index]),
++            int(node_offsets[graph_index + 1]),
++        )
++        edge_start, edge_end = (
++            int(edge_offsets[graph_index]),
++            int(edge_offsets[graph_index + 1]),
++        )
++        local_node_types = node_types[node_start:node_end]
++        local_endpoints = endpoints[edge_start:edge_end]
++        local_edge_types = edge_types[edge_start:edge_end]
++        n = int(local_node_types.size)
++        if n <= 0:
++            raise ValueError(f"DiGress graph {graph_index} has no nodes.")
++
++        graph = nx.Graph()
++        if dataset_name in GENERIC_DATASETS:
++            if np.any(local_node_types != 0):
++                raise ValueError(
++                    f"Generic DiGress graph {graph_index} contains a nonzero "
++                    "node category."
++                )
++            graph.add_nodes_from(range(n))
++        else:
++            if np.any(local_node_types < 0) or np.any(
++                local_node_types >= len(QM9_ATOMIC_NUMBERS)
++            ):
++                raise ValueError(
++                    f"QM9 DiGress graph {graph_index} contains an invalid atom class."
++                )
++            for node, atom_class in enumerate(local_node_types.tolist()):
++                atomic_number = QM9_ATOMIC_NUMBERS[int(atom_class)]
++                graph.add_node(
++                    node,
++                    atomic_num=atomic_number,
++                    atom_type=atomic_number,
++                )
++
++        for (source, target), edge_type in zip(
++            local_endpoints.tolist(),
++            local_edge_types.tolist(),
++        ):
++            source = int(source)
++            target = int(target)
++            semantic_edge_type = int(edge_type)
++            if not (0 <= source < n and 0 <= target < n):
++                raise ValueError(
++                    f"DiGress graph {graph_index} has endpoint outside [0, {n})."
++                )
++            if source >= target:
++                raise ValueError(
++                    f"DiGress graph {graph_index} edges must be stored once with "
++                    "source < target."
++                )
++            if graph.has_edge(source, target):
++                raise ValueError(
++                    f"DiGress graph {graph_index} contains a duplicate edge."
++                )
++            if dataset_name in GENERIC_DATASETS:
++                if semantic_edge_type != 1:
++                    raise ValueError(
++                        f"Generic DiGress graph {graph_index} has edge class "
++                        f"{semantic_edge_type}; expected 1."
++                    )
++                graph.add_edge(source, target)
++            else:
++                if semantic_edge_type not in BOND_ORDERS:
++                    raise ValueError(
++                        f"QM9 DiGress graph {graph_index} has bond class "
++                        f"{semantic_edge_type}."
++                    )
++                graph.add_edge(
++                    source,
++                    target,
++                    bond_type=semantic_edge_type,
++                    bond_order=BOND_ORDERS[semantic_edge_type],
++                )
++
++        if nx.number_of_selfloops(graph):
++            raise ValueError(f"DiGress graph {graph_index} contains a self-loop.")
++        graph.graph.update(
++            {
++                "generator": "digress",
++                "digress_sample_index": graph_index,
++                "molecular_dataset": "qm9" if dataset_name == "qm9" else None,
++                "molecular_representation": (
++                    "heavy_atom_graph" if dataset_name == "qm9" else None
++                ),
++            }
++        )
++        graphs.append(graph)
++    return graphs
+diff --git a/src/grapher/models/digress/runtime.py b/src/grapher/models/digress/runtime.py
+new file mode 100644
+index 0000000..e91224b
+--- /dev/null
++++ b/src/grapher/models/digress/runtime.py
+@@ -0,0 +1,57 @@
++"""Runtime discovery for the isolated DiGress wrapper."""
++
++from __future__ import annotations
++
++import os
++import sys
++from pathlib import Path
++
++DIGRESS_ROOT_ENV = "DIGRESS"
++DIGRESS_PYTHON_ENV = "DIGRESS_PYTHON"
++
++
++def resolve_digress_root(source_env: str = DIGRESS_ROOT_ENV) -> Path:
++    """Resolve and validate the external DiGress source checkout."""
++
++    raw = os.environ.get(str(source_env))
++    if not raw:
++        raise RuntimeError(
++            f"Set {source_env} to the attached DiGress source root, or pass "
++            "--digress-root to run_digress_baseline.py."
++        )
++    root = Path(raw).expanduser().resolve()
++    required = (
++        root / "src" / "diffusion_model_discrete.py",
++        root / "src" / "datasets" / "spectre_dataset.py",
++        root / "configs" / "config.yaml",
++    )
++    missing = [str(path) for path in required if not path.is_file()]
++    if missing:
++        raise FileNotFoundError(
++            f"Invalid DiGress source root {root}; missing: {missing}."
++        )
++    return root
++
++
++def resolve_digress_python(
++    *,
++    digress_root: Path,
++    python_executable: str | Path | None = None,
++    python_env: str = DIGRESS_PYTHON_ENV,
++) -> Path:
++    """Resolve the Python interpreter used for the external DiGress process."""
++
++    raw = python_executable or os.environ.get(str(python_env)) or sys.executable
++    path = Path(str(raw)).expanduser()
++    if not path.is_absolute():
++        import shutil
++
++        resolved = shutil.which(str(path))
++        if resolved is None:
++            raise FileNotFoundError(f"Could not resolve DiGress Python: {raw}")
++        path = Path(resolved)
++    path = path.resolve()
++    if not path.is_file():
++        raise FileNotFoundError(f"Missing DiGress Python executable: {path}")
++    del digress_root  # retained in the signature for symmetry with other wrappers
++    return path
+diff --git a/src/grapher/models/digress/workers/__init__.py b/src/grapher/models/digress/workers/__init__.py
+new file mode 100644
+index 0000000..8da79af
+--- /dev/null
++++ b/src/grapher/models/digress/workers/__init__.py
+@@ -0,0 +1 @@
++"""Standalone workers executed by the isolated DiGress interpreter."""
+diff --git a/src/grapher/models/digress/workers/common.py b/src/grapher/models/digress/workers/common.py
+new file mode 100644
+index 0000000..cf152c2
+--- /dev/null
++++ b/src/grapher/models/digress/workers/common.py
+@@ -0,0 +1,298 @@
++"""Shared runtime helpers for isolated DiGress workers.
++
++This module is imported only by worker scripts executed inside the external
++DiGress environment. It deliberately has no imports from GraphER's Python
++package, so the upstream dependency stack remains isolated.
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import random
++import sys
++from pathlib import Path
++from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
++
++SUPPORTED_GENERIC_DATASETS = frozenset({"comm20", "planar", "sbm"})
++SUPPORTED_MOLECULAR_DATASETS = frozenset({"qm9"})
++SUPPORTED_DATASETS = SUPPORTED_GENERIC_DATASETS | SUPPORTED_MOLECULAR_DATASETS
++
++
++def status(message: str) -> None:
++    print(f"[GraphER/DiGress] {message}", file=sys.stderr, flush=True)
++
++
++def seed_everything(seed: int) -> None:
++    random.seed(int(seed))
++    os.environ["PYTHONHASHSEED"] = str(int(seed))
++    try:
++        import numpy as np
++
++        np.random.seed(int(seed))
++    except Exception:
++        pass
++    import torch
++
++    torch.manual_seed(int(seed))
++    if torch.cuda.is_available():
++        torch.cuda.manual_seed_all(int(seed))
++    try:
++        import pytorch_lightning as pl
++
++        pl.seed_everything(int(seed), workers=True)
++    except TypeError:
++        import pytorch_lightning as pl
++
++        pl.seed_everything(int(seed))
++
++
++def _safe_override(value: str) -> str:
++    text = str(value)
++    if not text or any(character in text for character in "\x00\r\n"):
++        raise ValueError(f"Invalid Hydra override: {value!r}")
++    return text
++
++
++def compose_config(
++    *,
++    digress_root: Path,
++    dataset: str,
++    experiment: str,
++    dataset_datadir: Path,
++    run_name: str,
++    seed: int,
++    gpus: int,
++    n_epochs: Optional[int] = None,
++    batch_size: Optional[int] = None,
++    num_workers: Optional[int] = None,
++    check_val_every_n_epochs: Optional[int] = None,
++    extra_overrides: Sequence[str] = (),
++) -> Any:
++    """Compose the attached DiGress Hydra configuration without chdir."""
++
++    from hydra import compose, initialize_config_dir
++    from omegaconf import OmegaConf
++
++    dataset_name = str(dataset).lower()
++    if dataset_name not in SUPPORTED_DATASETS:
++        raise ValueError(
++            f"Unsupported DiGress dataset {dataset!r}; supported datasets are "
++            f"{sorted(SUPPORTED_DATASETS)}."
++        )
++    config_dir = (Path(digress_root) / "configs").resolve()
++    if not (config_dir / "config.yaml").is_file():
++        raise FileNotFoundError(f"Missing DiGress config root: {config_dir}")
++
++    overrides = [
++        f"+experiment={_safe_override(experiment)}",
++        f"dataset={dataset_name}",
++        f"dataset.datadir={str(Path(dataset_datadir).resolve())}",
++        f"general.name={_safe_override(run_name)}",
++        "general.wandb=disabled",
++        f"general.gpus={int(gpus)}",
++        f"train.seed={int(seed)}",
++        "train.save_model=true",
++        # Validation generation is disabled by the GraphER training shim. The
++        # likelihood validation loop remains available at the configured rate.
++        "general.sample_every_val=1000000000",
++        "general.samples_to_generate=0",
++        "general.samples_to_save=0",
++        "general.chains_to_save=0",
++        "general.final_model_samples_to_generate=0",
++        "general.final_model_samples_to_save=0",
++        "general.final_model_chains_to_save=0",
++    ]
++    if n_epochs is not None:
++        overrides.append(f"train.n_epochs={int(n_epochs)}")
++    if batch_size is not None:
++        overrides.append(f"train.batch_size={int(batch_size)}")
++    if num_workers is not None:
++        overrides.append(f"train.num_workers={int(num_workers)}")
++        # QM9's experiment also places num_workers under dataset.
++        if dataset_name == "qm9":
++            overrides.append(f"dataset.num_workers={int(num_workers)}")
++    if check_val_every_n_epochs is not None:
++        overrides.append(
++            f"general.check_val_every_n_epochs={int(check_val_every_n_epochs)}"
++        )
++    overrides.extend(_safe_override(value) for value in extra_overrides)
++
++    with initialize_config_dir(version_base="1.3", config_dir=str(config_dir)):
++        cfg = compose(config_name="config", overrides=overrides)
++    OmegaConf.resolve(cfg)
++    return cfg
++
++
++class NullSamplingMetrics:
++    """No-op replacement for expensive validation/test sampling metrics."""
++
++    def reset(self) -> None:
++        return None
++
++    def __call__(self, *args: Any, **kwargs: Any) -> dict[str, float]:
++        del args, kwargs
++        return {}
++
++    def forward(self, *args: Any, **kwargs: Any) -> dict[str, float]:
++        del args, kwargs
++        return {}
++
++
++def _tensor_list(value: Any) -> list[float]:
++    return [float(item) for item in value.detach().cpu().tolist()]
++
++
++def compute_qm9_statistics(datamodule: Any) -> dict[str, list[float]]:
++    """Compute priors from the exact GraphER-prepared QM9 splits."""
++
++    n_nodes = datamodule.node_counts()
++    node_types = datamodule.node_types()
++    edge_types = datamodule.edge_counts()
++    max_n_nodes = int(len(n_nodes) - 1)
++    valencies = datamodule.valency_count(max_n_nodes)
++    return {
++        "n_nodes": _tensor_list(n_nodes),
++        "node_types": _tensor_list(node_types),
++        "edge_types": _tensor_list(edge_types),
++        "valency_distribution": _tensor_list(valencies),
++    }
++
++
++def apply_qm9_statistics(dataset_infos: Any, statistics: Mapping[str, Any]) -> None:
++    import torch
++
++    required = (
++        "n_nodes",
++        "node_types",
++        "edge_types",
++        "valency_distribution",
++    )
++    missing = [name for name in required if name not in statistics]
++    if missing:
++        raise ValueError(f"QM9 statistics are missing fields: {missing}")
++    n_nodes = torch.tensor(statistics["n_nodes"], dtype=torch.float)
++    node_types = torch.tensor(statistics["node_types"], dtype=torch.float)
++    edge_types = torch.tensor(statistics["edge_types"], dtype=torch.float)
++    valencies = torch.tensor(
++        statistics["valency_distribution"], dtype=torch.float
++    )
++    if n_nodes.ndim != 1 or not torch.isfinite(n_nodes).all() or n_nodes.sum() <= 0:
++        raise ValueError("Invalid QM9 node-count distribution.")
++    if node_types.shape != (4,) or node_types.sum() <= 0:
++        raise ValueError("Invalid QM9 atom-type distribution.")
++    if edge_types.shape != (5,) or edge_types.sum() <= 0:
++        raise ValueError("Invalid QM9 edge-type distribution.")
++
++    n_nodes = n_nodes / n_nodes.sum()
++    node_types = node_types / node_types.sum()
++    edge_types = edge_types / edge_types.sum()
++    if valencies.sum() > 0:
++        valencies = valencies / valencies.sum()
++
++    dataset_infos.n_nodes = n_nodes
++    dataset_infos.node_types = node_types
++    dataset_infos.edge_types = edge_types
++    dataset_infos.valency_distribution = valencies
++    dataset_infos.complete_infos(n_nodes=n_nodes, node_types=node_types)
++
++
++def build_components(
++    cfg: Any,
++    *,
++    molecular_statistics: Optional[Mapping[str, Any]] = None,
++) -> Tuple[Any, dict, Optional[dict]]:
++    """Build the upstream data module and model kwargs without main.py.
++
++    Avoiding ``src/main.py`` is intentional: the attached entrypoint imports
++    graph-tool unconditionally and forces DDP even for a one-device run.
++    """
++
++    dataset = str(cfg.dataset.name).lower()
++    if dataset in SUPPORTED_GENERIC_DATASETS:
++        from datasets.spectre_dataset import (
++            SpectreDatasetInfos,
++            SpectreGraphDataModule,
++        )
++        from diffusion.extra_features import DummyExtraFeatures, ExtraFeatures
++        from metrics.abstract_metrics import TrainAbstractMetricsDiscrete
++
++        datamodule = SpectreGraphDataModule(cfg)
++        dataset_infos = SpectreDatasetInfos(datamodule, cfg.dataset)
++        if cfg.model.type == "discrete" and cfg.model.extra_features is not None:
++            extra_features = ExtraFeatures(
++                cfg.model.extra_features, dataset_info=dataset_infos
++            )
++        else:
++            extra_features = DummyExtraFeatures()
++        domain_features = DummyExtraFeatures()
++        dataset_infos.compute_input_output_dims(
++            datamodule=datamodule,
++            extra_features=extra_features,
++            domain_features=domain_features,
++        )
++        model_kwargs = {
++            "dataset_infos": dataset_infos,
++            "train_metrics": TrainAbstractMetricsDiscrete(),
++            "sampling_metrics": NullSamplingMetrics(),
++            "visualization_tools": None,
++            "extra_features": extra_features,
++            "domain_features": domain_features,
++        }
++        return datamodule, model_kwargs, None
++
++    if dataset == "qm9":
++        from datasets import qm9_dataset
++        from diffusion.extra_features import DummyExtraFeatures, ExtraFeatures
++        from diffusion.extra_features_molecular import ExtraMolecularFeatures
++        from metrics.molecular_metrics_discrete import TrainMolecularMetricsDiscrete
++
++        datamodule = qm9_dataset.QM9DataModule(cfg)
++        dataset_infos = qm9_dataset.QM9infos(datamodule=datamodule, cfg=cfg)
++        statistics = (
++            dict(molecular_statistics)
++            if molecular_statistics is not None
++            else compute_qm9_statistics(datamodule)
++        )
++        apply_qm9_statistics(dataset_infos, statistics)
++        if cfg.model.type == "discrete" and cfg.model.extra_features is not None:
++            extra_features = ExtraFeatures(
++                cfg.model.extra_features, dataset_info=dataset_infos
++            )
++            domain_features = ExtraMolecularFeatures(dataset_infos=dataset_infos)
++        else:
++            extra_features = DummyExtraFeatures()
++            domain_features = DummyExtraFeatures()
++        dataset_infos.compute_input_output_dims(
++            datamodule=datamodule,
++            extra_features=extra_features,
++            domain_features=domain_features,
++        )
++        model_kwargs = {
++            "dataset_infos": dataset_infos,
++            "train_metrics": TrainMolecularMetricsDiscrete(dataset_infos),
++            "sampling_metrics": NullSamplingMetrics(),
++            "visualization_tools": None,
++            "extra_features": extra_features,
++            "domain_features": domain_features,
++        }
++        return datamodule, model_kwargs, statistics
++
++    raise ValueError(f"Unsupported DiGress dataset: {dataset}")
++
++
++def load_json(path: Path) -> dict[str, Any]:
++    value = json.loads(Path(path).read_text(encoding="utf-8"))
++    if not isinstance(value, dict):
++        raise TypeError(f"Expected a JSON object in {path}.")
++    return value
++
++
++def atomic_json(path: Path, value: Mapping[str, Any]) -> None:
++    destination = Path(path)
++    destination.parent.mkdir(parents=True, exist_ok=True)
++    temporary = destination.with_name(destination.name + ".tmp")
++    temporary.write_text(
++        json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
++    )
++    temporary.replace(destination)
+diff --git a/src/grapher/models/digress/workers/export.py b/src/grapher/models/digress/workers/export.py
+new file mode 100755
+index 0000000..9d2a7ff
+--- /dev/null
++++ b/src/grapher/models/digress/workers/export.py
+@@ -0,0 +1,340 @@
++#!/usr/bin/env python
++"""Export an exact DiGress sample batch as neutral numeric arrays."""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import platform
++import time
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any, List, Optional, Sequence, Tuple
++
++from common import (
++    atomic_json,
++    build_components,
++    load_json,
++    seed_everything,
++    status,
++)
++
++FORMAT = "grapher_digress_export_v1"
++ARRAY_FORMAT = "digress_graph_batch_v1"
++
++
++def _positive_int(raw: str) -> int:
++    value = int(raw)
++    if value <= 0:
++        raise argparse.ArgumentTypeError("value must be a positive integer")
++    return value
++
++
++def _nonnegative_int(raw: str) -> int:
++    value = int(raw)
++    if value < 0:
++        raise argparse.ArgumentTypeError("value must be non-negative")
++    return value
++
++
++def _sha256(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as handle:
++        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(
++        description="Generate an exact neutral DiGress graph batch."
++    )
++    parser.add_argument("--digress-root", type=Path, required=True)
++    parser.add_argument("--dataset", required=True)
++    parser.add_argument("--dataset-datadir", type=Path, required=True)
++    parser.add_argument("--config", type=Path, required=True)
++    parser.add_argument("--checkpoint", type=Path, required=True)
++    parser.add_argument("--molecular-statistics", type=Path, default=None)
++    parser.add_argument("--output", type=Path, required=True)
++    parser.add_argument("--manifest", type=Path, required=True)
++    parser.add_argument("--num-graphs", type=_positive_int, required=True)
++    parser.add_argument("--batch-size", type=_positive_int, required=True)
++    parser.add_argument("--seed", type=_nonnegative_int, required=True)
++    parser.add_argument("--progress-every-batches", type=_positive_int, default=1)
++    parser.add_argument("--device", choices=("auto", "cpu", "gpu"), default="auto")
++    return parser
++
++
++def _load_config(path: Path, *, dataset_datadir: Path, dataset: str) -> Any:
++    from omegaconf import OmegaConf
++
++    cfg = OmegaConf.load(str(path))
++    cfg.dataset.name = str(dataset).lower()
++    cfg.dataset.datadir = str(dataset_datadir.resolve())
++    cfg.general.wandb = "disabled"
++    cfg.general.gpus = 0
++    cfg.general.samples_to_generate = 0
++    cfg.general.samples_to_save = 0
++    cfg.general.chains_to_save = 0
++    cfg.general.final_model_samples_to_generate = 0
++    cfg.general.final_model_samples_to_save = 0
++    cfg.general.final_model_chains_to_save = 0
++    OmegaConf.resolve(cfg)
++    return cfg
++
++
++def _device(requested: str) -> Any:
++    import torch
++
++    value = str(requested).lower()
++    if value == "cpu":
++        return torch.device("cpu")
++    if value == "gpu":
++        if not torch.cuda.is_available():
++            raise RuntimeError("--device gpu requested but CUDA is unavailable.")
++        return torch.device("cuda:0")
++    return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
++
++
++def _load_state(model: Any, checkpoint: Path, device: Any) -> None:
++    import torch
++
++    try:
++        payload = torch.load(str(checkpoint), map_location=device, weights_only=False)
++    except TypeError:
++        payload = torch.load(str(checkpoint), map_location=device)
++    if not isinstance(payload, dict):
++        raise TypeError("DiGress checkpoint must contain a mapping.")
++    state = payload.get("state_dict", payload)
++    if not isinstance(state, dict):
++        raise TypeError("DiGress checkpoint has no state_dict mapping.")
++    incompatible = model.load_state_dict(state, strict=True)
++    missing = list(getattr(incompatible, "missing_keys", []))
++    unexpected = list(getattr(incompatible, "unexpected_keys", []))
++    if missing or unexpected:
++        raise RuntimeError(
++            "DiGress checkpoint/model mismatch: missing=%s, unexpected=%s"
++            % (missing, unexpected)
++        )
++
++
++def _pack_samples(samples: Sequence[Any]) -> Tuple[Any, Any, Any, Any, Any]:
++    import numpy as np
++    import torch
++
++    node_offsets: List[int] = [0]
++    node_types: List[int] = []
++    edge_offsets: List[int] = [0]
++    endpoints: List[Tuple[int, int]] = []
++    edge_types: List[int] = []
++
++    for graph_index, sample in enumerate(samples):
++        if not isinstance(sample, (list, tuple)) or len(sample) < 2:
++            raise TypeError(
++                "DiGress sample %d is not [node_types, edge_types]." % graph_index
++            )
++        x = torch.as_tensor(sample[0]).detach().cpu().long()
++        e = torch.as_tensor(sample[1]).detach().cpu().long()
++        if x.ndim != 1:
++            raise ValueError(
++                "DiGress sample %d node tensor has shape %s." % (
++                    graph_index,
++                    tuple(x.shape),
++                )
++            )
++        n = int(x.shape[0])
++        if n <= 0 or e.shape != (n, n):
++            raise ValueError(
++                "DiGress sample %d has incompatible node/edge shapes %s/%s."
++                % (graph_index, tuple(x.shape), tuple(e.shape))
++            )
++        if not torch.equal(e, e.transpose(0, 1)):
++            raise ValueError("DiGress sample %d is not undirected." % graph_index)
++        if torch.any(torch.diag(e) != 0):
++            raise ValueError("DiGress sample %d contains a self-loop." % graph_index)
++
++        node_types.extend(int(value) for value in x.tolist())
++        node_offsets.append(len(node_types))
++        for source in range(n):
++            for target in range(source + 1, n):
++                edge_type = int(e[source, target].item())
++                if edge_type <= 0:
++                    continue
++                endpoints.append((source, target))
++                edge_types.append(edge_type)
++        edge_offsets.append(len(edge_types))
++
++    endpoint_array = np.asarray(endpoints, dtype=np.int64)
++    if endpoint_array.size == 0:
++        endpoint_array = np.empty((0, 2), dtype=np.int64)
++    else:
++        endpoint_array = endpoint_array.reshape((-1, 2))
++    return (
++        np.asarray(node_offsets, dtype=np.int64),
++        np.asarray(node_types, dtype=np.int64),
++        np.asarray(edge_offsets, dtype=np.int64),
++        endpoint_array,
++        np.asarray(edge_types, dtype=np.int64),
++    )
++
++
++def _atomic_npz(
++    path: Path,
++    *,
++    node_offsets: Any,
++    node_types: Any,
++    edge_offsets: Any,
++    edge_endpoints: Any,
++    edge_types: Any,
++) -> None:
++    import numpy as np
++
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_name(path.name + ".tmp")
++    with temporary.open("wb") as handle:
++        np.savez_compressed(
++            handle,
++            node_offsets=node_offsets,
++            node_types=node_types,
++            edge_offsets=edge_offsets,
++            edge_endpoints=edge_endpoints,
++            edge_types=edge_types,
++        )
++    temporary.replace(path)
++
++
++def main() -> None:
++    args = _parser().parse_args()
++    started_at = datetime.now(timezone.utc)
++    started = time.monotonic()
++    root = args.digress_root.expanduser().resolve()
++    config_path = args.config.expanduser().resolve()
++    checkpoint = args.checkpoint.expanduser().resolve()
++    dataset_datadir = args.dataset_datadir.expanduser().resolve()
++    output = args.output.expanduser().resolve()
++    manifest_path = args.manifest.expanduser().resolve()
++    for required in (config_path, checkpoint):
++        if not required.is_file():
++            raise FileNotFoundError(required)
++    if not dataset_datadir.is_dir():
++        raise FileNotFoundError(dataset_datadir)
++
++    seed_everything(args.seed)
++    cfg = _load_config(
++        config_path,
++        dataset_datadir=dataset_datadir,
++        dataset=args.dataset,
++    )
++    statistics = None
++    if args.molecular_statistics is not None:
++        stats_path = args.molecular_statistics.expanduser().resolve()
++        if not stats_path.is_file():
++            raise FileNotFoundError(stats_path)
++        statistics = load_json(stats_path)
++
++    status(
++        "Generation worker initializing: "
++        "dataset=%s, requested=%d, batch_size=%d, diffusion_steps=%d."
++        % (
++            args.dataset,
++            args.num_graphs,
++            args.batch_size,
++            int(cfg.model.diffusion_steps),
++        )
++    )
++    _, model_kwargs, _ = build_components(
++        cfg, molecular_statistics=statistics
++    )
++    from diffusion_model_discrete import DiscreteDenoisingDiffusion
++    import torch
++    import torch_geometric
++    import pytorch_lightning as pl
++
++    model = DiscreteDenoisingDiffusion(cfg=cfg, **model_kwargs)
++    device = _device(args.device)
++    _load_state(model, checkpoint, device)
++    model.to(device)
++    model.eval()
++
++    samples: List[Any] = []
++    total_batches = (args.num_graphs + args.batch_size - 1) // args.batch_size
++    with torch.inference_mode():
++        for batch_index in range(total_batches):
++            count = min(args.batch_size, args.num_graphs - len(samples))
++            batch = model.sample_batch(
++                batch_id=len(samples),
++                batch_size=count,
++                keep_chain=0,
++                number_chain_steps=1,
++                save_final=0,
++                num_nodes=None,
++            )
++            if len(batch) != count:
++                raise RuntimeError(
++                    "DiGress sample_batch returned %d graphs, expected %d."
++                    % (len(batch), count)
++                )
++            samples.extend(batch)
++            completed = batch_index + 1
++            if (
++                completed == 1
++                or completed == total_batches
++                or completed % args.progress_every_batches == 0
++            ):
++                status(
++                    "Generation progress: batch=%d/%d, generated=%d/%d."
++                    % (completed, total_batches, len(samples), args.num_graphs)
++                )
++    if len(samples) != args.num_graphs:
++        raise RuntimeError(
++            "DiGress generation count mismatch: requested %d, got %d."
++            % (args.num_graphs, len(samples))
++        )
++
++    packed = _pack_samples(samples)
++    _atomic_npz(
++        output,
++        node_offsets=packed[0],
++        node_types=packed[1],
++        edge_offsets=packed[2],
++        edge_endpoints=packed[3],
++        edge_types=packed[4],
++    )
++    finished_at = datetime.now(timezone.utc)
++    manifest = {
++        "format": FORMAT,
++        "array_format": ARRAY_FORMAT,
++        "status": "complete",
++        "dataset": str(args.dataset).lower(),
++        "num_requested": int(args.num_graphs),
++        "num_generated": int(len(samples)),
++        "generation_seed": int(args.seed),
++        "batch_size": int(args.batch_size),
++        "diffusion_steps": int(cfg.model.diffusion_steps),
++        "device": str(device),
++        "checkpoint": {
++            "path": str(checkpoint),
++            "sha256": _sha256(checkpoint),
++        },
++        "config": {"path": str(config_path), "sha256": _sha256(config_path)},
++        "output": {"path": str(output), "sha256": _sha256(output)},
++        "started_at": started_at.isoformat(),
++        "finished_at": finished_at.isoformat(),
++        "duration_seconds": time.monotonic() - started,
++        "runtime": {
++            "python": platform.python_version(),
++            "torch": str(torch.__version__),
++            "torch_geometric": str(torch_geometric.__version__),
++            "pytorch_lightning": str(pl.__version__),
++        },
++    }
++    atomic_json(manifest_path, manifest)
++    status(
++        "Generation worker completed: generated=%d, output=%s."
++        % (len(samples), output)
++    )
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/grapher/models/digress/workers/prepare_dataset.py b/src/grapher/models/digress/workers/prepare_dataset.py
+new file mode 100644
+index 0000000..b98b37b
+--- /dev/null
++++ b/src/grapher/models/digress/workers/prepare_dataset.py
+@@ -0,0 +1,203 @@
++#!/usr/bin/env python
++"""Convert trusted GraphER generic splits into DiGress PyG artifacts.
++
++This worker is executed with the isolated DiGress interpreter.  It writes both
++raw adjacency tensors and processed ``InMemoryDataset`` files so the attached
++DiGress ``SpectreGraphDataset.process`` implementation is never invoked.  That
++upstream implementation appends each graph twice in the provided snapshot.
++"""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import pickle
++import platform
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any
++
++FORMAT = "grapher_to_digress_generic_dataset_v1"
++SPLITS = ("train", "val", "test")
++
++
++def _sha256(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as handle:
++        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _atomic_json(path: Path, value: dict[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_name(path.name + ".tmp")
++    temporary.write_text(
++        json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
++    )
++    temporary.replace(path)
++
++
++def _atomic_torch_save(path: Path, value: Any, torch: Any) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_name(path.name + ".tmp")
++    torch.save(value, temporary)
++    temporary.replace(path)
++
++
++def _load_graphs(path: Path, *, split: str) -> list[Any]:
++    with path.open("rb") as handle:
++        value = pickle.load(handle)
++    if not isinstance(value, (list, tuple)) or not value:
++        raise TypeError(f"{split}.pkl must contain a non-empty graph sequence.")
++    return list(value)
++
++
++def _convert_split(
++    source: Path,
++    *,
++    raw_destination: Path,
++    processed_destination: Path,
++    split: str,
++) -> dict[str, Any]:
++    import networkx as nx
++    import numpy as np
++    import torch
++    import torch.nn.functional as F
++    from torch_geometric.data import Data, InMemoryDataset
++
++    graphs = _load_graphs(source, split=split)
++    adjacency_tensors: list[Any] = []
++    data_list: list[Any] = []
++    node_counts: list[int] = []
++    edge_counts: list[int] = []
++
++    for index, graph in enumerate(graphs):
++        label = f"{split}[{index}]"
++        if not isinstance(graph, nx.Graph):
++            raise TypeError(f"{label} is not a NetworkX graph.")
++        if graph.is_directed() or graph.is_multigraph():
++            raise ValueError(f"{label} must be simple and undirected.")
++        if graph.number_of_nodes() <= 0:
++            raise ValueError(f"{label} has no nodes.")
++        if nx.number_of_selfloops(graph):
++            raise ValueError(f"{label} contains a self-loop.")
++
++        nodes = list(graph.nodes())
++        adjacency = nx.to_numpy_array(
++            graph, nodelist=nodes, dtype=np.float32, weight=None
++        )
++        if adjacency.shape != (len(nodes), len(nodes)):
++            raise AssertionError(f"{label} has an invalid adjacency shape.")
++        if not np.array_equal(adjacency, adjacency.T):
++            raise ValueError(f"{label} adjacency is not symmetric.")
++        if np.any(np.diag(adjacency) != 0) or not np.all(
++            np.isin(adjacency, (0, 1))
++        ):
++            raise ValueError(f"{label} is not binary and loop-free.")
++
++        adjacency_tensor = torch.from_numpy(adjacency)
++        adjacency_tensors.append(adjacency_tensor)
++        edge_index = adjacency_tensor.nonzero(as_tuple=False).t().contiguous()
++        edge_labels = torch.ones(edge_index.shape[1], dtype=torch.long)
++        edge_attr = F.one_hot(edge_labels, num_classes=2).to(torch.float)
++        data_list.append(
++            Data(
++                x=torch.ones((len(nodes), 1), dtype=torch.float),
++                edge_index=edge_index,
++                edge_attr=edge_attr,
++                y=torch.zeros((1, 0), dtype=torch.float),
++                n_nodes=torch.tensor([len(nodes)], dtype=torch.long),
++                idx=torch.tensor([index], dtype=torch.long),
++            )
++        )
++        node_counts.append(len(nodes))
++        edge_counts.append(graph.number_of_edges())
++
++    _atomic_torch_save(raw_destination, adjacency_tensors, torch)
++    _atomic_torch_save(
++        processed_destination,
++        InMemoryDataset.collate(data_list),
++        torch,
++    )
++    return {
++        "source": {"path": str(source), "sha256": _sha256(source)},
++        "raw": {
++            "path": str(raw_destination),
++            "sha256": _sha256(raw_destination),
++        },
++        "processed": {
++            "path": str(processed_destination),
++            "sha256": _sha256(processed_destination),
++        },
++        "graph_count": len(graphs),
++        "source_to_processed_index": "identity",
++        "node_count": {"min": min(node_counts), "max": max(node_counts)},
++        "edge_count": {"min": min(edge_counts), "max": max(edge_counts)},
++    }
++
++
++def _parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(
++        description="Prepare GraphER generic splits for isolated DiGress training."
++    )
++    parser.add_argument("--dataset", required=True)
++    parser.add_argument("--output-root", type=Path, required=True)
++    parser.add_argument("--manifest", type=Path, required=True)
++    for split in SPLITS:
++        parser.add_argument(f"--{split}", type=Path, required=True)
++    return parser
++
++
++def main() -> None:
++    args = _parser().parse_args()
++    started = datetime.now(timezone.utc)
++    output_root = args.output_root.expanduser().resolve()
++    output_root.mkdir(parents=True, exist_ok=True)
++    records: dict[str, Any] = {}
++    for split in SPLITS:
++        source = getattr(args, split).expanduser().resolve()
++        if not source.is_file():
++            raise FileNotFoundError(f"Missing GraphER split: {source}")
++        records[split] = _convert_split(
++            source,
++            raw_destination=output_root / "raw" / f"{split}.pt",
++            processed_destination=output_root / "processed" / f"{split}.pt",
++            split=split,
++        )
++
++    import networkx as nx
++    import torch
++    import torch_geometric
++
++    finished = datetime.now(timezone.utc)
++    _atomic_json(
++        args.manifest.expanduser().resolve(),
++        {
++            "format": FORMAT,
++            "dataset": args.dataset,
++            "representation": "generic_simple_undirected",
++            "split_order_preserved": True,
++            "graphs_dropped": 0,
++            "upstream_process_bypassed": True,
++            "reason": (
++                "The attached SpectreGraphDataset.process appends every graph "
++                "twice; GraphER writes validated processed files directly."
++            ),
++            "splits": records,
++            "started_at": started.isoformat(),
++            "finished_at": finished.isoformat(),
++            "duration_seconds": (finished - started).total_seconds(),
++            "runtime": {
++                "python": platform.python_version(),
++                "networkx": str(nx.__version__),
++                "torch": str(torch.__version__),
++                "torch_geometric": str(torch_geometric.__version__),
++            },
++        },
++    )
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/grapher/models/digress/workers/prepare_molecular_dataset.py b/src/grapher/models/digress/workers/prepare_molecular_dataset.py
+new file mode 100644
+index 0000000..4d1abab
+--- /dev/null
++++ b/src/grapher/models/digress/workers/prepare_molecular_dataset.py
+@@ -0,0 +1,348 @@
++#!/usr/bin/env python
++"""Convert trusted GraphER QM9 splits into DiGress processed artifacts."""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import pickle
++import platform
++from collections import Counter
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any, Mapping
++
++FORMAT = "grapher_to_digress_qm9_dataset_v1"
++SPLITS = ("train", "val", "test")
++ATOM_VOCABULARY = (6, 7, 8, 9)
++EDGE_VOCABULARY = (1, 2, 3, 4)
++BOND_ORDERS = {1: 1.0, 2: 2.0, 3: 3.0, 4: 1.5}
++PROCESSED_FILES = {
++    "train": "proc_tr_no_h.pt",
++    "val": "proc_val_no_h.pt",
++    "test": "proc_test_no_h.pt",
++}
++RAW_PLACEHOLDERS = ("gdb9.sdf", "gdb9.sdf.csv", "uncharacterized.txt")
++
++
++def _sha256(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as handle:
++        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_name(path.name + ".tmp")
++    temporary.write_text(
++        json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
++    )
++    temporary.replace(path)
++
++
++def _atomic_pickle(path: Path, value: Any) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_name(path.name + ".tmp")
++    with temporary.open("wb") as handle:
++        pickle.dump(value, handle, protocol=pickle.HIGHEST_PROTOCOL)
++    temporary.replace(path)
++
++
++def _atomic_torch_save(path: Path, value: Any, torch: Any) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_name(path.name + ".tmp")
++    torch.save(value, temporary)
++    temporary.replace(path)
++
++
++def _load_graphs(path: Path, *, split: str) -> list[Any]:
++    with path.open("rb") as handle:
++        value = pickle.load(handle)
++    if not isinstance(value, (list, tuple)) or not value:
++        raise TypeError(f"{split}.pkl must contain a non-empty graph sequence.")
++    return list(value)
++
++
++def _atomic_number(data: Mapping[str, Any], *, label: str) -> int:
++    value = data.get("atomic_num", data.get("atom_type"))
++    if value is None:
++        raise ValueError(f"{label} contains a node without atomic_num/atom_type.")
++    atomic_number = int(value)
++    if "atomic_num" in data and "atom_type" in data:
++        if int(data["atomic_num"]) != int(data["atom_type"]):
++            raise ValueError(f"{label} has inconsistent atom attributes.")
++    if atomic_number not in ATOM_VOCABULARY:
++        raise ValueError(
++            f"{label} atomic number {atomic_number} is outside "
++            f"{ATOM_VOCABULARY}."
++        )
++    return atomic_number
++
++
++def _bond_type(data: Mapping[str, Any], *, label: str) -> int:
++    value = data.get("bond_type")
++    if value is None:
++        raw_order = data.get("bond_order")
++        if raw_order is None:
++            raise ValueError(f"{label} contains an edge without bond_type.")
++        order = float(raw_order)
++        value = 4 if abs(order - 1.5) < 1e-6 else int(round(order))
++    bond_type = int(value)
++    if bond_type not in EDGE_VOCABULARY:
++        raise ValueError(
++            f"{label} bond type {bond_type} is outside {EDGE_VOCABULARY}."
++        )
++    if "bond_order" in data:
++        expected = BOND_ORDERS[bond_type]
++        if abs(float(data["bond_order"]) - expected) > 1e-6:
++            raise ValueError(f"{label} has inconsistent bond_type/bond_order.")
++    return bond_type
++
++
++def _convert_split(
++    source: Path,
++    destination: Path,
++    *,
++    model_view_destination: Path,
++    split: str,
++) -> dict[str, Any]:
++    import networkx as nx
++    import torch
++    import torch.nn.functional as F
++    from torch_geometric.data import Data, InMemoryDataset
++
++    graphs = _load_graphs(source, split=split)
++    data_list: list[Any] = []
++    model_view_graphs: list[Any] = []
++    node_counts: list[int] = []
++    edge_counts: list[int] = []
++    atom_counts: Counter[int] = Counter()
++    bond_counts: Counter[int] = Counter()
++    projected_charge_graphs = 0
++    projected_chirality_graphs = 0
++
++    for index, graph in enumerate(graphs):
++        label = f"{split}[{index}]"
++        if not isinstance(graph, nx.Graph):
++            raise TypeError(f"{label} is not a NetworkX graph.")
++        if graph.is_directed() or graph.is_multigraph():
++            raise ValueError(f"{label} must be simple and undirected.")
++        if graph.number_of_nodes() <= 0:
++            raise ValueError(f"{label} has no nodes.")
++        if nx.number_of_selfloops(graph):
++            raise ValueError(f"{label} contains a self-loop.")
++
++        nodes = list(graph.nodes())
++        positions = {node: position for position, node in enumerate(nodes)}
++        atomic_numbers = [
++            _atomic_number(graph.nodes[node], label=label) for node in nodes
++        ]
++        atom_classes = [ATOM_VOCABULARY.index(value) for value in atomic_numbers]
++
++        row: list[int] = []
++        col: list[int] = []
++        edge_classes: list[int] = []
++        model_edges: list[tuple[int, int, int]] = []
++        for source_node, target_node, data in graph.edges(data=True):
++            source_index = positions[source_node]
++            target_index = positions[target_node]
++            if source_index == target_index:
++                raise ValueError(f"{label} contains a self-loop.")
++            bond_type = _bond_type(data, label=label)
++            row.extend((source_index, target_index))
++            col.extend((target_index, source_index))
++            edge_classes.extend((bond_type, bond_type))
++            model_edges.append(
++                (min(source_index, target_index), max(source_index, target_index), bond_type)
++            )
++
++        if row:
++            order = sorted(
++                range(len(row)), key=lambda item: row[item] * len(nodes) + col[item]
++            )
++            edge_index = torch.tensor(
++                [[row[item] for item in order], [col[item] for item in order]],
++                dtype=torch.long,
++            )
++            edge_labels = torch.tensor(
++                [edge_classes[item] for item in order], dtype=torch.long
++            )
++            edge_attr = F.one_hot(edge_labels, num_classes=5).to(torch.float)
++        else:
++            edge_index = torch.empty((2, 0), dtype=torch.long)
++            edge_attr = torch.empty((0, 5), dtype=torch.float)
++
++        x = F.one_hot(
++            torch.tensor(atom_classes, dtype=torch.long), num_classes=4
++        ).to(torch.float)
++        data_list.append(
++            Data(
++                x=x,
++                edge_index=edge_index,
++                edge_attr=edge_attr,
++                y=torch.zeros((1, 0), dtype=torch.float),
++                idx=torch.tensor([index], dtype=torch.long),
++            )
++        )
++
++        model_view = nx.Graph()
++        for node_index, atomic_number in enumerate(atomic_numbers):
++            model_view.add_node(
++                node_index,
++                atomic_num=int(atomic_number),
++                atom_type=int(atomic_number),
++            )
++        for source_index, target_index, bond_type in model_edges:
++            model_view.add_edge(
++                source_index,
++                target_index,
++                bond_type=int(bond_type),
++                bond_order=float(BOND_ORDERS[bond_type]),
++            )
++        model_view.graph.update(
++            {
++                "source_graph_index": index,
++                "molecular_dataset": "qm9",
++                "molecular_representation": "digress_model",
++                "qm9_source_state_projection_policy": graph.graph.get(
++                    "qm9_source_state_projection_policy"
++                ),
++                "projected_formal_charge_atoms": graph.graph.get(
++                    "projected_formal_charge_atoms", []
++                ),
++                "projected_chiral_atoms": graph.graph.get(
++                    "projected_chiral_atoms", []
++                ),
++                "projected_stereo_bonds": graph.graph.get(
++                    "projected_stereo_bonds", []
++                ),
++            }
++        )
++        model_view_graphs.append(model_view)
++
++        projected_charge_graphs += int(
++            bool(graph.graph.get("projected_formal_charge_atoms"))
++        )
++        projected_chirality_graphs += int(
++            bool(graph.graph.get("projected_chiral_atoms"))
++            or bool(graph.graph.get("projected_stereo_bonds"))
++        )
++        node_counts.append(len(nodes))
++        edge_counts.append(len(model_edges))
++        atom_counts.update(atomic_numbers)
++        bond_counts.update(bond_type for _, _, bond_type in model_edges)
++
++    _atomic_torch_save(
++        destination,
++        InMemoryDataset.collate(data_list),
++        torch,
++    )
++    _atomic_pickle(model_view_destination, model_view_graphs)
++    return {
++        "source": {"path": str(source), "sha256": _sha256(source)},
++        "processed": {"path": str(destination), "sha256": _sha256(destination)},
++        "model_view": {
++            "path": str(model_view_destination),
++            "sha256": _sha256(model_view_destination),
++            "graph_count": len(model_view_graphs),
++        },
++        "graph_count": len(graphs),
++        "source_to_processed_index": "identity",
++        "node_count": {"min": min(node_counts), "max": max(node_counts)},
++        "edge_count": {"min": min(edge_counts), "max": max(edge_counts)},
++        "atomic_number_counts": {
++            str(key): int(value) for key, value in sorted(atom_counts.items())
++        },
++        "bond_type_counts": {
++            str(key): int(value) for key, value in sorted(bond_counts.items())
++        },
++        "projected_source_state": {
++            "formal_charge_graphs": projected_charge_graphs,
++            "stereochemistry_graphs": projected_chirality_graphs,
++        },
++    }
++
++
++def _raw_placeholders(output_root: Path) -> list[dict[str, str]]:
++    raw = output_root / "raw"
++    raw.mkdir(parents=True, exist_ok=True)
++    notice = (
++        "GraphER-managed DiGress placeholder. Valid processed PyG artifacts "
++        "already exist; this is not the original QM9 source file.\n"
++    )
++    records: list[dict[str, str]] = []
++    for name in RAW_PLACEHOLDERS:
++        path = raw / name
++        path.write_text(notice, encoding="utf-8")
++        records.append({"path": str(path), "sha256": _sha256(path)})
++    return records
++
++
++def _parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(
++        description="Prepare GraphER QM9 splits for isolated DiGress training."
++    )
++    parser.add_argument("--dataset", choices=("qm9",), required=True)
++    parser.add_argument("--output-root", type=Path, required=True)
++    parser.add_argument("--manifest", type=Path, required=True)
++    for split in SPLITS:
++        parser.add_argument(f"--{split}", type=Path, required=True)
++    return parser
++
++
++def main() -> None:
++    args = _parser().parse_args()
++    started = datetime.now(timezone.utc)
++    output_root = args.output_root.expanduser().resolve()
++    output_root.mkdir(parents=True, exist_ok=True)
++    records: dict[str, Any] = {}
++    for split in SPLITS:
++        source = getattr(args, split).expanduser().resolve()
++        if not source.is_file():
++            raise FileNotFoundError(f"Missing GraphER split: {source}")
++        records[split] = _convert_split(
++            source,
++            output_root / "processed" / PROCESSED_FILES[split],
++            model_view_destination=output_root / "model_view" / f"{split}.pkl",
++            split=split,
++        )
++
++    placeholders = _raw_placeholders(output_root)
++    import networkx as nx
++    import torch
++    import torch_geometric
++
++    finished = datetime.now(timezone.utc)
++    _atomic_json(
++        args.manifest.expanduser().resolve(),
++        {
++            "format": FORMAT,
++            "dataset": "qm9",
++            "representation": "heavy_atom_categorical",
++            "split_order_preserved": True,
++            "graphs_dropped": 0,
++            "splits": records,
++            "vocabulary": {
++                "atom_class_to_atomic_number": list(ATOM_VOCABULARY),
++                "edge_class_zero": "no_edge",
++                "present_edge_classes": list(EDGE_VOCABULARY),
++            },
++            "raw_placeholders": placeholders,
++            "started_at": started.isoformat(),
++            "finished_at": finished.isoformat(),
++            "duration_seconds": (finished - started).total_seconds(),
++            "runtime": {
++                "python": platform.python_version(),
++                "networkx": str(nx.__version__),
++                "torch": str(torch.__version__),
++                "torch_geometric": str(torch_geometric.__version__),
++            },
++        },
++    )
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/grapher/models/digress/workers/train.py b/src/grapher/models/digress/workers/train.py
+new file mode 100755
+index 0000000..20e5cfe
+--- /dev/null
++++ b/src/grapher/models/digress/workers/train.py
+@@ -0,0 +1,366 @@
++#!/usr/bin/env python
++"""Train DiGress on GraphER-managed PyG artifacts in an isolated process.
++
++The worker builds the upstream model directly rather than importing DiGress's
++``src/main.py``. The attached main entrypoint imports graph-tool
++unconditionally, enables DDP for a single GPU, runs expensive sample metrics
++inside validation, and invokes a final test-generation pass. None of those
++behaviours is required to train a frozen baseline checkpoint.
++"""
++
++from __future__ import annotations
++
++import argparse
++import inspect
++import json
++import os
++import platform
++import sys
++import time
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any, Mapping, Optional, Sequence
++
++from common import (
++    atomic_json,
++    build_components,
++    compose_config,
++    seed_everything,
++    status,
++)
++
++FORMAT = "grapher_digress_training_worker_v1"
++
++
++def _positive_int(raw: str) -> int:
++    value = int(raw)
++    if value <= 0:
++        raise argparse.ArgumentTypeError("value must be a positive integer")
++    return value
++
++
++def _nonnegative_int(raw: str) -> int:
++    value = int(raw)
++    if value < 0:
++        raise argparse.ArgumentTypeError("value must be non-negative")
++    return value
++
++
++def _parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(
++        description="Train one GraphER-managed DiGress baseline checkpoint."
++    )
++    parser.add_argument("--digress-root", type=Path, required=True)
++    parser.add_argument("--dataset", required=True)
++    parser.add_argument("--experiment", required=True)
++    parser.add_argument("--dataset-datadir", type=Path, required=True)
++    parser.add_argument("--output-dir", type=Path, required=True)
++    parser.add_argument("--manifest", type=Path, required=True)
++    parser.add_argument("--run-name", required=True)
++    parser.add_argument("--seed", type=_nonnegative_int, required=True)
++    parser.add_argument("--gpus", type=_nonnegative_int, choices=(0, 1), default=1)
++    parser.add_argument("--n-epochs", type=_positive_int, default=None)
++    parser.add_argument("--batch-size", type=_positive_int, default=None)
++    parser.add_argument("--num-workers", type=_nonnegative_int, default=None)
++    parser.add_argument(
++        "--check-val-every-n-epochs", type=_positive_int, default=None
++    )
++    parser.add_argument("--save-every-n-epochs", type=_positive_int, default=None)
++    parser.add_argument("--epoch-progress-interval", type=_positive_int, default=None)
++    parser.add_argument("--resume-from", type=Path, default=None)
++    parser.add_argument("--override", action="append", default=[])
++    return parser
++
++
++def _float_metric(metric: Any) -> Optional[float]:
++    try:
++        total = getattr(metric, "total_samples", None)
++        if total is not None and float(total.detach().cpu().item()) <= 0:
++            return None
++        value = metric.compute()
++        if hasattr(value, "detach"):
++            value = value.detach().cpu().item()
++        return float(value)
++    except Exception:
++        return None
++
++
++def _json_metrics(values: Mapping[str, Any]) -> str:
++    normalized: dict[str, float] = {}
++    for key, value in values.items():
++        try:
++            if hasattr(value, "detach"):
++                value = value.detach().cpu().item()
++            normalized[str(key)] = float(value)
++        except Exception:
++            continue
++    return json.dumps(normalized, sort_keys=True)
++
++
++def _build_model_class() -> type[Any]:
++    """Create a bounded-output subclass of the attached Lightning module."""
++
++    from diffusion_model_discrete import DiscreteDenoisingDiffusion
++
++    class GraphERDiGressModel(DiscreteDenoisingDiffusion):
++        def on_fit_start(self) -> None:
++            self.train_iterations = len(self.trainer.datamodule.train_dataloader())
++            status(
++                "Training loop started: "
++                f"max_epochs={self.trainer.max_epochs}, "
++                f"batches_per_epoch={self.train_iterations}, "
++                f"device={self.device}."
++            )
++
++        def on_train_epoch_start(self) -> None:
++            self.start_epoch_time = time.time()
++            self.train_loss.reset()
++            self.train_metrics.reset()
++
++        def on_train_epoch_end(self) -> None:
++            completed = int(self.current_epoch) + 1
++            total = int(self.trainer.max_epochs)
++            interval = int(
++                os.environ.get(
++                    "GRAPHER_DIGRESS_EPOCH_PROGRESS_INTERVAL",
++                    max(total // 100, 1),
++                )
++            )
++            should_report = completed == 1 or completed == total or completed % interval == 0
++            if should_report:
++                x_ce = _float_metric(self.train_loss.node_loss)
++                e_ce = _float_metric(self.train_loss.edge_loss)
++                elapsed = time.time() - float(self.start_epoch_time or time.time())
++                metrics = {
++                    "train_x_ce": x_ce,
++                    "train_e_ce": e_ce,
++                }
++                compact = {
++                    key: value for key, value in metrics.items() if value is not None
++                }
++                status(
++                    "Training progress: "
++                    f"epoch={completed}/{total}, global_step={self.global_step}, "
++                    f"epoch_seconds={elapsed:.2f}, metrics={json.dumps(compact, sort_keys=True)}."
++                )
++
++        def on_validation_epoch_start(self) -> None:
++            self.val_nll.reset()
++            self.val_X_kl.reset()
++            self.val_E_kl.reset()
++            self.val_X_logp.reset()
++            self.val_E_logp.reset()
++            self.sampling_metrics.reset()
++
++        def on_validation_epoch_end(self) -> None:
++            values = {
++                "val_nll": self.val_nll.compute(),
++                "val_x_kl": self.val_X_kl.compute() * self.T,
++                "val_e_kl": self.val_E_kl.compute() * self.T,
++                "val_x_logp": self.val_X_logp.compute(),
++                "val_e_logp": self.val_E_logp.compute(),
++            }
++            val_nll = values["val_nll"]
++            try:
++                numeric = float(val_nll.detach().cpu().item())
++                self.best_val_nll = min(float(self.best_val_nll), numeric)
++            except Exception:
++                pass
++            status(
++                f"Validation completed at epoch={int(self.current_epoch) + 1}: "
++                f"{_json_metrics(values)}."
++            )
++            # Deliberately do not call sample_batch here. The upstream hook
++            # couples likelihood validation to expensive generation metrics.
++
++        def on_test_epoch_end(self) -> None:
++            # The GraphER worker never calls trainer.test(). Retain this guard
++            # so an accidental call cannot trigger 10,000-sample generation.
++            status("Test epoch completed; final sampling is managed separately.")
++
++    return GraphERDiGressModel
++
++
++def _trainer_kwargs(cfg: Any, *, output_dir: Path, callbacks: Sequence[Any]) -> dict[str, Any]:
++    import torch
++    from pytorch_lightning import Trainer
++
++    use_gpu = int(cfg.general.gpus) > 0 and torch.cuda.is_available()
++    parameters = inspect.signature(Trainer.__init__).parameters
++    kwargs: dict[str, Any] = {
++        "max_epochs": int(cfg.train.n_epochs),
++        "accelerator": "gpu" if use_gpu else "cpu",
++        "devices": 1,
++        "callbacks": list(callbacks),
++        "logger": False,
++        "enable_progress_bar": False,
++        "log_every_n_steps": max(int(cfg.general.log_every_steps), 1),
++        "default_root_dir": str(output_dir),
++        "deterministic": True,
++        "num_sanity_val_steps": 0,
++    }
++    if cfg.train.clip_grad is not None:
++        kwargs["gradient_clip_val"] = float(cfg.train.clip_grad)
++    if "strategy" in parameters:
++        kwargs["strategy"] = "auto"
++    if "check_val_every_n_epoch" in parameters:
++        kwargs["check_val_every_n_epoch"] = int(
++            cfg.general.check_val_every_n_epochs
++        )
++    if "enable_model_summary" in parameters:
++        kwargs["enable_model_summary"] = False
++    return kwargs
++
++
++def _periodic_checkpoint_callback(
++    *, output_dir: Path, every_n_epochs: Optional[int]
++) -> Any:
++    import pytorch_lightning as pl
++
++    class PeriodicCheckpoint(pl.Callback):
++        def on_train_epoch_end(self, trainer: Any, pl_module: Any) -> None:
++            del pl_module
++            if every_n_epochs is None:
++                return
++            completed = int(trainer.current_epoch) + 1
++            if completed % int(every_n_epochs) != 0:
++                return
++            path = output_dir / "checkpoints" / f"epoch={completed - 1}.ckpt"
++            path.parent.mkdir(parents=True, exist_ok=True)
++            trainer.save_checkpoint(str(path))
++            status(f"Periodic checkpoint saved: epoch={completed}, path={path}.")
++
++    return PeriodicCheckpoint()
++
++
++def main() -> None:
++    args = _parser().parse_args()
++    started_at = datetime.now(timezone.utc)
++    started = time.monotonic()
++    root = args.digress_root.expanduser().resolve()
++    output_dir = args.output_dir.expanduser().resolve()
++    output_dir.mkdir(parents=True, exist_ok=True)
++    checkpoint_dir = output_dir / "checkpoints"
++    checkpoint_dir.mkdir(parents=True, exist_ok=True)
++    resume_from = (
++        None if args.resume_from is None else args.resume_from.expanduser().resolve()
++    )
++    if resume_from is not None and not resume_from.is_file():
++        raise FileNotFoundError(f"Missing resume checkpoint: {resume_from}")
++
++    seed_everything(args.seed)
++    cfg = compose_config(
++        digress_root=root,
++        dataset=args.dataset,
++        experiment=args.experiment,
++        dataset_datadir=args.dataset_datadir,
++        run_name=args.run_name,
++        seed=args.seed,
++        gpus=args.gpus,
++        n_epochs=args.n_epochs,
++        batch_size=args.batch_size,
++        num_workers=args.num_workers,
++        check_val_every_n_epochs=args.check_val_every_n_epochs,
++        extra_overrides=args.override,
++    )
++    if int(cfg.model.type == "discrete") != 1:
++        raise ValueError("DiGressWrapper supports only the discrete model.")
++    if args.epoch_progress_interval is not None:
++        os.environ["GRAPHER_DIGRESS_EPOCH_PROGRESS_INTERVAL"] = str(
++            args.epoch_progress_interval
++        )
++
++    status(
++        "Resolved training configuration: "
++        f"dataset={cfg.dataset.name}, experiment={args.experiment}, "
++        f"epochs={cfg.train.n_epochs}, batch_size={cfg.train.batch_size}, "
++        f"diffusion_steps={cfg.model.diffusion_steps}, gpus={cfg.general.gpus}."
++    )
++    datamodule, model_kwargs, molecular_statistics = build_components(cfg)
++    model_class = _build_model_class()
++    model = model_class(cfg=cfg, **model_kwargs)
++
++    callbacks = [
++        _periodic_checkpoint_callback(
++            output_dir=output_dir,
++            every_n_epochs=args.save_every_n_epochs,
++        )
++    ]
++    if float(getattr(cfg.train, "ema_decay", 0.0)) > 0:
++        from src import utils
++
++        callbacks.append(utils.EMA(decay=float(cfg.train.ema_decay)))
++
++    from omegaconf import OmegaConf
++    from pytorch_lightning import Trainer
++    import torch
++    import torch_geometric
++    import pytorch_lightning as pl
++
++    resolved_config = output_dir / "resolved_config.yaml"
++    OmegaConf.save(config=cfg, f=str(resolved_config), resolve=True)
++    if molecular_statistics is not None:
++        atomic_json(output_dir / "molecular_statistics.json", molecular_statistics)
++
++    trainer = Trainer(**_trainer_kwargs(cfg, output_dir=output_dir, callbacks=callbacks))
++    status(
++        "Effective Lightning runtime: "
++        f"accelerator={type(trainer.accelerator).__name__}, "
++        f"strategy={type(trainer.strategy).__name__}, devices=1."
++    )
++    trainer.fit(
++        model,
++        datamodule=datamodule,
++        ckpt_path=(str(resume_from) if resume_from is not None else None),
++    )
++    final_checkpoint = checkpoint_dir / "model.ckpt"
++    trainer.save_checkpoint(str(final_checkpoint))
++    status(f"Final checkpoint saved: {final_checkpoint}.")
++
++    finished_at = datetime.now(timezone.utc)
++    manifest = {
++        "format": FORMAT,
++        "status": "complete",
++        "dataset": str(cfg.dataset.name),
++        "experiment": str(args.experiment),
++        "run_name": str(args.run_name),
++        "seed": int(args.seed),
++        "configured_n_epochs": int(cfg.train.n_epochs),
++        "completed_epochs": int(cfg.train.n_epochs),
++        "global_step": int(trainer.global_step),
++        "batch_size": int(cfg.train.batch_size),
++        "diffusion_steps": int(cfg.model.diffusion_steps),
++        "checkpoint": str(final_checkpoint),
++        "resolved_config": str(resolved_config),
++        "molecular_statistics": (
++            str(output_dir / "molecular_statistics.json")
++            if molecular_statistics is not None
++            else None
++        ),
++        "resume_from": str(resume_from) if resume_from is not None else None,
++        "started_at": started_at.isoformat(),
++        "finished_at": finished_at.isoformat(),
++        "duration_seconds": time.monotonic() - started,
++        "runtime": {
++            "python": platform.python_version(),
++            "torch": str(torch.__version__),
++            "torch_geometric": str(torch_geometric.__version__),
++            "pytorch_lightning": str(pl.__version__),
++            "cuda_available": bool(torch.cuda.is_available()),
++            "cuda_device_count": int(torch.cuda.device_count()),
++            "device": (
++                str(torch.cuda.get_device_name(0))
++                if torch.cuda.is_available() and torch.cuda.device_count() > 0
++                else "cpu"
++            ),
++        },
++    }
++    atomic_json(args.manifest.expanduser().resolve(), manifest)
++    status(
++        "Training worker completed: "
++        f"epochs={manifest['completed_epochs']}, global_step={manifest['global_step']}."
++    )
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/grapher/models/digress/wrapper.py b/src/grapher/models/digress/wrapper.py
+new file mode 100644
+index 0000000..c38dc8d
+--- /dev/null
++++ b/src/grapher/models/digress/wrapper.py
+@@ -0,0 +1,1249 @@
++"""GraphER-facing wrapper for the attached external DiGress codebase.
++
++The implementation follows the same artifact and isolation convention as
++``DeFoGWrapper``. GraphER-prepared NetworkX splits are converted into native
++PyG files, DiGress is trained in its own interpreter, and generated tensors are
++exported through a neutral NPZ schema before GraphER constructs NetworkX
++objects in its own process.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++import pickle
++import re
++import shutil
++import subprocess
++import sys
++import tempfile
++import time
++from collections.abc import Mapping, Sequence
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any
++
++import yaml
++
++from grapher.models.artifacts import ArtifactLayout
++from grapher.models.base import (
++    BaselineCapabilities,
++    BaseGeneratorWrapper,
++    GenerateRequest,
++    GenerationArtifacts,
++    TrainRequest,
++    TrainingArtifacts,
++)
++from grapher.models.errors import ArtifactCollisionError
++from grapher.utils.subprocess_progress import SubprocessLogReporter
++
++TRAINING_MANIFEST_FORMAT = "grapher_digress_training_v1"
++TRAINING_ESTIMATES_MANIFEST_FORMAT = "grapher_digress_training_estimates_v1"
++GENERATION_MANIFEST_FORMAT = "grapher_digress_generation_v1"
++SUPPORTED_GENERIC_DATASETS = frozenset({"comm20", "planar", "sbm"})
++SUPPORTED_MOLECULAR_DATASETS = frozenset({"qm9"})
++SUPPORTED_NATIVE_DATASETS = SUPPORTED_GENERIC_DATASETS | SUPPORTED_MOLECULAR_DATASETS
++_NATIVE_BY_BENCHMARK = {
++    "community_small": "comm20",
++    "ego_small": "comm20",
++    "grid": "planar",
++    "comm20": "comm20",
++    "planar": "planar",
++    "sbm": "sbm",
++    "qm9": "qm9",
++    "qm9_attributed": "qm9",
++}
++_EXPERIMENT_BY_NATIVE = {
++    "comm20": "comm20",
++    "planar": "planar",
++    "sbm": "sbm",
++    "qm9": "qm9_no_h",
++}
++_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]+$")
++_PROTECTED_HYDRA_KEYS = frozenset(
++    {
++        "experiment",
++        "dataset",
++        "dataset.name",
++        "dataset.datadir",
++        "general.name",
++        "general.gpus",
++        "general.wandb",
++        "train.seed",
++        "train.n_epochs",
++        "train.batch_size",
++        "train.num_workers",
++        "general.check_val_every_n_epochs",
++    }
++)
++
++
++def _utc_now() -> str:
++    return datetime.now(timezone.utc).isoformat()
++
++
++def _sha256(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as handle:
++        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _jsonable(value: Any) -> Any:
++    if isinstance(value, Path):
++        return str(value)
++    if isinstance(value, Mapping):
++        return {str(key): _jsonable(item) for key, item in value.items()}
++    if isinstance(value, (list, tuple)):
++        return [_jsonable(item) for item in value]
++    if isinstance(value, (str, int, float, bool)) or value is None:
++        return value
++    return repr(value)
++
++
++def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_name(path.name + ".tmp")
++    temporary.write_text(
++        json.dumps(_jsonable(value), indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    temporary.replace(path)
++
++
++def _atomic_pickle(path: Path, value: Any) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_name(path.name + ".tmp")
++    with temporary.open("wb") as handle:
++        pickle.dump(value, handle, protocol=pickle.HIGHEST_PROTOCOL)
++    temporary.replace(path)
++
++
++def _read_json(path: Path, *, label: str) -> dict[str, Any]:
++    value = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(value, dict):
++        raise TypeError(f"{label} must contain a JSON object: {path}")
++    return value
++
++
++def _load_pickle_graphs(path: Path) -> list[Any]:
++    with path.open("rb") as handle:
++        value = pickle.load(handle)
++    if not isinstance(value, (list, tuple)):
++        raise TypeError(f"Expected a graph sequence in {path}.")
++    return list(value)
++
++
++def _deep_update(base: dict[str, Any], update: Mapping[str, Any]) -> dict[str, Any]:
++    for key, value in update.items():
++        if isinstance(value, Mapping) and isinstance(base.get(key), Mapping):
++            base[key] = _deep_update(dict(base[key]), value)
++        else:
++            base[key] = value
++    return base
++
++
++def _mapping(value: Any, *, name: str) -> dict[str, Any]:
++    if value is None:
++        return {}
++    if not isinstance(value, Mapping):
++        raise TypeError(f"{name} must be a mapping.")
++    return dict(value)
++
++
++def _boolean(value: Any, *, name: str) -> bool:
++    if not isinstance(value, bool):
++        raise TypeError(f"{name} must be a boolean.")
++    return value
++
++
++def _load_options(request: TrainRequest) -> dict[str, Any]:
++    options: dict[str, Any] = {}
++    if request.config_path is not None:
++        if not request.config_path.is_file():
++            raise FileNotFoundError(
++                f"Missing DiGress wrapper config: {request.config_path}"
++            )
++        loaded = yaml.safe_load(request.config_path.read_text(encoding="utf-8")) or {}
++        if not isinstance(loaded, Mapping):
++            raise TypeError("The DiGress wrapper config must contain a mapping.")
++        selected = loaded.get("digress", loaded)
++        if not isinstance(selected, Mapping):
++            raise TypeError("The digress config section must contain a mapping.")
++        options = dict(selected)
++    return _deep_update(options, request.options)
++
++
++def _native_dataset(benchmark: str, explicit: Any = None) -> str:
++    requested = str(explicit or benchmark).lower()
++    native = _NATIVE_BY_BENCHMARK.get(requested, requested)
++    if native not in SUPPORTED_NATIVE_DATASETS:
++        if requested in {"zinc", "zinc_attributed"}:
++            raise ValueError(
++                "The attached DiGress snapshot has no ZINC dataset or experiment "
++                "configuration. DiGressWrapper currently supports Community-small, "
++                "Ego-small, Grid/SPECTRE-compatible generic graphs, and QM9."
++            )
++        raise ValueError(
++            f"DiGressWrapper supports native datasets "
++            f"{sorted(SUPPORTED_NATIVE_DATASETS)}; benchmark {benchmark!r} has "
++            "no declared compatibility profile."
++        )
++    return native
++
++
++def _default_experiment(native: str) -> str:
++    return _EXPERIMENT_BY_NATIVE[native]
++
++
++def _dataset_profile(benchmark: str, native: str) -> dict[str, str]:
++    if native == "qm9":
++        representation = "heavy_atom_categorical"
++        domain = "molecular"
++    else:
++        representation = "simple_undirected_topology"
++        domain = "generic"
++    if benchmark == "ego_small" and native == "comm20":
++        role = "generic_loader_compatibility_profile"
++    elif benchmark == "grid" and native == "planar":
++        role = "generic_loader_and_architecture_compatibility_profile"
++    elif benchmark != native:
++        role = "declared_native_alias"
++    else:
++        role = "native"
++    return {
++        "domain": domain,
++        "profile_role": role,
++        "model_representation": representation,
++    }
++
++
++def _progress_options(runtime: Mapping[str, Any]) -> dict[str, Any]:
++    raw = runtime.get("progress", {}) or {}
++    if not isinstance(raw, Mapping):
++        raise TypeError("runtime.progress must be a mapping.")
++    enabled = _boolean(raw.get("enabled", False), name="runtime.progress.enabled")
++    stream = _boolean(
++        raw.get("stream_output", enabled),
++        name="runtime.progress.stream_output",
++    )
++    interval = float(raw.get("interval_seconds", 30.0))
++    if interval <= 0:
++        raise ValueError("runtime.progress.interval_seconds must be positive.")
++    epoch_value = raw.get("epoch_interval")
++    epoch_interval = None if epoch_value is None else int(epoch_value)
++    if epoch_interval is not None and epoch_interval <= 0:
++        raise ValueError("runtime.progress.epoch_interval must be positive.")
++    generation_interval = int(raw.get("generation_batch_interval", 1))
++    if generation_interval <= 0:
++        raise ValueError(
++            "runtime.progress.generation_batch_interval must be positive."
++        )
++    return {
++        "enabled": enabled,
++        "stream_output": stream,
++        "interval_seconds": interval,
++        "epoch_interval": epoch_interval,
++        "generation_batch_interval": generation_interval,
++    }
++
++
++def _emit(progress: Mapping[str, Any], message: str) -> None:
++    if bool(progress.get("enabled")):
++        print(f"[GraphER/DiGress] {message}", file=sys.stderr, flush=True)
++
++
++def _source_revision(root: Path) -> str | None:
++    try:
++        result = subprocess.run(
++            ["git", "-C", str(root), "rev-parse", "HEAD"],
++            stdout=subprocess.PIPE,
++            stderr=subprocess.DEVNULL,
++            text=True,
++            timeout=5,
++            check=False,
++            shell=False,
++        )
++    except (FileNotFoundError, subprocess.TimeoutExpired):
++        return None
++    revision = result.stdout.strip()
++    return revision if result.returncode == 0 and revision else None
++
++
++def _source_identity(root: Path) -> dict[str, Any]:
++    digest = hashlib.sha256()
++    files: list[Path] = []
++    for directory in (root / "configs", root / "src"):
++        if directory.is_dir():
++            files.extend(
++                path
++                for path in directory.rglob("*")
++                if path.is_file()
++                and path.suffix.lower() in {".py", ".yaml", ".yml"}
++            )
++    for path in sorted(files, key=lambda item: item.relative_to(root).as_posix()):
++        relative = path.relative_to(root).as_posix().encode("utf-8")
++        digest.update(relative)
++        digest.update(b"\0")
++        with path.open("rb") as handle:
++            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
++                digest.update(chunk)
++    return {
++        "source_root": str(root),
++        "revision": _source_revision(root),
++        "source_fingerprint": {
++            "algorithm": "sha256_names_and_contents_v1",
++            "sha256": digest.hexdigest(),
++            "file_count": len(files),
++        },
++    }
++
++
++def _verify_source(expected: Mapping[str, Any], observed: Mapping[str, Any]) -> None:
++    expected_fp = expected.get("source_fingerprint")
++    observed_fp = observed.get("source_fingerprint")
++    if not isinstance(expected_fp, Mapping) or not isinstance(observed_fp, Mapping):
++        raise RuntimeError("DiGress source fingerprint provenance is incomplete.")
++    if str(expected_fp.get("sha256", "")) != str(
++        observed_fp.get("sha256", "")
++    ):
++        raise RuntimeError(
++            "The external DiGress source tree changed after training. Use a new "
++            "run_id or restore the recorded source."
++        )
++
++
++def _python_identity(python: Path) -> dict[str, Any]:
++    completed = subprocess.run(
++        [str(python), "-c", "import platform,sys; print(platform.python_version()); print(sys.prefix)"],
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        text=True,
++        timeout=30,
++        check=False,
++        shell=False,
++    )
++    if completed.returncode != 0:
++        raise RuntimeError(
++            "Could not inspect the DiGress Python environment: "
++            f"{completed.stderr.strip()}"
++        )
++    lines = completed.stdout.splitlines()
++    return {
++        "python_executable": str(python.resolve()),
++        "python_version": lines[0].strip() if lines else None,
++        "prefix": lines[1].strip() if len(lines) > 1 else None,
++    }
++
++
++def _external_environment(
++    root: Path,
++    *,
++    seed: int,
++    cuda_visible_devices: str | None,
++) -> dict[str, str]:
++    environment = dict(os.environ)
++    environment.update(
++        {
++            "PYTHONPATH": os.pathsep.join([str(root), str(root / "src")]),
++            "PYTHONHASHSEED": str(int(seed)),
++            "PYTHONUNBUFFERED": "1",
++            "WANDB_MODE": "disabled",
++            "WANDB_DISABLED": "true",
++            "HYDRA_FULL_ERROR": "1",
++            "MPLBACKEND": "Agg",
++            "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
++        }
++    )
++    if cuda_visible_devices is not None:
++        environment["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
++    return environment
++
++
++def _worker(name: str) -> Path:
++    path = Path(__file__).resolve().parent / "workers" / name
++    if not path.is_file():
++        raise FileNotFoundError(f"Missing DiGress worker: {path}")
++    return path
++
++
++def _publish_directory(stage: Path, target: Path, *, overwrite: bool) -> None:
++    ArtifactLayout.require_available(target, overwrite=overwrite)
++    target.parent.mkdir(parents=True, exist_ok=True)
++    backup: Path | None = None
++    if target.exists():
++        backup = target.with_name(f".{target.name}.backup-{time.time_ns()}")
++        target.replace(backup)
++    try:
++        stage.replace(target)
++    except Exception:
++        if backup is not None and backup.exists() and not target.exists():
++            backup.replace(target)
++        raise
++    if backup is not None:
++        shutil.rmtree(backup)
++
++
++def _tail(path: Path, *, lines: int = 200) -> str:
++    if not path.is_file():
++        return ""
++    return "\n".join(
++        path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
++    )
++
++
++def _normalize_hydra_overrides(value: Any) -> list[str]:
++    if value is None:
++        return []
++    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
++        raise TypeError("hydra_overrides must be a sequence of strings.")
++    result: list[str] = []
++    for raw in value:
++        text = str(raw)
++        if not text or any(character in text for character in "\x00\r\n"):
++            raise ValueError(f"Invalid Hydra override: {raw!r}")
++        key = text.lstrip("+").split("=", 1)[0]
++        if key in _PROTECTED_HYDRA_KEYS:
++            raise ValueError(
++                f"Hydra override {key!r} is managed by DiGressWrapper; use the "
++                "corresponding wrapper option or CLI argument."
++            )
++        result.append(text)
++    return result
++
++
++def _rewrite_config_datadir(path: Path, durable_path: Path) -> None:
++    loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
++    if not isinstance(loaded, dict):
++        raise TypeError("Resolved DiGress config must contain a mapping.")
++    dataset = loaded.setdefault("dataset", {})
++    if not isinstance(dataset, dict):
++        raise TypeError("Resolved DiGress dataset config must be a mapping.")
++    dataset["datadir"] = str(durable_path.expanduser().resolve())
++    path.write_text(yaml.safe_dump(loaded, sort_keys=False), encoding="utf-8")
++
++
++def _normalize_conversion_manifest(
++    manifest: dict[str, Any], *, temporary_root: Path
++) -> dict[str, Any]:
++    text = json.dumps(_jsonable(manifest), sort_keys=True)
++    text = text.replace(str(temporary_root.resolve()), "native_dataset")
++    return json.loads(text)
++
++
++def _preserve_failure(
++    *,
++    layout: ArtifactLayout,
++    workspace: Path,
++    log_path: Path,
++    error: BaseException,
++    command: Sequence[str] | None,
++) -> Path:
++    target = layout.run_dir / "failures" / f"attempt-{time.time_ns()}"
++    target.mkdir(parents=True, exist_ok=False)
++    if log_path.is_file():
++        shutil.copy2(log_path, target / "train.log")
++    # Preserve a completed or periodic checkpoint before the staging tree is
++    # removed. This protects long runs from late post-training decode failures.
++    checkpoints = sorted(
++        (path for path in workspace.rglob("*.ckpt") if path.is_file()),
++        key=lambda item: item.stat().st_mtime_ns,
++    )
++    recovered: str | None = None
++    if checkpoints:
++        source = checkpoints[-1]
++        destination = target / source.name
++        shutil.copy2(source, destination)
++        recovered = destination.name
++    _atomic_json(
++        target / "failure.json",
++        {
++            "format": "grapher_digress_training_failure_v1",
++            "model_id": "digress",
++            "dataset_id": layout.dataset_id,
++            "run_id": layout.run_id,
++            "failed_at": _utc_now(),
++            "exception_type": type(error).__name__,
++            "exception": str(error),
++            "command": list(command) if command is not None else None,
++            "log": "train.log" if log_path.is_file() else None,
++            "recovered_checkpoint": recovered,
++        },
++    )
++    return target
++
++
++class DiGressWrapper(BaseGeneratorWrapper):
++    """Train and sample the attached DiGress implementation in isolation."""
++
++    model_id = "digress"
++    display_name = "DiGress"
++    capabilities = BaselineCapabilities(
++        domains=frozenset({"generic", "attributed"}),
++        isolation="subprocess",
++        status="ready",
++    )
++    implementation_note = (
++        "Supports generic SPECTRE-compatible graph datasets and heavy-atom QM9. "
++        "The attached DiGress source has no ZINC configuration."
++    )
++
++    def _run_external(
++        self,
++        command: Sequence[str],
++        *,
++        cwd: Path,
++        environment: Mapping[str, str],
++        log_path: Path,
++        timeout_seconds: float | None,
++        label: str,
++        progress: Mapping[str, Any],
++        append: bool = True,
++    ) -> None:
++        log_path.parent.mkdir(parents=True, exist_ok=True)
++        mode = "a" if append else "w"
++        start_offset = log_path.stat().st_size if log_path.is_file() else 0
++        reporter = SubprocessLogReporter(
++            label=label,
++            log_path=log_path,
++            enabled=bool(progress["enabled"]),
++            stream_output=bool(progress["stream_output"]),
++            interval_seconds=float(progress["interval_seconds"]),
++            prefix="GraphER/DiGress",
++        )
++        with log_path.open(mode, encoding="utf-8") as log_file:
++            reporter.start(start_offset=start_offset)
++            try:
++                completed = subprocess.run(
++                    list(command),
++                    cwd=str(cwd),
++                    env=dict(environment),
++                    stdout=log_file,
++                    stderr=subprocess.STDOUT,
++                    timeout=timeout_seconds,
++                    check=False,
++                    shell=False,
++                    start_new_session=True,
++                )
++            except subprocess.TimeoutExpired as exc:
++                reporter.stop(status="timed out")
++                raise RuntimeError(
++                    f"{label} timed out.\nLog: {log_path}\n"
++                    f"Command: {json.dumps(list(command))}\n"
++                    f"Last output:\n{_tail(log_path)}"
++                ) from exc
++            except BaseException:
++                reporter.stop(status="failed")
++                raise
++            else:
++                reporter.stop(
++                    status=(
++                        "completed"
++                        if completed.returncode == 0
++                        else f"failed with exit code {completed.returncode}"
++                    )
++                )
++        if completed.returncode != 0:
++            raise RuntimeError(
++                f"{label} exited with code {completed.returncode}.\n"
++                f"Working directory: {cwd}\nLog: {log_path}\n"
++                f"Command: {json.dumps(list(command))}\n"
++                f"Last output:\n{_tail(log_path)}"
++            )
++
++    def train(self, request: TrainRequest) -> TrainingArtifacts:
++        self.validate_train_request(request)
++        options = _load_options(request)
++        native = _native_dataset(
++            request.dataset.benchmark_id,
++            options.get("native_dataset") or request.dataset.native_id,
++        )
++        experiment = str(
++            options.get("experiment", _default_experiment(native))
++        ).lower()
++        if not _SAFE_IDENTIFIER.fullmatch(experiment):
++            raise ValueError("DiGress experiment must be a safe identifier.")
++
++        from grapher.models.digress.runtime import (
++            resolve_digress_python,
++            resolve_digress_root,
++        )
++
++        source_env = str(options.get("source_env", "DIGRESS"))
++        python_env = str(options.get("python_env", "DIGRESS_PYTHON"))
++        root = resolve_digress_root(source_env)
++        runtime = _mapping(options.get("runtime"), name="runtime")
++        progress = _progress_options(runtime)
++        python = resolve_digress_python(
++            digress_root=root,
++            python_executable=runtime.get("python_executable"),
++            python_env=python_env,
++        )
++        source_identity = _source_identity(root)
++        python_identity = _python_identity(python)
++        timeout_value = runtime.get("timeout_seconds")
++        timeout_seconds = None if timeout_value is None else float(timeout_value)
++        if timeout_seconds is not None and timeout_seconds <= 0:
++            raise ValueError("runtime.timeout_seconds must be positive.")
++        gpus = int(runtime.get("gpus", 1))
++        if gpus not in {0, 1}:
++            raise ValueError("runtime.gpus must be 0 or 1.")
++        cuda_value = runtime.get("cuda_visible_devices")
++        cuda_visible_devices = None if cuda_value is None else str(cuda_value)
++        if cuda_visible_devices is not None and any(
++            character in cuda_visible_devices for character in "\x00\r\n"
++        ):
++            raise ValueError("runtime.cuda_visible_devices is invalid.")
++
++        experiment_config = root / "configs" / "experiment" / f"{experiment}.yaml"
++        dataset_config = root / "configs" / "dataset" / f"{native}.yaml"
++        missing = [
++            str(path)
++            for path in (experiment_config, dataset_config)
++            if not path.is_file()
++        ]
++        if missing:
++            raise FileNotFoundError(
++                f"The attached DiGress source lacks requested configs: {missing}."
++            )
++
++        layout = request.run.layout
++        if (
++            request.overwrite
++            and layout.generations_dir.is_dir()
++            and any(layout.generations_dir.iterdir())
++        ):
++            raise ArtifactCollisionError(
++                "Cannot overwrite a trained DiGress run that already has raw "
++                "generation batches. Use a new run_id."
++            )
++        ArtifactLayout.require_available(layout.train_dir, overwrite=request.overwrite)
++        staging_root = layout.output_root.expanduser().resolve() / ".staging"
++        staging_root.mkdir(parents=True, exist_ok=True)
++        workspace = Path(tempfile.mkdtemp(prefix="digress-train-", dir=staging_root))
++        stage_train = workspace / "train"
++        stage_train.mkdir()
++        native_data = workspace / "native_dataset"
++        native_run = workspace / "native_run"
++        log_path = stage_train / "train.log"
++        conversion_manifest_path = stage_train / "dataset_conversion.json"
++        worker_manifest_path = native_run / "training_worker_manifest.json"
++        started_at = _utc_now()
++        started = time.monotonic()
++        command: list[str] | None = None
++        try:
++            environment = _external_environment(
++                root,
++                seed=request.run.train_seed,
++                cuda_visible_devices=cuda_visible_devices,
++            )
++            preparation_worker = (
++                _worker("prepare_molecular_dataset.py")
++                if native in SUPPORTED_MOLECULAR_DATASETS
++                else _worker("prepare_dataset.py")
++            )
++            split_paths = request.dataset.split_paths
++            prepare_command = [
++                str(python),
++                str(preparation_worker),
++                "--dataset",
++                native,
++                "--output-root",
++                str(native_data),
++                "--manifest",
++                str(conversion_manifest_path),
++                "--train",
++                str(split_paths["train"].resolve()),
++                "--val",
++                str(split_paths["val"].resolve()),
++                "--test",
++                str(split_paths["test"].resolve()),
++            ]
++            _emit(
++                progress,
++                "preparing DiGress-native PyG artifacts from immutable GraphER splits",
++            )
++            self._run_external(
++                prepare_command,
++                cwd=root / "src",
++                environment=environment,
++                log_path=log_path,
++                timeout_seconds=timeout_seconds,
++                label="DiGress dataset preparation",
++                progress=progress,
++                append=False,
++            )
++            if not conversion_manifest_path.is_file():
++                raise RuntimeError("DiGress preparation worker published no manifest.")
++            conversion = _read_json(
++                conversion_manifest_path, label="DiGress conversion manifest"
++            )
++            split_records = conversion.get("splits")
++            if not isinstance(split_records, Mapping):
++                raise RuntimeError("DiGress conversion manifest has no split records.")
++            for split, source in split_paths.items():
++                record = split_records.get(split)
++                if not isinstance(record, Mapping):
++                    raise RuntimeError(f"Missing DiGress split record {split!r}.")
++                source_record = record.get("source")
++                if not isinstance(source_record, Mapping) or str(
++                    source_record.get("sha256", "")
++                ) != _sha256(source):
++                    raise RuntimeError(
++                        f"Prepared DiGress split {split!r} does not match its "
++                        "GraphER source bytes."
++                    )
++            train_count = int(split_records["train"].get("graph_count", 0))
++            if train_count <= 0:
++                raise RuntimeError("DiGress preparation produced no training graphs.")
++
++            hydra_overrides = _normalize_hydra_overrides(
++                options.get("hydra_overrides")
++            )
++            command = [
++                str(python),
++                str(_worker("train.py")),
++                "--digress-root",
++                str(root),
++                "--dataset",
++                native,
++                "--experiment",
++                experiment,
++                "--dataset-datadir",
++                str(native_data),
++                "--output-dir",
++                str(native_run),
++                "--manifest",
++                str(worker_manifest_path),
++                "--run-name",
++                f"grapher_{request.run.run_id}",
++                "--seed",
++                str(request.run.train_seed),
++                "--gpus",
++                str(gpus),
++            ]
++            scalar_options = (
++                ("n_epochs", "--n-epochs"),
++                ("batch_size", "--batch-size"),
++                ("num_workers", "--num-workers"),
++                ("check_val_every_n_epochs", "--check-val-every-n-epochs"),
++                ("save_every_n_epochs", "--save-every-n-epochs"),
++            )
++            for key, flag in scalar_options:
++                if options.get(key) is not None:
++                    command.extend([flag, str(int(options[key]))])
++            if progress["epoch_interval"] is not None:
++                command.extend(
++                    ["--epoch-progress-interval", str(progress["epoch_interval"])]
++                )
++            if request.resume_from is not None:
++                if not request.resume_from.is_file():
++                    raise FileNotFoundError(request.resume_from)
++                command.extend(["--resume-from", str(request.resume_from.resolve())])
++            for override in hydra_overrides:
++                command.extend(["--override", override])
++            _emit(
++                progress,
++                "launching isolated DiGress training: "
++                f"dataset={native}, experiment={experiment}, "
++                f"n_epochs={options.get('n_epochs', 'upstream default')}",
++            )
++            self._run_external(
++                command,
++                cwd=root / "src",
++                environment=environment,
++                log_path=log_path,
++                timeout_seconds=timeout_seconds,
++                label="DiGress training",
++                progress=progress,
++            )
++            if not worker_manifest_path.is_file():
++                raise RuntimeError("DiGress training worker published no manifest.")
++            worker_manifest = _read_json(
++                worker_manifest_path, label="DiGress training-worker manifest"
++            )
++            source_checkpoint = Path(str(worker_manifest.get("checkpoint", "")))
++            source_config = Path(str(worker_manifest.get("resolved_config", "")))
++            if not source_checkpoint.is_file() or not source_config.is_file():
++                raise RuntimeError(
++                    "DiGress training completed without checkpoint/config artifacts."
++                )
++
++            checkpoints_dir = stage_train / "checkpoints"
++            checkpoints_dir.mkdir()
++            checkpoint_path = checkpoints_dir / "model.ckpt"
++            shutil.copy2(source_checkpoint, checkpoint_path)
++            resolved_config = stage_train / "resolved_config.yaml"
++            shutil.copy2(source_config, resolved_config)
++            persisted_native = stage_train / "native_dataset"
++            native_data.replace(persisted_native)
++            _rewrite_config_datadir(
++                resolved_config, layout.native_training_dataset_dir
++            )
++            molecular_statistics_path: Path | None = None
++            worker_stats = worker_manifest.get("molecular_statistics")
++            if worker_stats:
++                source_stats = Path(str(worker_stats))
++                if not source_stats.is_file():
++                    raise RuntimeError("Missing DiGress molecular-statistics file.")
++                molecular_statistics_path = stage_train / "molecular_statistics.json"
++                shutil.copy2(source_stats, molecular_statistics_path)
++
++            conversion = _normalize_conversion_manifest(
++                conversion, temporary_root=native_data
++            )
++            # The temporary path may already have been moved; normalize the
++            # original workspace root as a second pass.
++            conversion = json.loads(
++                json.dumps(conversion).replace(
++                    str((workspace / "native_dataset").resolve()),
++                    "native_dataset",
++                )
++            )
++            _atomic_json(conversion_manifest_path, conversion)
++
++            estimate_options = _mapping(
++                options.get("training_estimates"), name="training_estimates"
++            )
++            estimates_enabled = _boolean(
++                estimate_options.get("enabled", True),
++                name="training_estimates.enabled",
++            )
++            estimate_summary: dict[str, Any] = {"enabled": estimates_enabled}
++            estimated_path: Path | None = None
++            ground_truth_path: Path | None = None
++            model_view_path: Path | None = None
++            estimates_manifest_path: Path | None = None
++            if estimates_enabled:
++                estimate_count = int(
++                    estimate_options.get(
++                        "num_graphs",
++                        min(train_count, 1024)
++                        if native in SUPPORTED_MOLECULAR_DATASETS
++                        else train_count,
++                    )
++                )
++                if estimate_count <= 0 or estimate_count > train_count:
++                    raise ValueError(
++                        "training_estimates.num_graphs must be between 1 and "
++                        f"the training-set size ({train_count})."
++                    )
++                estimate_seed = int(
++                    estimate_options.get("seed", request.run.train_seed)
++                )
++                estimate_batch_size = int(
++                    estimate_options.get(
++                        "batch_size",
++                        options.get(
++                            "generation_batch_size",
++                            256 if native == "qm9" else 64,
++                        ),
++                    )
++                )
++                estimate_native = stage_train / "training_estimates" / "native"
++                estimate_native.mkdir(parents=True)
++                _emit(
++                    progress,
++                    "generating independent post-training DiGress source pool: "
++                    f"num_graphs={estimate_count}, seed={estimate_seed}",
++                )
++                from grapher.models.digress.backend import generate_digress_graphs
++
++                estimate_result = generate_digress_graphs(
++                    digress_root=root,
++                    python_executable=python,
++                    dataset=native,
++                    dataset_datadir=persisted_native,
++                    resolved_config_path=resolved_config,
++                    checkpoint_path=checkpoint_path,
++                    output_dir=estimate_native,
++                    num_graphs=estimate_count,
++                    generation_seed=estimate_seed,
++                    batch_size=estimate_batch_size,
++                    molecular_statistics_path=molecular_statistics_path,
++                    device=str(estimate_options.get("device", "auto" if gpus else "cpu")),
++                    cuda_visible_devices=cuda_visible_devices,
++                    timeout_seconds=timeout_seconds,
++                    progress_enabled=bool(progress["enabled"]),
++                    stream_output=bool(progress["stream_output"]),
++                    progress_interval_seconds=float(progress["interval_seconds"]),
++                    generation_progress_every_batches=int(
++                        progress["generation_batch_interval"]
++                    ),
++                )
++                estimates_dir = stage_train / "training_estimates"
++                estimated_path = estimates_dir / "estimated_graphs.pkl"
++                _atomic_pickle(estimated_path, list(estimate_result.graphs))
++                train_graphs = _load_pickle_graphs(split_paths["train"])
++                ground_truth_path = estimates_dir / "ground_truth_graphs.pkl"
++                _atomic_pickle(ground_truth_path, train_graphs[:estimate_count])
++                if native == "qm9":
++                    source_model_view = (
++                        persisted_native / "model_view" / "train.pkl"
++                    )
++                    if not source_model_view.is_file():
++                        raise RuntimeError(
++                            "QM9 conversion did not persist its model-view train split."
++                        )
++                    model_view_graphs = _load_pickle_graphs(source_model_view)
++                    model_view_path = estimates_dir / "ground_truth_model_view.pkl"
++                    _atomic_pickle(
++                        model_view_path, model_view_graphs[:estimate_count]
++                    )
++                # Reuse the backend log as the standard estimate log.
++                shutil.copy2(
++                    estimate_result.log_path,
++                    estimates_dir / "generate.log",
++                )
++                estimates_manifest_path = estimates_dir / "manifest.json"
++                estimates_manifest = {
++                    "format": TRAINING_ESTIMATES_MANIFEST_FORMAT,
++                    "model_id": self.model_id,
++                    "dataset_id": request.run.dataset_id,
++                    "native_dataset": native,
++                    "run_id": request.run.run_id,
++                    "training_seed": request.run.train_seed,
++                    "generation_seed": estimate_seed,
++                    "count": estimate_count,
++                    "pairing": {
++                        "status": "unpaired",
++                        "reason": (
++                            "DiGress produces an independent unconditional sample "
++                            "pool; a separate declared matching step must construct "
++                            "corrector-training pairs."
++                        ),
++                    },
++                    "estimated_graphs": {
++                        "path": "estimated_graphs.pkl",
++                        "sha256": _sha256(estimated_path),
++                    },
++                    "ground_truth_graphs": {
++                        "path": "ground_truth_graphs.pkl",
++                        "sha256": _sha256(ground_truth_path),
++                    },
++                    "ground_truth_model_view": (
++                        {
++                            "path": "ground_truth_model_view.pkl",
++                            "sha256": _sha256(model_view_path),
++                        }
++                        if model_view_path is not None
++                        else None
++                    ),
++                    "neutral_export": {
++                        "path": "native/digress_samples.npz",
++                        "sha256": estimate_result.export_sha256,
++                    },
++                }
++                _atomic_json(estimates_manifest_path, estimates_manifest)
++                estimate_summary = {
++                    "enabled": True,
++                    "count": estimate_count,
++                    "manifest": "training_estimates/manifest.json",
++                }
++
++            training_manifest = {
++                "format": TRAINING_MANIFEST_FORMAT,
++                "model_id": self.model_id,
++                "dataset": {
++                    "benchmark_id": request.dataset.benchmark_id,
++                    "serialized_id": request.dataset.serialized_id,
++                    "native_id": native,
++                    "fingerprint": request.dataset.fingerprint(),
++                    **_dataset_profile(request.dataset.benchmark_id, native),
++                },
++                "run_id": request.run.run_id,
++                "train_seed": request.run.train_seed,
++                "started_at": started_at,
++                "finished_at": _utc_now(),
++                "duration_seconds": time.monotonic() - started,
++                "upstream": {
++                    **source_identity,
++                    "experiment": experiment,
++                    "python_environment": python_identity,
++                },
++                "training": {
++                    "configured_n_epochs": worker_manifest.get(
++                        "configured_n_epochs"
++                    ),
++                    "completed_epochs": worker_manifest.get("completed_epochs"),
++                    "global_step": worker_manifest.get("global_step"),
++                    "batch_size": worker_manifest.get("batch_size"),
++                    "diffusion_steps": worker_manifest.get("diffusion_steps"),
++                    "resume_from": (
++                        str(request.resume_from.resolve())
++                        if request.resume_from is not None
++                        else None
++                    ),
++                },
++                "checkpoint": {
++                    "path": "checkpoints/model.ckpt",
++                    "sha256": _sha256(checkpoint_path),
++                },
++                "resolved_config": {
++                    "path": "resolved_config.yaml",
++                    "sha256": _sha256(resolved_config),
++                },
++                "dataset_conversion": {
++                    "path": "dataset_conversion.json",
++                    "sha256": _sha256(conversion_manifest_path),
++                },
++                "molecular_statistics": (
++                    {
++                        "path": "molecular_statistics.json",
++                        "sha256": _sha256(molecular_statistics_path),
++                    }
++                    if molecular_statistics_path is not None
++                    else None
++                ),
++                "training_estimates": estimate_summary,
++                "wrapper_options": _jsonable(options),
++                "log": "train.log",
++            }
++            _atomic_json(stage_train / "manifest.json", training_manifest)
++            _atomic_json(
++                stage_train / "run.json",
++                {
++                    "format": "grapher_baseline_run_v1",
++                    "model_id": self.model_id,
++                    "dataset_id": request.run.dataset_id,
++                    "run_id": request.run.run_id,
++                    "train_seed": request.run.train_seed,
++                },
++            )
++            _publish_directory(
++                stage_train, layout.train_dir, overwrite=request.overwrite
++            )
++            # run.json belongs at run root under the common contract.
++            run_record = layout.train_dir / "run.json"
++            if run_record.is_file():
++                run_record.replace(layout.run_manifest_path)
++            checkpoint_final = layout.checkpoints_dir / "model.ckpt"
++            return TrainingArtifacts(
++                run_dir=layout.run_dir,
++                checkpoint_path=checkpoint_final,
++                manifest_path=layout.training_manifest_path,
++                log_path=layout.training_log_path,
++                artifacts=(
++                    layout.resolved_training_config_path,
++                    layout.train_dir / "dataset_conversion.json",
++                    layout.native_training_dataset_dir,
++                ),
++                estimated_graphs_path=(
++                    layout.estimated_training_graphs_path
++                    if estimates_enabled
++                    else None
++                ),
++                ground_truth_graphs_path=(
++                    layout.ground_truth_training_graphs_path
++                    if estimates_enabled
++                    else None
++                ),
++                ground_truth_model_view_graphs_path=(
++                    layout.ground_truth_model_view_graphs_path
++                    if estimates_enabled and native == "qm9"
++                    else None
++                ),
++                training_estimates_manifest_path=(
++                    layout.training_estimates_manifest_path
++                    if estimates_enabled
++                    else None
++                ),
++            )
++        except BaseException as exc:
++            failure = _preserve_failure(
++                layout=layout,
++                workspace=workspace,
++                log_path=log_path,
++                error=exc,
++                command=command,
++            )
++            print(
++                f"Failure artifacts preserved at: {failure}",
++                file=sys.stderr,
++                flush=True,
++            )
++            raise
++        finally:
++            shutil.rmtree(workspace, ignore_errors=True)
++
++    def generate(self, request: GenerateRequest) -> GenerationArtifacts:
++        self.validate_generate_request(request)
++        layout = request.run.layout
++        managed = layout.training_manifest_path.is_file()
++        training_manifest: dict[str, Any] = {}
++        if managed:
++            training_manifest = _read_json(
++                layout.training_manifest_path,
++                label="DiGress training manifest",
++            )
++            if training_manifest.get("format") != TRAINING_MANIFEST_FORMAT:
++                raise RuntimeError("Unsupported DiGress training manifest format.")
++            checkpoint_record = training_manifest.get("checkpoint")
++            if not isinstance(checkpoint_record, Mapping):
++                raise RuntimeError("DiGress training manifest has no checkpoint.")
++            if str(checkpoint_record.get("sha256", "")) != _sha256(
++                request.checkpoint_path
++            ):
++                raise RuntimeError(
++                    "Requested DiGress checkpoint differs from the managed run."
++                )
++
++        training_options = training_manifest.get("wrapper_options", {})
++        if not isinstance(training_options, Mapping):
++            training_options = {}
++        options = _deep_update(dict(training_options), request.options)
++        dataset_record = training_manifest.get("dataset", {})
++        if not isinstance(dataset_record, Mapping):
++            dataset_record = {}
++        native = _native_dataset(
++            request.run.dataset_id,
++            options.get("native_dataset") or dataset_record.get("native_id"),
++        )
++        upstream = training_manifest.get("upstream", {})
++        if not isinstance(upstream, Mapping):
++            upstream = {}
++
++        from grapher.models.digress.runtime import (
++            resolve_digress_python,
++            resolve_digress_root,
++        )
++
++        runtime = _mapping(options.get("runtime"), name="runtime")
++        progress = _progress_options(runtime)
++        root = resolve_digress_root(str(options.get("source_env", "DIGRESS")))
++        python = resolve_digress_python(
++            digress_root=root,
++            python_executable=runtime.get("python_executable"),
++            python_env=str(options.get("python_env", "DIGRESS_PYTHON")),
++        )
++        if managed:
++            expected_source = upstream
++            _verify_source(expected_source, _source_identity(root))
++            expected_python = upstream.get("python_environment")
++            if isinstance(expected_python, Mapping) and str(
++                expected_python.get("python_executable", "")
++            ) != str(python.resolve()):
++                raise RuntimeError(
++                    "Managed DiGress generation resolved a different Python "
++                    "interpreter from training."
++                )
++        timeout_value = runtime.get("timeout_seconds")
++        timeout_seconds = None if timeout_value is None else float(timeout_value)
++        cuda_value = runtime.get("cuda_visible_devices")
++        cuda_visible_devices = None if cuda_value is None else str(cuda_value)
++        batch_size = int(
++            options.get(
++                "generation_batch_size", 256 if native == "qm9" else 64
++            )
++        )
++        if batch_size <= 0:
++            raise ValueError("generation_batch_size must be positive.")
++        if not managed:
++            raise RuntimeError(
++                "DiGressWrapper.generate currently requires a managed training "
++                "run so the exact native dataset and resolved configuration are "
++                "available."
++            )
++
++        generation_id = request.resolved_generation_id
++        target = layout.generation_dir(generation_id)
++        ArtifactLayout.require_available(target, overwrite=request.overwrite)
++        staging_root = layout.output_root.expanduser().resolve() / ".staging"
++        staging_root.mkdir(parents=True, exist_ok=True)
++        workspace = Path(tempfile.mkdtemp(prefix="digress-generate-", dir=staging_root))
++        stage = workspace / "generation"
++        native_dir = stage / "native"
++        native_dir.mkdir(parents=True)
++        started_at = _utc_now()
++        started = time.monotonic()
++        try:
++            from grapher.models.digress.backend import generate_digress_graphs
++
++            stats_path = layout.train_dir / "molecular_statistics.json"
++            result = generate_digress_graphs(
++                digress_root=root,
++                python_executable=python,
++                dataset=native,
++                dataset_datadir=layout.native_training_dataset_dir,
++                resolved_config_path=layout.resolved_training_config_path,
++                checkpoint_path=request.checkpoint_path,
++                output_dir=native_dir,
++                num_graphs=request.num_graphs,
++                generation_seed=request.generation_seed,
++                batch_size=batch_size,
++                molecular_statistics_path=(stats_path if stats_path.is_file() else None),
++                device=str(runtime.get("device", "auto")),
++                cuda_visible_devices=cuda_visible_devices,
++                timeout_seconds=timeout_seconds,
++                progress_enabled=bool(progress["enabled"]),
++                stream_output=bool(progress["stream_output"]),
++                progress_interval_seconds=float(progress["interval_seconds"]),
++                generation_progress_every_batches=int(
++                    progress["generation_batch_interval"]
++                ),
++            )
++            if len(result.graphs) != request.num_graphs:
++                raise RuntimeError(
++                    f"DiGress returned {len(result.graphs)} graphs; expected "
++                    f"{request.num_graphs}."
++                )
++            graphs_path = stage / "base_graphs.pkl"
++            _atomic_pickle(graphs_path, list(result.graphs))
++            shutil.copy2(result.log_path, stage / "generate.log")
++            graphs_hash = _sha256(graphs_path)
++            manifest = {
++                "format": GENERATION_MANIFEST_FORMAT,
++                "model_id": self.model_id,
++                "dataset": {
++                    "benchmark_id": request.run.dataset_id,
++                    "native_id": native,
++                    **_dataset_profile(request.run.dataset_id, native),
++                },
++                "run_id": request.run.run_id,
++                "generation_id": generation_id,
++                "train_seed": request.run.train_seed,
++                "generation_seed": request.generation_seed,
++                "started_at": started_at,
++                "finished_at": _utc_now(),
++                "duration_seconds": time.monotonic() - started,
++                "requested_count": request.num_graphs,
++                "returned_count": len(result.graphs),
++                "sample_order": "digress_raw_index_ascending",
++                "base_graphs": {"path": "base_graphs.pkl", "sha256": graphs_hash},
++                "checkpoint": {
++                    "path": str(request.checkpoint_path.resolve()),
++                    "sha256": _sha256(request.checkpoint_path),
++                },
++                "resolved_training_config": {
++                    "path": str(layout.resolved_training_config_path.resolve()),
++                    "sha256": _sha256(layout.resolved_training_config_path),
++                },
++                "neutral_export": {
++                    "path": "native/digress_samples.npz",
++                    "sha256": result.export_sha256,
++                    "manifest": "native/digress_manifest.json",
++                },
++                "log": "generate.log",
++            }
++            _atomic_json(stage / "manifest.json", manifest)
++            _publish_directory(stage, target, overwrite=request.overwrite)
++            return GenerationArtifacts(
++                run_dir=layout.run_dir,
++                generation_dir=target,
++                graphs_path=layout.generated_graphs_path(generation_id),
++                manifest_path=layout.generation_manifest_path(generation_id),
++                num_requested=request.num_graphs,
++                num_generated=request.num_graphs,
++                graphs_sha256=graphs_hash,
++                log_path=layout.generation_log_path(generation_id),
++                native_artifacts=(
++                    layout.native_generation_dir(generation_id)
++                    / "digress_samples.npz",
++                    layout.native_generation_dir(generation_id)
++                    / "digress_manifest.json",
++                ),
++            )
++        finally:
++            shutil.rmtree(workspace, ignore_errors=True)
+diff --git a/src/grapher/models/registry.py b/src/grapher/models/registry.py
+index 9ae00dc..7c2f2ae 100644
+--- a/src/grapher/models/registry.py
++++ b/src/grapher/models/registry.py
+@@ -9,7 +9,7 @@ from grapher.models.base import BaseGeneratorWrapper
+ 
+ _WRAPPER_PATHS: Final[dict[str, str]] = {
+     "dhvae_hh": "grapher.models.dhvae_hh.wrapper:DHVAEHHWrapper",
+-    "digress": "grapher.models.digress:DiGressWrapper",
++    "digress": "grapher.models.digress.wrapper:DiGressWrapper",
+     "catflow": "grapher.models.catflow:CatFlowWrapper",
+     "defog": "grapher.models.defog.wrapper:DeFoGWrapper",
+     "hog_diff": "grapher.models.hog_diff:HOGDiffWrapper",
+diff --git a/src/grapher/utils/subprocess_progress.py b/src/grapher/utils/subprocess_progress.py
+index df758c8..6e16a63 100644
+--- a/src/grapher/utils/subprocess_progress.py
++++ b/src/grapher/utils/subprocess_progress.py
+@@ -62,6 +62,7 @@ class SubprocessLogReporter:
+         stream_output: bool = False,
+         interval_seconds: float = 30.0,
+         output: TextIO | None = None,
++        prefix: str = "GraphER/DeFoG",
+     ) -> None:
+         if interval_seconds <= 0:
+             raise ValueError("progress interval_seconds must be positive.")
+@@ -71,6 +72,10 @@ class SubprocessLogReporter:
+         self.stream_output = bool(stream_output)
+         self.interval_seconds = float(interval_seconds)
+         self.output = output or sys.stderr
++        normalized_prefix = str(prefix).strip()
++        if not normalized_prefix or any(ch in normalized_prefix for ch in "\x00\r\n[]"):
++            raise ValueError("progress prefix must be a non-empty bracket-safe string.")
++        self.prefix = normalized_prefix
+         self._stop = threading.Event()
+         self._thread: threading.Thread | None = None
+         self._started = 0.0
+@@ -91,7 +96,7 @@ class SubprocessLogReporter:
+         self._offset = max(int(start_offset), 0)
+         mode = "streaming output" if self.stream_output else "heartbeat only"
+         self._write_line(
+-            f"[GraphER/DeFoG] {self.label} started ({mode}); "
++            f"[{self.prefix}] {self.label} started ({mode}); "
+             f"log={self.log_path.resolve()}"
+         )
+         self._thread = threading.Thread(
+@@ -141,7 +146,7 @@ class SubprocessLogReporter:
+         fragment = _last_log_fragment(self.log_path)
+         suffix = f"; last_output={fragment!r}" if fragment else ""
+         self._write_line(
+-            f"[GraphER/DeFoG] {self.label} still running; "
++            f"[{self.prefix}] {self.label} still running; "
+             f"elapsed={_format_elapsed(now - self._started)}; "
+             f"log_bytes={size}{suffix}"
+         )
+@@ -156,6 +161,6 @@ class SubprocessLogReporter:
+             self._thread.join(timeout=2.0)
+         elapsed = _format_elapsed(time.monotonic() - self._started)
+         self._write_line(
+-            f"[GraphER/DeFoG] {self.label} {status}; elapsed={elapsed}; "
++            f"[{self.prefix}] {self.label} {status}; elapsed={elapsed}; "
+             f"log={self.log_path.resolve()}"
+         )
+diff --git a/tests/test_baseline_model_wrappers.py b/tests/test_baseline_model_wrappers.py
+index 3e2f4a0..5b451f7 100644
+--- a/tests/test_baseline_model_wrappers.py
++++ b/tests/test_baseline_model_wrappers.py
+@@ -36,7 +36,7 @@ class BaselineRegistryTests(unittest.TestCase):
+ 
+     def test_wrapper_statuses(self) -> None:
+         expected = {model_id: "placeholder" for model_id in EXPECTED_BASELINES}
+-        expected.update({"dhvae_hh": "ready", "defog": "ready"})
++        expected.update({"dhvae_hh": "ready", "digress": "ready", "defog": "ready"})
+         for model_id, status in expected.items():
+             wrapper = create_baseline(model_id)
+             self.assertEqual(wrapper.model_id, model_id)
+@@ -166,12 +166,12 @@ class PlaceholderBehaviorTests(unittest.TestCase):
+         with tempfile.TemporaryDirectory() as tmp:
+             output_root = Path(tmp) / "baselines"
+             run = RunSpec.for_seed(
+-                model_id="digress",
++                model_id="catflow",
+                 dataset_id="community_small",
+                 seed=42,
+                 output_root=output_root,
+             )
+-            wrapper = create_baseline("digress")
++            wrapper = create_baseline("catflow")
+             train_request = TrainRequest(
+                 run=run,
+                 dataset=DatasetReference(
+diff --git a/tests/test_digress_backend.py b/tests/test_digress_backend.py
+new file mode 100644
+index 0000000..d60cecd
+--- /dev/null
++++ b/tests/test_digress_backend.py
+@@ -0,0 +1,74 @@
++from __future__ import annotations
++
++import hashlib
++import json
++from pathlib import Path
++from types import SimpleNamespace
++
++import numpy as np
++
++from grapher.models.digress.backend import generate_digress_graphs
++
++
++def _sha256(path: Path) -> str:
++    return hashlib.sha256(path.read_bytes()).hexdigest()
++
++
++def test_backend_runs_shell_free_and_decodes_export(monkeypatch, tmp_path: Path) -> None:
++    root = tmp_path / "DiGress"
++    (root / "src").mkdir(parents=True)
++    dataset = tmp_path / "native_dataset"
++    dataset.mkdir()
++    config = tmp_path / "resolved_config.yaml"
++    config.write_text("dataset:\n  name: comm20\n", encoding="utf-8")
++    checkpoint = tmp_path / "model.ckpt"
++    checkpoint.write_bytes(b"checkpoint")
++
++    def fake_run(command, **kwargs):
++        assert kwargs["shell"] is False
++        assert kwargs["cwd"] == str(root / "src")
++        output = Path(command[command.index("--output") + 1])
++        manifest = Path(command[command.index("--manifest") + 1])
++        output.parent.mkdir(parents=True, exist_ok=True)
++        with output.open("wb") as handle:
++            np.savez_compressed(
++                handle,
++                node_offsets=np.asarray([0, 3], dtype=np.int64),
++                node_types=np.asarray([0, 0, 0], dtype=np.int64),
++                edge_offsets=np.asarray([0, 2], dtype=np.int64),
++                edge_endpoints=np.asarray([(0, 1), (1, 2)], dtype=np.int64),
++                edge_types=np.asarray([1, 1], dtype=np.int64),
++            )
++        manifest.write_text(
++            json.dumps(
++                {
++                    "format": "grapher_digress_export_v1",
++                    "num_generated": 1,
++                    "output": {"sha256": _sha256(output)},
++                }
++            ),
++            encoding="utf-8",
++        )
++        kwargs["stdout"].write("worker complete\n")
++        kwargs["stdout"].flush()
++        return SimpleNamespace(returncode=0)
++
++    monkeypatch.setattr("grapher.models.digress.backend.subprocess.run", fake_run)
++    result = generate_digress_graphs(
++        digress_root=root,
++        python_executable=Path(__import__("sys").executable),
++        dataset="comm20",
++        dataset_datadir=dataset,
++        resolved_config_path=config,
++        checkpoint_path=checkpoint,
++        output_dir=tmp_path / "output",
++        num_graphs=1,
++        generation_seed=42,
++        batch_size=1,
++    )
++
++    assert len(result.graphs) == 1
++    assert set(result.graphs[0].edges()) == {(0, 1), (1, 2)}
++    assert result.export_path.is_file()
++    assert result.manifest_path.is_file()
++    assert result.log_path.is_file()
+diff --git a/tests/test_digress_codec.py b/tests/test_digress_codec.py
+new file mode 100644
+index 0000000..4309b48
+--- /dev/null
++++ b/tests/test_digress_codec.py
+@@ -0,0 +1,98 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import numpy as np
++import pytest
++
++from grapher.models.digress.codec import load_digress_export
++
++
++def _write_export(
++    path: Path,
++    *,
++    node_offsets,
++    node_types,
++    edge_offsets,
++    endpoints,
++    edge_types,
++) -> None:
++    with path.open("wb") as handle:
++        np.savez_compressed(
++            handle,
++            node_offsets=np.asarray(node_offsets, dtype=np.int64),
++            node_types=np.asarray(node_types, dtype=np.int64),
++            edge_offsets=np.asarray(edge_offsets, dtype=np.int64),
++            edge_endpoints=np.asarray(endpoints, dtype=np.int64).reshape((-1, 2)),
++            edge_types=np.asarray(edge_types, dtype=np.int64),
++        )
++
++
++def test_generic_codec_preserves_order_and_isolates(tmp_path: Path) -> None:
++    path = tmp_path / "samples.npz"
++    _write_export(
++        path,
++        node_offsets=[0, 4, 7],
++        node_types=[0, 0, 0, 0, 0, 0, 0],
++        edge_offsets=[0, 2, 3],
++        endpoints=[(0, 1), (1, 2), (0, 2)],
++        edge_types=[1, 1, 1],
++    )
++
++    graphs = load_digress_export(path, dataset="comm20")
++
++    assert [graph.number_of_nodes() for graph in graphs] == [4, 3]
++    assert [set(graph.edges()) for graph in graphs] == [
++        {(0, 1), (1, 2)},
++        {(0, 2)},
++    ]
++    assert 3 in graphs[0]
++    assert [graph.graph["digress_sample_index"] for graph in graphs] == [0, 1]
++
++
++def test_qm9_codec_restores_atom_and_bond_attributes(tmp_path: Path) -> None:
++    path = tmp_path / "qm9.npz"
++    _write_export(
++        path,
++        node_offsets=[0, 4],
++        node_types=[0, 1, 2, 3],
++        edge_offsets=[0, 3],
++        endpoints=[(0, 1), (1, 2), (2, 3)],
++        edge_types=[1, 2, 3],
++    )
++
++    graph = load_digress_export(path, dataset="qm9")[0]
++
++    assert [graph.nodes[i]["atomic_num"] for i in range(4)] == [6, 7, 8, 9]
++    assert graph.edges[0, 1]["bond_order"] == 1.0
++    assert graph.edges[1, 2]["bond_order"] == 2.0
++    assert graph.edges[2, 3]["bond_order"] == 3.0
++    assert graph.graph["molecular_dataset"] == "qm9"
++
++
++def test_codec_rejects_mismatched_offsets(tmp_path: Path) -> None:
++    path = tmp_path / "bad.npz"
++    _write_export(
++        path,
++        node_offsets=[0, 2],
++        node_types=[0, 0],
++        edge_offsets=[0, 0, 0],
++        endpoints=[],
++        edge_types=[],
++    )
++    with pytest.raises(ValueError, match="different graph counts"):
++        load_digress_export(path, dataset="comm20")
++
++
++def test_codec_rejects_invalid_qm9_class(tmp_path: Path) -> None:
++    path = tmp_path / "bad_qm9.npz"
++    _write_export(
++        path,
++        node_offsets=[0, 1],
++        node_types=[7],
++        edge_offsets=[0, 0],
++        endpoints=[],
++        edge_types=[],
++    )
++    with pytest.raises(ValueError, match="invalid atom class"):
++        load_digress_export(path, dataset="qm9")
+diff --git a/tests/test_digress_wrapper.py b/tests/test_digress_wrapper.py
+new file mode 100644
+index 0000000..73e9173
+--- /dev/null
++++ b/tests/test_digress_wrapper.py
+@@ -0,0 +1,197 @@
++from __future__ import annotations
++
++import hashlib
++import json
++import pickle
++import sys
++from pathlib import Path
++from types import SimpleNamespace
++
++import networkx as nx
++
++from grapher.models import DatasetReference, GenerateRequest, RunSpec, TrainRequest
++from grapher.models.digress.wrapper import (
++    GENERATION_MANIFEST_FORMAT,
++    TRAINING_ESTIMATES_MANIFEST_FORMAT,
++    TRAINING_MANIFEST_FORMAT,
++    DiGressWrapper,
++)
++
++
++def _sha(path: Path) -> str:
++    return hashlib.sha256(path.read_bytes()).hexdigest()
++
++
++def _fake_root(tmp_path: Path) -> Path:
++    root = tmp_path / "DiGress"
++    (root / "src" / "datasets").mkdir(parents=True)
++    (root / "configs" / "experiment").mkdir(parents=True)
++    (root / "configs" / "dataset").mkdir(parents=True)
++    (root / "src" / "diffusion_model_discrete.py").write_text("# fake\n")
++    (root / "src" / "datasets" / "spectre_dataset.py").write_text("# fake\n")
++    (root / "configs" / "config.yaml").write_text("defaults: []\n")
++    (root / "configs" / "experiment" / "comm20.yaml").write_text("{}\n")
++    (root / "configs" / "dataset" / "comm20.yaml").write_text("{}\n")
++    return root
++
++
++def _prepared_dataset(tmp_path: Path) -> DatasetReference:
++    directory = tmp_path / "datasets" / "sbm"
++    directory.mkdir(parents=True)
++    values = {
++        "train": [nx.path_graph(3), nx.cycle_graph(4)],
++        "val": [nx.path_graph(4)],
++        "test": [nx.cycle_graph(5)],
++    }
++    for split, graphs in values.items():
++        with (directory / f"{split}.pkl").open("wb") as handle:
++            pickle.dump(graphs, handle)
++    return DatasetReference(
++        "community_small",
++        root=tmp_path / "datasets",
++        serialized_id="sbm",
++        native_id="comm20",
++    )
++
++
++def _fake_generation(output_dir: Path, count: int):
++    output_dir.mkdir(parents=True, exist_ok=True)
++    export = output_dir / "digress_samples.npz"
++    export.write_bytes(b"neutral")
++    manifest = output_dir / "digress_manifest.json"
++    manifest.write_text("{}\n", encoding="utf-8")
++    log = output_dir / "digress.log"
++    log.write_text("generated\n", encoding="utf-8")
++    graphs = [nx.path_graph(3 + (index % 2)) for index in range(count)]
++    for index, graph in enumerate(graphs):
++        graph.graph["digress_sample_index"] = index
++    return SimpleNamespace(
++        graphs=graphs,
++        export_path=export,
++        manifest_path=manifest,
++        log_path=log,
++        export_sha256=_sha(export),
++        manifest={"format": "grapher_digress_export_v1", "num_generated": count},
++    )
++
++
++def test_train_and_generate_publish_common_artifacts(monkeypatch, tmp_path: Path) -> None:
++    root = _fake_root(tmp_path)
++    monkeypatch.setenv("DIGRESS", str(root))
++    monkeypatch.setenv("DIGRESS_PYTHON", sys.executable)
++    dataset = _prepared_dataset(tmp_path)
++    run = RunSpec.for_seed(
++        model_id="digress",
++        dataset_id="community_small",
++        seed=42,
++        output_root=tmp_path / "outputs" / "baselines",
++    )
++    wrapper = DiGressWrapper()
++
++    def fake_external(command, **kwargs):
++        label = kwargs["label"]
++        if label == "DiGress dataset preparation":
++            output_root = Path(command[command.index("--output-root") + 1])
++            manifest_path = Path(command[command.index("--manifest") + 1])
++            records = {}
++            for split in ("train", "val", "test"):
++                source = Path(command[command.index(f"--{split}") + 1])
++                raw = output_root / "raw" / f"{split}.pt"
++                processed = output_root / "processed" / f"{split}.pt"
++                raw.parent.mkdir(parents=True, exist_ok=True)
++                processed.parent.mkdir(parents=True, exist_ok=True)
++                raw.write_bytes(split.encode())
++                processed.write_bytes((split + "p").encode())
++                with source.open("rb") as handle:
++                    count = len(pickle.load(handle))
++                records[split] = {
++                    "graph_count": count,
++                    "source": {"path": str(source), "sha256": _sha(source)},
++                    "raw": {"path": str(raw), "sha256": _sha(raw)},
++                    "processed": {
++                        "path": str(processed),
++                        "sha256": _sha(processed),
++                    },
++                }
++            manifest_path.write_text(
++                json.dumps({"format": "fixture", "splits": records}),
++                encoding="utf-8",
++            )
++        elif label == "DiGress training":
++            output = Path(command[command.index("--output-dir") + 1])
++            manifest_path = Path(command[command.index("--manifest") + 1])
++            checkpoint = output / "checkpoints" / "model.ckpt"
++            checkpoint.parent.mkdir(parents=True, exist_ok=True)
++            checkpoint.write_bytes(b"checkpoint")
++            config = output / "resolved_config.yaml"
++            config.write_text(
++                "dataset:\n  name: comm20\n  datadir: temporary\n"
++                "train:\n  n_epochs: 3\n  batch_size: 2\n"
++                "model:\n  diffusion_steps: 5\n",
++                encoding="utf-8",
++            )
++            manifest_path.parent.mkdir(parents=True, exist_ok=True)
++            manifest_path.write_text(
++                json.dumps(
++                    {
++                        "checkpoint": str(checkpoint),
++                        "resolved_config": str(config),
++                        "molecular_statistics": None,
++                        "configured_n_epochs": 3,
++                        "completed_epochs": 3,
++                        "global_step": 3,
++                        "batch_size": 2,
++                        "diffusion_steps": 5,
++                    }
++                ),
++                encoding="utf-8",
++            )
++        else:
++            raise AssertionError(label)
++
++    monkeypatch.setattr(wrapper, "_run_external", fake_external)
++
++    def fake_generate(**kwargs):
++        return _fake_generation(Path(kwargs["output_dir"]), kwargs["num_graphs"])
++
++    monkeypatch.setattr(
++        "grapher.models.digress.backend.generate_digress_graphs", fake_generate
++    )
++    training = wrapper.train(
++        TrainRequest(
++            run=run,
++            dataset=dataset,
++            options={
++                "n_epochs": 3,
++                "batch_size": 2,
++                "training_estimates": {"enabled": True, "num_graphs": 2},
++            },
++        )
++    )
++
++    assert training.checkpoint_path.is_file()
++    train_manifest = json.loads(training.manifest_path.read_text())
++    assert train_manifest["format"] == TRAINING_MANIFEST_FORMAT
++    estimates_manifest = json.loads(
++        training.training_estimates_manifest_path.read_text()
++    )
++    assert estimates_manifest["format"] == TRAINING_ESTIMATES_MANIFEST_FORMAT
++    assert estimates_manifest["pairing"]["status"] == "unpaired"
++    with training.estimated_graphs_path.open("rb") as handle:
++        assert len(pickle.load(handle)) == 2
++
++    generation = wrapper.generate(
++        GenerateRequest(
++            run=run,
++            checkpoint_path=training.checkpoint_path,
++            num_graphs=3,
++            generation_seed=9,
++        )
++    )
++    assert generation.num_generated == 3
++    manifest = json.loads(generation.manifest_path.read_text())
++    assert manifest["format"] == GENERATION_MANIFEST_FORMAT
++    assert manifest["returned_count"] == 3
++    with generation.graphs_path.open("rb") as handle:
++        graphs = pickle.load(handle)
++    assert [graph.graph["digress_sample_index"] for graph in graphs] == [0, 1, 2]
+diff --git a/tests/test_run_digress_baseline.py b/tests/test_run_digress_baseline.py
+new file mode 100644
+index 0000000..f7f2110
+--- /dev/null
++++ b/tests/test_run_digress_baseline.py
+@@ -0,0 +1,109 @@
++from __future__ import annotations
++
++import argparse
++from pathlib import Path
++from unittest.mock import patch
++
++from grapher.models import GenerationArtifacts, TrainingArtifacts
++from scripts.run_digress_baseline import DATASET_PROFILES, run_pipeline
++
++
++class WrapperStub:
++    def __init__(self) -> None:
++        self.training_request = None
++        self.generation_request = None
++
++    def train(self, request):
++        self.training_request = request
++        layout = request.run.layout
++        checkpoint = layout.checkpoints_dir / "model.ckpt"
++        checkpoint.parent.mkdir(parents=True, exist_ok=True)
++        checkpoint.write_bytes(b"checkpoint")
++        layout.training_log_path.parent.mkdir(parents=True, exist_ok=True)
++        layout.training_log_path.write_text("trained\n", encoding="utf-8")
++        return TrainingArtifacts(
++            run_dir=layout.run_dir,
++            checkpoint_path=checkpoint,
++            manifest_path=layout.training_manifest_path,
++            log_path=layout.training_log_path,
++        )
++
++    def generate(self, request):
++        self.generation_request = request
++        layout = request.run.layout
++        generation_dir = layout.generation_dir(request.resolved_generation_id)
++        generation_dir.mkdir(parents=True, exist_ok=True)
++        graphs = layout.generated_graphs_path(request.resolved_generation_id)
++        graphs.write_bytes(b"graphs")
++        log = layout.generation_log_path(request.resolved_generation_id)
++        log.write_text("generated\n", encoding="utf-8")
++        return GenerationArtifacts(
++            run_dir=layout.run_dir,
++            generation_dir=generation_dir,
++            graphs_path=graphs,
++            manifest_path=layout.generation_manifest_path(
++                request.resolved_generation_id
++            ),
++            num_requested=request.num_graphs,
++            num_generated=request.num_graphs,
++            graphs_sha256="abc",
++            log_path=log,
++        )
++
++
++def test_runner_forwards_training_and_progress_options(tmp_path: Path) -> None:
++    profile = DATASET_PROFILES["community_small"]
++    prepared = tmp_path / "datasets" / profile.serialized_id
++    prepared.mkdir(parents=True)
++    for split in ("train", "val", "test"):
++        (prepared / f"{split}.pkl").write_bytes(b"prepared")
++    stub = WrapperStub()
++    args = argparse.Namespace(
++        dataset="community_small",
++        num_samples=7,
++        seed_id=13,
++        dataset_root=tmp_path / "datasets",
++        output_root=tmp_path / "baselines",
++        run_id=None,
++        generation_id=None,
++        wrapper_config=None,
++        resume_from=None,
++        digress_root=None,
++        digress_python=None,
++        overwrite=False,
++        n_epochs=123,
++        batch_size=16,
++        generation_batch_size=8,
++        num_workers=0,
++        check_val_every_n_epochs=5,
++        save_every_n_epochs=10,
++        skip_training_estimates=False,
++        training_estimate_count=4,
++        progress_interval_seconds=4.0,
++        epoch_progress_interval=2,
++        generation_progress_every_batches=3,
++        no_stream_subprocess_output=False,
++        quiet=False,
++    )
++    with patch(
++        "scripts.run_digress_baseline.create_baseline", return_value=stub
++    ):
++        summary = run_pipeline(args)
++
++    assert stub.training_request.options["n_epochs"] == 123
++    assert stub.training_request.options["batch_size"] == 16
++    assert stub.training_request.options["generation_batch_size"] == 8
++    assert stub.training_request.options["training_estimates"] == {
++        "enabled": True,
++        "num_graphs": 4,
++    }
++    expected_progress = {
++        "enabled": True,
++        "stream_output": True,
++        "interval_seconds": 4.0,
++        "generation_batch_interval": 3,
++        "epoch_interval": 2,
++    }
++    assert stub.training_request.options["runtime"]["progress"] == expected_progress
++    assert stub.generation_request.options["runtime"]["progress"] == expected_progress
++    assert summary["generation_id"] == "seed_13_n_7"

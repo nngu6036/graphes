@@ -36,7 +36,7 @@ class BaselineRegistryTests(unittest.TestCase):
 
     def test_wrapper_statuses(self) -> None:
         expected = {model_id: "placeholder" for model_id in EXPECTED_BASELINES}
-        expected.update({"dhvae_hh": "ready", "defog": "ready"})
+        expected.update({"dhvae_hh": "ready", "digress": "ready", "defog": "ready"})
         for model_id, status in expected.items():
             wrapper = create_baseline(model_id)
             self.assertEqual(wrapper.model_id, model_id)
@@ -166,12 +166,12 @@ class PlaceholderBehaviorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp) / "baselines"
             run = RunSpec.for_seed(
-                model_id="digress",
+                model_id="catflow",
                 dataset_id="community_small",
                 seed=42,
                 output_root=output_root,
             )
-            wrapper = create_baseline("digress")
+            wrapper = create_baseline("catflow")
             train_request = TrainRequest(
                 run=run,
                 dataset=DatasetReference(
