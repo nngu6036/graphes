@@ -48,6 +48,12 @@ A full graphlet count is required only for the source graph. RDKit sanitization
 is applied only to the top combined-energy shortlist after inexpensive
 invariant, connectivity, valence, spectral, and graphlet checks.
 
+Canonical QM9 projects formal charge out of its categorical node state. The
+QM9 preset therefore uses the projected-state valence envelope (including
+N(+1) at valence four and O(+1) at valence three) and restores those implied
+positive charges only for candidate sanitization. Raw validity reporting keeps
+its existing charge-neutral behavior.
+
 ## Commands
 
 Train the light QM9 development model:

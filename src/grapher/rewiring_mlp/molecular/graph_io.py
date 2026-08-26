@@ -120,7 +120,27 @@ def nx_to_topology(graph: nx.Graph) -> nx.Graph:
     return nx.convert_node_labels_to_integers(g, ordering="sorted")
 
 
-def nx_to_rdkit_mol(graph: nx.Graph, *, sanitize: bool = True):
+def _infer_projected_qm9_formal_charges(mol: Any) -> None:
+    """Restore positive charges implied by QM9's projected graph state."""
+
+    projected_positive_valence = {7: 4.0, 8: 3.0}
+    for atom in mol.GetAtoms():
+        if int(atom.GetFormalCharge()) != 0:
+            continue
+        expected = projected_positive_valence.get(int(atom.GetAtomicNum()))
+        if expected is None:
+            continue
+        used = sum(float(bond.GetBondTypeAsDouble()) for bond in atom.GetBonds())
+        if abs(used - expected) <= 1.0e-8:
+            atom.SetFormalCharge(1)
+
+
+def nx_to_rdkit_mol(
+    graph: nx.Graph,
+    *,
+    sanitize: bool = True,
+    infer_projected_formal_charges: bool = False,
+):
     Chem = require_rdkit()
     mol = Chem.RWMol()
     node_map: dict[int, int] = {}
@@ -130,6 +150,8 @@ def nx_to_rdkit_mol(graph: nx.Graph, *, sanitize: bool = True):
             raise ValueError(f"Node {node!r} is missing atomic_num/atom_type.")
         atomic_num = int(raw_atomic_num)
         atom = Chem.Atom(atomic_num)
+        if data.get("formal_charge") is not None:
+            atom.SetFormalCharge(int(data["formal_charge"]))
         node_map[int(node)] = int(mol.AddAtom(atom))
     for u, v, data in graph.edges(data=True):
         if "bond_type" not in data:
@@ -139,24 +161,45 @@ def nx_to_rdkit_mol(graph: nx.Graph, *, sanitize: bool = True):
             node_map[int(u)], node_map[int(v)], _internal_bond_to_rdkit(bond_type)
         )
     out = mol.GetMol()
+    if infer_projected_formal_charges:
+        _infer_projected_qm9_formal_charges(out)
     if sanitize:
         Chem.SanitizeMol(out)
     return out
 
 
 def graph_to_smiles(
-    graph: nx.Graph, *, canonical: bool = True, sanitize: bool = True
+    graph: nx.Graph,
+    *,
+    canonical: bool = True,
+    sanitize: bool = True,
+    infer_projected_formal_charges: bool = False,
 ) -> str | None:
     Chem = require_rdkit()
     try:
-        mol = nx_to_rdkit_mol(graph, sanitize=sanitize)
+        mol = nx_to_rdkit_mol(
+            graph,
+            sanitize=sanitize,
+            infer_projected_formal_charges=infer_projected_formal_charges,
+        )
         return str(Chem.MolToSmiles(mol, canonical=canonical, isomericSmiles=False))
     except Exception:
         return None
 
 
-def is_valid_molecular_graph(graph: nx.Graph) -> bool:
-    return graph_to_smiles(graph, sanitize=True) is not None
+def is_valid_molecular_graph(
+    graph: nx.Graph,
+    *,
+    infer_projected_formal_charges: bool = False,
+) -> bool:
+    return (
+        graph_to_smiles(
+            graph,
+            sanitize=True,
+            infer_projected_formal_charges=infer_projected_formal_charges,
+        )
+        is not None
+    )
 
 
 def read_smiles_file(

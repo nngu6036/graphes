@@ -99,8 +99,10 @@ training_sources:
     max_ordinary_degree: 4
     max_weighted_valence:
       6: 4.0
-      7: 3.0
-      8: 2.0
+      # Canonical QM9 projects formal charge from the categorical state.
+      # These limits retain the corresponding N(+1)/O(+1) graph states.
+      7: 4.0
+      8: 3.0
       9: 1.0
 
 attributed_predictor:
@@ -175,8 +177,8 @@ constructor:
   max_ordinary_degree: 4
   max_weighted_valence:
     6: 4.0
-    7: 3.0
-    8: 2.0
+    7: 4.0
+    8: 3.0
     9: 1.0
 
 # During generation, the continuous reverse-summary target is projected into
@@ -247,13 +249,14 @@ attributed_refiner:
     allowed_bond_types: [1, 2, 3]
     max_valence:
       6: 4.0
-      7: 3.0
-      8: 2.0
+      7: 4.0
+      8: 3.0
       9: 1.0
 
     # Cheap invariant/valence/summary checks run first. RDKit is applied only
     # to the top combined-energy shortlist.
     rdkit_candidate_check: true
+    rdkit_infer_projected_formal_charges: true
     rdkit_shortlist: 8
     require_rdkit_source_validity: false
 

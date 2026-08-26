@@ -23,6 +23,7 @@ from grapher.rewiring_mlp.attributed.spectral_data import (
     AttributedTrainingPair,
     build_attributed_spectral_diffusion_examples,
     collate_attributed_spectral_examples,
+    resolve_attributed_diffusion_endpoints,
 )
 from grapher.rewiring_mlp.attributed.spectral_graphlet_refiner import (
     AttributedSpectralGraphletRefinerConfig,
@@ -34,10 +35,13 @@ from grapher.rewiring_mlp.attributed.spectral_model import (
     save_attributed_spectral_graphlet_checkpoint,
 )
 from grapher.rewiring_mlp.core.rewiring import apply_action, make_action
+from grapher.rewiring_mlp.molecular.constraints import QM9_PROJECTED_MAX_VALENCE
+from grapher.rewiring_mlp.molecular.graph_io import is_valid_molecular_graph
 from grapher.rewiring_mlp.molecular.typed_invariants import (
     extract_typed_invariant,
     typed_invariant_matches_graph,
 )
+from grapher.utils.io import load_yaml
 
 
 def _cycle_graph(edges: list[tuple[int, int]] | None = None) -> nx.Graph:
@@ -56,6 +60,24 @@ def _source_target_action():
         target.edges[u, v]["bond_type"] = 1
         target.edges[u, v]["bond_order"] = 1.0
     return source, target, action
+
+
+def _projected_tetravalent_nitrogen_graph() -> nx.Graph:
+    graph = nx.Graph()
+    for node, atomic_num in enumerate((7, 6, 8, 8)):
+        graph.add_node(node, atomic_num=atomic_num, atom_type=atomic_num)
+    graph.add_edge(0, 1, bond_type=1, bond_order=1.0)
+    graph.add_edge(0, 2, bond_type=2, bond_order=2.0)
+    graph.add_edge(0, 3, bond_type=1, bond_order=1.0)
+    graph.graph.update(
+        qm9_source_state_projection_policy=(
+            "audit_and_project_from_categorical_graph_state_v1"
+        ),
+        projected_formal_charge_atoms=[[0, 1], [3, -1]],
+        projected_chiral_atoms=[],
+        projected_stereo_bonds=[],
+    )
+    return graph
 
 
 def _vocabulary(graphs: list[nx.Graph]) -> GraphCategoryVocabulary:
@@ -193,6 +215,68 @@ def test_training_samples_continuous_diffusion_not_rewiring_states() -> None:
             atol=1.0e-6,
         )
         for example in examples
+    )
+
+
+def test_qm9_projected_valence_config_constructs_training_endpoint() -> None:
+    graph = _projected_tetravalent_nitrogen_graph()
+    vocabulary = GraphCategoryVocabulary.from_graphs(
+        [graph],
+        {
+            "node_attribute": "atomic_num",
+            "node_categories": [6, 7, 8, 9],
+            "edge_attribute": "bond_type",
+            "edge_categories": [1, 2, 3],
+        },
+    )
+    config = load_yaml(
+        "configs/experiments/grapher/qm9_attributed_spectral_graphlet_light.yaml"
+    )
+    projected_limits = {
+        key: value for key, value in QM9_PROJECTED_MAX_VALENCE.items() if key != 1
+    }
+
+    training_limits = config["training_sources"]["typed_constructor"][
+        "max_weighted_valence"
+    ]
+    generation_limits = config["constructor"]["max_weighted_valence"]
+    refiner_limits = config["attributed_refiner"]["molecular"]["max_valence"]
+    assert training_limits == projected_limits
+    assert generation_limits == projected_limits
+    assert refiner_limits == projected_limits
+    refiner_config = AttributedSpectralGraphletRefinerConfig.from_dict(
+        config["attributed_refiner"]
+    )
+    assert refiner_config.rdkit_infer_projected_formal_charges is True
+
+    source, target, metadata = resolve_attributed_diffusion_endpoints(
+        graph,
+        vocabulary=vocabulary,
+        source_config=config["training_sources"],
+        rng=np.random.default_rng(42),
+    )
+    invariant = extract_typed_invariant(
+        target,
+        edge_types=vocabulary.edge_values,
+        node_attribute="atomic_num",
+        edge_attribute="bond_type",
+    )
+    nitrogen = next(
+        signature for signature in invariant.signatures if signature.node_type == 7
+    )
+
+    assert metadata["source_mode"] == "target_typed_constructor"
+    assert nitrogen.degree == 3
+    assert nitrogen.weighted_degree(invariant.edge_types) == 4.0
+    assert typed_invariant_matches_graph(source, invariant)
+
+
+def test_projected_charge_inference_is_opt_in_for_rdkit_validity() -> None:
+    graph = _projected_tetravalent_nitrogen_graph()
+
+    assert is_valid_molecular_graph(graph) is False
+    assert (
+        is_valid_molecular_graph(graph, infer_projected_formal_charges=True) is True
     )
 
 

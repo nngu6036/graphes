@@ -121,6 +121,7 @@ class AttributedSpectralGraphletRefinerConfig:
     molecular_allowed_bond_types: tuple[int, ...] = (1, 2, 3)
     molecular_max_valence: dict[int, float] = field(default_factory=dict)
     rdkit_candidate_check: bool = True
+    rdkit_infer_projected_formal_charges: bool = False
     rdkit_shortlist: int = 8
     require_rdkit_source_validity: bool = False
 
@@ -274,6 +275,9 @@ class AttributedSpectralGraphletRefinerConfig:
                     "rdkit_candidate_check",
                     molecular.get("require_rdkit_candidate", True),
                 )
+            ),
+            rdkit_infer_projected_formal_charges=bool(
+                molecular.get("rdkit_infer_projected_formal_charges", False)
             ),
             rdkit_shortlist=max(
                 int(
@@ -702,7 +706,12 @@ def _choose_candidate(
             cache = row.get("_candidate_cache", row)
             if cache.get("rdkit_valid") is None:
                 cache["rdkit_valid"] = bool(
-                    is_valid_molecular_graph(row["candidate_graph"])
+                    is_valid_molecular_graph(
+                        row["candidate_graph"],
+                        infer_projected_formal_charges=(
+                            config.rdkit_infer_projected_formal_charges
+                        ),
+                    )
                 )
             row["rdkit_valid"] = cache["rdkit_valid"]
             if not bool(cache["rdkit_valid"]):
@@ -746,7 +755,12 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
         node_attribute=str(vocabulary.node_attribute),
         edge_attribute=str(vocabulary.edge_attribute),
     )
-    if cfg.require_rdkit_source_validity and not is_valid_molecular_graph(current):
+    if cfg.require_rdkit_source_validity and not is_valid_molecular_graph(
+        current,
+        infer_projected_formal_charges=(
+            cfg.rdkit_infer_projected_formal_charges
+        ),
+    ):
         raise ValueError("Attributed source graph failed RDKit sanitization.")
     source_spectra = attributed_laplacian_spectra(
         conditioning_graph, edge_attribute=str(vocabulary.edge_attribute)

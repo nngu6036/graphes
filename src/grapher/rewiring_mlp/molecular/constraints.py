@@ -23,6 +23,19 @@ DEFAULT_MAX_VALENCE = {
     8: 2.0,
     9: 1.0,
 }
+
+# QM9's categorical graph state intentionally projects formal charge.  Its
+# observed/generated state can therefore contain the charged representations
+# N(+1) at bond-order valence four and O(+1) at valence three even though the
+# corresponding neutral-atom limits above remain lower.  Keep this envelope
+# separate so generic molecular initialization retains neutral defaults.
+QM9_PROJECTED_MAX_VALENCE = {
+    1: 1.0,
+    6: 4.0,
+    7: 4.0,
+    8: 3.0,
+    9: 1.0,
+}
 DEFAULT_GENERATED_BOND_TYPES = (BOND_SINGLE, BOND_DOUBLE, BOND_TRIPLE)
 
 
