@@ -173,8 +173,10 @@ training_sources:
 
     max_weighted_valence:
       6: 4.0
-      7: 3.0
-      8: 2.0
+      # Canonical QM9 projects formal charge from the categorical state.
+      # Retain the corresponding N(+1)/O(+1) graph states.
+      7: 4.0
+      8: 3.0
       9: 1.0
 
 
@@ -303,8 +305,8 @@ constructor:
 
   max_weighted_valence:
     6: 4.0
-    7: 3.0
-    8: 2.0
+    7: 4.0
+    8: 3.0
     9: 1.0
 
 
@@ -441,13 +443,14 @@ attributed_refiner:
 
     max_valence:
       6: 4.0
-      7: 3.0
-      8: 2.0
+      7: 4.0
+      8: 3.0
       9: 1.0
 
     # Apply all cheap typed-invariant / valence / structural scoring first.
     # RDKit is evaluated only on the highest-ranked candidates.
     rdkit_candidate_check: true
+    rdkit_infer_projected_formal_charges: true
     rdkit_shortlist: 16
 
     # generation.require_rdkit_source_validity already guarantees this, but

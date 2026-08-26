@@ -66,8 +66,8 @@ endpoint_trajectory:
     max_ordinary_degree: 4
     max_weighted_valence:
       6: 4.0
-      7: 3.0
-      8: 2.0
+      7: 4.0
+      8: 3.0
       9: 1.0
 
 endpoint_predictor:
@@ -129,8 +129,8 @@ typed_signature:
   max_ordinary_degree: 4
   max_weighted_valence:
     6: 4.0
-    7: 3.0
-    8: 2.0
+    7: 4.0
+    8: 3.0
     9: 1.0
 
 constructor:
@@ -182,9 +182,15 @@ hybrid_refiner:
   preserve_removed_edge_type: true
   enforce_molecular_valence: true
   molecular_allowed_bond_types: [1, 2, 3]
+  molecular_max_valence:
+    6: 4.0
+    7: 4.0
+    8: 3.0
+    9: 1.0
   molecular_candidate_attempt_multiplier: 2
   # Domain checks run before expensive attributed-graphlet scoring.
   rdkit_candidate_check: true
+  rdkit_infer_projected_formal_charges: true
 
 evaluation:
   # Leave null to use ORCA_EXEC or an `orca` executable on PATH.

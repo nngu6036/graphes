@@ -30,8 +30,8 @@ typed_signature:
     3: 3.0
   max_weighted_valence:
     6: 4.0
-    7: 3.0
-    8: 2.0
+    7: 4.0
+    8: 3.0
     9: 1.0
   size_mask: true
   domain_mask: true

@@ -152,7 +152,7 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --epoch-progress-interval 10
 
 
-  PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-graphs \
     outputs/baselines/defog/qm9/seed_42/generations/seed_42_n_1024/base_graphs.pkl \
   --dataset-root outputs/datasets \
@@ -160,23 +160,32 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --reference-split test \
   --train-split train \
   --output-dir \
-    outputs/baselines/defog/qm9/seed_42/generations/seed_42_n_1024/evaluation
+    outputs/baselines/defog/qm9/seed_42/generations/seed_42_n_1024/evaluation_corrected_fcd \
+  --fcd-use-corrected \
+  --require-fcd
 
 
 Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.998046875
+  fcd: 0.4031882559643165
   num_generated_graphs: 1024
   num_valid_generated_molecules: 1022
   num_invalid_generated_molecules: 2
-  validity_without_correction: 0.998046875
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 2
+  correction_success_rate_on_raw_invalid: 1.0
   uniqueness_rate: 0.9980430528375733
   unique_valid_count: 1020
   novelty_rate: 0.2950980392156863
   novel_unique_valid_count: 301
-  nspdk_mmd: 1.633599035938429e-05
-  nspdk_mmd_valid_only: 1.6488629021951102e-05
-  fcd: None
+  nspdk_mmd: 1.6335990359385983e-05
+  nspdk_mmd_valid_only: 1.6488629021953792e-05
   fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1022
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
 
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
@@ -188,7 +197,7 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --epoch-progress-interval 10
 
 
-  PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-graphs \
     outputs/baselines/defog/qm9/seed_43/generations/seed_43_n_1024/base_graphs.pkl \
   --dataset-root outputs/datasets \
@@ -196,23 +205,32 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --reference-split test \
   --train-split train \
   --output-dir \
-    outputs/baselines/defog/qm9/seed_43/generations/seed_43_n_1024/evaluation
+    outputs/baselines/defog/qm9/seed_43/generations/seed_43_n_1024/evaluation_corrected_fcd \
+  --fcd-use-corrected \
+  --require-fcd
 
 
 Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9892578125
+  fcd: 0.5553955576492378
   num_generated_graphs: 1024
   num_valid_generated_molecules: 1013
   num_invalid_generated_molecules: 11
-  validity_without_correction: 0.9892578125
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 11
+  correction_success_rate_on_raw_invalid: 1.0
   uniqueness_rate: 0.9940769990128332
   unique_valid_count: 1007
   novelty_rate: 0.26216484607745777
   novel_unique_valid_count: 264
-  nspdk_mmd: 2.456079776663046e-05
-  nspdk_mmd_valid_only: 2.5941648018554044e-05
-  fcd: None
+  nspdk_mmd: 2.4560797766632867e-05
+  nspdk_mmd_valid_only: 2.594164801854979e-05
   fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1013
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
 
 
 
@@ -225,7 +243,7 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --epoch-progress-interval 10
 
 
-  PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-graphs \
     outputs/baselines/defog/qm9/seed_44/generations/seed_44_n_1024/base_graphs.pkl \
   --dataset-root outputs/datasets \
@@ -233,22 +251,32 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --reference-split test \
   --train-split train \
   --output-dir \
-    outputs/baselines/defog/qm9/seed_43/generations/seed_44_n_1024/evaluation
+    outputs/baselines/defog/qm9/seed_44/generations/seed_44_n_1024/evaluation_corrected_fcd \
+  --fcd-use-corrected \
+  --require-fcd
+
 
 Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9873046875
+  fcd: 0.41492557962705945
   num_generated_graphs: 1024
   num_valid_generated_molecules: 1011
   num_invalid_generated_molecules: 13
-  validity_without_correction: 0.9873046875
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 13
+  correction_success_rate_on_raw_invalid: 1.0
   uniqueness_rate: 0.9960435212660732
   unique_valid_count: 1007
   novelty_rate: 0.25521350546176763
   novel_unique_valid_count: 257
-  nspdk_mmd: 1.9870636841086912e-05
-  nspdk_mmd_valid_only: 1.9676847670456867e-05
-  fcd: None
+  nspdk_mmd: 1.9870636841085286e-05
+  nspdk_mmd_valid_only: 1.967684767045536e-05
   fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1011
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
   --dataset zinc \
@@ -263,28 +291,37 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
 GEN_DIR="outputs/baselines/defog/zinc/seed_42_e300/generations/seed_42_n_1024"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --dataset-root outputs/datasets \
   --dataset zinc \
   --reference-split test \
   --train-split train \
-  --output-dir "$GEN_DIR/evaluation"
+  --output-dir "$GEN_DIR/evaluation" \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --fcd-use-corrected \
+  --require-fcd
 
 
-  Molecular evaluation
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9541015625
+  fcd: 5.549331723153955
   num_generated_graphs: 1024
   num_valid_generated_molecules: 977
   num_invalid_generated_molecules: 47
-  validity_without_correction: 0.9541015625
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 47
+  correction_success_rate_on_raw_invalid: 1.0
   uniqueness_rate: 1.0
   unique_valid_count: 977
   novelty_rate: 1.0
   novel_unique_valid_count: 977
-  nspdk_mmd: 0.0006518988235405961
-  nspdk_mmd_valid_only: 0.0006612800736168162
-  fcd: None
+  nspdk_mmd: 0.0006518988235404931
+  nspdk_mmd_valid_only: 0.0006612800736168689
   fcd_num_reference_molecules: 915
-  fcd_num_valid_generated_molecules: 977
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
 
 
 
@@ -302,27 +339,36 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
 GEN_DIR="outputs/baselines/defog/zinc/seed_43_e300/generations/seed_43_n_1024"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --dataset-root outputs/datasets \
   --dataset zinc \
   --reference-split test \
   --train-split train \
-  --output-dir "$GEN_DIR/evaluation"
+  --output-dir "$GEN_DIR/evaluation" \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --fcd-use-corrected \
+  --require-fcd
 
-  Molecular evaluation
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9501953125
+  fcd: 5.690067574965511
   num_generated_graphs: 1024
   num_valid_generated_molecules: 973
   num_invalid_generated_molecules: 51
-  validity_without_correction: 0.9501953125
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 51
+  correction_success_rate_on_raw_invalid: 1.0
   uniqueness_rate: 1.0
   unique_valid_count: 973
   novelty_rate: 1.0
   novel_unique_valid_count: 973
-  nspdk_mmd: 0.0006427853972682708
-  nspdk_mmd_valid_only: 0.0006451268839738828
-  fcd: None
+  nspdk_mmd: 0.0006427853972682684
+  nspdk_mmd_valid_only: 0.0006451268839738862
   fcd_num_reference_molecules: 915
-  fcd_num_valid_generated_molecules: 973
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
 
 
   PYTHONPATH=src python scripts/run_defog_baseline.py \
@@ -337,26 +383,36 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
 
 GEN_DIR="outputs/baselines/defog/zinc/seed_44_e300/generations/seed_44_n_1024"
 
+
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --dataset-root outputs/datasets \
   --dataset zinc \
   --reference-split test \
   --train-split train \
-  --output-dir "$GEN_DIR/evaluation"
+  --output-dir "$GEN_DIR/evaluation" \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --fcd-use-corrected \
+  --require-fcd
 
 
 Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9541015625
+  fcd: 5.275953145153196
   num_generated_graphs: 1024
   num_valid_generated_molecules: 977
   num_invalid_generated_molecules: 47
-  validity_without_correction: 0.9541015625
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 47
+  correction_success_rate_on_raw_invalid: 1.0
   uniqueness_rate: 1.0
   unique_valid_count: 977
   novelty_rate: 1.0
   novel_unique_valid_count: 977
-  nspdk_mmd: 0.0006045195876225945
-  nspdk_mmd_valid_only: 0.0006105182788791186
-  fcd: None
-  fcd_num_reference_molecules: 9150
-  fcd_num_valid_generated_molecules: 9770
+  nspdk_mmd: 0.0006045195876225834
+  nspdk_mmd_valid_only: 0.0006105182788791385
+  fcd_num_reference_molecules: 915
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import networkx as nx
 import numpy as np
+import pytest
 import torch
 
 from grapher.properties.summary import SummaryConfig
@@ -18,6 +19,7 @@ from grapher.rewiring_mlp.attributed.graphlet_diffusion import (
     extract_attributed_graphlet_counts,
     extract_attributed_graphlet_simplex,
 )
+from grapher.rewiring_mlp.attributed.refiner import HybridRefinerConfig
 from grapher.rewiring_mlp.attributed.spectral import attributed_laplacian_spectra
 from grapher.rewiring_mlp.attributed.spectral_data import (
     AttributedTrainingPair,
@@ -42,6 +44,7 @@ from grapher.rewiring_mlp.molecular.typed_invariants import (
     typed_invariant_matches_graph,
 )
 from grapher.utils.io import load_yaml
+from scripts.run_attributed_grapher import _generation_rdkit_valid
 
 
 def _cycle_graph(edges: list[tuple[int, int]] | None = None) -> nx.Graph:
@@ -218,7 +221,25 @@ def test_training_samples_continuous_diffusion_not_rewiring_states() -> None:
     )
 
 
-def test_qm9_projected_valence_config_constructs_training_endpoint() -> None:
+@pytest.mark.parametrize(
+    ("config_path", "expected_source_gate"),
+    [
+        (
+            "configs/experiments/grapher/"
+            "qm9_attributed_spectral_graphlet_light.yaml",
+            False,
+        ),
+        (
+            "configs/experiments/grapher/"
+            "qm9_attributed_spectral_graphlet.yaml",
+            True,
+        ),
+    ],
+)
+def test_qm9_projected_valence_config_constructs_training_endpoint(
+    config_path: str,
+    expected_source_gate: bool,
+) -> None:
     graph = _projected_tetravalent_nitrogen_graph()
     vocabulary = GraphCategoryVocabulary.from_graphs(
         [graph],
@@ -229,9 +250,7 @@ def test_qm9_projected_valence_config_constructs_training_endpoint() -> None:
             "edge_categories": [1, 2, 3],
         },
     )
-    config = load_yaml(
-        "configs/experiments/grapher/qm9_attributed_spectral_graphlet_light.yaml"
-    )
+    config = load_yaml(config_path)
     projected_limits = {
         key: value for key, value in QM9_PROJECTED_MAX_VALENCE.items() if key != 1
     }
@@ -248,6 +267,11 @@ def test_qm9_projected_valence_config_constructs_training_endpoint() -> None:
         config["attributed_refiner"]
     )
     assert refiner_config.rdkit_infer_projected_formal_charges is True
+    assert (
+        config["generation"]["require_rdkit_source_validity"]
+        is expected_source_gate
+    )
+    assert refiner_config.require_rdkit_source_validity is expected_source_gate
 
     source, target, metadata = resolve_attributed_diffusion_endpoints(
         graph,
@@ -271,12 +295,49 @@ def test_qm9_projected_valence_config_constructs_training_endpoint() -> None:
     assert typed_invariant_matches_graph(source, invariant)
 
 
+def test_all_qm9_typed_generation_configs_use_projected_valence_policy() -> None:
+    projected_limits = {
+        key: value for key, value in QM9_PROJECTED_MAX_VALENCE.items() if key != 1
+    }
+    dhvae = load_yaml("configs/experiments/dhvae/qm9_typed.yaml")
+    hybrid = load_yaml(
+        "configs/experiments/grapher/qm9_attributed_hybrid_endpoint_graphlet.yaml"
+    )
+
+    assert dhvae["typed_signature"]["max_weighted_valence"] == projected_limits
+    assert (
+        hybrid["endpoint_trajectory"]["typed_constructor"][
+            "max_weighted_valence"
+        ]
+        == projected_limits
+    )
+    assert hybrid["typed_signature"]["max_weighted_valence"] == projected_limits
+
+    refiner_config = HybridRefinerConfig.from_dict(hybrid["hybrid_refiner"])
+    assert refiner_config.molecular_max_valence == projected_limits
+    assert refiner_config.rdkit_infer_projected_formal_charges is True
+
+
 def test_projected_charge_inference_is_opt_in_for_rdkit_validity() -> None:
     graph = _projected_tetravalent_nitrogen_graph()
 
     assert is_valid_molecular_graph(graph) is False
     assert (
         is_valid_molecular_graph(graph, infer_projected_formal_charges=True) is True
+    )
+    assert (
+        _generation_rdkit_valid(
+            graph,
+            infer_projected_formal_charges=True,
+        )
+        is True
+    )
+    assert (
+        _generation_rdkit_valid(
+            graph,
+            infer_projected_formal_charges=False,
+        )
+        is False
     )
 
 

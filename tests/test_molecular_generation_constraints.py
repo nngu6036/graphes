@@ -122,7 +122,7 @@ def test_rdkit_filter_does_not_depend_on_valence_filter(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "grapher.rewiring_mlp.molecular.graph_io.is_valid_molecular_graph",
-        lambda _graph: False,
+        lambda _graph, **_kwargs: False,
     )
 
     rows = score_hybrid_candidates(

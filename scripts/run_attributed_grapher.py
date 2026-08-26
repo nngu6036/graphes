@@ -51,6 +51,19 @@ def _limited(values: list[Any], limit: int | None) -> list[Any]:
     return values if limit is None or int(limit) <= 0 else values[: int(limit)]
 
 
+def _generation_rdkit_valid(
+    graph: nx.Graph,
+    *,
+    infer_projected_formal_charges: bool,
+) -> bool:
+    """Apply the configured generation validity policy without changing raw metrics."""
+
+    return is_valid_molecular_graph(
+        graph,
+        infer_projected_formal_charges=infer_projected_formal_charges,
+    )
+
+
 def _complete_molecular_aliases(
     graph: nx.Graph,
     *,
@@ -410,7 +423,12 @@ def main() -> None:
                     node_attribute=node_attribute,
                     edge_attribute=edge_attribute,
                 )
-                source_is_valid = is_valid_molecular_graph(source)
+                source_is_valid = _generation_rdkit_valid(
+                    source,
+                    infer_projected_formal_charges=(
+                        refiner_cfg.rdkit_infer_projected_formal_charges
+                    ),
+                )
                 if require_source_validity and not source_is_valid:
                     rejection_reasons["rdkit_invalid_source"] += 1
                     continue
@@ -440,7 +458,12 @@ def main() -> None:
                     )
                 if refined.number_of_nodes() > 1 and not nx.is_connected(refined):
                     raise AssertionError("Refinement returned a disconnected molecule.")
-                final_is_valid = is_valid_molecular_graph(refined)
+                final_is_valid = _generation_rdkit_valid(
+                    refined,
+                    infer_projected_formal_charges=(
+                        refiner_cfg.rdkit_infer_projected_formal_charges
+                    ),
+                )
                 if require_final_validity and not final_is_valid:
                     rejection_reasons["rdkit_invalid_final"] += 1
                     continue

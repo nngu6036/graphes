@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Sequence
 
 import networkx as nx
@@ -76,8 +76,10 @@ class HybridRefinerConfig:
     preserve_removed_edge_type: bool = False
     enforce_molecular_valence: bool = False
     molecular_allowed_bond_types: tuple[int, ...] = DEFAULT_GENERATED_BOND_TYPES
+    molecular_max_valence: dict[int, float] = field(default_factory=dict)
     molecular_candidate_attempt_multiplier: int = 2
     rdkit_candidate_check: bool = False
+    rdkit_infer_projected_formal_charges: bool = False
     selector_policy_weight: float = 1.0
     selector_energy_weight: float = 1.0
 
@@ -148,6 +150,12 @@ class HybridRefinerConfig:
                     DEFAULT_GENERATED_BOND_TYPES,
                 )
             ),
+            molecular_max_valence={
+                int(key): float(value)
+                for key, value in dict(
+                    data.get("molecular_max_valence", {}) or {}
+                ).items()
+            },
             molecular_candidate_attempt_multiplier=max(
                 int(
                     data.get(
@@ -158,6 +166,9 @@ class HybridRefinerConfig:
                 1,
             ),
             rdkit_candidate_check=bool(data.get("rdkit_candidate_check", False)),
+            rdkit_infer_projected_formal_charges=bool(
+                data.get("rdkit_infer_projected_formal_charges", False)
+            ),
             selector_policy_weight=float(data.get("selector_policy_weight", 1.0)),
             selector_energy_weight=float(data.get("selector_energy_weight", 1.0)),
         )
@@ -624,11 +635,17 @@ def score_hybrid_candidates(
                     candidate_graph,
                     allowed_atom_types=vocabulary.node_values,
                     allowed_bond_types=cfg.molecular_allowed_bond_types,
+                    max_valence=cfg.molecular_max_valence or None,
                 )
             if molecular_valid and cfg.rdkit_candidate_check:
                 from grapher.rewiring_mlp.molecular.graph_io import is_valid_molecular_graph
 
-                molecular_valid = is_valid_molecular_graph(candidate_graph)
+                molecular_valid = is_valid_molecular_graph(
+                    candidate_graph,
+                    infer_projected_formal_charges=(
+                        cfg.rdkit_infer_projected_formal_charges
+                    ),
+                )
             row["molecular_valid"] = bool(molecular_valid)
             if not molecular_valid:
                 row["hybrid_score"] = float("-inf")
@@ -747,13 +764,19 @@ def _propose_domain_valid_candidates(
             candidate,
             allowed_atom_types=vocabulary.node_values,
             allowed_bond_types=config.molecular_allowed_bond_types,
+            max_valence=config.molecular_max_valence or None,
         ):
             rejections["molecular_valence"] += 1
             continue
         if config.rdkit_candidate_check:
             from grapher.rewiring_mlp.molecular.graph_io import is_valid_molecular_graph
 
-            if not is_valid_molecular_graph(candidate):
+            if not is_valid_molecular_graph(
+                candidate,
+                infer_projected_formal_charges=(
+                    config.rdkit_infer_projected_formal_charges
+                ),
+            ):
                 rejections["rdkit_sanitization"] += 1
                 continue
         candidates.append(action)
