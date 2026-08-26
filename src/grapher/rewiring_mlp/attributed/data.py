@@ -293,6 +293,26 @@ class GraphletBasis:
         return sum(len(self.keys_by_k[k]) for k in self.sizes)
 
     @property
+    def simplex_width(self) -> int:
+        """Width after appending one disconnected-subset bin per order."""
+
+        return sum(len(self.keys_by_k[key]) + 1 for key in self.sizes)
+
+    @property
+    def simplex_slices(self) -> tuple[tuple[int, int], ...]:
+        result: list[tuple[int, int]] = []
+        start = 0
+        for key in self.sizes:
+            stop = start + len(self.keys_by_k[key]) + 1
+            result.append((start, stop))
+            start = stop
+        return tuple(result)
+
+    @property
+    def simplex_block_widths(self) -> tuple[int, ...]:
+        return tuple(len(self.keys_by_k[key]) + 1 for key in self.sizes)
+
+    @property
     def slices(self) -> tuple[tuple[int, int], ...]:
         out: list[tuple[int, int]] = []
         start = 0

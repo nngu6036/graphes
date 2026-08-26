@@ -12,10 +12,52 @@ GEN_DIR="outputs/baselines/digress/community_small/seed_42_e200k/generations/see
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
-  --run-id seed_42_e200k \
-  --seed-id 42 \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
+
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.026004          0.037029      0.025194
+digress_to_test                     0.032225          0.078709      0.047449
+
+
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 43 \
+  --run-id seed_43_e200k \
+  --wrapper-config configs/baselines/digress_community_small.yaml 
+
+GEN_DIR="outputs/baselines/digress/community_small/seed_43_e200k/generations/seed_43_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+
+
+
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --run-id seed_44_e200k \
+  --wrapper-config configs/baselines/digress_community_small.yaml 
+
+GEN_DIR="outputs/baselines/digress/community_small/seed_44_e200k/generations/seed_44_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
 
 
 export DIGRESS=/home/quang/DiGress

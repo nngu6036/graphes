@@ -8,6 +8,7 @@ This script is intended for outputs from
   generated.smi          # valid SMILES only
 
 Metrics:
+  - validity: RDKit sanitization success after deterministic valency correction
   - validity_without_correction: RDKit sanitization success rate, no correction
   - uniqueness_rate: unique valid canonical SMILES / valid generated molecules
   - novelty_rate: unique valid generated SMILES not in training set / unique valid generated
@@ -62,6 +63,142 @@ def _graph_to_canonical_smiles_and_error(
         return smi, None
     except Exception as exc:
         return None, type(exc).__name__
+
+
+def _reduced_rdkit_bond_type(Chem: Any, bond: Any):
+    """Return the next-lower RDKit bond type, or ``None`` to delete the bond.
+
+    This is the deterministic bond-order correction convention used only for
+    the *with-correction* validity diagnostic.  The generated graph itself is
+    never modified, and ``validity_without_correction`` remains the primary
+    pre-repair validity audit.
+    """
+
+    bond_type = bond.GetBondType()
+    if bond_type == Chem.BondType.TRIPLE:
+        return Chem.BondType.DOUBLE
+    if bond_type == Chem.BondType.DOUBLE:
+        return Chem.BondType.SINGLE
+    if bond_type == Chem.BondType.AROMATIC:
+        return Chem.BondType.SINGLE
+    if bond_type == Chem.BondType.SINGLE:
+        return None
+
+    order = float(bond.GetBondTypeAsDouble())
+    if order > 2.0:
+        return Chem.BondType.DOUBLE
+    if order > 1.0:
+        return Chem.BondType.SINGLE
+    return None
+
+
+def _corrected_canonical_smiles_and_error(
+    graph: nx.Graph,
+    *,
+    max_steps: int = 100,
+) -> tuple[str | None, str | None, int]:
+    """Return canonical SMILES after deterministic RDKit valency correction.
+
+    The routine follows the correction convention commonly used by molecular
+    graph-generation evaluators: repeatedly identify an atom-valence problem
+    and lower the highest-order incident bond until the molecule sanitizes.
+    Neutral tetravalent nitrogen (and trivalent oxygen) are first represented
+    using the corresponding positive formal charge.  A single bond may be
+    removed if no lower bond order exists.
+
+    The operation is evaluation-only.  It does not mutate ``graph`` and does
+    not affect the raw ``validity_without_correction`` metric.
+    """
+
+    Chem = require_rdkit()
+    max_steps = max(int(max_steps), 0)
+    try:
+        rw_mol = Chem.RWMol(nx_to_rdkit_mol(graph, sanitize=False))
+    except Exception as exc:
+        return None, type(exc).__name__, 0
+
+    last_error = "InvalidMolecule"
+    for step in range(max_steps + 1):
+        candidate = rw_mol.GetMol()
+        try:
+            candidate.UpdatePropertyCache(strict=False)
+        except Exception:
+            pass
+
+        try:
+            Chem.SanitizeMol(candidate)
+            smiles = str(
+                Chem.MolToSmiles(
+                    candidate,
+                    canonical=True,
+                    isomericSmiles=False,
+                )
+            )
+            if not smiles:
+                return None, "EmptySMILES", step
+            return smiles, None, step
+        except Exception as exc:
+            last_error = type(exc).__name__
+
+        if step >= max_steps:
+            break
+
+        try:
+            problems = list(Chem.DetectChemistryProblems(candidate))
+        except Exception:
+            problems = []
+
+        atom_indices: list[int] = []
+        for problem in problems:
+            getter = getattr(problem, "GetAtomIdx", None)
+            if getter is None:
+                continue
+            try:
+                atom_indices.append(int(getter()))
+            except Exception:
+                continue
+        if not atom_indices:
+            return None, last_error, step
+
+        atom_idx = min(atom_indices)
+        atom = rw_mol.GetAtomWithIdx(atom_idx)
+        incident_bonds = list(atom.GetBonds())
+        total_bond_order = float(
+            sum(float(bond.GetBondTypeAsDouble()) for bond in incident_bonds)
+        )
+
+        # Charged representations are standard for these otherwise-valid
+        # local valence patterns and avoid needlessly deleting a bond.
+        atomic_num = int(atom.GetAtomicNum())
+        formal_charge = int(atom.GetFormalCharge())
+        if atomic_num == 7 and formal_charge == 0 and abs(total_bond_order - 4.0) < 1e-8:
+            atom.SetFormalCharge(1)
+            continue
+        if atomic_num == 8 and formal_charge == 0 and abs(total_bond_order - 3.0) < 1e-8:
+            atom.SetFormalCharge(1)
+            continue
+
+        if not incident_bonds:
+            return None, last_error, step
+
+        def _bond_sort_key(bond: Any) -> tuple[float, int, int]:
+            begin = int(bond.GetBeginAtomIdx())
+            end = int(bond.GetEndAtomIdx())
+            return (
+                float(bond.GetBondTypeAsDouble()),
+                -min(begin, end),
+                -max(begin, end),
+            )
+
+        selected = max(incident_bonds, key=_bond_sort_key)
+        begin = int(selected.GetBeginAtomIdx())
+        end = int(selected.GetEndAtomIdx())
+        reduced_type = _reduced_rdkit_bond_type(Chem, selected)
+        rw_mol.RemoveBond(begin, end)
+        if reduced_type is not None:
+            rw_mol.AddBond(begin, end, reduced_type)
+
+    return None, last_error, max_steps
 
 
 def _load_graphs_from_path(path: str | Path) -> list[nx.Graph]:
@@ -178,6 +315,74 @@ def _validity_and_smiles(graphs: list[nx.Graph]) -> dict[str, Any]:
         "validity_without_correction": num_valid / max(num_graphs, 1),
         "uniqueness_rate": len(unique_valid) / max(num_valid, 1),
         "unique_valid_count": len(unique_valid),
+    }
+
+
+def _validity_with_correction(
+    graphs: list[nx.Graph],
+    *,
+    raw_smiles: list[str | None],
+    max_steps: int,
+) -> dict[str, Any]:
+    """Evaluate deterministic valency-corrected validity.
+
+    Raw-valid molecules are reused directly.  Correction is attempted only for
+    molecules that fail the no-correction RDKit sanitization test.
+    """
+
+    if len(graphs) != len(raw_smiles):
+        raise ValueError("graphs and raw_smiles must have identical lengths.")
+
+    corrected_all_smiles: list[str | None] = []
+    corrected_valid_smiles: list[str] = []
+    corrected_indices: list[int] = []
+    correction_steps: dict[int, int] = {}
+    correction_errors: Counter[str] = Counter()
+
+    for idx, (graph, raw_smi) in enumerate(zip(graphs, raw_smiles)):
+        if raw_smi is not None:
+            corrected_all_smiles.append(raw_smi)
+            corrected_valid_smiles.append(raw_smi)
+            correction_steps[idx] = 0
+            continue
+
+        smi, err, steps = _corrected_canonical_smiles_and_error(
+            graph,
+            max_steps=max_steps,
+        )
+        corrected_all_smiles.append(smi)
+        correction_steps[idx] = int(steps)
+        if smi is None:
+            correction_errors[str(err or "CorrectionFailed")] += 1
+            continue
+        corrected_valid_smiles.append(smi)
+        corrected_indices.append(idx)
+
+    num_graphs = len(graphs)
+    num_valid = len(corrected_valid_smiles)
+    unique_valid = sorted(set(corrected_valid_smiles))
+    raw_invalid_count = sum(smi is None for smi in raw_smiles)
+
+    return {
+        "all_smiles": corrected_all_smiles,
+        "valid_smiles": corrected_valid_smiles,
+        "unique_valid_smiles": unique_valid,
+        "num_graphs": num_graphs,
+        "num_valid": num_valid,
+        "num_invalid": num_graphs - num_valid,
+        "validity": num_valid / max(num_graphs, 1),
+        "validity_with_correction": num_valid / max(num_graphs, 1),
+        "num_corrected": len(corrected_indices),
+        "corrected_indices": corrected_indices,
+        "correction_steps": correction_steps,
+        "correction_error_counts": dict(correction_errors),
+        "correction_success_rate_on_raw_invalid": (
+            len(corrected_indices) / raw_invalid_count
+            if raw_invalid_count > 0
+            else 1.0
+        ),
+        "unique_valid_count": len(unique_valid),
+        "uniqueness_rate": len(unique_valid) / max(num_valid, 1),
     }
 
 
@@ -399,6 +604,11 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         train_smiles = train_smiles[: int(args.max_train)]
 
     valid_info = _validity_and_smiles(generated_graphs)
+    corrected_valid_info = _validity_with_correction(
+        generated_graphs,
+        raw_smiles=valid_info["all_smiles"],
+        max_steps=args.correction_max_steps,
+    )
     novelty_rate, novel_count = _novelty(
         valid_info["unique_valid_smiles"], train_smiles
     )
@@ -422,27 +632,63 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         normalize=not args.no_nspdk_normalize,
     )
 
+    fcd_generated_smiles = (
+        corrected_valid_info["valid_smiles"]
+        if args.fcd_use_corrected
+        else valid_info["valid_smiles"]
+    )
     fcd_value, fcd_info = compute_fcd(
         reference_smiles,
-        valid_info["valid_smiles"],
+        fcd_generated_smiles,
         device=args.fcd_device,
         skip=args.skip_fcd,
     )
+    if args.require_fcd and fcd_value is None:
+        raise RuntimeError(
+            "FCD was requested but could not be computed. "
+            f"Backend status: {fcd_info}. Install a compatible fcd_torch package "
+            "or omit --require-fcd."
+        )
 
     metrics = {
+        # Benchmark headline: validity after deterministic valency correction.
+        "validity": float(corrected_valid_info["validity"]),
+        "validity_with_correction": float(
+            corrected_valid_info["validity_with_correction"]
+        ),
+        # Primary implementation audit: validity before any repair/correction.
+        "validity_without_correction": float(
+            valid_info["validity_without_correction"]
+        ),
+        "fcd": fcd_value,
         "num_generated_graphs": int(len(generated_graphs)),
         "num_valid_generated_molecules": int(valid_info["num_valid"]),
         "num_invalid_generated_molecules": int(valid_info["num_invalid"]),
-        "validity_without_correction": float(valid_info["validity_without_correction"]),
+        "num_valid_generated_molecules_with_correction": int(
+            corrected_valid_info["num_valid"]
+        ),
+        "num_invalid_generated_molecules_after_correction": int(
+            corrected_valid_info["num_invalid"]
+        ),
+        "num_molecules_corrected_to_valid": int(
+            corrected_valid_info["num_corrected"]
+        ),
+        "correction_success_rate_on_raw_invalid": float(
+            corrected_valid_info["correction_success_rate_on_raw_invalid"]
+        ),
         "uniqueness_rate": float(valid_info["uniqueness_rate"]),
         "unique_valid_count": int(valid_info["unique_valid_count"]),
         "novelty_rate": None if novelty_rate is None else float(novelty_rate),
         "novel_unique_valid_count": int(novel_count),
         "nspdk_mmd": None if nspdk_all is None else float(nspdk_all),
         "nspdk_mmd_valid_only": None if nspdk_valid is None else float(nspdk_valid),
-        "fcd": fcd_value,
         "fcd_num_reference_molecules": int(len(reference_smiles)),
-        "fcd_num_valid_generated_molecules": int(len(valid_info["valid_smiles"])),
+        "fcd_num_valid_generated_molecules": int(len(fcd_generated_smiles)),
+        "fcd_generated_smiles_source": (
+            "valid_with_correction"
+            if args.fcd_use_corrected
+            else "valid_without_correction"
+        ),
     }
 
     report = {
@@ -461,7 +707,19 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "canonical_smiles": True,
             "isomeric_smiles": False,
+            "validity": (
+                "RDKit validity after deterministic evaluation-only valency "
+                "correction. Raw-valid molecules are retained; for raw-invalid "
+                "molecules the highest-order bond incident to an atom-valence "
+                "problem is repeatedly lowered until sanitization succeeds or "
+                "the correction budget is exhausted."
+            ),
+            "validity_with_correction": (
+                "Alias of validity; denominator is all serialized generated "
+                "graphs when molecular_graphs.pkl/generated_graphs.pkl is used."
+            ),
             "validity_without_correction": "RDKit Mol construction + Chem.SanitizeMol, no valency correction or edge resampling.",
+            "correction_max_steps": int(args.correction_max_steps),
             "uniqueness_definition": "unique valid canonical SMILES / valid generated molecules",
             "novelty_definition": "unique valid canonical SMILES not in training set / unique valid canonical SMILES",
             "nspdk": {
@@ -470,10 +728,24 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 "distance": int(args.nspdk_distance),
                 "normalized_features": bool(not args.no_nspdk_normalize),
             },
-            "fcd": fcd_info,
+            "fcd": {
+                **fcd_info,
+                "generated_smiles_source": (
+                    "valid_with_correction"
+                    if args.fcd_use_corrected
+                    else "valid_without_correction"
+                ),
+            },
         },
         "conversion_error_counts": valid_info["conversion_error_counts"],
         "invalid_indices": valid_info["invalid_indices"],
+        "correction": {
+            "corrected_indices": corrected_valid_info["corrected_indices"],
+            "correction_steps_by_index": corrected_valid_info["correction_steps"],
+            "correction_error_counts": corrected_valid_info[
+                "correction_error_counts"
+            ],
+        },
     }
     return report
 
@@ -523,6 +795,26 @@ def main() -> None:
 
     parser.add_argument("--skip-fcd", action="store_true")
     parser.add_argument("--fcd-device", default="auto")
+    parser.add_argument(
+        "--fcd-use-corrected",
+        action="store_true",
+        help=(
+            "Compute FCD from molecules valid after deterministic valency "
+            "correction. By default FCD retains the previous protocol and uses "
+            "only molecules valid without correction."
+        ),
+    )
+    parser.add_argument(
+        "--require-fcd",
+        action="store_true",
+        help="Fail instead of reporting fcd=None when the FCD backend is unavailable.",
+    )
+    parser.add_argument(
+        "--correction-max-steps",
+        type=int,
+        default=100,
+        help="Maximum deterministic bond-order corrections attempted per molecule.",
+    )
 
     args = parser.parse_args()
 
@@ -538,16 +830,30 @@ def main() -> None:
     save_json(report, out_dir / "molecular_evaluation_metrics.json")
 
     valid_smiles = []
-    # Recompute canonical valid smiles for saving in stable order.
+    corrected_valid_smiles = []
+    # Recompute canonical valid SMILES for saving in graph order.
     generated_graphs, _, _ = _resolve_generated_graphs(args)
     if args.max_generated is not None:
         generated_graphs = generated_graphs[: int(args.max_generated)]
     for g in generated_graphs:
-        smi = graph_to_smiles(g, canonical=True, sanitize=True)
-        if smi:
-            valid_smiles.append(smi)
+        raw_smi, _ = _graph_to_canonical_smiles_and_error(g)
+        if raw_smi is not None:
+            valid_smiles.append(raw_smi)
+            corrected_valid_smiles.append(raw_smi)
+            continue
+        corrected_smi, _, _ = _corrected_canonical_smiles_and_error(
+            g,
+            max_steps=args.correction_max_steps,
+        )
+        if corrected_smi is not None:
+            corrected_valid_smiles.append(corrected_smi)
     with (out_dir / "valid_generated.smi").open("w", encoding="utf-8") as f:
         for smi in valid_smiles:
+            f.write(smi + "\n")
+    with (out_dir / "corrected_valid_generated.smi").open(
+        "w", encoding="utf-8"
+    ) as f:
+        for smi in corrected_valid_smiles:
             f.write(smi + "\n")
 
     print("Molecular evaluation")
@@ -555,6 +861,10 @@ def main() -> None:
         print(f"  {key}: {value}")
     print(f"Saved metrics to: {out_dir / 'molecular_evaluation_metrics.json'}")
     print(f"Saved valid SMILES to: {out_dir / 'valid_generated.smi'}")
+    print(
+        "Saved validity-corrected SMILES to: "
+        f"{out_dir / 'corrected_valid_generated.smi'}"
+    )
 
 
 if __name__ == "__main__":

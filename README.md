@@ -946,9 +946,88 @@ the active generic model.
 - Label learned-, empirical-, and oracle-degree runs explicitly.
 - Never aggregate topology-only and attributed results into the same row.
 
-## Retained attributed pipeline and planned Stage 2
+## Attributed spectral--graphlet diffusion GraphER
 
-The repository still contains the earlier QM9/ZINC endpoint implementation for
+QM9 now has a maintained attributed generation path built around the same
+continuous-summary training principle as the generic spectral--graphlet model:
+
+- training diffuses an unweighted topology spectrum, a bond-order-weighted
+  spectrum, and attributed graphlet CLR/logit blocks between a typed source and
+  the clean molecule; it does **not** use rewiring to construct training states;
+- generation samples or reuses an atom/typed-degree invariant, realizes it with
+  the exact typed constructor, predicts the next continuous denoising target,
+  and projects that target with same-bond-type double-edge swaps;
+- accepted swaps preserve atom categories, indexed per-bond-type degrees,
+  ordinary degrees, global bond-type counts, and weighted valence;
+- candidate graphlets use an exact stateful local-delta cache; and
+- RDKit sanitization is applied only to the top combined-energy shortlist.
+
+Light QM9 training:
+
+```bash
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_graphlet_light.yaml \
+  --output-dir outputs/attributed_grapher/qm9_spectral_graphlet_light/seed_42 \
+  --seed 42 \
+  --device gpu
+```
+
+Controlled generation with empirical training typed invariants:
+
+```bash
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_graphlet_light.yaml \
+  --output-dir outputs/attributed_generation/qm9_spectral_graphlet_light/seed_42 \
+  --num-generate 256 \
+  --seed 42 \
+  --device gpu
+```
+
+Molecular evaluation:
+
+```bash
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir outputs/attributed_generation/qm9_spectral_graphlet_light/seed_42 \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir outputs/attributed_grapher/qm9_spectral_graphlet_light/seed_42/evaluation
+```
+
+The evaluator reports both molecular-validity protocols:
+
+- `validity_without_correction`: direct RDKit construction and sanitization of
+  the generated graph, with no repair;
+- `validity` / `validity_with_correction`: validity after deterministic,
+  evaluation-only valency correction by lowering offending bond orders.
+
+It also reports `fcd` when a compatible `fcd_torch` package is installed.  The
+default FCD protocol uses molecules valid without correction, preserving the
+previous evaluator behavior.  To evaluate FCD on the corrected-valid set and
+fail explicitly when the FCD backend is unavailable, add:
+
+```bash
+--fcd-use-corrected --require-fcd
+```
+
+The output directory additionally contains `valid_generated.smi` and
+`corrected_valid_generated.smi`.
+
+During generation, atomic partial checkpoints are written every configured
+number of returned molecules. A running job can therefore be evaluated safely
+with `--generated-graphs <output-dir>/molecular_graphs.partial.pkl`.
+
+The default light config uses empirical training typed invariants to isolate
+the attributed diffusion/refinement mechanism. After training a typed-degree
+VAE, switch to end-to-end invariant generation with:
+
+```bash
+--set generation.invariant_source=learned \
+--set degree_generator.enabled=true
+```
+
+The repository also retains the earlier QM9/ZINC endpoint implementation for
 compatibility:
 
 - `scripts/train_hybrid_endpoint_grapher.py`
@@ -956,9 +1035,9 @@ compatibility:
 - `configs/experiments/grapher/qm9_attributed_hybrid_endpoint_graphlet.yaml`
 - `configs/experiments/grapher/zinc_attributed_hybrid_endpoint_graphlet.yaml`
 
-That route uses typed invariants, all-pairs edge/no-edge prediction,
+That legacy route uses typed invariants, all-pairs edge/no-edge prediction,
 same-bond-type swaps, attributed graphlets, and policy/hybrid selectors. It is
-not the new decoupled attribute stage.
+not the continuous spectral--graphlet diffusion model described above.
 
 This limitation concerns GraphER's planned topology-conditioned attribute
 stage, not the baseline wrapper. `DeFoGWrapper` can train and sample
@@ -966,7 +1045,7 @@ unconditional DeFoG bases for QM9 and ZINC while preserving DeFoG's supported
 atom and bond attributes; it does not implement that planned conditional stage
 or apply GraphER correction by itself.
 
-The planned Stage 2 will condition an attribute-only CatFlow/DeFoG-style
+The separately planned Stage 2 will condition an attribute-only CatFlow/DeFoG-style
 process on a generated topology, omit edge-occupancy/no-edge prediction, and
 optionally apply attributed-graphlet rewiring correction. No such Stage 2
 training or generation script is implemented in this release.
@@ -1001,6 +1080,7 @@ PYTHONPATH=src python -m pytest -q
 ## Additional documentation
 
 - [Decoupled topology generator](docs/TOPOLOGY_GENERATOR.md)
+- [Attributed spectral--graphlet diffusion](docs/ATTRIBUTED_SPECTRAL_GRAPHLET_DIFFUSION.md)
 - [Implementation design contract](docs/DESIGN_CONTRACT.md)
 - [Implementation audit](docs/IMPLEMENTATION_AUDIT.md)
 - [Refactor notes](docs/REFACTOR_NOTES.md)
