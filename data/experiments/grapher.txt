@@ -43,3 +43,32 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/grapher/ego_small_topology_spectral_graphlet_v2.yaml \
   --generated-dir outputs/topology_generation/ego_small_topology_spectral_graphlet_v2/seed_42 \
   --output-dir outputs/topology_grapher/ego_small_topology_spectral_graphlet_v2/seed_42/evaluation
+
+
+
+
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_graphlet.yaml \
+  --output-dir outputs/attributed_grapher/qm9_spectral_graphlet/seed_42 \
+  --seed 42 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_graphlet.yaml \
+  --output-dir outputs/attributed_generation/qm9_spectral_graphlet/seed_42 \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs \
+    outputs/attributed_generation/qm9_spectral_graphlet/seed_42/molecular_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir \
+    outputs/attributed_grapher/qm9_spectral_graphlet/seed_42/evaluation \
+  --require-fcd
