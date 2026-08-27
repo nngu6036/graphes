@@ -1,0 +1,176 @@
+experiment: community_small_topology_graphlet_adaptive_k
+benchmark: community_small
+seed: 42
+
+pipeline:
+  stage: topology
+  factorization: declared_dhvae_hh_base_then_structural_rewiring
+
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  max_reference_graphs: null
+  tune_on_split: val
+  final_split: test
+
+dataset:
+  # Community-small retains the historical serialized dataset name `sbm`.
+  name: sbm
+  benchmark: community_small
+  config_path: configs/datasets/community_small.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+  max_val_graphs: null
+
+# Rewiring-MLP states start from finished outputs of the declared frozen base
+# generator. The wrapper manifest is checksum-verified, partitioned
+# deterministically, then coupled one-to-one to targets within node-count
+# strata using only the sorted degree profile.
+training_sources:
+  mode: completed_base_outputs
+  validation_fraction: 0.1
+  partition_seed: 42
+  matching:
+    method: hungarian_degree_profile
+    require_exact_node_count: true
+    disconnected_policy: drop
+    max_degree_cost: null
+  generators:
+    - id: dhvae_hh
+      manifest_path: outputs/baselines/dhvae_hh/community_small/seed_{seed}/train/training_estimates/manifest.json
+      artifact: estimated_graphs
+      verify_sha256: true
+
+graphlet_prediction:
+  estimator: exact_connected_local_delta
+  graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  # Connected topology graphlets are enumerated exactly; candidate scores use
+  # exact local deltas around the four switch endpoints.
+  graphlet_num_samples: null
+  clustering_summary: true
+  clustering_bins: 20
+  spectral_summary: false
+  motif_proxy: false
+  orbit_count: true
+
+# The teacher starts from a completed base-generator output and sees only
+# graph-level terminal summaries, never the terminal adjacency. It follows valid
+# degree-preserving swaps that improve the combined structural target.
+topology_trajectory:
+  storage: eager
+  steps: 24
+  proposal_budget: 128
+  valid_candidate_budget: 32
+  states_per_graph: 8
+  paths_per_graph: 2
+  source_randomization_steps: 0
+  random_relabel_source: true
+
+  teacher_mode: soft
+  teacher_temperature: 0.25
+  teacher_top_k: 4
+  teacher_sample_actions: true
+
+  teacher_graphlet_weight: 1.0
+  teacher_clustering_weight: 1.0
+  teacher_orbit_weight: 1.0
+
+  preserve_connectivity: true
+  ensure_connected_source: true
+
+topology_predictor:
+  checkpoint_path: outputs/topology_grapher/community_small/seed_42/checkpoint.pt
+  device: auto
+  hidden_dim: 128
+  edge_dim: 64
+  graph_dim: 128
+  num_layers: 4
+  dropout: 0.0
+  min_concentration: 0.05
+  max_concentration: 50.0
+  batch_size: 4
+  epochs: 100
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  target_epsilon: 0.00001
+  loss_weights:
+    graphlet_mean: 1.0
+    graphlet_distribution: 0.1
+    graphlet_mass: 0.0
+    clustering_mean: 1.0
+    clustering_distribution: 0.1
+    orbit: 1.0
+  progress_interval: 5
+
+generation:
+  degree_source: learned
+  num_generate: 1024
+  max_attempts_per_graph: 8
+  write_legacy_hybrid_alias: false
+
+degree_generator:
+  enabled: true
+  type: degree_histogram_vae
+  checkpoint_path: outputs/baselines/dhvae_hh/community_small/seed_42/train/checkpoints/checkpoint.pt
+  device: auto
+  deterministic: false
+  sample_num_nodes: empirical
+  max_resample: 500
+  parity_conditioned: true
+  max_parity_resample: 64
+  postprocess_policy: reject_only
+  fallback: error
+
+constructor:
+  type: havel_hakimi
+  ensure_connected: true
+  random_relabel: true
+  max_repair_trials: 10000
+
+topology_refiner:
+  mode: energy
+  steps: 24
+
+  proposal_budget: 128
+  valid_candidate_budget: 32
+
+  graphlet_weight: 1.0
+  graphlet_mass_weight: 0.0
+  clustering_weight: 1.0
+  orbit_weight: 1.0
+
+  accept_only_improving: true
+  min_improvement: 0.00000001
+  min_relative_improvement: 0.0001
+
+  # GENERATION-ONLY adaptive prediction horizon. Predictor training still
+  # advances one teacher rewiring per state and ignores this block. For K
+  # sweeps prefer run_topology_grapher.py --set ... instead of cloning YAMLs.
+  prediction_horizon:
+    mode: annealed
+    initial_k: 8
+    final_k: 1
+    schedule: exponential
+    refresh_on_plateau: true
+
+  reject_revisited_states: true
+  preserve_connectivity: true
+  selection: greedy
+
+
+evaluation:
+  inline_during_generation: false
+  orca_exec: null
+  compute_orbit: true
+  compute_graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 8192

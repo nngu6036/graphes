@@ -1,0 +1,158 @@
+
+
+
+ PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --output-dir outputs/topology_grapher/community_small_spectral_graphlet_v2/seed_42 \
+  --seed 42 \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_topology_grapher.py  \
+--config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml  \
+--output-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2/seed_42   \
+--num-generate 1024  \
+--seed 42   \
+--device gpu 
+
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --generated-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2/seed_42 \
+  --output-dir outputs/topology_grapher/community_small_topology_spectral_graphlet_v2/seed_42/evaluation
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.026004          0.037029      0.025194
+hh_source_to_test                   0.047347          0.277226      0.227409
+topology_final_to_test              0.047347          0.062318      0.052306
+
+ PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config configs/experiments/grapher/ego_small_topology_spectral_graphlet_v2.yaml \
+  --output-dir outputs/topology_grapher/ego_small_topology_spectral_graphlet_v2/seed_42 \
+  --seed 42 \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_topology_grapher.py  \
+--config configs/experiments/grapher/ego_small_topology_spectral_graphlet_v2.yaml  \
+--output-dir outputs/topology_generation/ego_topology_spectral_graphlet_v2/seed_42   \
+--num-generate 1024  \
+--seed 42   \
+--device gpu 
+
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/ego_small_topology_spectral_graphlet_v2.yaml \
+  --generated-dir outputs/topology_generation/ego_small_topology_spectral_graphlet_v2/seed_42 \
+  --output-dir outputs/topology_grapher/ego_small_topology_spectral_graphlet_v2/seed_42/evaluation
+
+
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/qm9_typed.yaml
+
+
+
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_graphlet.yaml \
+  --output-dir outputs/attributed_grapher/qm9_spectral_graphlet/seed_42 \
+  --seed 42 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_graphlet.yaml \
+  --output-dir outputs/attributed_generation/qm9_spectral_graphlet/seed_42 \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs \
+    outputs/attributed_generation/qm9_spectral_graphlet/seed_42/molecular_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir \
+    outputs/attributed_grapher/qm9_spectral_graphlet/seed_42/evaluation \
+  --require-fcd
+
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9990234375
+  fcd: 2.4381281385924396
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1023
+  num_invalid_generated_molecules: 1
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 1
+  correction_success_rate_on_raw_invalid: 1.0
+  uniqueness_rate: 0.989247311827957
+  unique_valid_count: 1012
+  novelty_rate: 0.8458498023715415
+  novel_unique_valid_count: 856
+  nspdk_mmd: 0.00020439745240377957
+  nspdk_mmd_valid_only: 0.00020391667742086618
+  fcd_num_reference_molecules: 13174
+  fcd_num_valid_generated_molecules: 1023
+  fcd_generated_smiles_source: valid_without_correction
+
+
+
+
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_graphlet.yaml \
+  --output-dir outputs/attributed_grapher/qm9_spectral_graphlet/seed_43 \
+  --seed 43 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_graphlet.yaml \
+  --output-dir outputs/attributed_generation/qm9_spectral_graphlet/seed_43 \
+  --num-generate 1024 \
+  --seed 43 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs \
+    outputs/attributed_generation/qm9_spectral_graphlet/seed_43/molecular_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir \
+    outputs/attributed_grapher/qm9_spectral_graphlet/seed_43/evaluation \
+  --require-fcd
+
+
+
+
+  
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_graphlet.yaml \
+  --output-dir outputs/attributed_grapher/qm9_spectral_graphlet/seed_44 \
+  --seed 44 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_graphlet.yaml \
+  --output-dir outputs/attributed_generation/qm9_spectral_graphlet/seed_44 \
+  --num-generate 1024 \
+  --seed 44 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs \
+    outputs/attributed_generation/qm9_spectral_graphlet/seed_44/molecular_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir \
+    outputs/attributed_grapher/qm9_spectral_graphlet/seed_44/evaluation \
+  --require-fcd

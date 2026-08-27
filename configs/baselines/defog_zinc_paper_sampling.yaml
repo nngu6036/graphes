@@ -1,0 +1,25 @@
+defog:
+  # DeFoG paper-reported ZINC250k sampling configuration.
+  #
+  # Note: GraphES may use a ZINC subset rather than the full ZINC250k
+  # benchmark, so results should be reported as a rerun on the GraphES split.
+
+  hydra_overrides:
+    # Molecular experiments use 500 sampling steps in the DeFoG paper.
+    - "sample.sample_steps=500"
+
+    # Paper-reported ZINC250k sampling settings.
+    - "sample.time_distortion=polydec"
+    - "sample.omega=0.0"
+    - "sample.eta=200"
+
+  # Keep the auxiliary post-training source pool reasonably small.
+  # This pool is used by the GraphES wrapper for training-estimate artifacts
+  # and is separate from --num-samples in run_defog_baseline.py.
+  training_estimates:
+    enabled: true
+    num_graphs: 256
+
+  runtime:
+    gpus: 1
+    cuda_visible_devices: "0"

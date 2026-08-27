@@ -1,0 +1,40 @@
+# Historical filename: this is the Community-small benchmark used by GDSS and
+# the manuscript, not the larger variable-block SPECTRE SBM benchmark.
+name: sbm
+type: sbm
+benchmark: community_small
+
+# Keep the dataset/split seed fixed across all model-training seeds.
+seed: 0
+num_graphs: 100
+
+# GDSS exposes an 80/20 train/test split. This project reserves 10 graphs from
+# the training side for validation, giving 70/10/20 while retaining the
+# benchmark's 20-graph held-out test set.
+split:
+  train: 0.7
+  val: 0.1
+  test: 0.2
+
+communities:
+  min_blocks: 2
+  max_blocks: 2
+  # Match GDSS: draw max_nodes uniformly from 12..20, then use two equal
+  # communities of floor(max_nodes / 2). Actual graph sizes are therefore
+  # 12, 14, 16, 18, or 20.
+  min_total_nodes: 12
+  max_total_nodes: 20
+  equal_block_sizes: true
+
+edge_probs:
+  p_in: 0.70
+  p_out: 0.0
+  # `p_inter` follows the GDSS generator: the Bernoulli bridge probability is
+  # chosen so that E[number of cross-community edges] = p_inter * |V|.
+  p_inter: 0.05
+  ensure_inter_community_edge: true
+
+filters:
+  require_connected: true
+  reject_zero_degree: true
+  max_attempts_per_graph: 300

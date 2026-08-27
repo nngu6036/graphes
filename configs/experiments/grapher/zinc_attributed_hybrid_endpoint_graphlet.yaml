@@ -1,0 +1,169 @@
+experiment: zinc_attributed_hybrid_endpoint_graphlet
+benchmark: zinc_12k_heavy_atom
+implementation_status: implemented
+seed: 42
+
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  tune_on_split: val
+  final_split: test
+
+dataset:
+  name: zinc
+  config_path: configs/datasets/zinc.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+  max_val_graphs: null
+
+categorical_state:
+  node_attribute: atomic_num
+  node_categories: [6, 7, 8, 9, 15, 16, 17, 35, 53]
+  edge_attribute: bond_type
+  edge_categories: [1, 2, 3, 4]
+
+graphlet_prediction:
+  graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 2048
+  attributed: true
+  attributed_backend: auto
+
+endpoint_trajectory:
+  storage: streaming
+  steps: 40
+  candidate_budget: 128
+  states_per_graph: 8
+  paths_per_graph: 2
+  source_randomization_steps: 8
+  teacher_mode: soft
+  teacher_temperature: 0.25
+  teacher_top_k: 8
+  teacher_sample_actions: true
+  teacher_pair_weight: 1.0
+  teacher_graphlet_weight: 1.0
+  teacher_min_improvement: 0.00000001
+  preserve_connectivity: true
+  ensure_connected_source: true
+  shared_relabel_augmentation: true
+  typed_constructor:
+    type: typed_backtracking
+    ensure_connected: true
+    randomize_assignment: false
+    max_restarts: 64
+    max_backtracks: 200000
+
+endpoint_predictor:
+  checkpoint_path: outputs/hybrid_endpoint/zinc_attributed/seed_42/checkpoint.pt
+  device: auto
+  hidden_dim: 192
+  edge_dim: 96
+  graph_dim: 192
+  num_layers: 4
+  dropout: 0.0
+  min_concentration: 0.05
+  max_concentration: 50.0
+  fixed_node_categories: true
+  batch_size: 32
+  epochs: 200
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  no_edge_class_weight: 0.10
+  present_edge_class_weight: 1.0
+  target_epsilon: 0.00001
+  loss_weights:
+    node: 0.0
+    edge: 1.0
+    graphlet_mean: 1.0
+    graphlet_distribution: 0.1
+    graphlet_mass: 0.0
+    consistency: 0.1
+  progress_interval: 5
+
+candidate_selector:
+  enabled: true
+  checkpoint_path: outputs/hybrid_endpoint/zinc_attributed/seed_42/selector.pt
+  hidden_dim: 128
+  dropout: 0.0
+  epochs: 25
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  objective: cross_entropy
+
+generation:
+  degree_source: learned
+  num_generate: 1024
+
+degree_generator:
+  enabled: true
+  type: typed_degree_histogram_vae
+  checkpoint_path: outputs/degree_generators/zinc_typed/seed_42/checkpoint.pt
+  device: auto
+  deterministic: false
+  sample_num_nodes: empirical
+  max_resample: 2000
+  fallback: error
+
+typed_signature:
+  node_attribute: atomic_num
+  edge_attribute: bond_type
+  edge_categories: [1, 2, 3, 4]
+  max_ordinary_degree: 6
+
+constructor:
+  type: typed_backtracking
+  ensure_connected: true
+  randomize_assignment: true
+  max_restarts: 256
+  max_backtracks: 200000
+  candidate_ranking: uniform
+
+molecular_generation:
+  enabled: true
+  allowed_atom_types: [6, 7, 8, 9, 15, 16, 17, 35, 53]
+  allowed_bond_types: [1, 2, 3, 4]
+  sample_attributes: false
+  require_rdkit_source_validity: true
+
+hybrid_refiner:
+  mode: hybrid
+  steps: 40
+  proposal_budget: 2048
+  valid_candidate_budget: 256
+  policy_shortlist: 32
+  selector_policy_weight: 1.0
+  selector_energy_weight: 1.0
+  preserve_connectivity: true
+  selection: greedy
+  temperature: 0.1
+  categorical_weight: 0.0
+  probability_weight: 1.0
+  graphlet_weight: 1.0
+  graphlet_mass_weight: 0.0
+  accept_only_improving: true
+  min_improvement: 0.00000001
+  sample_endpoint: false
+  sample_graphlet: false
+  refresh_prediction_every: 1
+  infeasible_target_policy: guidance_only
+  require_same_edge_type_pair: true
+  preserve_removed_edge_type: true
+  enforce_molecular_valence: true
+  molecular_allowed_bond_types: [1, 2, 3, 4]
+  molecular_candidate_attempt_multiplier: 4
+  rdkit_candidate_check: true
+
+evaluation:
+  orca_exec: null
+  compute_orbit: true
+  compute_graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 8192

@@ -1,11 +1,5 @@
-tensorboard-logger
-tensorflow
-networkx==3.1
-pyemd
-matplotlib
-scipy
-numpy==1.24.0
-python-louvain
-torchvision
-torch_geometric
-scikit-learn
+networkx>=3.2
+numpy>=1.24
+PyYAML>=6.0
+matplotlib>=3.7
+pytest>=8.0

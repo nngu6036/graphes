@@ -1,0 +1,24 @@
+name: grid
+type: grid
+benchmark: grid
+seed: 0
+num_graphs: 100
+split:
+  # Reserve validation data from the original 80% training side while keeping
+  # the benchmark's 20 held-out graphs for final evaluation.
+  train: 0.7
+  val: 0.1
+  test: 0.2
+grid:
+  min_rows: 10
+  max_rows: 19
+  min_cols: 10
+  max_cols: 19
+  # Match the GDSS generator: independently sample each side length for every
+  # graph, so repeated dimension pairs are allowed.
+  enumerate_dimensions: false
+  random_relabel: false
+filters:
+  require_connected: true
+  reject_zero_degree: true
+  max_attempts_per_graph: 50

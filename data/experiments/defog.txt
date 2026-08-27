@@ -1,0 +1,418 @@
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset ego_small \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42 \
+  --n-epochs 200000 \
+  --epoch-progress-interval 5000
+
+DEFOG_GENERATION_DIR="outputs/baselines/defog/community_small/seed_42/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_defog_corrector.yaml \
+  --generated-dir "$DEFOG_GENERATION_DIR" \
+  --generated-stage defog_seed_42_n_1024 \
+  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_42_n_1024"
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.026004          0.037029      0.025194
+defog_e800k_to_test                 0.057971          0.046759      0.065031
+
+
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 43 \
+  --run-id seed_43 \
+  --n-epochs 200000 \
+  --epoch-progress-interval 5000
+
+DEFOG_GENERATION_DIR="outputs/baselines/defog/community_small/seed_43/generations/seed_43_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_defog_corrector.yaml \
+  --generated-dir "$DEFOG_GENERATION_DIR" \
+  --generated-stage defog_seed_43_n_1024 \
+  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_43_n_1024"
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.026004          0.037029      0.025194
+defog_seed_43_n_1024_to_test        0.080293          0.076529      0.075752
+
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --run-id seed_44 \
+  --n-epochs 200000 \
+  --epoch-progress-interval 5000
+
+DEFOG_GENERATION_DIR="outputs/baselines/defog/community_small/seed_44/generations/seed_44_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_defog_corrector.yaml \
+  --generated-dir "$DEFOG_GENERATION_DIR" \
+  --generated-stage defog_seed_44 \
+  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_44_n_1024"
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.026004          0.037029      0.025194
+defog_seed_44_to_test               0.031352          0.065902      0.061298
+
+
+
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset ego_small \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42 \
+  --n-epochs 200000 \
+
+DEFOG_GENERATION_DIR="outputs/baselines/defog/ego_small/seed_42/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/ego_small_defog_corrector.yaml \
+  --generated-dir "$DEFOG_GENERATION_DIR" \
+  --generated-stage defog_seed_42_n_1024 \
+  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_42_n_1024"
+
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004751          0.002533      0.006985
+defog_seed_42_n_1024_to_test        0.008769          0.007234      0.008608
+
+
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset ego_small \
+  --num-samples 1024 \
+  --seed-id 43 \
+  --run-id seed_43 \
+  --n-epochs 200000 \
+
+DEFOG_GENERATION_DIR="outputs/baselines/defog/ego_small/seed_43/generations/seed_43_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/ego_small_defog_corrector.yaml \
+  --generated-dir "$DEFOG_GENERATION_DIR" \
+  --generated-stage defog_seed_43_n_1024 \
+  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_43_n_1024"
+
+  Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004751          0.002533      0.006985
+defog_seed_43_n_1024_to_test        0.003890          0.002774      0.006746
+
+
+
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset ego_small \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --run-id seed_44 \
+  --n-epochs 200000 \
+
+DEFOG_GENERATION_DIR="outputs/baselines/defog/ego_small/seed_44/generations/seed_44_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/ego_small_defog_corrector.yaml \
+  --generated-dir "$DEFOG_GENERATION_DIR" \
+  --generated-stage defog_seed_44_n_1024 \
+  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_44_n_1024"
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004751          0.002533      0.006985
+defog_seed_44_n_1024_to_test        0.006851          0.004938      0.006732
+
+
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset qm9 \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42 \
+  --n-epochs 1000 \
+  --epoch-progress-interval 10
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs \
+    outputs/baselines/defog/qm9/seed_42/generations/seed_42_n_1024/base_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir \
+    outputs/baselines/defog/qm9/seed_42/generations/seed_42_n_1024/evaluation_corrected_fcd \
+  --fcd-use-corrected \
+  --require-fcd
+
+
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.998046875
+  fcd: 0.4031882559643165
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1022
+  num_invalid_generated_molecules: 2
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 2
+  correction_success_rate_on_raw_invalid: 1.0
+  uniqueness_rate: 0.9980430528375733
+  unique_valid_count: 1020
+  novelty_rate: 0.2950980392156863
+  novel_unique_valid_count: 301
+  nspdk_mmd: 1.6335990359385983e-05
+  nspdk_mmd_valid_only: 1.6488629021953792e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset qm9 \
+  --num-samples 1024 \
+  --seed-id 43 \
+  --run-id seed_43 \
+  --n-epochs 1000 \
+  --epoch-progress-interval 10
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs \
+    outputs/baselines/defog/qm9/seed_43/generations/seed_43_n_1024/base_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir \
+    outputs/baselines/defog/qm9/seed_43/generations/seed_43_n_1024/evaluation_corrected_fcd \
+  --fcd-use-corrected \
+  --require-fcd
+
+
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9892578125
+  fcd: 0.5553955576492378
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1013
+  num_invalid_generated_molecules: 11
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 11
+  correction_success_rate_on_raw_invalid: 1.0
+  uniqueness_rate: 0.9940769990128332
+  unique_valid_count: 1007
+  novelty_rate: 0.26216484607745777
+  novel_unique_valid_count: 264
+  nspdk_mmd: 2.4560797766632867e-05
+  nspdk_mmd_valid_only: 2.594164801854979e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset qm9 \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --run-id seed_44 \
+  --n-epochs 1000 \
+  --epoch-progress-interval 10
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs \
+    outputs/baselines/defog/qm9/seed_44/generations/seed_44_n_1024/base_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir \
+    outputs/baselines/defog/qm9/seed_44/generations/seed_44_n_1024/evaluation_corrected_fcd \
+  --fcd-use-corrected \
+  --require-fcd
+
+
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9873046875
+  fcd: 0.41492557962705945
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1011
+  num_invalid_generated_molecules: 13
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 13
+  correction_success_rate_on_raw_invalid: 1.0
+  uniqueness_rate: 0.9960435212660732
+  unique_valid_count: 1007
+  novelty_rate: 0.25521350546176763
+  novel_unique_valid_count: 257
+  nspdk_mmd: 1.9870636841085286e-05
+  nspdk_mmd_valid_only: 1.967684767045536e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_e300 \
+  --n-epochs 300 \
+  --wrapper-config configs/baselines/defog_zinc_paper_sampling.yaml \
+  --epoch-progress-interval 1
+
+
+GEN_DIR="outputs/baselines/defog/zinc/seed_42_e300/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --fcd-use-corrected \
+  --require-fcd
+
+
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9541015625
+  fcd: 5.549331723153955
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 977
+  num_invalid_generated_molecules: 47
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 47
+  correction_success_rate_on_raw_invalid: 1.0
+  uniqueness_rate: 1.0
+  unique_valid_count: 977
+  novelty_rate: 1.0
+  novel_unique_valid_count: 977
+  nspdk_mmd: 0.0006518988235404931
+  nspdk_mmd_valid_only: 0.0006612800736168689
+  fcd_num_reference_molecules: 915
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+
+
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 43 \
+  --run-id seed_43_e300 \
+  --n-epochs 300 \
+  --wrapper-config configs/baselines/defog_zinc_paper_sampling.yaml \
+  --epoch-progress-interval 1
+  
+
+GEN_DIR="outputs/baselines/defog/zinc/seed_43_e300/generations/seed_43_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --fcd-use-corrected \
+  --require-fcd
+
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9501953125
+  fcd: 5.690067574965511
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 973
+  num_invalid_generated_molecules: 51
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 51
+  correction_success_rate_on_raw_invalid: 1.0
+  uniqueness_rate: 1.0
+  unique_valid_count: 973
+  novelty_rate: 1.0
+  novel_unique_valid_count: 973
+  nspdk_mmd: 0.0006427853972682684
+  nspdk_mmd_valid_only: 0.0006451268839738862
+  fcd_num_reference_molecules: 915
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+
+  PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --run-id seed_44_e300 \
+  --n-epochs 300 \
+  --wrapper-config configs/baselines/defog_zinc_paper_sampling.yaml \
+  --epoch-progress-interval 1
+  
+
+GEN_DIR="outputs/baselines/defog/zinc/seed_44_e300/generations/seed_44_n_1024"
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --fcd-use-corrected \
+  --require-fcd
+
+
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9541015625
+  fcd: 5.275953145153196
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 977
+  num_invalid_generated_molecules: 47
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 47
+  correction_success_rate_on_raw_invalid: 1.0
+  uniqueness_rate: 1.0
+  unique_valid_count: 977
+  novelty_rate: 1.0
+  novel_unique_valid_count: 977
+  nspdk_mmd: 0.0006045195876225834
+  nspdk_mmd_valid_only: 0.0006105182788791385
+  fcd_num_reference_molecules: 915
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction

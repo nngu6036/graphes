@@ -1,0 +1,27 @@
+digress:
+  native_dataset: comm20
+  experiment: comm20
+
+  # The attached upstream comm20 configuration uses 1,000,000 epochs. GraphES
+  # uses a 200k budget by default; increase this only after validation evidence.
+  n_epochs: 200000
+  batch_size: 256
+  num_workers: 0
+  check_val_every_n_epochs: 1000
+  save_every_n_epochs: 10000
+  generation_batch_size: 64
+
+  training_estimates:
+    enabled: true
+    # Omit num_graphs to match the 140-graph training split automatically.
+
+  runtime:
+    gpus: 1
+    cuda_visible_devices: "0"
+    device: auto
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+      epoch_interval: 2000
+      generation_batch_interval: 1

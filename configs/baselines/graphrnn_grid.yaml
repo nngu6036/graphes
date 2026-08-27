@@ -1,0 +1,73 @@
+# GraphRNN baseline on the frozen GraphES Grid split.
+
+experiment: graphrnn_grid
+benchmark: grid
+
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  max_reference_graphs: null
+  tune_on_split: val
+  final_split: test
+
+dataset:
+  name: grid
+  benchmark: grid
+  config_path: configs/datasets/grid.yaml
+  root: outputs/datasets
+  build_if_missing: false
+
+evaluation:
+  orca_exec: null
+  compute_orbit: true
+  graphlet_backend: sampled
+
+graphrnn:
+  source_env: GRAPHRNN
+  python_env: GRAPHRNN_PYTHON
+  variant: GraphRNN_RNN
+
+  # Grid side lengths are sampled independently from 10..19, hence n <= 361.
+  # The bounded BFS width follows GraphRNN's intended compression mechanism.
+  max_num_node: 361
+  max_prev_node: 40
+
+  hidden_size_rnn: 128
+  hidden_size_rnn_output: 16
+  embedding_size_rnn: 64
+  embedding_size_rnn_output: 8
+  embedding_size_output: 64
+  num_layers: 4
+
+  batch_size: 32
+  batch_ratio: 32
+  epochs: 3000
+  learning_rate: 0.003
+  milestones: [400, 1000]
+  lr_rate: 0.3
+  scheduler_step_unit: batch
+  num_workers: 0
+  save_every_epochs: 100
+  log_every_epochs: 10
+  gradient_clip_norm: null
+
+  sample_time: 1
+  generation_batch_size: 16
+  deterministic: false
+  torch_num_threads: null
+
+  training_estimates:
+    enabled: true
+
+  runtime:
+    device: auto
+    python_executable: null
+    cuda_visible_devices: "0"
+    timeout_seconds: null
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+      epoch_interval: 10
+      generation_batch_interval: 1

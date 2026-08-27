@@ -1,0 +1,89 @@
+# GraphRNN baseline on the frozen GraphES Community-small split.
+# This file is accepted by both run_graphrnn_baseline.py and
+# evaluate_graph_generation_report.py.
+
+experiment: graphrnn_community_small
+benchmark: community_small
+
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  max_reference_graphs: null
+  tune_on_split: val
+  final_split: test
+
+# Evaluator-facing dataset identity.
+dataset:
+  name: sbm
+  benchmark: community_small
+  config_path: configs/datasets/community_small.yaml
+  root: outputs/datasets
+  build_if_missing: false
+
+# Generic graph metrics used in the paper-facing report.
+evaluation:
+  orca_exec: null
+  compute_orbit: true
+  graphlet_backend: sampled
+
+# Wrapper/training configuration.
+graphrnn:
+  source_env: GRAPHRNN
+  python_env: GRAPHRNN_PYTHON
+
+  # GraphRNN_RNN is the dependent Bernoulli-sequence model used as the main
+  # GraphRNN variant. GraphRNN_MLP is available for a controlled ablation.
+  variant: GraphRNN_RNN
+
+  # Community-small contains at most 20 nodes. A full 19-step look-back avoids
+  # truncating any BFS adjacency row on this small benchmark.
+  max_num_node: 20
+  max_prev_node: 19
+
+  # Original attached GraphRNN architecture.
+  hidden_size_rnn: 128
+  hidden_size_rnn_output: 16
+  embedding_size_rnn: 64
+  embedding_size_rnn_output: 8
+  embedding_size_output: 64
+  num_layers: 4
+
+  # Original attached GraphRNN optimization horizon and sampler.
+  batch_size: 32
+  batch_ratio: 32
+  epochs: 3000
+  learning_rate: 0.003
+  milestones: [400, 1000]
+  lr_rate: 0.3
+
+  # The legacy implementation steps MultiStepLR after every mini-batch. Keep
+  # this setting for fidelity; use "epoch" only as an explicit new ablation.
+  scheduler_step_unit: batch
+  num_workers: 0
+  save_every_epochs: 100
+  log_every_epochs: 10
+  gradient_clip_norm: null
+
+  sample_time: 1
+  generation_batch_size: 32
+  deterministic: false
+  torch_num_threads: null
+
+  # Independent samples for optional GraphER corrector-data construction.
+  # They are deliberately marked unpaired in the wrapper manifest.
+  training_estimates:
+    enabled: true
+    # Omit num_graphs to match the 70-graph training split.
+
+  runtime:
+    device: auto
+    python_executable: null
+    cuda_visible_devices: "0"
+    timeout_seconds: null
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+      epoch_interval: 10
+      generation_batch_interval: 1

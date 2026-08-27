@@ -1,0 +1,54 @@
+# Fixed 12k subset derived from ZINC250k. This is a prepared molecular dataset:
+# create train.pkl/val.pkl/test.pkl under outputs/datasets/zinc before training.
+name: zinc
+kind: prepared_molecular_attributed
+root: outputs/datasets
+
+source:
+  dataset: ZINC250k
+  subset:
+    name: grapher_fixed_12k
+    selection: first_valid_after_seeded_shuffle
+    seed: 0
+    expected_graphs: 12000
+
+split:
+  train: 10000
+  val: 1000
+  test: 1000
+
+preprocessing:
+  representation: heavy_atom_graph
+  hydrogens: implicit
+  remove_hydrogens: true
+  remove_self_loops: true
+  undirected: true
+  keep_largest_fragment: true
+  sanitize_with_rdkit: true
+  kekulize: false
+  retain_aromatic_bonds: true
+  retain_formal_charge: false
+  retain_stereochemistry: false
+  max_nodes: 38
+
+filters:
+  require_connected: true
+  neutral_only: true
+  # DeFoG's categorical ZINC state has no formal-charge channel. Reject even
+  # net-neutral zwitterions so the prepared source has a lossless model view.
+  uncharged_atoms_only: true
+  allowed_atomic_numbers: [6, 7, 8, 9, 15, 16, 17, 35, 53]
+
+# Atomic-number vocabulary commonly used for the ZINC250k generation
+# benchmark. Index 0 is reserved for no-edge only; it is not an atom category.
+categorical_state:
+  node_attribute: atomic_num
+  node_categories: [6, 7, 8, 9, 15, 16, 17, 35, 53]
+  edge_attribute: bond_type
+  edge_categories: [1, 2, 3, 4]
+
+bond_orders:
+  1: 1.0
+  2: 2.0
+  3: 3.0
+  4: 1.5

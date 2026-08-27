@@ -1,0 +1,175 @@
+# Research-scale Community-small experiment retained under the historical
+# `sbm` serialized-dataset name.
+experiment: sbm_hybrid_endpoint_graphlet
+benchmark: community_small
+seed: 42
+
+# Metadata for the paper protocol. The current scripts read `seed` and
+# `generation.num_generate`; the remaining fields document aggregation.
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  max_reference_graphs: 20
+  tune_on_split: val
+  final_split: test
+
+dataset:
+  name: sbm
+  benchmark: community_small
+  config_path: configs/datasets/community_small.yaml
+  root: outputs/datasets
+  # Prepare once with prepare_generic_dataset.py and keep the same serialized
+  # splits for all models and seeds.
+  build_if_missing: false
+  max_train_graphs: null
+  max_val_graphs: null
+
+# Generic featureless graphs use one node category and two dense pair states:
+# no-edge (reserved index 0) and edge (index 1).
+categorical_state:
+  node_attribute: null
+  node_categories: [0]
+  edge_attribute: null
+  edge_categories: [1]
+
+# The paper uses connected induced graphlets of sizes {3, 4, 5}. The 2,048
+# subset cap is exact for smaller Community-small graphs and deterministic
+# Monte Carlo extraction for the largest size-5 subset spaces.
+graphlet_prediction:
+  graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 2048
+  clustering_summary: false
+  spectral_summary: false
+  motif_proxy: false
+  orbit_count: false
+
+# Build multiple randomized feasible sources and cache the soft graphlet-aware
+# teacher distribution (including STOP) at every supervised state.
+endpoint_trajectory:
+  storage: eager
+  steps: 40
+  candidate_budget: 128
+  states_per_graph: 8
+  paths_per_graph: 2
+  source_randomization_steps: 8
+  teacher_mode: soft
+  teacher_temperature: 0.25
+  teacher_top_k: 8
+  teacher_sample_actions: true
+  teacher_pair_weight: 1.0
+  teacher_graphlet_weight: 1.0
+  teacher_min_improvement: 0.00000001
+  preserve_connectivity: true
+  ensure_connected_source: true
+  max_repair_trials: 10000
+  shared_relabel_augmentation: true
+
+endpoint_predictor:
+  checkpoint_path: outputs/hybrid_endpoint/sbm/seed_42/checkpoint.pt
+  device: auto
+  hidden_dim: 128
+  edge_dim: 64
+  graph_dim: 128
+  num_layers: 4
+  dropout: 0.0
+  min_concentration: 0.05
+  max_concentration: 50.0
+  batch_size: 4
+  epochs: 200
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  no_edge_class_weight: 0.25
+  present_edge_class_weight: 1.0
+  target_epsilon: 0.00001
+  loss_weights:
+    # The node term is identically zero for the one-class generic setting.
+    node: 0.0
+    edge: 1.0
+    graphlet_mean: 1.0
+    graphlet_distribution: 0.1
+    # Connected induced-subset mass is an external diagnostic, not a main loss.
+    graphlet_mass: 0.0
+    consistency: 0.1
+  progress_interval: 5
+
+candidate_selector:
+  enabled: true
+  checkpoint_path: outputs/hybrid_endpoint/sbm/seed_42/selector.pt
+  hidden_dim: 128
+  dropout: 0.0
+  epochs: 25
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  objective: cross_entropy
+
+# `learned` is the end-to-end setting. Use `empirical` and `oracle` only as
+# explicitly labelled invariant-prior/refiner ablations.
+generation:
+  degree_source: learned
+  num_generate: 1024
+
+degree_generator:
+  enabled: true
+  type: degree_histogram_vae
+  checkpoint_path: outputs/degree_generators/sbm/seed_42/checkpoint.pt
+  device: auto
+  deterministic: false
+  sample_num_nodes: empirical
+  max_resample: 500
+  parity_conditioned: true
+  max_parity_resample: 64
+  # Never replace a failed model draw with a training degree sequence in the
+  # main experiment. The current runner raises on an exhausted draw, making the
+  # failure visible instead of silently contaminating the learned-prior result.
+  fallback: error
+
+constructor:
+  type: havel_hakimi
+  ensure_connected: true
+  random_relabel: true
+  max_repair_trials: 10000
+
+# The endpoint and graphlet means are recomputed after every accepted swap.
+hybrid_refiner:
+  mode: hybrid
+  steps: 80
+  proposal_budget: 512
+  valid_candidate_budget: 128
+  policy_shortlist: 16
+  selector_policy_weight: 1.0
+  selector_energy_weight: 1.0
+  preserve_connectivity: true
+  selection: greedy
+  temperature: 0.1
+  categorical_weight: 0.0
+  probability_weight: 1.0
+  graphlet_weight: 1.0
+  graphlet_mass_weight: 0.0
+  graphlet_top_k: 8
+  accept_only_improving: true
+  min_improvement: 0.00000001
+  patience: 2
+  sample_endpoint: false
+  sample_graphlet: false
+  endpoint_temperature: 1.0
+  refresh_prediction_every: 1
+  infeasible_target_policy: guidance_only
+  report_guidance_consistency: false
+
+evaluation:
+  # Four-node orbit MMD uses ORCA. Leave null to use ORCA_EXEC or `orca` on
+  # PATH. Graphlet MMD includes size 5, so it must use the sampled backend;
+  # this code's exact ORCA graphlet-history backend supports k <= 4 only.
+  orca_exec: null
+  compute_orbit: true
+  compute_graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 8192

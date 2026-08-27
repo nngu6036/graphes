@@ -1,0 +1,36 @@
+# Report-facing QM9 protocol. The preparation command writes both
+# qm9_topology and qm9_attributed from the same identity-ordered source pool.
+name: qm9_attributed
+kind: prepared_molecular_attributed
+root: outputs/datasets
+
+protocol:
+  canonical: true
+  # Original QM9/Figshare SDF and official uncharacterized list.
+  expected_source_records: 133885
+  expected_excluded_records: 3054
+  expected_graphs: 130831
+
+# Fixed project split used by every base wrapper. Counts follow an 80/10/10
+# seeded permutation of the canonical 130,831-molecule pool.
+split:
+  seed: 42
+  train: 104665
+  val: 13083
+  test: 13083
+
+preprocessing:
+  representation: heavy_atom_graph
+  remove_hydrogens: true
+  kekulize: true
+  # DeFoG represents only atom and bond categories. Preserve all canonical
+  # molecule indices, project these unsupported channels, and audit how often
+  # the projection occurs in the preparation report.
+  project_formal_charge: true
+  project_stereochemistry: true
+
+categorical_state:
+  node_attribute: atomic_num
+  node_categories: [6, 7, 8, 9]
+  edge_attribute: bond_type
+  edge_categories: [1, 2, 3, 4]

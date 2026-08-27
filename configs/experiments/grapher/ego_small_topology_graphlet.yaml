@@ -1,0 +1,175 @@
+experiment: ego_small_topology_graphlet
+benchmark: ego_small
+seed: 42
+
+pipeline:
+  stage: topology
+  factorization: declared_dhvae_hh_base_then_structural_rewiring
+
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  # Use the complete held-out split. A small reference cap can make the very
+  # low Ego-small MMD values unstable.
+  max_reference_graphs: null
+  tune_on_split: val
+  final_split: test
+
+dataset:
+  name: ego_small
+  benchmark: ego_small
+  config_path: configs/datasets/ego_small.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+  max_val_graphs: null
+
+# Rewiring-MLP states start from completed outputs of the frozen base generator.
+# Pairing remains based only on node count and sorted degree profile.
+training_sources:
+  mode: completed_base_outputs
+  validation_fraction: 0.1
+  partition_seed: 42
+  matching:
+    method: hungarian_degree_profile
+    require_exact_node_count: true
+    disconnected_policy: drop
+    # Do not guess this scale. After inspecting the matching-cost distribution,
+    # set a validation-selected cutoff that retains roughly 70--90% of pairs.
+    max_degree_cost: null
+  generators:
+    - id: dhvae_hh
+      manifest_path: outputs/baselines/dhvae_hh/ego_small/seed_{seed}/train/training_estimates/manifest.json
+      artifact: estimated_graphs
+      verify_sha256: true
+
+graphlet_prediction:
+  estimator: exact_connected_local_delta
+  graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  # Full graph summaries are exact when graphlet_num_samples is null; candidate
+  # scores use exact local deltas around the four switch endpoints.
+  graphlet_num_samples: null
+  clustering_summary: true
+  clustering_bins: 20
+  spectral_summary: false
+  motif_proxy: false
+  orbit_count: true
+
+# Ego-small did not benefit from a long stochastic teacher path. Regenerate
+# trajectories during training, use a clearer near-greedy teacher, and spend the
+# budget on a wider candidate comparison rather than a long horizon.
+topology_trajectory:
+  storage: streaming
+  steps: 16
+
+  proposal_budget: 256
+  valid_candidate_budget: 128
+
+  states_per_graph: 8
+  paths_per_graph: 2
+
+  teacher_temperature: 0.10
+  teacher_top_k: 2
+  teacher_sample_actions: true
+
+  teacher_graphlet_weight: 0.5
+  teacher_graphlet_mass_weight: 0.5
+  teacher_clustering_weight: 2.0
+  teacher_orbit_weight: 2.0
+
+  teacher_min_improvement: 0.00001
+
+topology_predictor:
+  checkpoint_path: outputs/topology_grapher/ego_small/seed_42/checkpoint.pt
+  device: auto
+  hidden_dim: 128
+  edge_dim: 64
+  graph_dim: 128
+  num_layers: 4
+  dropout: 0.0
+  min_concentration: 0.05
+  max_concentration: 50.0
+  batch_size: 4
+  epochs: 100
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  target_epsilon: 0.00001
+  loss_weights:
+    graphlet_mean: 0.5
+    graphlet_distribution: 0.5
+    graphlet_mass: 0.5
+    clustering_mean: 1.0
+    clustering_distribution: 1.0
+    orbit: 4.0
+  progress_interval: 5
+
+generation:
+  degree_source: learned
+  num_generate: 1024
+  max_attempts_per_graph: 8
+  write_legacy_hybrid_alias: false
+
+degree_generator:
+  enabled: true
+  type: degree_histogram_vae
+  checkpoint_path: outputs/baselines/dhvae_hh/ego_small/seed_42/train/checkpoints/checkpoint.pt
+  device: auto
+  deterministic: false
+  sample_num_nodes: empirical
+  max_resample: 500
+  parity_conditioned: true
+  max_parity_resample: 64
+  postprocess_policy: reject_only
+  fallback: error
+
+constructor:
+  type: havel_hakimi
+  ensure_connected: true
+  random_relabel: true
+  max_repair_trials: 10000
+
+# Use a shorter total trajectory with a wider per-step search. The larger
+# acceptance threshold rejects tiny predictor-only gains that did not transfer
+# to external clustering/orbit MMD in the previous run.
+topology_refiner:
+  mode: energy
+  steps: 16
+
+  proposal_budget: 256
+  valid_candidate_budget: 128
+
+  graphlet_weight: 0.5
+  graphlet_mass_weight: 0.5
+  clustering_weight: 2.0
+  orbit_weight: 2.0
+
+  preserve_connectivity: true
+  selection: greedy
+  accept_only_improving: true
+  min_improvement: 0.00001
+  min_relative_improvement: 0.0001
+
+  sample_graphlet: false
+  # Generation baseline: refresh the structural prediction after every
+  # accepted rewiring action. Adaptive K is generation-only and lives in a
+  # separate config / CLI override, not in the training configuration.
+  refresh_prediction_every: 1
+  refresh_on_plateau: false
+
+  reject_revisited_states: true
+
+evaluation:
+  inline_during_generation: false
+  orca_exec: null
+  compute_orbit: true
+  compute_graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 8192

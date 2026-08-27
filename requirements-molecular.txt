@@ -1,0 +1,8 @@
+-r requirements.txt
+# Optional but recommended for molecular dataset preparation and validity.
+rdkit-pypi>=2022.9.5
+# Optional: enables scripts/prepare_qm9_dataset.py --source pyg.
+torch-geometric>=2.5
+# Paper metric: raw Fréchet ChemNet Distance.
+fcd-torch>=1.0.7
+# NSPDK: the evaluator includes a deterministic fallback in earlier scripts.
