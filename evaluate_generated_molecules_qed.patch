@@ -1,0 +1,244 @@
+--- /mnt/data/qed_original/scripts/evaluate_generated_molecules.py	2026-08-26 12:15:00.000000000 +0000
++++ /mnt/data/qed_update/scripts/evaluate_generated_molecules.py	2026-08-27 05:54:30.478779034 +0000
+@@ -13,6 +13,7 @@
+   - uniqueness_rate: unique valid canonical SMILES / valid generated molecules
+   - novelty_rate: unique valid generated SMILES not in training set / unique valid generated
+   - FCD: optional, computed with fcd_torch when installed
++  - QED: RDKit Quantitative Estimate of Drug-likeness statistics and reference-distribution Wasserstein distance
+   - NSPDK MMD: built-in approximate NSPDK-style graph kernel MMD
+ 
+ The built-in NSPDK is a deterministic approximation based on hashed rooted
+@@ -567,6 +568,112 @@
+                 }
+ 
+ 
++
++def _wasserstein_1d(values_a: Iterable[float], values_b: Iterable[float]) -> float | None:
++    """Exact 1-Wasserstein distance between two empirical 1-D samples.
++
++    This avoids adding SciPy as an evaluator dependency.  Each empirical sample
++    is assigned uniform mass, and the integral of the absolute CDF difference
++    is accumulated over the union of observed support points.
++    """
++
++    a = sorted(float(v) for v in values_a)
++    b = sorted(float(v) for v in values_b)
++    if not a or not b:
++        return None
++
++    i = 0
++    j = 0
++    n = len(a)
++    m = len(b)
++    previous = min(a[0], b[0])
++    distance = 0.0
++
++    while i < n or j < m:
++        next_a = a[i] if i < n else float("inf")
++        next_b = b[j] if j < m else float("inf")
++        current = min(next_a, next_b)
++
++        distance += (current - previous) * abs(i / n - j / m)
++
++        while i < n and a[i] == current:
++            i += 1
++        while j < m and b[j] == current:
++            j += 1
++        previous = current
++
++    return float(distance)
++
++
++def compute_qed(smiles: Iterable[str]) -> tuple[list[float], dict[str, Any]]:
++    """Compute RDKit QED for a collection of sanitizable SMILES.
++
++    QED is evaluated only on molecules represented by the supplied SMILES.
++    The caller therefore decides whether raw-valid or validity-corrected
++    generated molecules are used.
++    """
++
++    smiles = list(smiles)
++    Chem = require_rdkit()
++    try:
++        from rdkit.Chem import QED
++    except Exception as exc:
++        return [], {
++            "status": "not_available_or_failed",
++            "error": type(exc).__name__,
++        }
++
++    scores: list[float] = []
++    errors: Counter[str] = Counter()
++    for smi in smiles:
++        try:
++            mol = Chem.MolFromSmiles(str(smi))
++            if mol is None:
++                errors["MolFromSmilesFailed"] += 1
++                continue
++            Chem.SanitizeMol(mol)
++            scores.append(float(QED.qed(mol)))
++        except Exception as exc:
++            errors[type(exc).__name__] += 1
++
++    return scores, {
++        "status": "ok" if scores else "not_computed_empty_or_invalid_smiles",
++        "backend": "rdkit.Chem.QED.qed",
++        "num_input_smiles": int(len(smiles)),
++        "num_scored": int(len(scores)),
++        "error_counts": dict(errors),
++    }
++
++
++def _qed_summary(scores: Iterable[float]) -> dict[str, float | int | None]:
++    values = sorted(float(v) for v in scores)
++    n = len(values)
++    if n == 0:
++        return {
++            "count": 0,
++            "mean": None,
++            "std": None,
++            "median": None,
++            "max": None,
++            "min": None,
++        }
++
++    mean = sum(values) / n
++    variance = sum((v - mean) ** 2 for v in values) / n
++    if n % 2:
++        median = values[n // 2]
++    else:
++        median = 0.5 * (values[n // 2 - 1] + values[n // 2])
++
++    return {
++        "count": int(n),
++        "mean": float(mean),
++        "std": float(variance ** 0.5),
++        "median": float(median),
++        "max": float(values[-1]),
++        "min": float(values[0]),
++    }
++
+ def _select_valid_graphs(
+     graphs: list[nx.Graph], smiles: list[str | None]
+ ) -> list[nx.Graph]:
+@@ -650,6 +757,18 @@
+             "or omit --require-fcd."
+         )
+ 
++    qed_use_corrected = bool(getattr(args, "qed_use_corrected", False))
++    qed_generated_smiles = (
++        corrected_valid_info["valid_smiles"]
++        if qed_use_corrected
++        else valid_info["valid_smiles"]
++    )
++    qed_generated_scores, qed_generated_info = compute_qed(qed_generated_smiles)
++    qed_reference_scores, qed_reference_info = compute_qed(reference_smiles)
++    qed_generated_summary = _qed_summary(qed_generated_scores)
++    qed_reference_summary = _qed_summary(qed_reference_scores)
++    qed_wasserstein = _wasserstein_1d(qed_generated_scores, qed_reference_scores)
++
+     metrics = {
+         # Benchmark headline: validity after deterministic valency correction.
+         "validity": float(corrected_valid_info["validity"]),
+@@ -661,6 +780,23 @@
+             valid_info["validity_without_correction"]
+         ),
+         "fcd": fcd_value,
++        "qed": qed_generated_summary["mean"],
++        "qed_mean": qed_generated_summary["mean"],
++        "qed_std": qed_generated_summary["std"],
++        "qed_median": qed_generated_summary["median"],
++        "qed_max": qed_generated_summary["max"],
++        "qed_min": qed_generated_summary["min"],
++        "qed_reference_mean": qed_reference_summary["mean"],
++        "qed_reference_std": qed_reference_summary["std"],
++        "qed_reference_median": qed_reference_summary["median"],
++        "qed_wasserstein": qed_wasserstein,
++        "qed_num_reference_molecules": int(qed_reference_summary["count"]),
++        "qed_num_valid_generated_molecules": int(qed_generated_summary["count"]),
++        "qed_generated_smiles_source": (
++            "valid_with_correction"
++            if qed_use_corrected
++            else "valid_without_correction"
++        ),
+         "num_generated_graphs": int(len(generated_graphs)),
+         "num_valid_generated_molecules": int(valid_info["num_valid"]),
+         "num_invalid_generated_molecules": int(valid_info["num_invalid"]),
+@@ -736,6 +872,21 @@
+                     else "valid_without_correction"
+                 ),
+             },
++            "qed": {
++                "definition": (
++                    "RDKit Quantitative Estimate of Drug-likeness (QED). "
++                    "Generated summary statistics are reported together with "
++                    "the reference-test distribution and exact empirical "
++                    "1-Wasserstein distance."
++                ),
++                "generated": qed_generated_info,
++                "reference": qed_reference_info,
++                "generated_smiles_source": (
++                    "valid_with_correction"
++                    if qed_use_corrected
++                    else "valid_without_correction"
++                ),
++            },
+         },
+         "conversion_error_counts": valid_info["conversion_error_counts"],
+         "invalid_indices": valid_info["invalid_indices"],
+@@ -810,6 +961,15 @@
+         help="Fail instead of reporting fcd=None when the FCD backend is unavailable.",
+     )
+     parser.add_argument(
++        "--qed-use-corrected",
++        action="store_true",
++        help=(
++            "Compute generated-molecule QED statistics on molecules valid "
++            "after deterministic valency correction. By default QED uses "
++            "only molecules valid without correction."
++        ),
++    )
++    parser.add_argument(
+         "--correction-max-steps",
+         type=int,
+         default=100,
+--- /mnt/data/qed_original/tests/test_evaluate_generated_molecules.py	2026-08-26 12:16:06.000000000 +0000
++++ /mnt/data/qed_update/tests/test_evaluate_generated_molecules.py	2026-08-27 05:54:30.479330713 +0000
+@@ -108,6 +108,7 @@
+         fcd_device="cpu",
+         fcd_use_corrected=True,
+         require_fcd=True,
++        qed_use_corrected=True,
+         correction_max_steps=10,
+     )
+ 
+@@ -120,4 +121,29 @@
+     assert metrics["fcd"] == pytest.approx(1.234)
+     assert metrics["fcd_num_valid_generated_molecules"] == 2
+     assert metrics["fcd_generated_smiles_source"] == "valid_with_correction"
++    assert metrics["qed_generated_smiles_source"] == "valid_with_correction"
++    assert metrics["qed_num_valid_generated_molecules"] == 2
++    assert metrics["qed_num_reference_molecules"] == 1
++    assert metrics["qed"] == pytest.approx(metrics["qed_mean"])
++    assert 0.0 <= metrics["qed_mean"] <= 1.0
++    assert 0.0 <= metrics["qed_reference_mean"] <= 1.0
++    assert metrics["qed_wasserstein"] is not None
++    assert metrics["qed_wasserstein"] >= 0.0
++    assert report["protocol"]["qed"]["generated"]["backend"] == "rdkit.Chem.QED.qed"
+     assert report["correction"]["corrected_indices"] == [1]
++
++
++def test_qed_summary_and_wasserstein() -> None:
++    pytest.importorskip("rdkit")
++    assert MODULE._wasserstein_1d([0.0, 1.0], [0.0, 2.0]) == pytest.approx(0.5)
++
++    raw = MODULE._validity_and_smiles([_valid_cf4_graph()])
++    scores, info = MODULE.compute_qed(raw["valid_smiles"])
++    summary = MODULE._qed_summary(scores)
++
++    assert info["status"] == "ok"
++    assert info["backend"] == "rdkit.Chem.QED.qed"
++    assert summary["count"] == 1
++    assert 0.0 <= summary["mean"] <= 1.0
++    assert summary["std"] == pytest.approx(0.0)
++    assert summary["median"] == pytest.approx(summary["mean"])
