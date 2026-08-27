@@ -10,6 +10,7 @@ from grapher.models.base import BaseGeneratorWrapper
 _WRAPPER_PATHS: Final[dict[str, str]] = {
     "dhvae_hh": "grapher.models.dhvae_hh.wrapper:DHVAEHHWrapper",
     "digress": "grapher.models.digress.wrapper:DiGressWrapper",
+    "graphrnn": "grapher.models.graphrnn.wrapper:GraphRNNWrapper",
     "catflow": "grapher.models.catflow:CatFlowWrapper",
     "defog": "grapher.models.defog.wrapper:DeFoGWrapper",
     "hog_diff": "grapher.models.hog_diff:HOGDiffWrapper",
@@ -21,6 +22,7 @@ _ALIASES: Final[dict[str, str]] = {
     "dh_vae_hh": "dhvae_hh",
     "dhvae+hh": "dhvae_hh",
     "di-gress": "digress",
+    "graph-rnn": "graphrnn",
     "cat-flow": "catflow",
     "de-fog": "defog",
     "hog-diff": "hog_diff",

@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import math
 import random
+import threading
+import time
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -37,11 +40,108 @@ def _limited(values: list[Any], limit: int | None) -> list[Any]:
     return values if limit is None or int(limit) <= 0 else values[: int(limit)]
 
 
+def _estimated_examples(values: Any) -> int:
+    estimate = getattr(values, "estimated_examples", None)
+    return int(estimate) if estimate is not None else len(values)
+
+
 def _mean_metrics(rows: list[dict[str, float]]) -> dict[str, float]:
     if not rows:
         return {}
     keys = sorted(set.intersection(*(set(row) for row in rows)))
     return {key: float(np.mean([row[key] for row in rows])) for key in keys}
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None or not math.isfinite(float(seconds)):
+        return "?"
+    value = max(float(seconds), 0.0)
+    if value < 60.0:
+        return f"{value:.2f}s"
+    total = int(value)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours:d}h{minutes:02d}m{secs:02d}s"
+    return f"{minutes:d}m{secs:02d}s"
+
+
+def _progress_line(
+    *,
+    epoch: int,
+    total_epochs: int,
+    phase: str,
+    status: str,
+    completed_batches: int,
+    expected_batches: int | None,
+    active_batch: int | None,
+    completed_examples: int,
+    expected_examples: int | None,
+    elapsed_seconds: float,
+    running_loss: float | None,
+    last_data_wait_seconds: float | None = None,
+    last_host_step_seconds: float | None = None,
+) -> str:
+    batch_total = "?" if expected_batches is None else str(expected_batches)
+    example_total = "?" if expected_examples is None else str(expected_examples)
+    active = "" if active_batch is None else f" active_batch={active_batch}"
+    percent = ""
+    if expected_examples is not None and expected_examples > 0:
+        percent = f" ({100.0 * completed_examples / expected_examples:.1f}%)"
+    rate = completed_examples / elapsed_seconds if elapsed_seconds > 0.0 else 0.0
+    eta: float | None = None
+    if expected_examples is not None and rate > 0.0:
+        eta = max(expected_examples - completed_examples, 0) / rate
+    loss = "" if running_loss is None else f" running_loss={running_loss:.5f}"
+    timings = ""
+    if last_data_wait_seconds is not None:
+        timings += f" last_data_wait={_format_duration(last_data_wait_seconds)}"
+    if last_host_step_seconds is not None:
+        timings += f" last_host_step={_format_duration(last_host_step_seconds)}"
+    return (
+        f"[AttributedTraining] epoch={epoch:04d}/{total_epochs:04d} "
+        f"phase={phase} status={status} "
+        f"batch={completed_batches}/{batch_total}{active} "
+        f"examples={completed_examples}/{example_total}{percent}{loss}{timings} "
+        f"rate={rate:.2f} examples/s elapsed={_format_duration(elapsed_seconds)} "
+        f"eta={_format_duration(eta)}"
+    )
+
+
+def _heartbeat_loop(
+    stop: threading.Event,
+    lock: threading.Lock,
+    state: dict[str, Any],
+    *,
+    interval_seconds: float,
+    epoch: int,
+    total_epochs: int,
+    phase: str,
+    expected_batches: int | None,
+    expected_examples: int | None,
+    started: float,
+) -> None:
+    while not stop.wait(interval_seconds):
+        with lock:
+            if stop.is_set():
+                return
+            snapshot = dict(state)
+            print(
+                _progress_line(
+                    epoch=epoch,
+                    total_epochs=total_epochs,
+                    phase=phase,
+                    status=str(snapshot["status"]),
+                    completed_batches=int(snapshot["completed_batches"]),
+                    expected_batches=expected_batches,
+                    active_batch=snapshot.get("active_batch"),
+                    completed_examples=int(snapshot["completed_examples"]),
+                    expected_examples=expected_examples,
+                    elapsed_seconds=time.perf_counter() - started,
+                    running_loss=snapshot.get("running_loss"),
+                ),
+                flush=True,
+            )
 
 
 def _run_epoch(
@@ -51,24 +151,195 @@ def _run_epoch(
     device: torch.device,
     optimizer: torch.optim.Optimizer | None,
     loss_weights: dict[str, float],
+    phase: str = "train",
+    epoch: int = 1,
+    total_epochs: int = 1,
+    expected_examples: int | None = None,
+    expected_batches: int | None = None,
+    batch_progress_interval: int = 0,
+    progress_interval_seconds: float = 0.0,
 ) -> dict[str, float]:
     training = optimizer is not None
     model.train(training)
     rows: list[dict[str, float]] = []
+    completed_examples = 0
+    running_loss_sum = 0.0
+    started = time.perf_counter()
+    progress_enabled = (
+        int(batch_progress_interval) > 0 or float(progress_interval_seconds) > 0.0
+    )
+    state: dict[str, Any] = {
+        "status": "waiting_for_first_batch",
+        "active_batch": 1,
+        "completed_batches": 0,
+        "completed_examples": 0,
+        "running_loss": None,
+    }
+    state_lock = threading.Lock()
+    heartbeat_stop = threading.Event()
+    heartbeat: threading.Thread | None = None
+    if progress_enabled:
+        print(
+            _progress_line(
+                epoch=epoch,
+                total_epochs=total_epochs,
+                phase=phase,
+                status="waiting_for_first_batch",
+                completed_batches=0,
+                expected_batches=expected_batches,
+                active_batch=1,
+                completed_examples=0,
+                expected_examples=expected_examples,
+                elapsed_seconds=0.0,
+                running_loss=None,
+            ),
+            flush=True,
+        )
+    if progress_interval_seconds > 0.0:
+        heartbeat = threading.Thread(
+            target=_heartbeat_loop,
+            args=(heartbeat_stop, state_lock, state),
+            kwargs={
+                "interval_seconds": float(progress_interval_seconds),
+                "epoch": epoch,
+                "total_epochs": total_epochs,
+                "phase": phase,
+                "expected_batches": expected_batches,
+                "expected_examples": expected_examples,
+                "started": started,
+            },
+            name=f"attributed-{phase}-progress",
+            daemon=True,
+        )
+        heartbeat.start()
     context = torch.enable_grad() if training else torch.no_grad()
-    with context:
-        for batch in loader:
-            batch = batch.to(device)
-            loss, metrics = model.loss(batch, loss_weights=loss_weights)
-            if training:
-                assert optimizer is not None
-                optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-                optimizer.step()
-            rows.append(metrics)
+    try:
+        iterator = iter(loader)
+        batch_index = 0
+        with context:
+            while True:
+                active_batch = batch_index + 1
+                with state_lock:
+                    state["status"] = "loading_batch"
+                    state["active_batch"] = active_batch
+                data_started = time.perf_counter()
+                try:
+                    batch = next(iterator)
+                except StopIteration:
+                    break
+                data_ready = time.perf_counter()
+                with state_lock:
+                    state["status"] = (
+                        "optimizing_batch" if training else "evaluating_batch"
+                    )
+                batch_index = active_batch
+                batch_examples = int(batch.graph_size.shape[0])
+                step_started = data_ready
+                batch = batch.to(device)
+                loss, metrics = model.loss(batch, loss_weights=loss_weights)
+                if training:
+                    assert optimizer is not None
+                    optimizer.zero_grad(set_to_none=True)
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                    optimizer.step()
+                rows.append(metrics)
+                completed_examples += batch_examples
+                running_loss_sum += float(metrics["loss"])
+                running_loss = running_loss_sum / batch_index
+                completed_at = time.perf_counter()
+                phase_complete = (
+                    expected_examples is not None
+                    and completed_examples >= expected_examples
+                ) or (
+                    expected_batches is not None
+                    and batch_index >= expected_batches
+                )
+                periodic_report = (
+                    batch_progress_interval > 0
+                    and batch_index % batch_progress_interval == 0
+                    and not phase_complete
+                )
+                first_nonfinal_batch = batch_index == 1 and (
+                    expected_batches is None or expected_batches > 1
+                )
+                with state_lock:
+                    state.update(
+                        {
+                            "status": "batch_complete",
+                            "active_batch": None,
+                            "completed_batches": batch_index,
+                            "completed_examples": completed_examples,
+                            "running_loss": running_loss,
+                        }
+                    )
+                    if phase_complete:
+                        heartbeat_stop.set()
+                    if progress_enabled and (
+                        first_nonfinal_batch or periodic_report
+                    ):
+                        print(
+                            _progress_line(
+                                epoch=epoch,
+                                total_epochs=total_epochs,
+                                phase=phase,
+                                status="batch_complete",
+                                completed_batches=batch_index,
+                                expected_batches=expected_batches,
+                                active_batch=None,
+                                completed_examples=completed_examples,
+                                expected_examples=expected_examples,
+                                elapsed_seconds=completed_at - started,
+                                running_loss=running_loss,
+                                last_data_wait_seconds=data_ready - data_started,
+                                last_host_step_seconds=completed_at - step_started,
+                            ),
+                            flush=True,
+                        )
+    except Exception as exc:
+        if progress_enabled:
+            with state_lock:
+                snapshot = dict(state)
+                print(
+                    _progress_line(
+                        epoch=epoch,
+                        total_epochs=total_epochs,
+                        phase=phase,
+                        status=f"failed:{type(exc).__name__}",
+                        completed_batches=int(snapshot["completed_batches"]),
+                        expected_batches=expected_batches,
+                        active_batch=snapshot.get("active_batch"),
+                        completed_examples=int(snapshot["completed_examples"]),
+                        expected_examples=expected_examples,
+                        elapsed_seconds=time.perf_counter() - started,
+                        running_loss=snapshot.get("running_loss"),
+                    ),
+                    flush=True,
+                )
+        raise
+    finally:
+        heartbeat_stop.set()
+        if heartbeat is not None:
+            heartbeat.join()
     if not rows:
         raise RuntimeError("Attributed summary-diffusion dataset produced no examples.")
+    if progress_enabled:
+        print(
+            _progress_line(
+                epoch=epoch,
+                total_epochs=total_epochs,
+                phase=phase,
+                status="complete",
+                completed_batches=len(rows),
+                expected_batches=expected_batches,
+                active_batch=None,
+                completed_examples=completed_examples,
+                expected_examples=expected_examples,
+                elapsed_seconds=time.perf_counter() - started,
+                running_loss=running_loss_sum / len(rows),
+            ),
+            flush=True,
+        )
     return _mean_metrics(rows)
 
 
@@ -105,6 +376,18 @@ def main() -> None:
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument(
+        "--batch-progress-interval",
+        type=int,
+        default=None,
+        help="Report intra-epoch progress every N completed batches; 0 disables.",
+    )
+    parser.add_argument(
+        "--progress-interval-seconds",
+        type=float,
+        default=None,
+        help="Emit a heartbeat at this maximum silence interval; 0 disables.",
+    )
     parser.add_argument("--max-train-graphs", type=int, default=None)
     parser.add_argument("--max-val-graphs", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
@@ -184,6 +467,20 @@ def main() -> None:
         train_graphs,
         None if basis_limit in {None, "", "none", "None"} else int(basis_limit),
     )
+    basis_started = time.perf_counter()
+    graphlet_sampling = (
+        "exact"
+        if graphlet_cfg.get("graphlet_num_samples") in {None, "", "none", "None"}
+        else f"samples={int(graphlet_cfg['graphlet_num_samples'])}"
+    )
+    print(
+        "[AttributedSetup] phase=graphlet_basis status=starting "
+        f"graphs={len(basis_graphs)} "
+        f"k={summary_cfg.graphlet_k_min}..{summary_cfg.graphlet_k_max} "
+        f"backend={graphlet_cfg.get('attributed_backend', 'python')} "
+        f"sampling={graphlet_sampling}",
+        flush=True,
+    )
     graphlet_basis = GraphletBasis.fit_from_graphs(
         basis_graphs,
         graphlet_cfg,
@@ -192,7 +489,8 @@ def main() -> None:
         seed=seed,
     )
     print(
-        "Attributed graphlet basis: "
+        "[AttributedSetup] phase=graphlet_basis status=complete "
+        f"elapsed={_format_duration(time.perf_counter() - basis_started)} basis="
         + ", ".join(
             f"k={size}:classes={len(graphlet_basis.keys_by_k[size])}+disconnected"
             for size in graphlet_basis.sizes
@@ -320,6 +618,27 @@ def main() -> None:
     }
     epochs = int(args.epochs if args.epochs is not None else predictor_cfg.get("epochs", 100))
     progress_interval = max(int(predictor_cfg.get("progress_interval", 5)), 1)
+    batch_progress_interval = int(
+        args.batch_progress_interval
+        if args.batch_progress_interval is not None
+        else predictor_cfg.get("batch_progress_interval", 0)
+    )
+    progress_interval_seconds = float(
+        args.progress_interval_seconds
+        if args.progress_interval_seconds is not None
+        else predictor_cfg.get("progress_interval_seconds", 0.0)
+    )
+    if batch_progress_interval < 0:
+        raise ValueError("batch_progress_interval must be non-negative.")
+    if (
+        not math.isfinite(progress_interval_seconds)
+        or progress_interval_seconds < 0.0
+    ):
+        raise ValueError("progress_interval_seconds must be finite and non-negative.")
+    train_expected_examples = _estimated_examples(train_examples)
+    val_expected_examples = _estimated_examples(val_examples)
+    train_expected_batches = math.ceil(train_expected_examples / batch_size)
+    val_expected_batches = math.ceil(val_expected_examples / batch_size)
     output_dir = ensure_dir(
         args.output_dir
         or Path(predictor_cfg.get("checkpoint_path", "outputs/attributed_grapher/qm9/seed_42/checkpoint.pt")).parent
@@ -331,9 +650,26 @@ def main() -> None:
         checkpoint_path = Path(args.output_dir) / "checkpoint.pt"
     ensure_dir(checkpoint_path.parent)
     print(
-        f"Training attributed predictor device={device} batch_size={batch_size} epochs={epochs} checkpoint={checkpoint_path}",
+        f"Training attributed predictor device={device} batch_size={batch_size} "
+        f"epochs={epochs} checkpoint={checkpoint_path}",
         flush=True,
     )
+    print(
+        "Attributed training workload: "
+        f"train_examples={train_expected_examples} "
+        f"train_batches={train_expected_batches} "
+        f"val_examples={val_expected_examples} val_batches={val_expected_batches} "
+        f"batch_progress_interval={batch_progress_interval} "
+        f"heartbeat_seconds={progress_interval_seconds:g} num_workers=0",
+        flush=True,
+    )
+    if storage == "streaming":
+        print(
+            "[AttributedTraining] status=loading_batch covers CPU typed-endpoint "
+            "construction, dual spectra, and exact attributed graphlets before "
+            "the batch reaches CUDA.",
+            flush=True,
+        )
 
     best_loss = float("inf")
     best_epoch = 0
@@ -349,6 +685,13 @@ def main() -> None:
             device=device,
             optimizer=optimizer,
             loss_weights=loss_weights,
+            phase="train",
+            epoch=epoch,
+            total_epochs=epochs,
+            expected_examples=train_expected_examples,
+            expected_batches=train_expected_batches,
+            batch_progress_interval=batch_progress_interval,
+            progress_interval_seconds=progress_interval_seconds,
         )
         val_metrics = _run_epoch(
             model,
@@ -356,6 +699,13 @@ def main() -> None:
             device=device,
             optimizer=None,
             loss_weights=loss_weights,
+            phase="val",
+            epoch=epoch,
+            total_epochs=epochs,
+            expected_examples=val_expected_examples,
+            expected_batches=val_expected_batches,
+            batch_progress_interval=batch_progress_interval,
+            progress_interval_seconds=progress_interval_seconds,
         )
         row = {
             "epoch": epoch,

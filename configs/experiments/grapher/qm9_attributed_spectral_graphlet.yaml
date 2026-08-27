@@ -223,6 +223,11 @@ attributed_predictor:
 
   progress_interval: 1
 
+  # The streaming CPU pipeline constructs typed endpoints and exact source /
+  # target graphlets before each CUDA step. Keep long epochs visibly alive.
+  batch_progress_interval: 10
+  progress_interval_seconds: 30
+
   loss_weights:
     # Joint full-spectrum reconstruction.
     spectrum: 1.0

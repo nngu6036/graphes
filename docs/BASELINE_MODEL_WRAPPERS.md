@@ -50,6 +50,16 @@ src/grapher/models/
 │       ├── export.py
 │       ├── prepare_dataset.py
 │       └── prepare_molecular_dataset.py
+├── graphrnn/
+│   ├── __init__.py
+│   ├── wrapper.py
+│   ├── backend.py
+│   ├── codec.py
+│   ├── runtime.py
+│   └── workers/
+│       ├── common.py
+│       ├── train.py
+│       └── export.py
 ├── catflow.py
 ├── defog/
 │   ├── __init__.py
@@ -94,6 +104,7 @@ The canonical registry identifiers are:
 
 - `dhvae_hh`
 - `digress`
+- `graphrnn`
 - `catflow`
 - `defog`
 - `hog_diff`
@@ -219,17 +230,22 @@ generic graphs and attributed QM9/ZINC molecular graphs using the existing
 project-owned trainer, invariant samplers, and constructors. The DeFoG wrapper
 implements isolated training, post-training estimate export, and generation
 for the same domains. DiGress is also complete for Community-small, Ego-small,
-Grid, and heavy-atom QM9. Both external wrappers export neutral numeric NPZ
-batches and validate dataset-specific schemas before publishing GraphER-facing
-NetworkX graphs. CatFlow, HOG-Diff, and FLAGG remain explicit placeholders.
+Grid, and heavy-atom QM9. GraphRNN is complete for Community-small, Ego-small,
+and Grid through a current-PyTorch compatibility worker that imports the
+attached upstream GRU/MLP modules while preserving GraphRNN's BFS adjacency
+encoding and autoregressive sampler. All completed external wrappers export
+neutral numeric NPZ batches and validate dataset-specific schemas before
+publishing GraphER-facing NetworkX graphs. CatFlow, HOG-Diff, and FLAGG remain
+explicit placeholders.
 Unimplemented methods raise `BaselineNotImplementedError` before creating any
 directories; an incomplete adapter must not leave a partial run that looks
 like evidence.
 
-`scripts/run_dhvae_hh_baseline.py`, `scripts/run_defog_baseline.py`, and
-`scripts/run_digress_baseline.py` provide thin train-then-generate commands over
-the common wrappers. Internal isolated workers live under their corresponding
-`grapher.models.<model>.workers` package. DiGress-specific setup and commands
-are documented in `docs/DIGRESS_WRAPPER.md`; DeFoG molecular preparation
-records the exact source representation and, for ZINC, the verified Kekule
-model view.
+`scripts/run_dhvae_hh_baseline.py`, `scripts/run_defog_baseline.py`,
+`scripts/run_digress_baseline.py`, and `scripts/run_graphrnn_baseline.py`
+provide thin train-then-generate commands over the common wrappers. Internal
+isolated workers live under their corresponding
+`grapher.models.<model>.workers` package. GraphRNN-specific setup and commands
+are documented in `docs/GRAPHRNN_WRAPPER.md`; DiGress-specific setup is in
+`docs/DIGRESS_WRAPPER.md`. DeFoG molecular preparation records the exact source
+representation and, for ZINC, the verified Kekule model view.

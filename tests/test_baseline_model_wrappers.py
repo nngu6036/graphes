@@ -20,6 +20,7 @@ from grapher.models import (
 EXPECTED_BASELINES = (
     "dhvae_hh",
     "digress",
+    "graphrnn",
     "catflow",
     "defog",
     "hog_diff",
@@ -33,10 +34,18 @@ class BaselineRegistryTests(unittest.TestCase):
         self.assertEqual(normalize_baseline_id("DH-VAE+HH"), "dhvae_hh")
         self.assertEqual(normalize_baseline_id("HOG-Diff"), "hog_diff")
         self.assertEqual(normalize_baseline_id("DeFoG"), "defog")
+        self.assertEqual(normalize_baseline_id("Graph-RNN"), "graphrnn")
 
     def test_wrapper_statuses(self) -> None:
         expected = {model_id: "placeholder" for model_id in EXPECTED_BASELINES}
-        expected.update({"dhvae_hh": "ready", "digress": "ready", "defog": "ready"})
+        expected.update(
+            {
+                "dhvae_hh": "ready",
+                "digress": "ready",
+                "graphrnn": "ready",
+                "defog": "ready",
+            }
+        )
         for model_id, status in expected.items():
             wrapper = create_baseline(model_id)
             self.assertEqual(wrapper.model_id, model_id)

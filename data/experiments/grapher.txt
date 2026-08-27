@@ -45,6 +45,9 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir outputs/topology_grapher/ego_small_topology_spectral_graphlet_v2/seed_42/evaluation
 
 
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/qm9_typed.yaml
+  
 
 
 PYTHONPATH=src python scripts/train_attributed_grapher.py \

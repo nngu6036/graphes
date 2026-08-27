@@ -128,8 +128,9 @@ baseline artifact path.
 
 The complete API, manifest requirements, and implementation checklist are in
 [`docs/BASELINE_MODEL_WRAPPERS.md`](docs/BASELINE_MODEL_WRAPPERS.md).
-The DiGress and DeFoG integration details are in
+The DiGress, GraphRNN, and DeFoG integration details are in
 [`docs/DIGRESS_WRAPPER.md`](docs/DIGRESS_WRAPPER.md) and
+[`docs/GRAPHRNN_WRAPPER.md`](docs/GRAPHRNN_WRAPPER.md), and
 [`docs/DEFOG_WRAPPER.md`](docs/DEFOG_WRAPPER.md), respectively.
 
 To train DH-VAE+HH on Community-small and generate 1,024 raw graphs:
@@ -186,6 +187,44 @@ The evaluator reads the managed generation manifest, auto-detects
 The attached DiGress source has no ZINC configuration. The maintained wrapper
 supports Community-small, Ego-small, Grid, and heavy-atom QM9 and records any
 compatibility architecture separately from the benchmark identity.
+
+To retrain the attached GraphRNN implementation on the same frozen
+Community-small split, expose the source directory containing `model.py` and
+run the isolated compatibility wrapper:
+
+```bash
+export GRAPHRNN=/home/quang/GraphRNN
+export GRAPHRNN_PYTHON="$(command -v python)"
+
+PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42 \
+  --wrapper-config configs/baselines/graphrnn_community_small.yaml
+```
+
+The wrapper imports the attached `GRU_plain` and `MLP_plain` neural modules but
+does not execute the legacy PyTorch 0.x/NetworkX 1.x entry point. Its modern
+worker preserves GraphRNN's random permutation, BFS adjacency encoding,
+weighted mini-batch sampling, dependent edge-sequence decoder, and raw
+autoregressive outputs. Prepared and generated graphs cross the subprocess
+boundary as validated numeric NPZ files rather than Python pickles.
+
+Evaluate the managed raw batch with the same configuration:
+
+```bash
+GEN_DIR="outputs/baselines/graphrnn/community_small/seed_42/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/baselines/graphrnn_community_small.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
+
+Equivalent configs are provided for Ego-small and Grid. The attached GraphRNN
+formulation is topology-only, so the wrapper deliberately rejects molecular
+benchmarks rather than inventing atom or bond decoders.
 
 To train DeFoG on the prepared Community-small split and then generate 1,024
 raw graphs, keep GraphER in its own environment and point the wrapper at the
@@ -1084,3 +1123,4 @@ PYTHONPATH=src python -m pytest -q
 - [Implementation design contract](docs/DESIGN_CONTRACT.md)
 - [Implementation audit](docs/IMPLEMENTATION_AUDIT.md)
 - [Refactor notes](docs/REFACTOR_NOTES.md)
+- [GraphRNN baseline wrapper](docs/GRAPHRNN_WRAPPER.md)

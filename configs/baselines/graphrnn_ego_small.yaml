@@ -1,0 +1,74 @@
+# GraphRNN baseline on the frozen GraphES Ego-small split.
+
+experiment: graphrnn_ego_small
+benchmark: ego_small
+
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  max_reference_graphs: null
+  tune_on_split: val
+  final_split: test
+
+dataset:
+  name: ego_small
+  benchmark: ego_small
+  config_path: configs/datasets/ego_small.yaml
+  root: outputs/datasets
+  build_if_missing: false
+
+evaluation:
+  orca_exec: null
+  compute_orbit: true
+  graphlet_backend: sampled
+
+graphrnn:
+  source_env: GRAPHRNN
+  python_env: GRAPHRNN_PYTHON
+  variant: GraphRNN_RNN
+
+  max_num_node: 18
+  max_prev_node: 17
+
+  # The attached code halves the main hidden/embedding widths for datasets
+  # whose native profile name contains "small".
+  hidden_size_rnn: 64
+  hidden_size_rnn_output: 16
+  embedding_size_rnn: 32
+  embedding_size_rnn_output: 8
+  embedding_size_output: 32
+  num_layers: 4
+
+  batch_size: 32
+  batch_ratio: 32
+  epochs: 3000
+  learning_rate: 0.003
+  milestones: [400, 1000]
+  lr_rate: 0.3
+  scheduler_step_unit: batch
+  num_workers: 0
+  save_every_epochs: 100
+  log_every_epochs: 10
+  gradient_clip_norm: null
+
+  sample_time: 1
+  generation_batch_size: 32
+  deterministic: false
+  torch_num_threads: null
+
+  training_estimates:
+    enabled: true
+    # Omit num_graphs to match the 140-graph training split.
+
+  runtime:
+    device: auto
+    python_executable: null
+    cuda_visible_devices: "0"
+    timeout_seconds: null
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+      epoch_interval: 10
+      generation_batch_interval: 1
