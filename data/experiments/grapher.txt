@@ -128,7 +128,27 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --require-fcd
 
 
-
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 1.0
+  fcd: 2.252526630191092
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1024
+  num_invalid_generated_molecules: 0
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 0
+  correction_success_rate_on_raw_invalid: 1.0
+  uniqueness_rate: 0.9931640625
+  unique_valid_count: 1017
+  novelty_rate: 0.8652900688298918
+  novel_unique_valid_count: 880
+  nspdk_mmd: 0.00017804688651992483
+  nspdk_mmd_valid_only: 0.00017804688651992483
+  fcd_num_reference_molecules: 13174
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_without_correction
 
   
 PYTHONPATH=src python scripts/train_attributed_grapher.py \
@@ -156,3 +176,26 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --output-dir \
     outputs/attributed_grapher/qm9_spectral_graphlet/seed_44/evaluation \
   --require-fcd
+
+
+  Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9990234375
+  fcd: 2.1971773765876925
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1023
+  num_invalid_generated_molecules: 1
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 1
+  correction_success_rate_on_raw_invalid: 1.0
+  uniqueness_rate: 0.9980449657869013
+  unique_valid_count: 1021
+  novelty_rate: 0.8746327130264446
+  novel_unique_valid_count: 893
+  nspdk_mmd: 0.0001669894590978374
+  nspdk_mmd_valid_only: 0.0001663896554304608
+  fcd_num_reference_molecules: 13174
+  fcd_num_valid_generated_molecules: 1023
+  fcd_generated_smiles_source: valid_without_correction
