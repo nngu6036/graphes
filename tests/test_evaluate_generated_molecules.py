@@ -101,6 +101,7 @@ def test_evaluate_outputs_validity_raw_validity_and_fcd(
         max_generated=None,
         max_reference=None,
         max_train=None,
+        nspdk_backend="proxy",
         nspdk_radius=1,
         nspdk_distance=2,
         no_nspdk_normalize=False,
@@ -114,10 +115,27 @@ def test_evaluate_outputs_validity_raw_validity_and_fcd(
     report = MODULE.evaluate(args)
     metrics = report["metrics"]
 
-    assert metrics["validity"] == pytest.approx(1.0)
+    assert metrics["validity"] == pytest.approx(0.5)
     assert metrics["validity_with_correction"] == pytest.approx(1.0)
     assert metrics["validity_without_correction"] == pytest.approx(0.5)
     assert metrics["fcd"] == pytest.approx(1.234)
     assert metrics["fcd_num_valid_generated_molecules"] == 2
     assert metrics["fcd_generated_smiles_source"] == "valid_with_correction"
     assert report["correction"]["corrected_indices"] == [1]
+
+
+def test_eden_nspdk_matches_hogdiff_linear_kernel_protocol() -> None:
+    pytest.importorskip("rdkit")
+    from grapher.rewiring_mlp.evaluation.molecular_nspdk import eden_nspdk_mmd
+
+    single = nx.Graph()
+    single.add_node(0, atomic_num=6, atom_type=6)
+    single.add_node(1, atomic_num=8, atom_type=8)
+    single.add_edge(0, 1, bond_type=1, bond_order=1.0)
+
+    double = single.copy()
+    double[0][1]["bond_type"] = 2
+    double[0][1]["bond_order"] = 2.0
+
+    assert eden_nspdk_mmd([single], [single], complexity=4) == pytest.approx(0.0)
+    assert eden_nspdk_mmd([single], [double], complexity=4) > 0.0

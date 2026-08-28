@@ -583,3 +583,38 @@ def test_revised_qm9_configs_enable_bond_reassigning_kernel() -> None:
         )
         assert refiner.require_same_edge_type_pair is False
         assert refiner.preserve_typed_degree is False
+
+
+def test_attributed_hogdiff_ou_bridge_preserves_both_spectral_traces() -> None:
+    source, target, _ = _source_target_action()
+    vocabulary = _vocabulary([source, target])
+    basis = _basis([source, target], vocabulary)
+    examples, diagnostics = build_attributed_spectral_diffusion_examples(
+        [AttributedTrainingPair(source, target)],
+        vocabulary=vocabulary,
+        graphlet_basis=basis,
+        diffusion_config={
+            "bridge": "ou_bridge",
+            "ou_num_scales": 32,
+            "ou_schedule": "linear",
+            "ou_eps": 0.005,
+            "samples_per_graph": 3,
+            "paths_per_graph": 1,
+            "spectral_sigma": 0.2,
+            "graphlet_sigma": 0.2,
+            "preserve_spectral_trace": True,
+            "fix_spectral_lambda1": True,
+        },
+        spectral_config={"normalization": "mean_degree"},
+        seed=29,
+    )
+    assert diagnostics["bridge"] == "ou_bridge"
+    assert diagnostics["ou_num_scales"] == 32
+    assert len(examples) == 3
+    for example in examples:
+        assert np.allclose(
+            example.current_spectra.sum(axis=1),
+            example.source_spectra.sum(axis=1),
+            atol=1.0e-6,
+        )
+        assert np.allclose(example.current_spectra[:, 0], 0.0, atol=1.0e-8)

@@ -119,3 +119,107 @@ def test_streaming_diffusion_resamples_noise_between_epochs() -> None:
         not np.allclose(a.current_spectrum, b.current_spectrum)
         for a, b in zip(first, second)
     )
+
+
+def test_hogdiff_ou_bridge_has_exact_endpoints_and_interior_noise() -> None:
+    from grapher.rewiring_mlp.generic.summary_diffusion import (
+        SummaryDiffusionConfig,
+        sample_spectral_bridge_marginal,
+    )
+
+    schedule = SummaryDiffusionConfig.from_dict(
+        {
+            "bridge": "ou_bridge",
+            "ou_num_scales": 64,
+            "ou_schedule": "linear",
+            "ou_eps": 0.005,
+            "spectral_sigma": 0.2,
+        }
+    )
+    m0, n0, s0 = schedule.ou_bridge_coefficients(0.0)
+    m1, n1, s1 = schedule.ou_bridge_coefficients(1.0)
+    mm, nm, sm = schedule.ou_bridge_coefficients(0.5)
+    assert m0 == pytest.approx(0.0, abs=1.0e-8)
+    assert n0 == pytest.approx(1.0, abs=1.0e-8)
+    assert s0 == pytest.approx(0.0, abs=1.0e-8)
+    assert m1 == pytest.approx(1.0, abs=1.0e-8)
+    assert n1 == pytest.approx(0.0, abs=1.0e-8)
+    assert s1 == pytest.approx(0.0, abs=1.0e-8)
+    assert 0.0 < mm < 1.0
+    assert 0.0 < nm < 1.0
+    assert mm + nm == pytest.approx(1.0, abs=1.0e-8)
+    assert sm > 0.0
+
+    source = np.asarray([0.0, 1.0, 2.0, 3.0], dtype=np.float64)
+    clean = np.asarray([0.0, 0.5, 2.5, 3.0], dtype=np.float64)
+    assert source.sum() == pytest.approx(clean.sum())
+    rng = np.random.default_rng(19)
+
+    source_state, _ = sample_spectral_bridge_marginal(
+        source,
+        clean,
+        progress=0.0,
+        sigma=0.2,
+        scale=2.0,
+        preserve_trace=True,
+        fix_lambda1=True,
+        schedule=schedule,
+        rng=rng,
+    )
+    clean_state, _ = sample_spectral_bridge_marginal(
+        source,
+        clean,
+        progress=1.0,
+        sigma=0.2,
+        scale=2.0,
+        preserve_trace=True,
+        fix_lambda1=True,
+        schedule=schedule,
+        rng=rng,
+    )
+    middle_state, middle_diag = sample_spectral_bridge_marginal(
+        source,
+        clean,
+        progress=0.5,
+        sigma=0.2,
+        scale=2.0,
+        preserve_trace=True,
+        fix_lambda1=True,
+        schedule=schedule,
+        rng=rng,
+    )
+    assert np.allclose(source_state, source, atol=1.0e-8)
+    assert np.allclose(clean_state, clean, atol=1.0e-8)
+    assert middle_state[0] == pytest.approx(0.0, abs=1.0e-8)
+    assert middle_state.sum() == pytest.approx(source.sum(), abs=1.0e-8)
+    assert middle_diag["bridge"] == "ou_bridge"
+    assert middle_diag["noise_std"] > 0.0
+
+
+def test_hogdiff_ou_bridge_is_exposed_in_diffusion_diagnostics() -> None:
+    examples, report = build_spectral_diffusion_examples(
+        [_graph()],
+        diffusion_config={
+            "bridge": "ou_bridge",
+            "ou_num_scales": 32,
+            "ou_schedule": "linear",
+            "ou_eps": 0.005,
+            "spectral_sigma": 0.15,
+            "graphlet_sigma": 0.2,
+            "samples_per_graph": 2,
+            "paths_per_graph": 1,
+        },
+        source_config={
+            "ensure_connected_source": True,
+            "random_relabel_source": False,
+            "source_randomization_steps": 0,
+        },
+        spectral_config={"require_same_degree_sequence": True},
+        graphlet_basis=_basis(),
+        seed=23,
+    )
+    assert len(examples) == 2
+    assert report["bridge"] == "ou_bridge"
+    assert report["ou_num_scales"] == 32
+    assert report["ou_schedule"] == "linear"
+    assert report["ou_eps"] == pytest.approx(0.005)

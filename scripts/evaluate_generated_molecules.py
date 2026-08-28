@@ -8,16 +8,14 @@ This script is intended for outputs from
   generated.smi          # valid SMILES only
 
 Metrics:
-  - validity: RDKit sanitization success after deterministic valency correction
-  - validity_without_correction: RDKit sanitization success rate, no correction
-  - uniqueness_rate: unique valid canonical SMILES / valid generated molecules
-  - novelty_rate: unique valid generated SMILES not in training set / unique valid generated
-  - FCD: optional, computed with fcd_torch when installed
-  - NSPDK MMD: built-in approximate NSPDK-style graph kernel MMD
+  - validity: direct RDKit sanitization success, without post-hoc correction
+  - validity_with_correction: deterministic valency-correction diagnostic
+  - uniqueness_rate / novelty_rate on the configured valid-molecule source
+  - FCD: optional, with reusable reference-statistics caching when supported
+  - NSPDK MMD: HOG-Diff-compatible EDeN neighborhood-pair features by default
 
-The built-in NSPDK is a deterministic approximation based on hashed rooted
-neighborhood-pair features. If you use it in a paper, report it as the
-"builtin NSPDK proxy" unless you replace it with an official NSPDK backend.
+The previous deterministic hashed neighborhood-pair proxy is retained as an
+explicit fallback/diagnostic backend.
 """
 
 from __future__ import annotations
@@ -30,6 +28,7 @@ from typing import Any, Iterable
 
 import networkx as nx
 
+from grapher.rewiring_mlp.evaluation.molecular_nspdk import eden_nspdk_mmd
 from grapher.rewiring_mlp.molecular.graph_io import (
     graph_to_smiles,
     graphs_from_smiles,
@@ -516,7 +515,15 @@ def compute_fcd(
     *,
     device: str = "auto",
     skip: bool = False,
+    cache_dir: str | Path | None = None,
 ) -> tuple[float | None, dict[str, Any]]:
+    """Compute FCD, reusing reference ChemNet statistics when supported.
+
+    HOG-Diff precomputes the reference FCD representation once and reuses it
+    across generated batches.  We follow that protocol when the installed
+    ``fcd_torch`` API exposes ``precalc``; older APIs fall back to direct calls.
+    """
+
     if skip:
         return None, {"status": "skipped_by_user"}
     if not reference_smiles or not generated_smiles:
@@ -528,43 +535,117 @@ def compute_fcd(
 
     resolved_device = str(resolve_torch_device(device))
 
-    # fcd_torch has had a few APIs. Try the common ones.
-    try:
-        from fcd_torch import FCD  # type: ignore
+    def _reference_key() -> str:
+        digest = hashlib.blake2b(digest_size=16)
+        for smi in reference_smiles:
+            digest.update(str(smi).encode("utf-8"))
+            digest.update(b"\0")
+        return digest.hexdigest()
 
-        fcd = FCD(device=resolved_device)
-        value = fcd(reference_smiles, generated_smiles)
-        return float(value), {"status": "ok", "backend": "fcd_torch.FCD"}
-    except Exception as exc1:
-        try:
-            from fcd_torch.fcd import FCD  # type: ignore
+    def _cached_precalc(fcd: Any) -> tuple[Any | None, str | None]:
+        if not hasattr(fcd, "precalc"):
+            return None, None
+        cache_path: Path | None = None
+        if cache_dir is not None:
+            import pickle
 
-            fcd = FCD(device=resolved_device)
-            value = fcd(reference_smiles, generated_smiles)
-            return float(value), {"status": "ok", "backend": "fcd_torch.fcd.FCD"}
-        except Exception as exc2:
+            cache_root = Path(cache_dir)
+            cache_root.mkdir(parents=True, exist_ok=True)
+            cache_path = cache_root / f"fcd_reference_{_reference_key()}.pkl"
+            if cache_path.exists():
+                try:
+                    with cache_path.open("rb") as handle:
+                        return pickle.load(handle), str(cache_path)
+                except Exception:
+                    pass
+        pref = fcd.precalc(reference_smiles)
+        if cache_path is not None:
             try:
-                from fcd_torch import get_fcd  # type: ignore
+                import pickle
 
-                value = get_fcd(
-                    generated_smiles, reference_smiles, device=resolved_device
-                )
-                return float(value), {"status": "ok", "backend": "fcd_torch.get_fcd"}
-            except Exception as exc3:
-                return None, {
-                    "status": "not_available_or_failed",
-                    "backend_attempts": [
-                        "fcd_torch.FCD",
-                        "fcd_torch.fcd.FCD",
-                        "fcd_torch.get_fcd",
-                    ],
-                    "errors": [
-                        type(exc1).__name__,
-                        type(exc2).__name__,
-                        type(exc3).__name__,
-                    ],
-                    "message": "Install a compatible fcd_torch package to compute FCD, or pass --skip-fcd.",
+                with cache_path.open("wb") as handle:
+                    pickle.dump(pref, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            except Exception:
+                pass
+        return pref, None if cache_path is None else str(cache_path)
+
+    errors: list[str] = []
+    for import_path in ("fcd_torch", "fcd_torch.fcd"):
+        try:
+            if import_path == "fcd_torch":
+                from fcd_torch import FCD  # type: ignore
+            else:
+                from fcd_torch.fcd import FCD  # type: ignore
+            fcd = FCD(device=resolved_device)
+            pref, cache_path = _cached_precalc(fcd)
+            if pref is not None:
+                try:
+                    value = fcd(gen=generated_smiles, pref=pref)
+                except TypeError:
+                    value = fcd(generated_smiles, pref=pref)
+                return float(value), {
+                    "status": "ok",
+                    "backend": f"{import_path}.FCD.precalc",
+                    "reference_cache": cache_path,
                 }
+            value = fcd(reference_smiles, generated_smiles)
+            return float(value), {"status": "ok", "backend": f"{import_path}.FCD"}
+        except Exception as exc:
+            errors.append(f"{import_path}: {type(exc).__name__}")
+
+    try:
+        from fcd_torch import get_fcd  # type: ignore
+
+        value = get_fcd(generated_smiles, reference_smiles, device=resolved_device)
+        return float(value), {"status": "ok", "backend": "fcd_torch.get_fcd"}
+    except Exception as exc:
+        errors.append(f"fcd_torch.get_fcd: {type(exc).__name__}")
+        return None, {
+            "status": "not_available_or_failed",
+            "backend_attempts": [
+                "fcd_torch.FCD.precalc",
+                "fcd_torch.fcd.FCD.precalc",
+                "fcd_torch.get_fcd",
+            ],
+            "errors": errors,
+            "message": "Install a compatible fcd_torch package to compute FCD, or pass --skip-fcd.",
+        }
+
+
+def _graphs_from_metric_smiles(smiles: Iterable[str]) -> list[nx.Graph]:
+    """Build lightweight attributed graphs for kernel metrics from valid SMILES."""
+
+    Chem = require_rdkit()
+    bond_map = {
+        Chem.BondType.SINGLE: 1,
+        Chem.BondType.DOUBLE: 2,
+        Chem.BondType.TRIPLE: 3,
+        Chem.BondType.AROMATIC: 4,
+    }
+    graphs: list[nx.Graph] = []
+    for smi in smiles:
+        mol = Chem.MolFromSmiles(str(smi))
+        if mol is None:
+            continue
+        graph = nx.Graph()
+        for atom in mol.GetAtoms():
+            atomic_num = int(atom.GetAtomicNum())
+            graph.add_node(int(atom.GetIdx()), atomic_num=atomic_num, atom_type=atomic_num)
+        supported = True
+        for bond in mol.GetBonds():
+            bond_type = bond_map.get(bond.GetBondType())
+            if bond_type is None:
+                supported = False
+                break
+            graph.add_edge(
+                int(bond.GetBeginAtomIdx()),
+                int(bond.GetEndAtomIdx()),
+                bond_type=int(bond_type),
+                bond_order=float(bond.GetBondTypeAsDouble()),
+            )
+        if supported and graph.number_of_nodes() > 0:
+            graphs.append(nx.convert_node_labels_to_integers(graph, ordering="sorted"))
+    return graphs
 
 
 def _select_valid_graphs(
@@ -609,39 +690,88 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         raw_smiles=valid_info["all_smiles"],
         max_steps=args.correction_max_steps,
     )
-    novelty_rate, novel_count = _novelty(
-        valid_info["unique_valid_smiles"], train_smiles
+    hogdiff_compat = bool(getattr(args, "hogdiff_compatible_metrics", False))
+    metric_source = (
+        "corrected_valid"
+        if hogdiff_compat
+        else str(getattr(args, "metric_molecule_source", "raw_valid")).lower()
     )
+    if metric_source not in {"raw_valid", "corrected_valid"}:
+        raise ValueError("--metric-molecule-source must be raw_valid or corrected_valid.")
 
-    generated_valid_graphs = _select_valid_graphs(
-        generated_graphs, valid_info["all_smiles"]
+    raw_valid_graphs = _select_valid_graphs(generated_graphs, valid_info["all_smiles"])
+    corrected_metric_graphs = _graphs_from_metric_smiles(
+        corrected_valid_info["valid_smiles"]
     )
+    metric_smiles = (
+        corrected_valid_info["valid_smiles"]
+        if metric_source == "corrected_valid"
+        else valid_info["valid_smiles"]
+    )
+    metric_graphs = (
+        corrected_metric_graphs if metric_source == "corrected_valid" else raw_valid_graphs
+    )
+    metric_unique_smiles = sorted(set(metric_smiles))
+    novelty_rate, novel_count = _novelty(metric_unique_smiles, train_smiles)
+    metric_uniqueness_rate = len(metric_unique_smiles) / max(len(metric_smiles), 1)
 
-    nspdk_all = builtin_nspdk_mmd(
+    # Retain the legacy proxy for debugging, but use HOG-Diff's EDeN feature
+    # protocol as the benchmark NSPDK implementation by default.
+    nspdk_proxy_all = builtin_nspdk_mmd(
         reference_graphs,
         generated_graphs,
-        radius=args.nspdk_radius,
-        distance=args.nspdk_distance,
-        normalize=not args.no_nspdk_normalize,
+        radius=int(getattr(args, "nspdk_radius", 2)),
+        distance=int(getattr(args, "nspdk_distance", 4)),
+        normalize=not bool(getattr(args, "no_nspdk_normalize", False)),
     )
-    nspdk_valid = builtin_nspdk_mmd(
+    nspdk_proxy_valid = builtin_nspdk_mmd(
         reference_graphs,
-        generated_valid_graphs,
-        radius=args.nspdk_radius,
-        distance=args.nspdk_distance,
-        normalize=not args.no_nspdk_normalize,
+        metric_graphs,
+        radius=int(getattr(args, "nspdk_radius", 2)),
+        distance=int(getattr(args, "nspdk_distance", 4)),
+        normalize=not bool(getattr(args, "no_nspdk_normalize", False)),
     )
+    nspdk_backend = (
+        "eden"
+        if hogdiff_compat
+        else str(getattr(args, "nspdk_backend", "eden")).lower()
+    )
+    nspdk_bond_label_mode = (
+        "hogdiff"
+        if hogdiff_compat
+        else str(getattr(args, "nspdk_bond_label_mode", "hogdiff"))
+    )
+    metric_cache_dir = getattr(args, "metric_cache_dir", None)
+    if metric_cache_dir is None:
+        metric_cache_dir = str(Path(args.dataset_root) / args.dataset / "evaluation_cache")
+    if nspdk_backend == "eden":
+        nspdk_value = eden_nspdk_mmd(
+            reference_graphs,
+            metric_graphs,
+            complexity=int(getattr(args, "nspdk_complexity", 4)),
+            cache_dir=metric_cache_dir,
+            bond_label_mode=nspdk_bond_label_mode,
+        )
+    elif nspdk_backend == "proxy":
+        nspdk_value = nspdk_proxy_valid
+    else:
+        raise ValueError("--nspdk-backend must be eden or proxy.")
 
+    # HOG-Diff evaluates distributional metrics after its deterministic validity
+    # correction. GraphER defaults to strict raw-valid molecules, but this flag
+    # and --metric-molecule-source make cross-codebase reproduction explicit.
+    fcd_use_corrected = hogdiff_compat or bool(getattr(args, "fcd_use_corrected", False))
     fcd_generated_smiles = (
         corrected_valid_info["valid_smiles"]
-        if args.fcd_use_corrected
-        else valid_info["valid_smiles"]
+        if fcd_use_corrected
+        else metric_smiles
     )
     fcd_value, fcd_info = compute_fcd(
         reference_smiles,
         fcd_generated_smiles,
-        device=args.fcd_device,
-        skip=args.skip_fcd,
+        device=getattr(args, "fcd_device", "auto"),
+        skip=bool(getattr(args, "skip_fcd", False)),
+        cache_dir=metric_cache_dir,
     )
     if args.require_fcd and fcd_value is None:
         raise RuntimeError(
@@ -651,8 +781,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     metrics = {
-        # Benchmark headline: validity after deterministic valency correction.
-        "validity": float(corrected_valid_info["validity"]),
+        # Benchmark headline: direct RDKit validity, matching the no-repair
+        # molecular protocol used in the paper and HOG-Diff's reported validity.
+        "validity": float(valid_info["validity_without_correction"]),
         "validity_with_correction": float(
             corrected_valid_info["validity_with_correction"]
         ),
@@ -676,18 +807,26 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         "correction_success_rate_on_raw_invalid": float(
             corrected_valid_info["correction_success_rate_on_raw_invalid"]
         ),
-        "uniqueness_rate": float(valid_info["uniqueness_rate"]),
-        "unique_valid_count": int(valid_info["unique_valid_count"]),
+        "metric_molecule_source": metric_source,
+        "hogdiff_compatible_distribution_metrics": hogdiff_compat,
+        "uniqueness_rate": float(metric_uniqueness_rate),
+        "unique_valid_count": int(len(metric_unique_smiles)),
         "novelty_rate": None if novelty_rate is None else float(novelty_rate),
         "novel_unique_valid_count": int(novel_count),
-        "nspdk_mmd": None if nspdk_all is None else float(nspdk_all),
-        "nspdk_mmd_valid_only": None if nspdk_valid is None else float(nspdk_valid),
+        "nspdk_mmd": None if nspdk_value is None else float(nspdk_value),
+        "nspdk_mmd_valid_only": None if nspdk_value is None else float(nspdk_value),
+        "nspdk_proxy_mmd_all_generated": (
+            None if nspdk_proxy_all is None else float(nspdk_proxy_all)
+        ),
+        "nspdk_proxy_mmd_metric_source": (
+            None if nspdk_proxy_valid is None else float(nspdk_proxy_valid)
+        ),
         "fcd_num_reference_molecules": int(len(reference_smiles)),
         "fcd_num_valid_generated_molecules": int(len(fcd_generated_smiles)),
         "fcd_generated_smiles_source": (
             "valid_with_correction"
-            if args.fcd_use_corrected
-            else "valid_without_correction"
+            if fcd_use_corrected
+            else metric_source
         ),
     }
 
@@ -707,33 +846,40 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "canonical_smiles": True,
             "isomeric_smiles": False,
-            "validity": (
-                "RDKit validity after deterministic evaluation-only valency "
-                "correction. Raw-valid molecules are retained; for raw-invalid "
-                "molecules the highest-order bond incident to an atom-valence "
-                "problem is repeatedly lowered until sanitization succeeds or "
-                "the correction budget is exhausted."
-            ),
+            "validity": "RDKit Mol construction + Chem.SanitizeMol, with no correction or repair.",
             "validity_with_correction": (
-                "Alias of validity; denominator is all serialized generated "
-                "graphs when molecular_graphs.pkl/generated_graphs.pkl is used."
+                "Deterministic evaluation-only valency correction diagnostic. "
+                "Raw-valid molecules are retained; for raw-invalid molecules the "
+                "highest-order bond incident to an atom-valence problem is lowered "
+                "until sanitization succeeds or the correction budget is exhausted."
             ),
             "validity_without_correction": "RDKit Mol construction + Chem.SanitizeMol, no valency correction or edge resampling.",
             "correction_max_steps": int(args.correction_max_steps),
-            "uniqueness_definition": "unique valid canonical SMILES / valid generated molecules",
-            "novelty_definition": "unique valid canonical SMILES not in training set / unique valid canonical SMILES",
+            "metric_molecule_source": metric_source,
+            "hogdiff_compatible_distribution_metrics": hogdiff_compat,
+            "uniqueness_definition": "unique canonical SMILES / molecules in metric_molecule_source",
+            "novelty_definition": "unique canonical SMILES not in training set / unique canonical SMILES in metric_molecule_source",
             "nspdk": {
-                "backend": "builtin_hashed_neighborhood_pair_proxy",
-                "radius": int(args.nspdk_radius),
-                "distance": int(args.nspdk_distance),
-                "normalized_features": bool(not args.no_nspdk_normalize),
+                "backend": (
+                    "hogdiff_eden_neighborhood_pair_linear_mmd"
+                    if nspdk_backend == "eden"
+                    else "builtin_hashed_neighborhood_pair_proxy"
+                ),
+                "complexity": int(getattr(args, "nspdk_complexity", 4)),
+                "bond_label_mode": nspdk_bond_label_mode,
+                "proxy_radius": int(getattr(args, "nspdk_radius", 2)),
+                "proxy_distance": int(getattr(args, "nspdk_distance", 4)),
+                "proxy_normalized_features": bool(
+                    not getattr(args, "no_nspdk_normalize", False)
+                ),
+                "metric_cache_dir": str(metric_cache_dir),
             },
             "fcd": {
                 **fcd_info,
                 "generated_smiles_source": (
                     "valid_with_correction"
-                    if args.fcd_use_corrected
-                    else "valid_without_correction"
+                    if fcd_use_corrected
+                    else metric_source
                 ),
             },
         },
@@ -789,9 +935,52 @@ def main() -> None:
     parser.add_argument("--max-reference", type=int, default=None)
     parser.add_argument("--max-train", type=int, default=None)
 
+    parser.add_argument(
+        "--hogdiff-compatible-metrics",
+        action="store_true",
+        help=(
+            "Use HOG-Diff's corrected-molecule source for uniqueness/novelty/FCD/NSPDK, "
+            "the EDeN NSPDK backend, and HOG-Diff bond labels. The headline validity "
+            "remains strict raw RDKit validity so GraphER's no-repair protocol is not weakened."
+        ),
+    )
+    parser.add_argument(
+        "--metric-molecule-source",
+        choices=["raw_valid", "corrected_valid"],
+        default="raw_valid",
+        help=(
+            "Molecule subset used for uniqueness, novelty and NSPDK. "
+            "Use corrected_valid to reproduce HOG-Diff's post-correction "
+            "distributional-metric convention; raw_valid is the strict GraphER protocol."
+        ),
+    )
+    parser.add_argument(
+        "--nspdk-backend",
+        choices=["eden", "proxy"],
+        default="eden",
+        help="EDeN/HOG-Diff-compatible NSPDK (default) or the legacy hashed proxy.",
+    )
+    parser.add_argument("--nspdk-complexity", type=int, default=4)
+    parser.add_argument(
+        "--nspdk-bond-label-mode",
+        choices=["hogdiff", "categorical"],
+        default="hogdiff",
+        help=(
+            "hogdiff reproduces int(RDKit bond order), including aromatic 1.5 -> 1; "
+            "categorical preserves GraphER's bond-type ids."
+        ),
+    )
     parser.add_argument("--nspdk-radius", type=int, default=2)
     parser.add_argument("--nspdk-distance", type=int, default=4)
     parser.add_argument("--no-nspdk-normalize", action="store_true")
+    parser.add_argument(
+        "--metric-cache-dir",
+        default=None,
+        help=(
+            "Cache reusable EDeN/FCD reference statistics here. Defaults to "
+            "<dataset-root>/<dataset>/evaluation_cache."
+        ),
+    )
 
     parser.add_argument("--skip-fcd", action="store_true")
     parser.add_argument("--fcd-device", default="auto")
@@ -800,8 +989,8 @@ def main() -> None:
         action="store_true",
         help=(
             "Compute FCD from molecules valid after deterministic valency "
-            "correction. By default FCD retains the previous protocol and uses "
-            "only molecules valid without correction."
+            "correction. This matches HOG-Diff's distributional-metric source. "
+            "Otherwise FCD uses --metric-molecule-source."
         ),
     )
     parser.add_argument(
