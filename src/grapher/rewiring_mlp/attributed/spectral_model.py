@@ -418,11 +418,12 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
                     F.smooth_l1_loss(predicted / scale, target / scale, reduction="none")
                     * low_weight
                 ).sum() / low_weight.sum().clamp_min(1.0)
-        # Strict same-bond-type rewiring fixes ordinary and weighted degrees.
-        # Consequently, the second Laplacian moment of each channel is an
-        # invariant of the realization fibre. The output decoder enforces the
-        # traces exactly; this auxiliary term encourages the remaining
-        # spectrum to stay on the correct degree-compatible shell.
+        # Ordinary degree preservation fixes the topology second moment,
+        # while the bond-weighted second moment can change under cross-type
+        # bond reassignment.  This term is therefore best interpreted as an
+        # auxiliary clean-spectrum reconstruction constraint rather than a
+        # hard invariant of both channels.  The output decoder still enforces
+        # both traces because global bond-type counts are preserved.
         graph_size = batch.graph_size.unsqueeze(1).clamp_min(1.0)
         second_scale = scale.squeeze(-1).square() * graph_size
         predicted_moment2 = (predicted.square() * valid).sum(dim=-1)

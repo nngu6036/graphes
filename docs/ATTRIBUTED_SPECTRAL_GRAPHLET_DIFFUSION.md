@@ -3,23 +3,59 @@
 This implementation extends the confirmed generic GraphER design to heavy-atom
 molecular graphs.
 
-## Invariant and transition
+## Revised invariant and transition
 
-The source is an exact realization of the indexed typed-degree invariant
+The source graph may still be constructed from a typed-degree sample because
+that provides a chemically plausible initialized molecule.  The typed degree is
+now an **initialization state**, not the hard invariant of the rewiring process.
+
+The revised hard rewiring invariant is
 
 ```text
-(atom type, degree in every bond category)
+(indexed atom types, indexed ordinary degrees, global bond-type counts)
 ```
 
-and every generation transition is a same-bond-type double-edge swap. Therefore
-atom categories, indexed typed degrees, ordinary degrees, global bond counts,
-and weighted valence are preserved exactly. Simplicity and connectedness are
-checked for every candidate.
+A generation action may select two bonds of different types
+
+```text
+(u, v, type a), (x, y, type b)
+```
+
+and enumerate both topological reconnections and both assignments of the two
+removed bond types:
+
+```text
+(u, x, a), (v, y, b)
+(u, x, b), (v, y, a)
+(u, y, a), (v, x, b)
+(u, y, b), (v, x, a)
+```
+
+When `a == b`, duplicate assignments collapse to the usual two double-edge
+swaps.  Every accepted move preserves each node's ordinary degree and atom
+category and removes/adds exactly one edge of each selected type, so the global
+bond-type histogram is preserved exactly.
+
+Per-node typed degrees and per-node weighted valence are intentionally allowed
+to change.  They are no longer asserted as invariants.  Instead, every
+candidate must pass inexpensive atom-specific valence checks and the best
+shortlist is checked by RDKit before acceptance.  This larger action space lets
+GraphER move single/double/triple bond mass between local atom environments
+while retaining exact topology-degree and global bond-count constraints.
+
+The previous strict same-bond-type mode remains available for ablation with:
+
+```yaml
+molecular:
+  require_same_edge_type_pair: true
+  preserve_typed_degree: true
+  preserve_weighted_valence: true
+```
 
 ## Continuous training state
 
 Training does not construct a rewiring trajectory. For a clean molecule and a
-same-invariant typed source, it computes:
+source endpoint, it computes:
 
 - the ordinary topology Laplacian spectrum;
 - the bond-order-weighted Laplacian spectrum; and
@@ -27,16 +63,22 @@ same-invariant typed source, it computes:
 
 A stochastic endpoint-conditioned bridge is sampled directly in these
 continuous summary coordinates. The model predicts the clean endpoint from the
-continuous current state, fixed source summaries, typed source graph, and
-normalized diffusion progress.
+continuous current state, fixed source summaries, source graph, and normalized
+diffusion progress.
+
+The two Laplacian traces remain compatible with the revised rewiring kernel.
+The ordinary-degree constraint fixes the topology trace, while preservation of
+global bond-type counts fixes the total bond order and therefore the weighted
+Laplacian trace.  In contrast, the second moment of the bond-weighted spectrum
+is no longer an invariant because local weighted degrees may change.
 
 ## Generation
 
 At generation time, the current realized graph supplies the two spectra and
 attributed graphlet logits. The predictor estimates the clean summaries, the
-schedulers derive the next continuous denoising target, and valid rewiring
-candidates are ranked by a global-to-local combination of dual-spectral and
-attributed-graphlet distances.
+schedulers derive the next continuous denoising target, and valid attributed
+rewiring candidates are ranked by a global-to-local combination of dual-spectral
+and attributed-graphlet distances.
 
 Attributed graphlet candidates use an exact stateful local-delta cache:
 
@@ -54,6 +96,41 @@ N(+1) at valence four and O(+1) at valence three) and restores those implied
 positive charges only for candidate sanitization. Raw validity reporting keeps
 its existing charge-neutral behavior.
 
+## Revised QM9 generation flags
+
+```yaml
+attributed_refiner:
+  molecular:
+    require_same_edge_type_pair: false
+    preserve_removed_edge_type: false
+    preserve_global_edge_type_counts: true
+    enumerate_edge_type_permutations: true
+    preserve_node_types: true
+    preserve_ordinary_degree: true
+    preserve_typed_degree: false
+    preserve_weighted_valence: false
+    enforce_molecular_valence: true
+```
+
+The generation report now distinguishes the required relaxed invariant from
+strict typed-degree preservation:
+
+```text
+rewiring_invariant_preservation_rate
+node_type_preservation_rate
+indexed_degree_preservation_rate
+edge_type_count_preservation_rate
+```
+
+must remain one, while
+
+```text
+typed_degree_preservation_rate
+per_node_weighted_valence_preservation_rate
+```
+
+are diagnostics and may be below one in cross-type mode.
+
 ## Commands
 
 Train the light QM9 development model:
@@ -66,7 +143,7 @@ PYTHONPATH=src python scripts/train_attributed_grapher.py \
   --device gpu
 ```
 
-Generate with empirical training typed invariants:
+Generate with empirical training source states:
 
 ```bash
 PYTHONPATH=src python scripts/run_attributed_grapher.py \
@@ -87,20 +164,4 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --reference-split test \
   --train-split train \
   --output-dir outputs/attributed_grapher/qm9_spectral_graphlet_light/seed_42/evaluation
-```
-
-The molecular report includes `validity_without_correction`, corrected
-`validity` (also exposed as `validity_with_correction`), and FCD.  By default,
-FCD uses the raw valid molecules to preserve the historical evaluator protocol.
-Pass `--fcd-use-corrected` to use the corrected-valid set and `--require-fcd`
-to make a missing or failed `fcd_torch` backend an error rather than returning
-`fcd: null`.
-
-The default config uses empirical typed invariants to isolate the new attributed
-refiner. For end-to-end learned invariant generation, provide the typed-degree
-VAE checkpoint and use:
-
-```bash
---set generation.invariant_source=learned \
---set degree_generator.enabled=true
 ```

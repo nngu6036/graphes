@@ -29,6 +29,7 @@ from grapher.rewiring_mlp.attributed.spectral_data import (
     collate_attributed_spectral_examples,
 )
 from grapher.rewiring_mlp.attributed.spectral_graphlet_refiner import (
+    AttributedRewireAction,
     AttributedSpectralGraphletPrediction,
     AttributedSpectralGraphletRefinerConfig,
     predict_clean_attributed_summaries,
@@ -50,6 +51,7 @@ __all__ = [
     "HybridPrediction",
     "HybridRefinerConfig",
     "ATTRIBUTED_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT",
+    "AttributedRewireAction",
     "AttributedSpectralBatch",
     "AttributedSpectralDiffusionIterableDataset",
     "AttributedSpectralExample",

@@ -217,13 +217,18 @@ A coarse-to-fine schedule lets spectral information dominate early while graphle
 
 GraphER also contains an attributed molecular generation path for datasets such as **QM9** and **ZINC**.
 
-The molecular variant can preserve:
+The revised molecular rewiring kernel preserves exactly:
 
 - atom categories,
-- indexed per-bond-type degrees,
-- ordinary degrees,
-- global bond-type counts,
-- weighted valence.
+- indexed ordinary degrees,
+- global bond-type counts.
+
+It may select two bonds of different types and reassign those two bond types
+across either double-edge reconnection. Per-node typed degrees and weighted
+valence can therefore change locally; atom-specific valence and RDKit checks
+serve as validity constraints instead of treating those quantities as hard
+invariants. The previous same-bond-type kernel remains available as a strict
+ablation.
 
 The attributed spectral–graphlet model combines:
 

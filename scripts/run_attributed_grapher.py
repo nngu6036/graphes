@@ -35,6 +35,8 @@ from grapher.rewiring_mlp.molecular.graph_io import (
 )
 from grapher.rewiring_mlp.molecular.typed_invariants import (
     TypedInvariant,
+    attributed_rewiring_invariant_matches_graph,
+    extract_attributed_rewiring_invariant,
     extract_typed_invariant,
     typed_invariant_matches_graph,
 )
@@ -131,6 +133,23 @@ def _edge_type_counts(graph: nx.Graph, edge_attribute: str) -> Counter[Any]:
     return Counter(data[edge_attribute] for _, _, data in graph.edges(data=True))
 
 
+def _typed_degree_vectors(
+    graph: nx.Graph,
+    *,
+    edge_types: tuple[Any, ...],
+    edge_attribute: str,
+) -> tuple[tuple[int, ...], ...]:
+    edge_index = {value: index for index, value in enumerate(edge_types)}
+    counts = [[0 for _ in edge_types] for _ in sorted(graph.nodes())]
+    node_index = {node: index for index, node in enumerate(sorted(graph.nodes()))}
+    for u, v, data in graph.edges(data=True):
+        category = data[edge_attribute]
+        column = edge_index[category]
+        counts[node_index[u]][column] += 1
+        counts[node_index[v]][column] += 1
+    return tuple(tuple(int(value) for value in row) for row in counts)
+
+
 def _preservation_audit(
     source: nx.Graph,
     final: nx.Graph,
@@ -142,6 +161,22 @@ def _preservation_audit(
     final_nodes = tuple(final.nodes[node][node_attribute] for node in sorted(final.nodes()))
     source_degrees = tuple(int(source.degree(node)) for node in sorted(source.nodes()))
     final_degrees = tuple(int(final.degree(node)) for node in sorted(final.nodes()))
+    edge_types = tuple(
+        sorted(
+            set(_edge_type_counts(source, edge_attribute))
+            | set(_edge_type_counts(final, edge_attribute)),
+            key=lambda value: repr(value),
+        )
+    )
+    source_typed = _typed_degree_vectors(
+        source, edge_types=edge_types, edge_attribute=edge_attribute
+    )
+    final_typed = _typed_degree_vectors(
+        final, edge_types=edge_types, edge_attribute=edge_attribute
+    )
+    changed_typed_nodes = sum(
+        left != right for left, right in zip(source_typed, final_typed)
+    )
     return {
         "node_type_preserved": source_nodes == final_nodes,
         "indexed_degree_preserved": source_degrees == final_degrees,
@@ -151,6 +186,10 @@ def _preservation_audit(
         == _edge_type_counts(final, edge_attribute),
         "weighted_valence_preserved": bool(
             np.allclose(_weighted_valence(source), _weighted_valence(final), atol=1.0e-8)
+        ),
+        "typed_degree_preserved": source_typed == final_typed,
+        "typed_degree_changed_node_fraction": float(
+            changed_typed_nodes / max(len(source_typed), 1)
         ),
     }
 
@@ -212,7 +251,7 @@ def _partial_report(
     started: float,
 ) -> dict[str, Any]:
     return {
-        "format": "attributed_spectral_graphlet_partial_generation_v1",
+        "format": "attributed_spectral_graphlet_partial_generation_v2",
         "generated": int(generated),
         "requested": int(requested),
         "generation_attempts": int(sum(attempts)),
@@ -224,9 +263,9 @@ def _partial_report(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate attributed molecular graphs using a typed-degree invariant, "
+            "Generate attributed molecular graphs using a typed source initializer, "
             "continuous topology/bond-spectrum and attributed graphlet-logit denoising, "
-            "and same-bond-type degree-constrained rewiring projection."
+            "and bond-reassigning degree-constrained rewiring projection."
         )
     )
     parser.add_argument("--config", required=True)
@@ -307,8 +346,8 @@ def main() -> None:
     )
     print(
         "[GraphER/AttributedSpectralGraphlet] training=continuous stochastic summary diffusion "
-        "without rewiring; generation=reverse summary target followed by same-bond-type "
-        "discrete rewiring projection.",
+        "without rewiring; generation=reverse summary target followed by bond-reassigning "
+        "degree-constrained discrete rewiring projection.",
         flush=True,
     )
     print(
@@ -367,7 +406,8 @@ def main() -> None:
         f"debug={refiner_cfg.debug_enabled} steps={refiner_cfg.steps} "
         f"proposal_budget={refiner_cfg.proposal_budget} "
         f"valid_candidate_budget={refiner_cfg.valid_candidate_budget} "
-        f"rdkit_shortlist={refiner_cfg.rdkit_shortlist}",
+        f"rdkit_shortlist={refiner_cfg.rdkit_shortlist} "
+        f"rewiring_kernel={'same_edge_type' if refiner_cfg.require_same_edge_type_pair else 'bond_reassigning_cross_type'}",
         flush=True,
     )
 
@@ -417,7 +457,13 @@ def main() -> None:
                     node_attribute=node_attribute,
                     edge_attribute=edge_attribute,
                 )
-                indexed_source_invariant = extract_typed_invariant(
+                indexed_source_typed_invariant = extract_typed_invariant(
+                    source,
+                    edge_types=vocabulary.edge_values,
+                    node_attribute=node_attribute,
+                    edge_attribute=edge_attribute,
+                )
+                indexed_source_rewiring_invariant = extract_attributed_rewiring_invariant(
                     source,
                     edge_types=vocabulary.edge_values,
                     node_attribute=node_attribute,
@@ -452,9 +498,21 @@ def main() -> None:
                     node_attribute=node_attribute,
                     edge_attribute=edge_attribute,
                 )
-                if not typed_invariant_matches_graph(refined, indexed_source_invariant):
+                if not attributed_rewiring_invariant_matches_graph(
+                    refined, indexed_source_rewiring_invariant
+                ):
                     raise AssertionError(
-                        "Refinement changed the indexed typed-degree invariant."
+                        "Refinement changed node types, indexed ordinary degrees, or "
+                        "global bond-type counts."
+                    )
+                if (
+                    refiner_cfg.preserve_typed_degree
+                    and not typed_invariant_matches_graph(
+                        refined, indexed_source_typed_invariant
+                    )
+                ):
+                    raise AssertionError(
+                        "Strict refinement changed the indexed typed-degree invariant."
                     )
                 if refined.number_of_nodes() > 1 and not nx.is_connected(refined):
                     raise AssertionError("Refinement returned a disconnected molecule.")
@@ -545,6 +603,20 @@ def main() -> None:
     accepted_rows = [row for row in trace_rows if bool(row.get("accepted"))]
     source_validity = [is_valid_molecular_graph(graph) for graph in source_graphs]
     final_validity = [is_valid_molecular_graph(graph) for graph in final_graphs]
+    rewiring_invariant_preservation = [
+        attributed_rewiring_invariant_matches_graph(
+            final,
+            extract_attributed_rewiring_invariant(
+                source,
+                edge_types=vocabulary.edge_values,
+                node_attribute=node_attribute,
+                edge_attribute=edge_attribute,
+            ),
+        )
+        for source, final in zip(source_graphs, final_graphs)
+    ]
+    # Typed-degree preservation is now a diagnostic rather than a required
+    # invariant.  Cross-type bond reassignment is expected to change it.
     typed_preservation = [
         typed_invariant_matches_graph(
             final,
@@ -569,6 +641,15 @@ def main() -> None:
         "guidance_mode": "dual_spectral_attributed_graphlet",
         "invariant_source": invariant_source,
         "num_generated": len(final_graphs),
+        "rewiring_invariant_preservation_rate": float(
+            np.mean(rewiring_invariant_preservation)
+        ),
+        "typed_degree_preservation_rate": float(np.mean(typed_preservation)),
+        "mean_typed_degree_changed_node_fraction": float(
+            np.mean([row["typed_degree_changed_node_fraction"] for row in audits])
+        ),
+        # Compatibility alias retained for older report readers.  In revised
+        # cross-type mode this is diagnostic and is not expected to be 1.0.
         "typed_invariant_preservation_rate": float(np.mean(typed_preservation)),
         "node_type_preservation_rate": float(
             np.mean([row["node_type_preserved"] for row in audits])
@@ -579,6 +660,11 @@ def main() -> None:
         "edge_type_count_preservation_rate": float(
             np.mean([row["edge_type_counts_preserved"] for row in audits])
         ),
+        "per_node_weighted_valence_preservation_rate": float(
+            np.mean([row["weighted_valence_preserved"] for row in audits])
+        ),
+        # Compatibility alias; per-node weighted valence is no longer a hard
+        # invariant under cross-type reassignment.
         "weighted_valence_preservation_rate": float(
             np.mean([row["weighted_valence_preserved"] for row in audits])
         ),
@@ -664,13 +750,23 @@ def main() -> None:
         encoding="utf-8",
     )
     report = {
-        "format": "attributed_spectral_graphlet_generation_v1",
+        "format": "attributed_spectral_graphlet_generation_v2",
         "checkpoint_format": checkpoint.get("format"),
         "training_state_source": checkpoint.get("config", {})
         .get("summary_diffusion", {})
         .get("bridge", "continuous_summary_diffusion"),
         "rewiring_used_during_training": False,
         "rewiring_used_during_generation": True,
+        "rewiring_kernel": (
+            "same_edge_type"
+            if refiner_cfg.require_same_edge_type_pair
+            else "bond_reassigning_cross_type"
+        ),
+        "hard_rewiring_invariant": [
+            "indexed_node_types",
+            "indexed_ordinary_degrees",
+            "global_edge_type_counts",
+        ],
         "spectral_channels": ["topology", "bond_weighted"],
         "graphlet_orders": list(graphlet_basis.sizes),
         "vocabulary": vocabulary.to_dict(),

@@ -50,9 +50,10 @@ def attributed_laplacian_spectra(
     """Return topology and bond-order-weighted Laplacian spectra.
 
     Output shape is ``[2, n]`` with channels ``topology`` and
-    ``bond_weighted``.  Strict same-bond-type rewiring preserves the trace of
-    both channels: ordinary degree fixes the first and typed degree fixes the
-    second.
+    ``bond_weighted``.  Degree-preserving rewiring fixes the topology trace.
+    The revised attributed kernel also preserves the global bond-type
+    histogram, so the total bond order and therefore the weighted-Laplacian
+    trace remain fixed even though per-node weighted degrees may change.
     """
 
     graph = normalize_attributed_graph(graph)

@@ -29,6 +29,8 @@ from grapher.rewiring_mlp.attributed.spectral_data import (
 )
 from grapher.rewiring_mlp.attributed.spectral_graphlet_refiner import (
     AttributedSpectralGraphletRefinerConfig,
+    _apply_attributed_action,
+    _typed_actions_for_topology_action,
     refine_attributed_graph_with_spectral_graphlet_diffusion,
 )
 from grapher.rewiring_mlp.attributed.spectral_model import (
@@ -36,10 +38,16 @@ from grapher.rewiring_mlp.attributed.spectral_model import (
     load_attributed_spectral_graphlet_checkpoint,
     save_attributed_spectral_graphlet_checkpoint,
 )
-from grapher.rewiring_mlp.core.rewiring import apply_action, make_action
+from grapher.rewiring_mlp.core.rewiring import (
+    apply_action,
+    candidate_actions_from_edge_pair,
+    make_action,
+)
 from grapher.rewiring_mlp.molecular.constraints import QM9_PROJECTED_MAX_VALENCE
 from grapher.rewiring_mlp.molecular.graph_io import is_valid_molecular_graph
 from grapher.rewiring_mlp.molecular.typed_invariants import (
+    attributed_rewiring_invariant_matches_graph,
+    extract_attributed_rewiring_invariant,
     extract_typed_invariant,
     typed_invariant_matches_graph,
 )
@@ -450,3 +458,128 @@ def test_generation_refiner_preserves_indexed_typed_invariant() -> None:
     assert refined.number_of_edges() == source.number_of_edges()
     assert nx.is_connected(refined)
     assert trace
+
+
+def _mixed_bond_cycle_graph() -> nx.Graph:
+    graph = _cycle_graph()
+    graph.edges[0, 1]["bond_type"] = 1
+    graph.edges[0, 1]["bond_order"] = 1.0
+    graph.edges[3, 4]["bond_type"] = 2
+    graph.edges[3, 4]["bond_order"] = 2.0
+    return graph
+
+
+def test_cross_type_kernel_enumerates_both_type_assignments_per_orientation() -> None:
+    graph = _mixed_bond_cycle_graph()
+    vocabulary = GraphCategoryVocabulary.from_graphs(
+        [graph],
+        {
+            "node_attribute": "atomic_num",
+            "node_categories": [6],
+            "edge_attribute": "bond_type",
+            "edge_categories": [1, 2],
+        },
+    )
+    config = AttributedSpectralGraphletRefinerConfig.from_dict(
+        {
+            "molecular": {
+                "require_same_edge_type_pair": False,
+                "preserve_global_edge_type_counts": True,
+                "enumerate_edge_type_permutations": True,
+                "preserve_node_types": True,
+                "preserve_ordinary_degree": True,
+                "preserve_typed_degree": False,
+                "preserve_weighted_valence": False,
+                "rdkit_candidate_check": False,
+            }
+        }
+    )
+    actions = candidate_actions_from_edge_pair((0, 1), (3, 4))
+    assert len(actions) == 2
+    typed = [
+        candidate
+        for topology_action in actions
+        for candidate in _typed_actions_for_topology_action(
+            graph, topology_action, vocabulary=vocabulary, config=config
+        )
+    ]
+    assert len(typed) == 4
+    assert {tuple(action.added_edge_categories) for action in typed} == {(1, 2), (2, 1)}
+
+
+def test_cross_type_action_preserves_relaxed_invariant_but_can_change_typed_degree() -> None:
+    graph = _mixed_bond_cycle_graph()
+    vocabulary = GraphCategoryVocabulary.from_graphs(
+        [graph],
+        {
+            "node_attribute": "atomic_num",
+            "node_categories": [6],
+            "edge_attribute": "bond_type",
+            "edge_categories": [1, 2],
+        },
+    )
+    config = AttributedSpectralGraphletRefinerConfig.from_dict(
+        {
+            "molecular": {
+                "require_same_edge_type_pair": False,
+                "preserve_global_edge_type_counts": True,
+                "enumerate_edge_type_permutations": True,
+                "preserve_node_types": True,
+                "preserve_ordinary_degree": True,
+                "preserve_typed_degree": False,
+                "preserve_weighted_valence": False,
+                "enforce_molecular_valence": True,
+                "allowed_bond_types": [1, 2],
+                "max_valence": {6: 4.0},
+                "rdkit_candidate_check": False,
+            }
+        }
+    )
+    topology_action = next(
+        action
+        for action in candidate_actions_from_edge_pair((0, 1), (3, 4))
+        if set(action[1]) == {(0, 3), (1, 4)}
+    )
+    typed_actions = _typed_actions_for_topology_action(
+        graph, topology_action, vocabulary=vocabulary, config=config
+    )
+    # The first assignment aligns the removed categories with the canonical
+    # added-edge order and changes the local bond-type incidences of nodes 1/3.
+    candidate = _apply_attributed_action(graph, typed_actions[0], vocabulary)
+
+    relaxed = extract_attributed_rewiring_invariant(
+        graph,
+        edge_types=vocabulary.edge_values,
+        node_attribute="atomic_num",
+        edge_attribute="bond_type",
+    )
+    strict = extract_typed_invariant(
+        graph,
+        edge_types=vocabulary.edge_values,
+        node_attribute="atomic_num",
+        edge_attribute="bond_type",
+    )
+    assert attributed_rewiring_invariant_matches_graph(candidate, relaxed)
+    assert not typed_invariant_matches_graph(candidate, strict)
+    assert sorted(data["bond_type"] for _, _, data in candidate.edges(data=True)) == sorted(
+        data["bond_type"] for _, _, data in graph.edges(data=True)
+    )
+    assert [candidate.degree(i) for i in range(6)] == [graph.degree(i) for i in range(6)]
+
+
+def test_revised_qm9_configs_enable_bond_reassigning_kernel() -> None:
+    for config_path in (
+        "configs/experiments/grapher/qm9_attributed_spectral_graphlet_light.yaml",
+        "configs/experiments/grapher/qm9_attributed_spectral_graphlet.yaml",
+    ):
+        config = load_yaml(config_path)
+        molecular = config["attributed_refiner"]["molecular"]
+        assert molecular["require_same_edge_type_pair"] is False
+        assert molecular["preserve_global_edge_type_counts"] is True
+        assert molecular["enumerate_edge_type_permutations"] is True
+        assert molecular["preserve_typed_degree"] is False
+        refiner = AttributedSpectralGraphletRefinerConfig.from_dict(
+            config["attributed_refiner"]
+        )
+        assert refiner.require_same_edge_type_pair is False
+        assert refiner.preserve_typed_degree is False

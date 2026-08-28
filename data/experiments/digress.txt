@@ -85,7 +85,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir "$GEN_DIR/evaluation_report"
 
 
-
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004751          0.002533      0.006985
+digress_e200k_to_test               0.003472          0.007016      0.012191
 
 export DIGRESS=/home/quang/DiGress
 export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
@@ -105,7 +108,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-stage digress_e200k \
   --output-dir "$GEN_DIR/evaluation_report"
 
-
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004751          0.002533      0.006985
+digress_e200k_to_test               0.003942          0.008573      0.017430
 
 
 export DIGRESS=/home/quang/DiGress

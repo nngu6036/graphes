@@ -102,6 +102,70 @@ class TypedInvariant:
         )
 
 
+@dataclass(frozen=True)
+class AttributedRewiringInvariant:
+    """Hard invariant for bond-reassigning attributed rewiring.
+
+    Unlike :class:`TypedInvariant`, this invariant deliberately does not fix the
+    per-node degree in every edge category.  A valid attributed double-edge
+    swap preserves the indexed ordinary degree and node category of every node
+    while reassigning the two removed edge categories to the two inserted
+    edges.  The global edge-category histogram is therefore preserved exactly,
+    but typed degrees and per-node weighted valence may change.
+    """
+
+    node_types: tuple[Any, ...]
+    degrees: tuple[int, ...]
+    edge_types: tuple[Any, ...]
+    edge_counts: tuple[int, ...]
+    node_attribute: str = "atomic_num"
+    edge_attribute: str = "bond_type"
+
+    def __post_init__(self) -> None:
+        if len(self.node_types) != len(self.degrees):
+            raise ValueError("node_types and degrees must have equal length.")
+        if len(self.edge_types) != len(self.edge_counts):
+            raise ValueError("edge_types and edge_counts must have equal length.")
+        if len(set(self.edge_types)) != len(self.edge_types):
+            raise ValueError("edge_types must be unique.")
+        if any(int(value) < 0 for value in self.degrees):
+            raise ValueError("Ordinary degrees must be non-negative.")
+        if any(int(value) < 0 for value in self.edge_counts):
+            raise ValueError("Edge-category counts must be non-negative.")
+
+    @property
+    def num_nodes(self) -> int:
+        return len(self.node_types)
+
+    @property
+    def edge_count_map(self) -> dict[Any, int]:
+        return {
+            edge_type: int(count)
+            for edge_type, count in zip(self.edge_types, self.edge_counts)
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "node_types": list(self.node_types),
+            "degrees": [int(value) for value in self.degrees],
+            "edge_types": list(self.edge_types),
+            "edge_counts": [int(value) for value in self.edge_counts],
+            "node_attribute": self.node_attribute,
+            "edge_attribute": self.edge_attribute,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AttributedRewiringInvariant":
+        return cls(
+            node_types=tuple(data.get("node_types", [])),
+            degrees=tuple(int(value) for value in data.get("degrees", [])),
+            edge_types=tuple(data.get("edge_types", [])),
+            edge_counts=tuple(int(value) for value in data.get("edge_counts", [])),
+            node_attribute=str(data.get("node_attribute", "atomic_num")),
+            edge_attribute=str(data.get("edge_attribute", "bond_type")),
+        )
+
+
 def extract_typed_invariant(
     graph: nx.Graph,
     *,
@@ -144,6 +208,73 @@ def extract_typed_invariant(
         edge_types=edge_types,
         node_attribute=node_attribute,
         edge_attribute=edge_attribute,
+    )
+
+
+def extract_attributed_rewiring_invariant(
+    graph: nx.Graph,
+    *,
+    edge_types: Sequence[Any],
+    node_attribute: str = "atomic_num",
+    edge_attribute: str = "bond_type",
+) -> AttributedRewiringInvariant:
+    """Extract the invariant preserved by bond-reassigning edge swaps.
+
+    The returned object fixes indexed node categories and ordinary degrees plus
+    the global count of every configured edge category.  It intentionally does
+    not fix per-node typed degrees.
+    """
+
+    if graph.is_directed() or graph.is_multigraph() or nx.number_of_selfloops(graph):
+        raise ValueError("Attributed rewiring invariants require a simple undirected graph.")
+    normalized = nx.convert_node_labels_to_integers(
+        nx.Graph(graph), first_label=0, ordering="sorted"
+    )
+    edge_types = tuple(edge_types)
+    edge_index = {value: index for index, value in enumerate(edge_types)}
+    edge_counts = [0 for _ in edge_types]
+    for u, v, data in normalized.edges(data=True):
+        if edge_attribute not in data:
+            raise KeyError(f"Edge {(u, v)!r} is missing {edge_attribute!r}.")
+        edge_type = data[edge_attribute]
+        if edge_type not in edge_index:
+            raise ValueError(f"Unsupported edge category {edge_type!r}.")
+        edge_counts[edge_index[edge_type]] += 1
+
+    node_types: list[Any] = []
+    degrees: list[int] = []
+    for node, data in normalized.nodes(data=True):
+        if node_attribute not in data:
+            raise KeyError(f"Node {node!r} is missing {node_attribute!r}.")
+        node_types.append(data[node_attribute])
+        degrees.append(int(normalized.degree(node)))
+    return AttributedRewiringInvariant(
+        node_types=tuple(node_types),
+        degrees=tuple(degrees),
+        edge_types=edge_types,
+        edge_counts=tuple(edge_counts),
+        node_attribute=node_attribute,
+        edge_attribute=edge_attribute,
+    )
+
+
+def attributed_rewiring_invariant_matches_graph(
+    graph: nx.Graph,
+    invariant: AttributedRewiringInvariant,
+) -> bool:
+    try:
+        observed = extract_attributed_rewiring_invariant(
+            graph,
+            edge_types=invariant.edge_types,
+            node_attribute=invariant.node_attribute,
+            edge_attribute=invariant.edge_attribute,
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (
+        observed.node_types == invariant.node_types
+        and observed.degrees == invariant.degrees
+        and observed.edge_counts == invariant.edge_counts
     )
 
 

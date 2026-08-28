@@ -45,7 +45,10 @@ from grapher.rewiring_mlp.molecular.constraints import (
 )
 from grapher.rewiring_mlp.molecular.graph_io import is_valid_molecular_graph
 from grapher.rewiring_mlp.molecular.typed_invariants import (
+    AttributedRewiringInvariant,
     TypedInvariant,
+    attributed_rewiring_invariant_matches_graph,
+    extract_attributed_rewiring_invariant,
     extract_typed_invariant,
     typed_invariant_matches_graph,
 )
@@ -115,8 +118,19 @@ class AttributedSpectralGraphletRefinerConfig:
     prediction_horizon_schedule: str = "cosine"
     refresh_on_prediction_plateau: bool = True
 
-    require_same_edge_type_pair: bool = True
-    preserve_removed_edge_type: bool = True
+    # Attributed action family.  The default revised kernel may select two
+    # edges of different categories and reassign the two removed categories
+    # across either topological reconnection.  This preserves indexed ordinary
+    # degrees, node categories, and global edge-category counts while allowing
+    # per-node typed degrees / weighted valence to move subject to validity.
+    require_same_edge_type_pair: bool = False
+    preserve_removed_edge_type: bool = False  # legacy strict-mode alias
+    preserve_global_edge_type_counts: bool = True
+    enumerate_edge_type_permutations: bool = True
+    preserve_node_types: bool = True
+    preserve_ordinary_degree: bool = True
+    preserve_typed_degree: bool = False
+    preserve_weighted_valence: bool = False
     enforce_molecular_valence: bool = True
     molecular_allowed_bond_types: tuple[int, ...] = (1, 2, 3)
     molecular_max_valence: dict[int, float] = field(default_factory=dict)
@@ -257,8 +271,20 @@ class AttributedSpectralGraphletRefinerConfig:
             prediction_horizon_final_k=int(horizon.get("final_k", 1)),
             prediction_horizon_schedule=str(horizon.get("schedule", "cosine")).lower(),
             refresh_on_prediction_plateau=bool(horizon.get("refresh_on_plateau", True)),
-            require_same_edge_type_pair=bool(molecular.get("require_same_edge_type_pair", True)),
-            preserve_removed_edge_type=bool(molecular.get("preserve_removed_edge_type", True)),
+            require_same_edge_type_pair=bool(molecular.get("require_same_edge_type_pair", False)),
+            preserve_removed_edge_type=bool(molecular.get("preserve_removed_edge_type", False)),
+            preserve_global_edge_type_counts=bool(
+                molecular.get("preserve_global_edge_type_counts", True)
+            ),
+            enumerate_edge_type_permutations=bool(
+                molecular.get("enumerate_edge_type_permutations", True)
+            ),
+            preserve_node_types=bool(molecular.get("preserve_node_types", True)),
+            preserve_ordinary_degree=bool(molecular.get("preserve_ordinary_degree", True)),
+            preserve_typed_degree=bool(molecular.get("preserve_typed_degree", False)),
+            preserve_weighted_valence=bool(
+                molecular.get("preserve_weighted_valence", False)
+            ),
             enforce_molecular_valence=bool(
                 molecular.get(
                     "enforce_molecular_valence",
@@ -301,8 +327,26 @@ class AttributedSpectralGraphletRefinerConfig:
             raise ValueError("selection must be greedy or softmax/sample.")
         if cfg.temperature <= 0:
             raise ValueError("temperature must be positive.")
-        if cfg.require_same_edge_type_pair != cfg.preserve_removed_edge_type:
-            raise ValueError("Strict typed rewiring requires same-type pairing and type preservation together.")
+        if not cfg.preserve_global_edge_type_counts:
+            raise ValueError(
+                "Attributed GraphER currently preserves the global edge-category histogram; "
+                "preserve_global_edge_type_counts must be true."
+            )
+        if cfg.preserve_typed_degree and not cfg.require_same_edge_type_pair:
+            raise ValueError(
+                "Per-node typed-degree preservation requires same-edge-type pairing. "
+                "Disable preserve_typed_degree to use bond-reassigning cross-type swaps."
+            )
+        if cfg.preserve_weighted_valence and not cfg.require_same_edge_type_pair:
+            raise ValueError(
+                "Exact per-node weighted-valence preservation requires same-edge-type pairing. "
+                "Use enforce_molecular_valence for the revised cross-type kernel."
+            )
+        if not cfg.preserve_node_types or not cfg.preserve_ordinary_degree:
+            raise ValueError(
+                "The implemented attributed rewiring kernel always preserves node types and "
+                "indexed ordinary degrees; both preservation flags must remain true."
+            )
         if cfg.prediction_horizon_mode not in {"fixed", "annealed"}:
             raise ValueError("prediction_horizon.mode must be fixed or annealed.")
         if cfg.prediction_horizon_initial_k <= 0 or cfg.prediction_horizon_final_k <= 0:
@@ -323,108 +367,300 @@ def _edge_category(
     return int(vocabulary.edge_index(graph.edges[edge[0], edge[1]]))
 
 
-def _apply_same_type_action(
+@dataclass(frozen=True)
+class AttributedRewireAction:
+    """A double-edge topology move plus an assignment of edge categories.
+
+    ``topology_action`` fixes the two removed and two inserted unordered edges.
+    ``removed_edge_categories`` and ``added_edge_categories`` are category
+    indices aligned with the canonical edge order inside that topology action.
+    The revised kernel requires the two category multisets to be identical, so
+    global edge-category counts are preserved even when the two removed edges
+    have different types.
+    """
+
+    topology_action: Action
+    removed_edge_categories: tuple[int, int]
+    added_edge_categories: tuple[int, int]
+
+    def __post_init__(self) -> None:
+        if len(self.removed_edge_categories) != 2 or len(self.added_edge_categories) != 2:
+            raise ValueError("Attributed rewiring actions require two removed and two added categories.")
+        if sorted(self.removed_edge_categories) != sorted(self.added_edge_categories):
+            raise ValueError("Attributed rewiring must preserve the global edge-category multiset.")
+
+    @property
+    def removed(self):
+        return self.topology_action[0]
+
+    @property
+    def added(self):
+        return self.topology_action[1]
+
+
+def _attributed_action_trace(
+    action: AttributedRewireAction,
+    vocabulary: GraphCategoryVocabulary,
+) -> dict[str, Any]:
+    return {
+        "removed": [list(edge) for edge in action.removed],
+        "added": [list(edge) for edge in action.added],
+        "removed_edge_types": [
+            vocabulary.edge_value(category) for category in action.removed_edge_categories
+        ],
+        "added_edge_types": [
+            vocabulary.edge_value(category) for category in action.added_edge_categories
+        ],
+    }
+
+
+def _edge_attribute_template(
     graph: nx.Graph,
-    action: Action,
+    edge: tuple[int, int],
+    *,
+    category: int,
+    vocabulary: GraphCategoryVocabulary,
+) -> dict[str, Any]:
+    attributes = dict(graph.edges[edge])
+    edge_value = vocabulary.edge_value(category)
+    if vocabulary.edge_attribute:
+        attributes[vocabulary.edge_attribute] = edge_value
+    if vocabulary.edge_attribute == "bond_type":
+        attributes["bond_order"] = bond_order(int(edge_value))
+    return attributes
+
+
+def _apply_attributed_action(
+    graph: nx.Graph,
+    action: AttributedRewireAction,
     vocabulary: GraphCategoryVocabulary,
 ) -> nx.Graph:
-    removed, added = action
-    categories = [_edge_category(graph, edge, vocabulary) for edge in removed]
-    if len(set(categories)) != 1:
-        raise ValueError("Attributed rewiring must remove two edges of the same type.")
-    category = categories[0]
-    edge_value = vocabulary.edge_value(category)
-    source_attributes = dict(graph.edges[removed[0]])
-    if vocabulary.edge_attribute:
-        source_attributes[vocabulary.edge_attribute] = edge_value
-    if vocabulary.edge_attribute == "bond_type":
-        source_attributes["bond_order"] = bond_order(int(edge_value))
+    """Apply a topology swap while reassigning the two removed edge types."""
+
+    observed_removed = tuple(
+        _edge_category(graph, edge, vocabulary) for edge in action.removed
+    )
+    if observed_removed != action.removed_edge_categories:
+        raise ValueError(
+            "Attributed action removed-edge categories no longer match the current graph."
+        )
+    if sorted(action.added_edge_categories) != sorted(observed_removed):
+        raise ValueError("Attributed action would change global edge-category counts.")
+
+    # Preserve any non-category edge metadata by taking a template from a
+    # removed edge of the same category.  The category/bond order themselves
+    # are always overwritten explicitly below.
+    templates: dict[int, dict[str, Any]] = {}
+    for edge, category in zip(action.removed, observed_removed):
+        templates.setdefault(
+            int(category),
+            _edge_attribute_template(
+                graph, edge, category=int(category), vocabulary=vocabulary
+            ),
+        )
+
     candidate = graph.copy()
-    for edge in removed:
+    for edge in action.removed:
         candidate.remove_edge(*edge)
-    for edge in added:
-        candidate.add_edge(*edge, **source_attributes)
+    for edge, category in zip(action.added, action.added_edge_categories):
+        attributes = dict(templates[int(category)])
+        edge_value = vocabulary.edge_value(int(category))
+        if vocabulary.edge_attribute:
+            attributes[vocabulary.edge_attribute] = edge_value
+        if vocabulary.edge_attribute == "bond_type":
+            attributes["bond_order"] = bond_order(int(edge_value))
+        candidate.add_edge(*edge, **attributes)
     return candidate
 
 
-def _propose_same_type_candidates(
+def _typed_actions_for_topology_action(
+    graph: nx.Graph,
+    topology_action: Action,
+    *,
+    vocabulary: GraphCategoryVocabulary,
+    config: AttributedSpectralGraphletRefinerConfig,
+) -> list[AttributedRewireAction]:
+    removed_categories = tuple(
+        _edge_category(graph, edge, vocabulary) for edge in topology_action[0]
+    )
+    if config.require_same_edge_type_pair and len(set(removed_categories)) != 1:
+        return []
+
+    assignments = [removed_categories]
+    if (
+        config.enumerate_edge_type_permutations
+        and removed_categories[0] != removed_categories[1]
+    ):
+        assignments.append((removed_categories[1], removed_categories[0]))
+
+    out: list[AttributedRewireAction] = []
+    for added_categories in assignments:
+        out.append(
+            AttributedRewireAction(
+                topology_action=topology_action,
+                removed_edge_categories=(
+                    int(removed_categories[0]),
+                    int(removed_categories[1]),
+                ),
+                added_edge_categories=(
+                    int(added_categories[0]),
+                    int(added_categories[1]),
+                ),
+            )
+        )
+    return out
+
+
+def _propose_attributed_candidates(
     graph: nx.Graph,
     *,
     vocabulary: GraphCategoryVocabulary,
     config: AttributedSpectralGraphletRefinerConfig,
     rng: np.random.Generator,
     excluded_states: set[tuple[Any, ...]] | None,
-) -> tuple[list[Action], dict[Action, nx.Graph], dict[str, Any]]:
-    groups: dict[int, list[tuple[int, int]]] = {}
-    for u, v, data in graph.edges(data=True):
-        category = int(vocabulary.edge_index(data))
-        groups.setdefault(category, []).append((min(int(u), int(v)), max(int(u), int(v))))
-    groups = {key: value for key, value in groups.items() if len(value) >= 2}
-    if not groups:
-        return [], {}, {"num_proposals": 0, "num_valid_candidates": 0, "candidate_pass_rate": 0.0, "candidate_rejection_reasons": {"no_same_type_pair": 1}}
-    group_keys = list(groups)
-    group_weights = np.asarray(
-        [len(groups[key]) * (len(groups[key]) - 1) / 2 for key in group_keys],
-        dtype=np.float64,
+) -> tuple[
+    list[AttributedRewireAction],
+    dict[AttributedRewireAction, nx.Graph],
+    dict[str, Any],
+]:
+    """Propose valid typed double-edge swaps.
+
+    In revised mode, any two distinct edges with four distinct endpoints may be
+    selected.  For each of the two topological reconnections, both assignments
+    of the two removed edge categories are enumerated.  Hence two differently
+    typed removed edges yield up to four attributed successors while same-type
+    edges yield the usual two.
+    """
+
+    edges = sorted(
+        (min(int(u), int(v)), max(int(u), int(v))) for u, v in graph.edges()
     )
-    group_weights /= group_weights.sum()
+    if len(edges) < 2:
+        return [], {}, {
+            "num_proposals": 0,
+            "num_valid_candidates": 0,
+            "candidate_pass_rate": 0.0,
+            "candidate_rejection_reasons": {"too_few_edges": 1},
+        }
+
     target = int(config.valid_candidate_budget)
     proposal_limit = int(config.proposal_budget)
-    if target < 0 or proposal_limit < 0:
-        proposal_limit = sum(len(edges) * (len(edges) - 1) for edges in groups.values())
-        target = proposal_limit
-    seen: set[Action] = set()
-    candidates: list[Action] = []
-    candidate_graphs: dict[Action, nx.Graph] = {}
+    complete = target < 0 or proposal_limit < 0
+    if complete:
+        pair_indices = [
+            (i, j) for i in range(len(edges)) for j in range(i + 1, len(edges))
+        ]
+        rng.shuffle(pair_indices)
+        target = 10**18
+        proposal_limit = 10**18
+    else:
+        pair_indices = []
+
+    seen: set[AttributedRewireAction] = set()
+    candidates: list[AttributedRewireAction] = []
+    candidate_graphs: dict[AttributedRewireAction, nx.Graph] = {}
     rejections: dict[str, int] = {}
     attempts = 0
-    max_attempts = max(100, proposal_limit * 50)
-    while attempts < max_attempts and len(seen) < proposal_limit and len(candidates) < target:
+    pair_cursor = 0
+    max_attempts = (
+        len(pair_indices)
+        if complete
+        else max(100, int(config.proposal_budget) * 50)
+    )
+
+    while (
+        attempts < max_attempts
+        and len(seen) < proposal_limit
+        and len(candidates) < target
+    ):
         attempts += 1
-        key = group_keys[int(rng.choice(len(group_keys), p=group_weights))]
-        edges = groups[key]
-        indices = rng.choice(len(edges), size=2, replace=False)
-        actions = candidate_actions_from_edge_pair(edges[int(indices[0])], edges[int(indices[1])])
-        rng.shuffle(actions)
-        for action in actions:
-            if action in seen:
-                continue
-            seen.add(action)
-            if not is_valid_action(graph, action, preserve_connectivity=config.preserve_connectivity):
-                rejections["topology_or_connectivity"] = rejections.get("topology_or_connectivity", 0) + 1
-                continue
-            try:
-                candidate = _apply_same_type_action(graph, action, vocabulary)
-            except (KeyError, TypeError, ValueError):
-                rejections["attribute_assignment"] = rejections.get("attribute_assignment", 0) + 1
-                continue
-            if config.enforce_molecular_valence and not is_molecular_valence_feasible(
-                candidate,
-                allowed_atom_types=vocabulary.node_values,
-                allowed_bond_types=config.molecular_allowed_bond_types,
-                max_valence=config.molecular_max_valence or None,
-            ):
-                rejections["molecular_valence"] = rejections.get("molecular_valence", 0) + 1
-                continue
-            if excluded_states is not None:
-                state = attributed_state_key(
-                    candidate,
-                    node_attribute=str(vocabulary.node_attribute),
-                    edge_attribute=str(vocabulary.edge_attribute),
-                )
-                if state in excluded_states:
-                    rejections["revisited_state"] = rejections.get("revisited_state", 0) + 1
-                    continue
-            candidates.append(action)
-            candidate_graphs[action] = candidate
-            if len(candidates) >= target:
+        if complete:
+            if pair_cursor >= len(pair_indices):
                 break
+            left, right = pair_indices[pair_cursor]
+            pair_cursor += 1
+        else:
+            indices = rng.choice(len(edges), size=2, replace=False)
+            left, right = int(indices[0]), int(indices[1])
+        e1, e2 = edges[left], edges[right]
+        if len({*e1, *e2}) != 4:
+            rejections["shared_endpoint"] = rejections.get("shared_endpoint", 0) + 1
+            continue
+        if config.require_same_edge_type_pair:
+            if _edge_category(graph, e1, vocabulary) != _edge_category(graph, e2, vocabulary):
+                rejections["different_edge_type"] = rejections.get("different_edge_type", 0) + 1
+                continue
+
+        topology_actions = candidate_actions_from_edge_pair(e1, e2)
+        rng.shuffle(topology_actions)
+        for topology_action in topology_actions:
+            if not is_valid_action(
+                graph,
+                topology_action,
+                preserve_connectivity=config.preserve_connectivity,
+            ):
+                rejections["topology_or_connectivity"] = rejections.get(
+                    "topology_or_connectivity", 0
+                ) + 1
+                continue
+            typed_actions = _typed_actions_for_topology_action(
+                graph,
+                topology_action,
+                vocabulary=vocabulary,
+                config=config,
+            )
+            rng.shuffle(typed_actions)
+            for action in typed_actions:
+                if action in seen:
+                    continue
+                seen.add(action)
+                if len(seen) > proposal_limit:
+                    break
+                try:
+                    candidate = _apply_attributed_action(graph, action, vocabulary)
+                except (KeyError, TypeError, ValueError):
+                    rejections["attribute_assignment"] = rejections.get(
+                        "attribute_assignment", 0
+                    ) + 1
+                    continue
+                if config.enforce_molecular_valence and not is_molecular_valence_feasible(
+                    candidate,
+                    allowed_atom_types=vocabulary.node_values,
+                    allowed_bond_types=config.molecular_allowed_bond_types,
+                    max_valence=config.molecular_max_valence or None,
+                ):
+                    rejections["molecular_valence"] = rejections.get(
+                        "molecular_valence", 0
+                    ) + 1
+                    continue
+                if excluded_states is not None:
+                    state = attributed_state_key(
+                        candidate,
+                        node_attribute=str(vocabulary.node_attribute),
+                        edge_attribute=str(vocabulary.edge_attribute),
+                    )
+                    if state in excluded_states:
+                        rejections["revisited_state"] = rejections.get(
+                            "revisited_state", 0
+                        ) + 1
+                        continue
+                candidates.append(action)
+                candidate_graphs[action] = candidate
+                if len(candidates) >= target:
+                    break
+            if len(candidates) >= target or len(seen) >= proposal_limit:
+                break
+
     proposals = len(seen)
     return candidates, candidate_graphs, {
         "num_proposals": proposals,
         "num_valid_candidates": len(candidates),
         "candidate_pass_rate": float(len(candidates) / max(proposals, 1)),
         "candidate_rejection_reasons": rejections,
+        "rewiring_kernel": (
+            "same_edge_type" if config.require_same_edge_type_pair
+            else "bond_reassigning_cross_type"
+        ),
     }
 
 
@@ -492,9 +728,9 @@ def predict_clean_attributed_summaries(
 
 def _prepare_candidate_states(
     graph: nx.Graph,
-    candidates: Sequence[Action],
+    candidates: Sequence[AttributedRewireAction],
     *,
-    candidate_graphs: dict[Action, nx.Graph],
+    candidate_graphs: dict[AttributedRewireAction, nx.Graph],
     current_counts: AttributedGraphletCounts,
     vocabulary: GraphCategoryVocabulary,
     graphlet_basis: GraphletBasis,
@@ -526,7 +762,7 @@ def _prepare_candidate_states(
             candidate_attributed_graphlet_logits_from_counts(
                 graph,
                 candidate,
-                action,
+                action.topology_action,
                 current_counts=current_counts,
                 graphlet_basis=graphlet_basis,
                 epsilon=config.graphlet_logit_epsilon,
@@ -749,11 +985,32 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
     generator = rng if rng is not None else np.random.default_rng(0)
     current = normalize_attributed_graph(graph)
     conditioning_graph = current.copy()
-    invariant = extract_typed_invariant(
+    rewiring_invariant = extract_attributed_rewiring_invariant(
         current,
         edge_types=vocabulary.edge_values,
         node_attribute=str(vocabulary.node_attribute),
         edge_attribute=str(vocabulary.edge_attribute),
+    )
+    typed_invariant = (
+        extract_typed_invariant(
+            current,
+            edge_types=vocabulary.edge_values,
+            node_attribute=str(vocabulary.node_attribute),
+            edge_attribute=str(vocabulary.edge_attribute),
+        )
+        if cfg.preserve_typed_degree
+        else None
+    )
+    source_weighted_valence = (
+        tuple(
+            sum(
+                bond_order(int(data[str(vocabulary.edge_attribute)]))
+                for _, _, data in current.edges(node, data=True)
+            )
+            for node in sorted(current.nodes())
+        )
+        if cfg.preserve_weighted_valence
+        else None
     )
     if cfg.require_rdkit_source_validity and not is_valid_molecular_graph(
         current,
@@ -845,7 +1102,7 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
         graphlet_mix = cfg.graphlet_bridge.clean_mix_for_step(
             accepted_step=accepted_steps, total_steps=max(cfg.steps, 1)
         )
-        candidates, candidate_graphs, proposal_diag = _propose_same_type_candidates(
+        candidates, candidate_graphs, proposal_diag = _propose_attributed_candidates(
             current,
             vocabulary=vocabulary,
             config=cfg,
@@ -857,7 +1114,7 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
                 {
                     "step": decision_step,
                     "accepted": False,
-                    "reason": "no_valid_same_type_candidates",
+                    "reason": "no_valid_attributed_candidates",
                     "prediction_calls": prediction_calls,
                     **proposal_diag,
                 }
@@ -944,8 +1201,27 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
 
         chosen = rows[selected]
         candidate = chosen["candidate_graph"]
-        if not typed_invariant_matches_graph(candidate, invariant):
-            raise AssertionError("Attributed rewiring changed the indexed typed-degree invariant.")
+        if not attributed_rewiring_invariant_matches_graph(candidate, rewiring_invariant):
+            raise AssertionError(
+                "Attributed rewiring changed node types, indexed ordinary degrees, "
+                "or global edge-category counts."
+            )
+        if typed_invariant is not None and not typed_invariant_matches_graph(
+            candidate, typed_invariant
+        ):
+            raise AssertionError("Strict attributed rewiring changed the indexed typed-degree invariant.")
+        if source_weighted_valence is not None:
+            candidate_weighted_valence = tuple(
+                sum(
+                    bond_order(int(data[str(vocabulary.edge_attribute)]))
+                    for _, _, data in candidate.edges(node, data=True)
+                )
+                for node in sorted(candidate.nodes())
+            )
+            if not np.allclose(
+                candidate_weighted_valence, source_weighted_valence, atol=1.0e-8
+            ):
+                raise AssertionError("Strict attributed rewiring changed per-node weighted valence.")
         if cfg.preserve_connectivity and candidate.number_of_nodes() > 1 and not nx.is_connected(candidate):
             raise AssertionError("Attributed rewiring broke connectivity.")
         current = candidate
@@ -985,8 +1261,8 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
                 "step": decision_step,
                 "accepted_step": accepted_steps,
                 "accepted": True,
-                "reason": "attributed_spectral_graphlet_denoising_swap",
-                "action": chosen["action"],
+                "reason": "attributed_spectral_graphlet_bond_reassigning_swap",
+                "action": _attributed_action_trace(chosen["action"], vocabulary),
                 "prediction_refreshed": prediction_refreshed,
                 "prediction_calls": prediction_calls,
                 "prediction_horizon": horizon,
@@ -1016,14 +1292,22 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
         decision_step += 1
 
     result = best_graph if cfg.return_best_state and accepted_steps > 0 else current
-    if not typed_invariant_matches_graph(result, invariant):
-        raise AssertionError("Final attributed graph does not preserve the source typed invariant.")
+    if not attributed_rewiring_invariant_matches_graph(result, rewiring_invariant):
+        raise AssertionError(
+            "Final attributed graph does not preserve node types, indexed ordinary "
+            "degrees, and global edge-category counts."
+        )
+    if typed_invariant is not None and not typed_invariant_matches_graph(
+        result, typed_invariant
+    ):
+        raise AssertionError("Final attributed graph does not preserve the strict typed invariant.")
     if return_trace:
         return result, trace
     return result
 
 
 __all__ = [
+    "AttributedRewireAction",
     "AttributedSpectralGraphletPrediction",
     "AttributedSpectralGraphletRefinerConfig",
     "predict_clean_attributed_summaries",
