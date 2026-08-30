@@ -1,0 +1,277 @@
+# HOG-Diff-inspired OU-bridge ablation for GraphER, noise-matched to the Brownian baseline peak scale.
+# This changes only the continuous summary training marginal; generation
+# remains degree/typed-degree-constrained rewiring. Compare against the
+# parent config community_small_topology_spectral_graphlet_v2.yaml with identical seeds and generation budgets.
+
+experiment: community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010
+benchmark: community_small
+seed: 42
+
+pipeline:
+  stage: topology
+  factorization: dhvae_hh_then_spectral_graphlet_diffusion_guided_degree_rewiring
+
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  max_reference_graphs: null
+  tune_on_split: val
+  final_split: test
+
+dataset:
+  # Community-small retains the historical serialized dataset name `sbm`.
+  name: sbm
+  benchmark: community_small
+  config_path: configs/datasets/community_small.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+  max_val_graphs: null
+
+# Every clean graph is paired with an HH realization of the same indexed
+# degree sequence. All teacher/generation states therefore remain in one
+# fixed degree fibre.
+training_sources:
+  mode: target_degree_havel_hakimi
+
+# Connected induced graphlet classes define the local coordinates.  Each
+# order is augmented by a disconnected-subset bin, making the block a full
+# probability simplex over induced k-node subsets.
+graphlet_prediction:
+  estimator: exact_connected_local_delta
+  graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: null
+  clustering_summary: true
+  clustering_bins: 20
+  spectral_summary: false
+  motif_proxy: false
+  orbit_count: true
+
+# Keep the spectrum as global guidance, but reduce its dominance relative to
+# the spectral-only experiment because additional compute already saturated.
+spectral_prediction:
+  require_same_degree_sequence: true
+  distance: rmse
+  normalization: mean_degree
+  low_frequency_weight: 1.5
+  low_frequency_cutoff: 6
+
+# Graphlet diffusion uses centered log-ratio (CLR) coordinates.  A slightly
+# larger epsilon than V1 prevents very rare/zero graphlet bins from creating
+# excessively large CLR magnitudes on Community-small.
+graphlet_diffusion:
+  enabled: true
+  representation: clr_logits
+  include_disconnected_bin: true
+  logit_epsilon: 0.0001
+  distance: clr_rmse
+  # These weights document the intended local priority. Candidate scoring uses
+  # the matching graphlet_guidance.size_weights below.
+  size_weights:
+    "3": 1.5
+    "4": 2.5
+    "5": 0.75
+
+# Predictor training follows a stochastic continuous bridge in summary space.
+# No rewiring trajectory is constructed during training.  The only materialized
+# graphs are the two endpoints: the same-degree HH source and the clean graph.
+# Intermediate spectral/graphlet states are continuous and need not correspond
+# to any realizable graph.  Streaming mode resamples new bridge noise every epoch.
+summary_diffusion:
+  storage: streaming
+  bridge: ou_bridge
+  # HOG-Diff-inspired GOUB/OU marginal (Community-small: N=500, linear theta schedule).
+  ou_num_scales: 500
+  ou_schedule: linear
+  ou_eps: 0.005
+  graphlet_bridge: brownian
+  schedule: cosine
+  power: 2.0
+
+  # Spectrum noise is expressed relative to the mean-degree spectral scale.
+  # OU unit noise can approach 1.0, so sigma=0.10 roughly matches the
+  # Brownian baseline peak effective noise (0.20 * 0.5 = 0.10).
+  # Zero-sum noise on lambda_2:n preserves trace=2m, while higher moments and
+  # ordering are intentionally free to leave the graph-realizable manifold.
+  spectral_sigma: 0.10
+  preserve_spectral_trace: true
+  fix_spectral_lambda1: true
+
+  # CLR logits live in Euclidean coordinates. Noise is centered independently
+  # inside each graphlet-order block so the CLR gauge remains zero-sum.
+  graphlet_sigma: 0.35
+
+  # 32 x 2 stochastic states per endpoint pair per epoch.
+  samples_per_graph: 32
+  paths_per_graph: 2
+  time_sampling: stratified
+  min_progress: 0.0
+  max_progress: 1.0
+
+  # HH source construction only; these are not trajectory/search settings.
+  source_randomization_steps: 0
+  random_relabel_source: true
+  ensure_connected_source: true
+  max_repair_trials: 10000
+
+topology_predictor:
+  type: spectral_graphlet_transformer
+  checkpoint_path: outputs/topology_grapher/community_small_spectral_graphlet_v2_hogdiff_ou_sigma010/seed_42/checkpoint.pt
+  device: auto
+
+  # Shared source-endpoint encoder. The graph context is always the fixed HH/base
+  # source; continuous current spectrum/graphlet states are separate inputs.
+  hidden_dim: 256
+  edge_dim: 128
+  graph_dim: 256
+  num_layers: 6
+
+  # Global branch: variable-length Spectral Transformer.
+  spectral_dim: 256
+  spectral_layers: 6
+  spectral_heads: 8
+  spectral_ff_dim: 1024
+
+  # Local branch: stronger residual CLR-logit heads.
+  graphlet_dim: 512
+  graphlet_dropout: 0.03
+
+  dropout: 0.05
+  min_gap: 0.000001
+  input_normalization: mean_degree
+  batch_size: 4
+
+  # Spend the additional training budget primarily on the joint predictor.
+  epochs: 800
+  learning_rate: 0.0001
+  weight_decay: 0.00005
+
+  # The previous spectral-only model saturated, so checkpoint selection is now
+  # deliberately more sensitive to graphlet prediction quality.
+  loss_weights:
+    spectrum: 0.75
+    moment2: 0.25
+    low_frequency: 0.75
+    low_frequency_k: 6
+    graphlet_logit: 2.0
+    graphlet_probability: 1.0
+
+  progress_interval: 10
+
+generation:
+  degree_source: learned
+  num_generate: 1024
+  max_attempts_per_graph: 8
+  write_legacy_hybrid_alias: false
+
+degree_generator:
+  enabled: true
+  type: degree_histogram_vae
+  checkpoint_path: outputs/baselines/dhvae_hh/community_small/seed_42/train/checkpoints/checkpoint.pt
+  device: auto
+  deterministic: false
+  sample_num_nodes: empirical
+  max_resample: 500
+  parity_conditioned: true
+  max_parity_resample: 64
+  postprocess_policy: reject_only
+  fallback: error
+
+constructor:
+  type: havel_hakimi
+  ensure_connected: true
+  random_relabel: true
+  max_repair_trials: 10000
+
+topology_refiner:
+  mode: spectral_graphlet
+
+  # Large enough to test whether local graphlet guidance can continue improving
+  # after the spectral-only model saturated.
+  steps: 256
+  proposal_budget: 2048
+  valid_candidate_budget: 512
+
+  preserve_connectivity: true
+  reject_revisited_states: true
+  selection: greedy
+  temperature: 0.1
+  accept_only_improving: true
+
+  min_improvement: 0.0000000001
+  min_relative_improvement: 0.000001
+  relative_improvement_epsilon: 0.000000000001
+
+  # Global guidance: keep spectrum important early, but avoid letting it
+  # dominate the combined energy near the clean end of the trajectory.
+  spectral_guidance:
+    distance: rmse
+    normalization: mean_degree
+    low_frequency_weight: 1.5
+    low_frequency_cutoff: 6
+    schedule: cosine
+    min_clean_mix: 0.25
+    max_clean_mix: 1.0
+    power: 2.0
+    expand_on_plateau: true
+    plateau_expand_factor: 1.25
+    max_plateau_expansions: 12
+
+  # Local guidance: prioritize triangles (clustering) and 4-node graphlets
+  # (the standard orbit metric), while keeping k=5 as a weaker regularizer.
+  graphlet_guidance:
+    distance: clr_rmse
+    logit_epsilon: 0.0001
+    size_weights:
+      "3": 1.5
+      "4": 2.5
+      "5": 0.75
+    schedule: cosine
+    min_clean_mix: 0.15
+    max_clean_mix: 1.0
+    power: 1.5
+    plateau_expand_factor: 1.25
+
+  # Global-to-local curriculum. Graphlet guidance is active from the beginning
+  # and becomes dominant later; spectrum becomes a weak global regularizer.
+  global_to_local:
+    schedule: linear
+    spectral_initial: 0.80
+    spectral_final: 0.15
+    graphlet_initial: 0.50
+    graphlet_final: 3.00
+    power: 1.0
+
+  # Graphlets are local and can change substantially after one swap, so refresh
+  # the joint clean prediction more frequently than the previous 8 -> 2 setup.
+  prediction_horizon:
+    mode: annealed
+    initial_k: 4
+    final_k: 1
+    schedule: cosine
+    refresh_on_plateau: true
+
+  # Keep detailed traces off for the 1024-graph run. Enable on 5--10 graphs to
+  # inspect weighted spectral/graphlet gains and projection residuals.
+  debug:
+    enabled: false
+    print_every: 1
+    top_candidates: 5
+    spectrum_values: 12
+    store_spectra: false
+
+evaluation:
+  inline_during_generation: false
+  orca_exec: null
+  compute_orbit: true
+  compute_graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 8192
