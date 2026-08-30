@@ -3,7 +3,12 @@ from __future__ import annotations
 import networkx as nx
 import pytest
 
-from grapher.data.builders import EgoDatasetBuilder, build_sbm_graphs, split_graphs
+from grapher.data.builders import (
+    EgoDatasetBuilder,
+    build_sbm_graphs,
+    load_precomputed_graphs,
+    split_graphs,
+)
 
 
 def _community_test_config() -> dict:
@@ -61,18 +66,18 @@ def test_community_generation_is_deterministic_for_dataset_seed() -> None:
     ]
 
 
-def test_community_protocol_splits_100_graphs_as_70_10_20() -> None:
+def test_common_protocol_splits_100_graphs_as_64_16_20() -> None:
     splits = split_graphs(
         list(range(100)),
         {
             "seed": 0,
-            "split": {"train": 0.7, "val": 0.1, "test": 0.2},
+            "split": {"seed": 0, "train": 0.64, "val": 0.16, "test": 0.2},
         },
     )
 
     assert {name: len(values) for name, values in splits.items()} == {
-        "train": 70,
-        "val": 10,
+        "train": 64,
+        "val": 16,
         "test": 20,
     }
 
@@ -127,3 +132,67 @@ def test_ego_rejects_unknown_selection(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="ego.selection"):
         builder.build_graphs()
+
+
+def test_precomputed_networkx_pickle_source_is_pinned(tmp_path) -> None:
+    import pickle
+
+    source = tmp_path / "ego.pkl"
+    graphs = [nx.path_graph(4), nx.cycle_graph(5)]
+    with source.open("wb") as handle:
+        pickle.dump(graphs, handle)
+
+    loaded = load_precomputed_graphs(
+        {
+            "name": "ego_small",
+            "num_graphs": 2,
+            "source": {
+                "kind": "networkx_pickle",
+                "path": str(source),
+                "expected_graphs": 2,
+            },
+        }
+    )
+
+    assert loaded is not None
+    assert [g.number_of_nodes() for g in loaded] == [4, 5]
+    assert [g.graph["source_index"] for g in loaded] == [0, 1]
+
+
+def test_split_seed_can_be_declared_inside_split_block() -> None:
+    graphs = list(range(20))
+    left = split_graphs(
+        graphs,
+        {"seed": 999, "split": {"seed": 7, "train": 0.6, "val": 0.2, "test": 0.2}},
+    )
+    right = split_graphs(
+        graphs,
+        {"seed": 1, "split": {"seed": 7, "train": 0.6, "val": 0.2, "test": 0.2}},
+    )
+    assert left == right
+
+
+def test_precomputed_spectre_pt_source_reads_first_adjacency_payload(tmp_path) -> None:
+    torch = pytest.importorskip("torch")
+    source = tmp_path / "community.pt"
+    adjs = [
+        torch.tensor(nx.to_numpy_array(nx.path_graph(4)), dtype=torch.float32),
+        torch.tensor(nx.to_numpy_array(nx.cycle_graph(5)), dtype=torch.float32),
+    ]
+    torch.save((adjs, None, None, None, None, None, None, None), source)
+
+    loaded = load_precomputed_graphs(
+        {
+            "name": "sbm",
+            "num_graphs": 2,
+            "source": {
+                "kind": "spectre_pt",
+                "path": str(source),
+                "expected_graphs": 2,
+            },
+        }
+    )
+
+    assert loaded is not None
+    assert [g.number_of_nodes() for g in loaded] == [4, 5]
+    assert [g.number_of_edges() for g in loaded] == [3, 5]

@@ -61,7 +61,13 @@ def mmd_rbf(x: np.ndarray, y: np.ndarray, sigma: float | None = None) -> float:
     return float(np.mean(kxx) + np.mean(kyy) - 2.0 * np.mean(kxy))
 
 
-def gaussian_emd_kernel(x: np.ndarray, y: np.ndarray, sigma: float = 1.0) -> np.ndarray:
+def gaussian_emd_kernel(
+    x: np.ndarray,
+    y: np.ndarray,
+    sigma: float = 1.0,
+    *,
+    distance_scaling: float = 1.0,
+) -> np.ndarray:
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
     if x.ndim == 1:
@@ -73,7 +79,10 @@ def gaussian_emd_kernel(x: np.ndarray, y: np.ndarray, sigma: float = 1.0) -> np.
     yp = np.zeros((y.shape[0], width), dtype=np.float64)
     xp[:, : x.shape[1]] = x
     yp[:, : y.shape[1]] = y
-    emd = np.sum(np.abs(np.cumsum(xp[:, None, :] - yp[None, :, :], axis=-1)), axis=-1)
+    emd = np.sum(
+        np.abs(np.cumsum(xp[:, None, :] - yp[None, :, :], axis=-1)),
+        axis=-1,
+    ) / max(float(distance_scaling), 1.0e-12)
     return np.exp(-(emd * emd) / (2.0 * float(sigma) * float(sigma)))
 
 
@@ -81,6 +90,8 @@ def mmd_gaussian_emd(
     x: np.ndarray,
     y: np.ndarray,
     sigma: float | None = None,
+    *,
+    distance_scaling: float = 1.0,
 ) -> float:
     """Biased MMD with one common Gaussian Earth-Mover kernel protocol."""
 
@@ -111,15 +122,33 @@ def mmd_gaussian_emd(
                 )
             ),
             axis=-1,
-        )
+        ) / max(float(distance_scaling), 1.0e-12)
         values = pairwise[np.triu_indices(combined.shape[0], k=1)]
         values = values[values > 0.0]
         sigma = float(np.median(values)) if values.size else 1.0
     sigma = max(float(sigma), 1.0e-12)
-    k_xx = gaussian_emd_kernel(x, x, sigma)
-    k_yy = gaussian_emd_kernel(y, y, sigma)
-    k_xy = gaussian_emd_kernel(x, y, sigma)
+    k_xx = gaussian_emd_kernel(x, x, sigma, distance_scaling=distance_scaling)
+    k_yy = gaussian_emd_kernel(y, y, sigma, distance_scaling=distance_scaling)
+    k_xy = gaussian_emd_kernel(x, y, sigma, distance_scaling=distance_scaling)
     return float(k_xx.mean() + k_yy.mean() - 2.0 * k_xy.mean())
+
+
+def mmd_orbit_graphrnn(
+    reference: Sequence[nx.Graph],
+    generated: Sequence[nx.Graph],
+    sigma: float = 30.0,
+) -> float:
+    """GraphRNN/SPECTRE four-node orbit MMD.
+
+    ``orbit_count_vector`` already returns the mean per-node 15-orbit vector,
+    matching GraphRNN's ORCA ``sum(axis=0) / num_nodes`` descriptor.  The
+    historical benchmark applies a Gaussian L2 kernel with sigma=30 and does
+    *not* renormalize this vector into a probability histogram.
+    """
+
+    ref = descriptor_matrix(reference, orbit_count_vector)
+    gen = descriptor_matrix(generated, orbit_count_vector)
+    return mmd_rbf(ref, gen, sigma=float(sigma))
 
 
 def orbit_histogram_matrix(graphs: Sequence[nx.Graph]) -> np.ndarray:

@@ -164,6 +164,9 @@ topology_refiner:
   reject_revisited_states: true
 
 evaluation:
+  # Match GraphRNN/SPECTRE generic benchmark metrics.
+  generic_mmd_protocol: graphrnn
+  generic_clustering_bins: 100
   inline_during_generation: false
   orca_exec: null
   compute_orbit: true

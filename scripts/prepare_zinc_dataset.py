@@ -44,6 +44,8 @@ class ZincProtocol:
     split_counts: dict[str, int]
     remove_hydrogens: bool
     keep_largest_fragment: bool
+    kekulize: bool
+    retain_aromatic_bonds: bool
     retain_formal_charge: bool
     retain_stereochemistry: bool
     max_nodes: int
@@ -86,12 +88,18 @@ class ZincProtocol:
             raise ValueError("Strict RDKit sanitization cannot be disabled.")
         if not bool(preprocessing.get("undirected", True)):
             raise NotImplementedError("Directed molecular graphs are not supported.")
-        if bool(preprocessing.get("kekulize", False)):
+        kekulize = bool(preprocessing.get("kekulize", False))
+        retain_aromatic_bonds = bool(
+            preprocessing.get("retain_aromatic_bonds", not kekulize)
+        )
+        if kekulize and retain_aromatic_bonds:
             raise ValueError(
-                "ZINC preparation must keep kekulize=false to preserve aromatic bonds."
+                "kekulize=true is incompatible with retain_aromatic_bonds=true."
             )
-        if not bool(preprocessing.get("retain_aromatic_bonds", True)):
-            raise ValueError("ZINC preparation must retain aromatic bonds.")
+        if not kekulize and not retain_aromatic_bonds:
+            raise ValueError(
+                "When kekulize=false, aromatic bonds must remain representable."
+            )
         if bool(preprocessing.get("retain_stereochemistry", False)):
             raise NotImplementedError(
                 "Stereochemical graph attributes are not implemented."
@@ -129,6 +137,15 @@ class ZincProtocol:
                 "ZINC edge categories must be drawn from bond types 1, 2, 3, 4."
             )
 
+        if retain_aromatic_bonds and 4 not in allowed_bonds:
+            raise ValueError(
+                "retain_aromatic_bonds=true requires aromatic bond category 4."
+            )
+        if not retain_aromatic_bonds and 4 in allowed_bonds:
+            raise ValueError(
+                "retain_aromatic_bonds=false requires removing category 4."
+            )
+
         bond_orders = {
             int(key): float(value)
             for key, value in (config.get("bond_orders", {}) or {}).items()
@@ -153,6 +170,8 @@ class ZincProtocol:
             keep_largest_fragment=bool(
                 preprocessing.get("keep_largest_fragment", True)
             ),
+            kekulize=kekulize,
+            retain_aromatic_bonds=retain_aromatic_bonds,
             retain_formal_charge=bool(preprocessing.get("retain_formal_charge", False)),
             retain_stereochemistry=False,
             max_nodes=max_nodes,
@@ -327,7 +346,13 @@ def smiles_to_zinc_graph(
             molecule = Chem.RemoveHs(molecule, sanitize=True)
         if not protocol.retain_stereochemistry:
             Chem.RemoveStereochemistry(molecule)
-        Chem.SanitizeMol(molecule)
+        if protocol.kekulize:
+            # Match the attached DeFoG/HOG-Diff representation: clear
+            # aromatic flags and keep the explicit alternating bond orders.
+            # Re-sanitizing here would perceive aromaticity again.
+            Chem.Kekulize(molecule, clearAromaticFlags=True)
+        else:
+            Chem.SanitizeMol(molecule)
     except Exception as exc:
         raise ZincRecordError("sanitization_failure", str(exc)) from exc
 
@@ -586,6 +611,8 @@ def prepare_zinc_dataset(
             "node_attributes": ["atomic_num", "atom_type"],
             "edge_attributes": ["bond_type", "bond_order"],
             "bond_types": list(protocol.allowed_bond_types),
+            "kekulize": bool(protocol.kekulize),
+            "retain_aromatic_bonds": bool(protocol.retain_aromatic_bonds),
         },
     }
     output_dir = ensure_dir(output_root / protocol.dataset_name)

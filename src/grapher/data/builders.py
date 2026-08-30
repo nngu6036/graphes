@@ -322,7 +322,7 @@ def split_graphs(
     train_frac = float(split_cfg.get("train", 0.8))
     val_frac = float(split_cfg.get("val", 0.1))
     test_frac = float(split_cfg.get("test", 1.0 - train_frac - val_frac))
-    seed = int(config.get("seed", 0))
+    seed = int(split_cfg.get("seed", config.get("seed", 0)))
 
     if min(train_frac, val_frac, test_frac) < 0.0:
         raise ValueError("split train/val/test fractions must be non-negative.")
@@ -341,6 +341,134 @@ def split_graphs(
         "val": [graphs[i] for i in val_idx],
         "test": [graphs[i] for i in test_idx],
     }
+
+
+def _resolve_precomputed_source(source: dict[str, Any]) -> Path:
+    path_value = source.get("path")
+    if not path_value:
+        raise ValueError("A precomputed dataset source requires source.path.")
+    path = Path(str(path_value))
+    if path.is_file():
+        return path
+    url = source.get("url")
+    if not url:
+        raise FileNotFoundError(f"Precomputed dataset source does not exist: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    urllib.request.urlretrieve(str(url), path)
+    return path
+
+
+def _normalize_precomputed_graph(
+    graph: nx.Graph,
+    *,
+    source_dataset: str,
+    source_kind: str,
+    source_index: int,
+) -> nx.Graph:
+    out = nx.Graph(graph)
+    out.remove_edges_from(nx.selfloop_edges(out))
+    out = nx.convert_node_labels_to_integers(
+        out, first_label=0, ordering="sorted"
+    )
+    out.graph.update(
+        {
+            "source_dataset": source_dataset,
+            "source_kind": source_kind,
+            "source_index": int(source_index),
+        }
+    )
+    return out
+
+
+def load_precomputed_graphs(
+    config: dict[str, Any],
+) -> list[nx.Graph] | None:
+    """Load a pinned benchmark artifact when ``source.kind`` declares one.
+
+    This keeps the common GraphES split/evaluation contract while avoiding
+    regeneration of canonical Community-small/Ego-small benchmark graphs.
+    """
+
+    source = config.get("source", {}) or {}
+    kind = str(source.get("kind", "")).strip().lower()
+    if not kind:
+        return None
+    if kind not in {"spectre_pt", "networkx_pickle"}:
+        raise ValueError(
+            f"Unsupported precomputed source.kind {kind!r}; expected "
+            "'spectre_pt' or 'networkx_pickle'."
+        )
+
+    source_path = _resolve_precomputed_source(source)
+    source_dataset = str(config.get("name", "graph"))
+    if kind == "spectre_pt":
+        try:
+            import torch
+        except ModuleNotFoundError as exc:
+            raise ImportError(
+                "Loading a SPECTRE .pt benchmark requires PyTorch."
+            ) from exc
+        try:
+            payload = torch.load(
+                source_path, map_location="cpu", weights_only=False
+            )
+        except TypeError:
+            payload = torch.load(source_path, map_location="cpu")
+        if not isinstance(payload, (tuple, list)) or not payload:
+            raise TypeError(
+                f"Unexpected SPECTRE payload in {source_path}; expected tuple/list."
+            )
+        adjacency_list = payload[0]
+        graphs = []
+        for index, adjacency in enumerate(adjacency_list):
+            array = (
+                adjacency.detach().cpu().numpy()
+                if hasattr(adjacency, "detach")
+                else np.asarray(adjacency)
+            )
+            graph = nx.from_numpy_array(np.asarray(array))
+            graphs.append(
+                _normalize_precomputed_graph(
+                    graph,
+                    source_dataset=source_dataset,
+                    source_kind=kind,
+                    source_index=index,
+                )
+            )
+    else:
+        with source_path.open("rb") as handle:
+            payload = pickle.load(handle)
+        if isinstance(payload, dict):
+            for key in ("graphs", "networks", "data"):
+                if key in payload:
+                    payload = payload[key]
+                    break
+        if not isinstance(payload, (list, tuple)):
+            raise TypeError(
+                f"Unexpected graph pickle payload in {source_path}; expected list/tuple."
+            )
+        graphs = []
+        for index, graph in enumerate(payload):
+            if not isinstance(graph, nx.Graph):
+                raise TypeError(
+                    f"Precomputed graph {index} in {source_path} is not NetworkX."
+                )
+            graphs.append(
+                _normalize_precomputed_graph(
+                    graph,
+                    source_dataset=source_dataset,
+                    source_kind=kind,
+                    source_index=index,
+                )
+            )
+
+    expected = int(source.get("expected_graphs", config.get("num_graphs", len(graphs))))
+    if len(graphs) != expected:
+        raise ValueError(
+            f"Precomputed source {source_path} contains {len(graphs)} graphs; "
+            f"expected {expected}."
+        )
+    return graphs
 
 
 def build_graphs_from_config(config: dict[str, Any]) -> list[nx.Graph]:
@@ -374,6 +502,9 @@ class SBMDatasetBuilder:
     config: dict[str, Any]
 
     def build_graphs(self) -> list[nx.Graph]:
+        graphs = load_precomputed_graphs(self.config)
+        if graphs is not None:
+            return graphs
         graphs = build_sbm_graphs(self.config)
         source_dataset = str(self.config.get("name", "sbm"))
         for graph in graphs:
@@ -474,6 +605,9 @@ class EgoDatasetBuilder:
     config: dict[str, Any]
 
     def build_graphs(self) -> list[nx.Graph]:
+        graphs = load_precomputed_graphs(self.config)
+        if graphs is not None:
+            return graphs
         cfg = self.config.get("ego", {}) or {}
         filters = self.config.get("filters", {}) or {}
         num_graphs = int(self.config.get("num_graphs", 200))

@@ -166,10 +166,30 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --reference-split test \
   --train-split train \
   --output-dir "$GEN_DIR/evaluation" \
-  --fcd-device auto
+   --require-fcd
 
 
-
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9892578125
+  fcd: 0.4075531445147327
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1013
+  num_invalid_generated_molecules: 11
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 11
+  correction_success_rate_on_raw_invalid: 1.0
+  uniqueness_rate: 0.9950641658440277
+  unique_valid_count: 1008
+  novelty_rate: 0.2837301587301587
+  novel_unique_valid_count: 286
+  nspdk_mmd: 8.364006275022426e-06
+  nspdk_mmd_valid_only: 8.231630162851501e-06
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1013
+  fcd_generated_smiles_source: valid_without_correction
   
 
 export DIGRESS=/home/quang/DiGress
@@ -192,4 +212,55 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --reference-split test \
   --train-split train \
   --output-dir "$GEN_DIR/evaluation" \
-  --fcd-device auto
+  --require-fcd
+
+
+  Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9873046875
+  fcd: 0.4245433681641231
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1011
+  num_invalid_generated_molecules: 13
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 13
+  correction_success_rate_on_raw_invalid: 1.0
+  uniqueness_rate: 0.9920870425321464
+  unique_valid_count: 1003
+  novelty_rate: 0.27018943170488535
+  novel_unique_valid_count: 271
+  nspdk_mmd: 1.574874999061238e-05
+  nspdk_mmd_valid_only: 1.5942734972552522e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1011
+  fcd_generated_smiles_source: valid_without_correction
+
+
+
+
+
+
+  
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset qm9 \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --run-id seed_44_e1000 \
+  --wrapper-config configs/baselines/digress_qm9.yaml
+
+GEN_DIR="outputs/baselines/digress/qm9/seed_44_e1000/generations/seed_44_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+  --require-fcd

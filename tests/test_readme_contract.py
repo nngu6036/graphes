@@ -43,7 +43,7 @@ def test_community_config_preserves_historical_dataset_alias(monkeypatch) -> Non
     assert dataset_name == "sbm"
 
 
-def test_community_config_matches_the_declared_gdss_protocol() -> None:
+def test_community_config_pins_the_spectre_artifact() -> None:
     config = yaml.safe_load(
         (REPOSITORY_ROOT / "configs/datasets/community_small.yaml").read_text(
             encoding="utf-8"
@@ -51,11 +51,11 @@ def test_community_config_matches_the_declared_gdss_protocol() -> None:
     )
 
     assert config["num_graphs"] == 100
-    assert config["split"] == {"train": 0.7, "val": 0.1, "test": 0.2}
-    assert config["communities"]["min_total_nodes"] == 12
-    assert config["communities"]["max_total_nodes"] == 20
-    assert config["communities"]["equal_block_sizes"] is True
-    assert config["edge_probs"]["p_inter"] == 0.05
+    assert config["source"]["kind"] == "spectre_pt"
+    assert config["source"]["artifact"] == "community_12_21_100.pt"
+    assert config["split"]["train"] == 0.64
+    assert config["split"]["val"] == 0.16
+    assert config["split"]["test"] == 0.20
 
 
 def test_generic_grapher_configs_exist_for_every_readme_dataset() -> None:

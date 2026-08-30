@@ -40,8 +40,8 @@ def _zinc_config(*, expected_graphs: int = 6, seed: int = 0) -> dict:
             "undirected": True,
             "keep_largest_fragment": True,
             "sanitize_with_rdkit": True,
-            "kekulize": False,
-            "retain_aromatic_bonds": True,
+            "kekulize": True,
+            "retain_aromatic_bonds": False,
             "retain_formal_charge": False,
             "retain_stereochemistry": False,
             "max_nodes": 38,
@@ -54,9 +54,9 @@ def _zinc_config(*, expected_graphs: int = 6, seed: int = 0) -> dict:
         },
         "categorical_state": {
             "node_categories": [6, 7, 8, 9, 15, 16, 17, 35, 53],
-            "edge_categories": [1, 2, 3, 4],
+            "edge_categories": [1, 2, 3],
         },
-        "bond_orders": {1: 1.0, 2: 2.0, 3: 3.0, 4: 1.5},
+        "bond_orders": {1: 1.0, 2: 2.0, 3: 3.0},
     }
 
 
@@ -71,7 +71,9 @@ def test_repository_zinc_config_resolves_fixed_12k_protocol() -> None:
     assert protocol.seed == 0
     assert protocol.split_counts == {"train": 10000, "val": 1000, "test": 1000}
     assert protocol.uncharged_atoms_only is True
-    assert protocol.allowed_bond_types == (1, 2, 3, 4)
+    assert protocol.allowed_bond_types == (1, 2, 3)
+    assert protocol.kekulize is True
+    assert protocol.retain_aromatic_bonds is False
 
 
 def test_read_zinc_smiles_uses_named_or_indexed_csv_column(
@@ -87,23 +89,23 @@ def test_read_zinc_smiles_uses_named_or_indexed_csv_column(
     assert read_zinc_smiles(source, smiles_column=1) == ["CC", "C#N"]
 
 
-def test_zinc_conversion_preserves_all_four_bond_types() -> None:
+def test_zinc_conversion_kekulizes_aromatic_bonds() -> None:
     pytest.importorskip("rdkit")
     protocol = ZincProtocol.from_config(_zinc_config())
     examples = {
-        "CC": 1,
-        "C=C": 2,
-        "C#N": 3,
-        "c1ccccc1": 4,
+        "CC": {1},
+        "C=C": {2},
+        "C#N": {3},
+        "c1ccccc1": {1, 2},
     }
 
-    for smiles, expected_bond_type in examples.items():
+    for smiles, expected_bond_types in examples.items():
         graph = smiles_to_zinc_graph(smiles, protocol)
 
         assert nx.is_connected(graph)
-        assert {data["bond_type"] for _, _, data in graph.edges(data=True)} == {
-            expected_bond_type
-        }
+        assert {data["bond_type"] for _, _, data in graph.edges(data=True)} == (
+            expected_bond_types
+        )
         assert all(
             "atomic_num" in data and "atom_type" in data
             for _, data in graph.nodes(data=True)

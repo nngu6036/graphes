@@ -6,6 +6,10 @@ root: outputs/datasets
 
 protocol:
   canonical: true
+  id: graphes_qm9_common_v1
+  comparison_scope: rerun_only
+  # No single attached baseline uses this exact train/val/test partition.
+  # Published molecular numbers therefore require a separate protocol audit.
   # Original QM9/Figshare SDF and official uncharacterized list.
   expected_source_records: 133885
   expected_excluded_records: 3054
@@ -28,6 +32,18 @@ preprocessing:
   # the projection occurs in the preparation report.
   project_formal_charge: true
   project_stereochemistry: true
+
+native_reference:
+  digress_defog:
+    remove_hydrogens: true
+    split_rule: raw_133885_shuffle_seed_42_then_100000_train_10pct_test_remainder_val_before_uncharacterized_filter
+  hog_diff:
+    remove_hydrogens: true
+    max_nodes: 9
+    split_rule: valid_idx_qm9_json_test_and_remaining_train_no_validation
+    evaluation_samples: 10000
+  graphrnn:
+    availability: no native QM9 molecular configuration
 
 categorical_state:
   node_attribute: atomic_num

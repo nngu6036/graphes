@@ -23,6 +23,9 @@ dataset:
 
 # Generic graph metrics used in the paper-facing report.
 evaluation:
+  # Match GraphRNN/SPECTRE generic benchmark metrics.
+  generic_mmd_protocol: graphrnn
+  generic_clustering_bins: 100
   orca_exec: null
   compute_orbit: true
   graphlet_backend: sampled
@@ -74,7 +77,7 @@ graphrnn:
   # They are deliberately marked unpaired in the wrapper manifest.
   training_estimates:
     enabled: true
-    # Omit num_graphs to match the 70-graph training split.
+    # Omit num_graphs to match the 64-graph training split.
 
   runtime:
     device: auto

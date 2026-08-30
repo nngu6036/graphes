@@ -25,6 +25,7 @@ from grapher.rewiring_mlp.evaluation.metrics import (
     descriptor_matrix,
     mmd_gaussian_emd,
     mmd_orbit,
+    mmd_orbit_graphrnn,
 )
 from grapher.rewiring_mlp.molecular.graph_io import nx_to_rdkit_mol, require_rdkit
 from grapher.properties.summary import (
@@ -258,9 +259,24 @@ def _paper_mmd(
     candidate: Sequence[nx.Graph],
     *,
     compute_orbit: bool = True,
+    metric_protocol: str = "graphrnn",
+    clustering_bins: int = 100,
 ) -> dict[str, float]:
-    """Evaluate the three generic-graph statistics used in the manuscript."""
+    """Evaluate generic graph statistics under a declared metric protocol.
 
+    ``graphrnn`` reproduces the historical GraphRNN/SPECTRE convention used
+    by GraphRNN, HOG-Diff (Community/Ego), and DiGress/DeFoG Comm20:
+
+    * degree histogram + Gaussian EMD, sigma=1;
+    * 100-bin clustering histogram + Gaussian EMD, sigma=0.1, distance
+      scaling equal to the number of bins; and
+    * mean per-node four-node orbit vector + Gaussian L2, sigma=30.
+
+    ``graphes_adaptive`` keeps the pre-alignment GraphES behavior for
+    backwards diagnostics only.
+    """
+
+    protocol = str(metric_protocol).strip().lower().replace("-", "_")
     max_degree = max(
         (
             max((int(degree) for _, degree in graph.degree()), default=0)
@@ -276,24 +292,61 @@ def _paper_mmd(
         candidate,
         lambda graph: degree_histogram(graph, max_degree),
     )
-    clustering_reference = descriptor_matrix(
-        reference,
-        lambda graph: clustering_histogram(graph, 20),
+
+    if protocol in {"graphrnn", "graphrnn_legacy", "spectre", "spectre_legacy"}:
+        bins = int(clustering_bins)
+        if bins <= 0:
+            raise ValueError("clustering_bins must be positive.")
+        clustering_reference = descriptor_matrix(
+            reference,
+            lambda graph: clustering_histogram(graph, bins),
+        )
+        clustering_candidate = descriptor_matrix(
+            candidate,
+            lambda graph: clustering_histogram(graph, bins),
+        )
+        return {
+            "degree_mmd": mmd_gaussian_emd(
+                degree_reference, degree_candidate, sigma=1.0
+            ),
+            "clustering_mmd": mmd_gaussian_emd(
+                clustering_reference,
+                clustering_candidate,
+                sigma=0.1,
+                distance_scaling=float(bins),
+            ),
+            "orbit_mmd": (
+                mmd_orbit_graphrnn(reference, candidate, sigma=30.0)
+                if compute_orbit
+                else float("nan")
+            ),
+        }
+
+    if protocol in {"graphes_adaptive", "adaptive"}:
+        clustering_reference = descriptor_matrix(
+            reference,
+            lambda graph: clustering_histogram(graph, 20),
+        )
+        clustering_candidate = descriptor_matrix(
+            candidate,
+            lambda graph: clustering_histogram(graph, 20),
+        )
+        return {
+            "degree_mmd": mmd_gaussian_emd(degree_reference, degree_candidate),
+            "clustering_mmd": mmd_gaussian_emd(
+                clustering_reference, clustering_candidate
+            ),
+            "orbit_mmd": (
+                mmd_orbit(reference, candidate)
+                if compute_orbit
+                else float("nan")
+            ),
+        }
+
+    raise ValueError(
+        f"Unknown generic MMD protocol {metric_protocol!r}; expected "
+        "'graphrnn' or 'graphes_adaptive'."
     )
-    clustering_candidate = descriptor_matrix(
-        candidate,
-        lambda graph: clustering_histogram(graph, 20),
-    )
-    return {
-        "degree_mmd": mmd_gaussian_emd(degree_reference, degree_candidate),
-        "clustering_mmd": mmd_gaussian_emd(
-            clustering_reference,
-            clustering_candidate,
-        ),
-        "orbit_mmd": (
-            mmd_orbit(reference, candidate) if compute_orbit else float("nan")
-        ),
-    }
 
 
 def is_molecular_evaluation(
@@ -653,6 +706,15 @@ def main() -> None:
         )
     )
     parser.add_argument("--config", required=True)
+    parser.add_argument(
+        "--generic-mmd-protocol",
+        choices=("config", "graphrnn", "graphes_adaptive"),
+        default="config",
+        help=(
+            "Generic-graph MMD convention. 'config' reads "
+            "evaluation.generic_mmd_protocol (default: graphrnn)."
+        ),
+    )
     parser.add_argument("--generated-dir", required=True)
     parser.add_argument(
         "--generated-graphs",
@@ -710,6 +772,14 @@ def main() -> None:
     output_dir = ensure_dir(args.output_dir or generated_dir / "evaluation_report")
 
     evaluation_cfg = config.get("evaluation", {}) or {}
+    generic_mmd_protocol = (
+        str(evaluation_cfg.get("generic_mmd_protocol", "graphrnn"))
+        if args.generic_mmd_protocol == "config"
+        else str(args.generic_mmd_protocol)
+    )
+    generic_clustering_bins = int(
+        evaluation_cfg.get("generic_clustering_bins", 100)
+    )
     compute_orbit = bool(evaluation_cfg.get("compute_orbit", True))
     graphlet_backend = str(
         evaluation_cfg.get("graphlet_backend", "sampled")
@@ -734,6 +804,12 @@ def main() -> None:
         print("Python four-node orbit evaluation enabled.", flush=True)
     else:
         print("ORCA evaluation disabled by configuration.", flush=True)
+
+    print(
+        "Generic MMD protocol: "
+        f"{generic_mmd_protocol} (clustering_bins={generic_clustering_bins})",
+        flush=True,
+    )
 
     dataset_cfg = config.get("dataset", {}) or {}
     splits = load_dataset_splits(
@@ -795,6 +871,8 @@ def main() -> None:
                     reference,
                     train_graphs,
                     compute_orbit=compute_orbit,
+                    metric_protocol=generic_mmd_protocol,
+                    clustering_bins=generic_clustering_bins,
                 ),
             }
         )
@@ -809,6 +887,8 @@ def main() -> None:
                     reference,
                     base_graphs[:base_count],
                     compute_orbit=compute_orbit,
+                    metric_protocol=generic_mmd_protocol,
+                    clustering_bins=generic_clustering_bins,
                 ),
             }
         )
@@ -819,6 +899,8 @@ def main() -> None:
                 reference,
                 generated,
                 compute_orbit=compute_orbit,
+                metric_protocol=generic_mmd_protocol,
+                clustering_bins=generic_clustering_bins,
             ),
         }
     )
@@ -885,6 +967,8 @@ def main() -> None:
             "format": "graph_generation_evaluation_report_v3",
             "orca_exec": orca_exec,
             "compute_orbit": compute_orbit,
+            "generic_mmd_protocol": generic_mmd_protocol,
+            "generic_clustering_bins": generic_clustering_bins,
             "graphlet_backend": graphlet_backend,
             "generated_graphs": str(generated_path),
             "generated_stage": final_stage,

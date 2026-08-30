@@ -1,33 +1,49 @@
-# Ego-small benchmark used by GDSS and subsequent graph-generation work.
+# Common report-facing Ego-small benchmark.
+# Pin the serialized EDGE ego-graph artifact used by DeFoG instead of rebuilding
+# ego neighborhoods from Citeseer with potentially different filtering/order.
 name: ego_small
 type: ego
 benchmark: ego_small
+protocol_id: graphes_ego_small_edge_v2
 
-# Keep dataset preparation fixed across model-training seeds.
-seed: 0
+seed: 1234
 num_graphs: 200
 
-# The original benchmark uses an 80/20 train/test split. We reserve 20 graphs
-# from the training side for validation while retaining 40 held-out test graphs.
-split:
-  train: 0.7
-  val: 0.1
-  test: 0.2
+source:
+  kind: networkx_pickle
+  provider: EDGE
+  artifact: Ego.pkl
+  url: https://raw.githubusercontent.com/tufts-ml/graph-generation-EDGE/main/graphs/Ego.pkl
+  path: outputs/datasets/sources/edge/Ego.pkl
+  expected_graphs: 200
 
-ego:
-  source_model: citeseer
-  source_root: outputs/datasets/planetoid
-  source_graph_url: https://github.com/kimiyoung/planetoid/raw/master/data/ind.citeseer.graph
-  largest_connected_component: true
-  radius: 1
-  min_nodes: 4
-  max_nodes: 18
-  # The official generator iterates over the relabelled Citeseer component and
-  # retains the first 200 qualifying ego graphs.
-  selection: first
-  sample_with_replacement: false
+# Common disjoint split. This preserves a 20% test set while avoiding the
+# train/validation overlap present in some legacy loaders.
+split:
+  seed: 1234
+  train: 0.64
+  val: 0.16
+  test: 0.20
 
 filters:
   require_connected: true
   reject_zero_degree: true
-  max_attempts_per_graph: 300
+
+native_reference:
+  graphrnn:
+    dataset_name: citeseer_small
+    construction: radius_1_citeseer_ego
+    min_nodes: 4
+    max_nodes: 20
+    note: native GraphRNN shuffles 200 ego graphs and uses an overlapping validation subset
+  defog:
+    dataset_name: ego
+    artifact: Ego.pkl
+    test_fraction: 0.20
+    note: attached loader uses validation as a subset of training; GraphES intentionally uses disjoint validation
+  hog_diff:
+    dataset_name: ego_small
+    max_nodes: 18
+    test_fraction: 0.20
+  digress:
+    availability: no shipped Ego-small dataset config in the attached repository

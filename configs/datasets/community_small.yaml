@@ -1,40 +1,50 @@
-# Historical filename: this is the Community-small benchmark used by GDSS and
-# the manuscript, not the larger variable-block SPECTRE SBM benchmark.
+# Common report-facing Community-small benchmark.
+# Pin the serialized SPECTRE artifact instead of regenerating an approximate SBM.
 name: sbm
+# Historical serialized alias retained for compatibility with existing GraphES code.
 type: sbm
 benchmark: community_small
+protocol_id: graphes_community_small_spectre_v2
 
-# Keep the dataset/split seed fixed across all model-training seeds.
 seed: 0
 num_graphs: 100
 
-# GDSS exposes an 80/20 train/test split. This project reserves 10 graphs from
-# the training side for validation, giving 70/10/20 while retaining the
-# benchmark's 20-graph held-out test set.
+source:
+  kind: spectre_pt
+  provider: SPECTRE
+  artifact: community_12_21_100.pt
+  url: https://raw.githubusercontent.com/KarolisMart/SPECTRE/main/data/community_12_21_100.pt
+  path: outputs/datasets/sources/spectre/community_12_21_100.pt
+  expected_graphs: 100
+
+# Use the intended SPECTRE-style 80/20 train/test partition and reserve 20% of
+# the training side for validation: 64/16/20.  The split is disjoint.
 split:
-  train: 0.7
-  val: 0.1
-  test: 0.2
-
-communities:
-  min_blocks: 2
-  max_blocks: 2
-  # Match GDSS: draw max_nodes uniformly from 12..20, then use two equal
-  # communities of floor(max_nodes / 2). Actual graph sizes are therefore
-  # 12, 14, 16, 18, or 20.
-  min_total_nodes: 12
-  max_total_nodes: 20
-  equal_block_sizes: true
-
-edge_probs:
-  p_in: 0.70
-  p_out: 0.0
-  # `p_inter` follows the GDSS generator: the Bernoulli bridge probability is
-  # chosen so that E[number of cross-community edges] = p_inter * |V|.
-  p_inter: 0.05
-  ensure_inter_community_edge: true
+  seed: 0
+  train: 0.64
+  val: 0.16
+  test: 0.20
 
 filters:
   require_connected: true
   reject_zero_degree: true
-  max_attempts_per_graph: 300
+
+# Native-code notes are documentation only; GraphES always uses the common
+# split above for reruns.
+native_reference:
+  graphrnn:
+    dataset_identity: different_native_generator
+    note: original GraphRNN community code generates 3000 graphs rather than this SPECTRE artifact
+  digress:
+    dataset_name: comm20
+    artifact: community_12_21_100.pt
+    intended_split: [0.64, 0.16, 0.20]
+    attached_code_note: declares num_graphs=200 for the 100-graph artifact and duplicates processed records
+  defog:
+    dataset_name: comm20
+    artifact: community_12_21_100.pt
+    intended_split: [0.64, 0.16, 0.20]
+    attached_code_note: declares num_graphs=200 for the 100-graph artifact
+  hog_diff:
+    dataset_name: community_small
+    test_fraction: 0.20

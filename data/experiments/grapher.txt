@@ -199,3 +199,20 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   fcd_num_reference_molecules: 13174
   fcd_num_valid_generated_molecules: 1023
   fcd_generated_smiles_source: valid_without_correction
+
+
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2_hogdiff_ou.yaml \
+  --output-dir outputs/topology_grapher/community_small_spectral_graphlet_v2_hogdiff_ou/seed_42 \
+  --seed 42 \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_topology_grapher.py  \
+--config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2_hogdiff_ou.yaml  \
+--output-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2_hogdiff_ou/seed_42   \
+--num-generate 1024  \
+--seed 42   \
+--device gpu 
+
+
+
