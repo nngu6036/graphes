@@ -520,3 +520,39 @@ For implementation details, see:
 ## License
 
 Add the appropriate open-source license before public release.
+
+
+## Prepare molecular datasets
+
+mkdir -p data/qm9
+
+wget --content-disposition \
+  -O data/qm9/uncharacterized.txt \
+  https://ndownloader.figshare.com/files/3195404
+
+wget -O data/qm9/gdb9.tar.gz \
+  https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/gdb9.tar.gz
+
+tar -xzf data/qm9/gdb9.tar.gz -C data/qm9
+
+PYTHONPATH=src python scripts/prepare_qm9_dataset.py \
+  --config configs/datasets/qm9.yaml \
+  --source sdf \
+  --sdf-file data/qm9/gdb9.sdf \
+  --uncharacterized-file data/qm9/uncharacterized.txt \
+  --root outputs/datasets
+
+PYTHONPATH=src python scripts/prepare_zinc_dataset.py \
+  --config configs/datasets/zinc.yaml \
+  --smiles-file data/zinc250k.csv \
+  --smiles-column smiles \
+  --root outputs/datasets
+
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 42
+

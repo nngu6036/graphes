@@ -46,6 +46,8 @@ class QM9Protocol:
     split_counts: dict[str, int]
     project_formal_charge: bool
     project_stereochemistry: bool
+    sanitize_sdf: bool
+    kekulize: bool
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "QM9Protocol":
@@ -71,6 +73,8 @@ class QM9Protocol:
             project_stereochemistry=bool(
                 preprocessing.get("project_stereochemistry", True)
             ),
+            sanitize_sdf=bool(preprocessing.get("sanitize_sdf", False)),
+            kekulize=bool(preprocessing.get("kekulize", False)),
         )
         if min(
             result.expected_source_records,
@@ -95,6 +99,16 @@ class QM9Protocol:
             raise ValueError(
                 "Canonical QM9 must explicitly declare projection of formal "
                 "charge and stereochemistry from DeFoG's categorical state."
+            )
+        if result.canonical and result.sanitize_sdf:
+            raise ValueError(
+                "Canonical QM9 must parse gdb9.sdf with sanitize=False, "
+                "matching the native DiGress/DeFoG loaders."
+            )
+        if result.canonical and result.kekulize:
+            raise ValueError(
+                "Canonical QM9 must not kekulize gdb9.sdf before category "
+                "extraction; native DiGress/DeFoG preserve the raw bond state."
             )
         return result
 
@@ -345,7 +359,7 @@ def _rdkit_bond_type(bond) -> int:
     return int(QM9_BOND_TYPES[idx])
 
 
-def _rdkit_mol_to_nx(mol, *, remove_h: bool = True, kekulize: bool = True) -> nx.Graph:
+def _rdkit_mol_to_nx(mol, *, remove_h: bool = True, kekulize: bool = False) -> nx.Graph:
     try:
         from rdkit import Chem  # type: ignore
     except ModuleNotFoundError as exc:
@@ -430,7 +444,8 @@ def _graphs_from_sdf_qm9(
     *,
     max_molecules: int | None = None,
     remove_h: bool = True,
-    kekulize: bool = True,
+    kekulize: bool = False,
+    sanitize_sdf: bool = False,
     excluded_indices: set[int] | None = None,
 ) -> tuple[list[nx.Graph], dict[str, int], int]:
     try:
@@ -444,7 +459,12 @@ def _graphs_from_sdf_qm9(
     if not sdf_file.exists():
         raise FileNotFoundError(f"SDF file does not exist: {sdf_file}")
 
-    supplier = Chem.SDMolSupplier(str(sdf_file), removeHs=False, sanitize=True)
+    # Native DiGress/DeFoG intentionally parse the legacy QM9 SDF without
+    # RDKit valence sanitization. Official uncharacterized molecules are
+    # removed separately by their source indices.
+    supplier = Chem.SDMolSupplier(
+        str(sdf_file), removeHs=False, sanitize=bool(sanitize_sdf)
+    )
     if supplier is None:
         raise RuntimeError(f"Could not open SDF file: {sdf_file}")
 
@@ -538,7 +558,14 @@ def main() -> None:
         help="Split seed; defaults to the pinned value in the protocol config.",
     )
     parser.add_argument("--keep-hydrogens", action="store_true")
-    parser.add_argument("--no-kekulize", action="store_true")
+    kekulize_group = parser.add_mutually_exclusive_group()
+    kekulize_group.add_argument(
+        "--kekulize", dest="kekulize_override", action="store_const", const=True
+    )
+    kekulize_group.add_argument(
+        "--no-kekulize", dest="kekulize_override", action="store_const", const=False
+    )
+    parser.set_defaults(kekulize_override=None)
     parser.add_argument(
         "--allow-noncanonical",
         action="store_true",
@@ -553,6 +580,12 @@ def main() -> None:
     protocol = QM9Protocol.from_config(config)
     split_seed = protocol.split_seed if args.seed is None else int(args.seed)
     canonical_run = bool(protocol.canonical and not args.allow_noncanonical)
+    kekulize = (
+        protocol.kekulize
+        if args.kekulize_override is None
+        else bool(args.kekulize_override)
+    )
+    sanitize_sdf = bool(protocol.sanitize_sdf)
     if canonical_run and args.max_molecules is not None:
         raise ValueError(
             "--max-molecules is a development option; combine it with "
@@ -563,10 +596,16 @@ def main() -> None:
             f"Canonical QM9 uses split seed {protocol.split_seed}; received "
             f"{split_seed}. Use --allow-noncanonical for a different split."
         )
-    if canonical_run and (args.keep_hydrogens or args.no_kekulize):
+    if canonical_run and args.keep_hydrogens:
         raise ValueError(
-            "Canonical QM9 uses the heavy-atom, kekulized representation. "
-            "Use --allow-noncanonical to change preprocessing."
+            "Canonical QM9 uses the heavy-atom representation. "
+            "Use --allow-noncanonical to keep hydrogens."
+        )
+    if canonical_run and kekulize != protocol.kekulize:
+        raise ValueError(
+            "Canonical QM9 preserves the preprocessing declared in "
+            "configs/datasets/qm9.yaml. Use --allow-noncanonical to override "
+            "bond-state handling."
         )
 
     root = Path(args.root)
@@ -606,7 +645,7 @@ def main() -> None:
         graphs, errors = graphs_from_smiles(
             smiles,
             remove_h=not args.keep_hydrogens,
-            kekulize=not args.no_kekulize,
+            kekulize=kekulize,
         )
         source_path = str(args.smiles_file)
         source_sha256 = _sha256_file(Path(args.smiles_file).resolve())
@@ -629,7 +668,8 @@ def main() -> None:
             sdf_file,
             max_molecules=args.max_molecules,
             remove_h=not args.keep_hydrogens,
-            kekulize=not args.no_kekulize,
+            kekulize=kekulize,
+            sanitize_sdf=sanitize_sdf,
             excluded_indices=excluded_indices,
         )
         sdf_file = sdf_file.resolve()
@@ -720,7 +760,8 @@ def main() -> None:
         "source_type": source,
         "kind": "qm9_topology",
         "remove_h": not args.keep_hydrogens,
-        "kekulize": not args.no_kekulize,
+        "kekulize": bool(kekulize),
+        "sanitize_sdf": bool(sanitize_sdf),
         "seed": split_seed,
         "canonical_protocol": canonical_run,
         "source_sha256": source_sha256,

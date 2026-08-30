@@ -6,7 +6,7 @@ root: outputs/datasets
 
 protocol:
   canonical: true
-  id: graphes_qm9_common_v1
+  id: graphes_qm9_common_v2
   comparison_scope: rerun_only
   # No single attached baseline uses this exact train/val/test partition.
   # Published molecular numbers therefore require a separate protocol audit.
@@ -26,7 +26,13 @@ split:
 preprocessing:
   representation: heavy_atom_graph
   remove_hydrogens: true
-  kekulize: true
+  # Match the native DiGress/DeFoG QM9 raw loader. The legacy gdb9.sdf
+  # contains characterized records that RDKit rejects under full sanitization.
+  sanitize_sdf: false
+  # Native DiGress/DeFoG do not kekulize the source SDF. QM9's observed heavy-
+  # atom edge support is still single/double/triple; their reserved aromatic
+  # category has zero observed mass.
+  kekulize: false
   # DeFoG represents only atom and bond categories. Preserve all canonical
   # molecule indices, project these unsupported channels, and audit how often
   # the projection occurs in the preparation report.
@@ -36,6 +42,9 @@ preprocessing:
 native_reference:
   digress_defog:
     remove_hydrogens: true
+    sanitize_sdf: false
+    kekulize: false
+    observed_edge_categories: [1, 2, 3]
     split_rule: raw_133885_shuffle_seed_42_then_100000_train_10pct_test_remainder_val_before_uncharacterized_filter
   hog_diff:
     remove_hydrogens: true
@@ -49,4 +58,4 @@ categorical_state:
   node_attribute: atomic_num
   node_categories: [6, 7, 8, 9]
   edge_attribute: bond_type
-  edge_categories: [1, 2, 3, 4]
+  edge_categories: [1, 2, 3]

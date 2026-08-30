@@ -21,9 +21,9 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir outputs/topology_grapher/community_small_topology_spectral_graphlet_v2/seed_42/evaluation
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.026004          0.037029      0.025194
-hh_source_to_test                   0.047347          0.277226      0.227409
-topology_final_to_test              0.047347          0.062318      0.052306
+train_to_test                       0.028458          0.041560      0.005482
+hh_source_to_test                   0.058957          0.281856      0.256149
+topology_final_to_test              0.058957          0.065885      0.084601
 
  PYTHONPATH=src python scripts/train_topology_grapher.py \
   --config configs/experiments/grapher/ego_small_topology_spectral_graphlet_v2.yaml \
@@ -75,6 +75,7 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --output-dir \
     outputs/attributed_grapher/qm9_spectral_graphlet/seed_42/evaluation \
   --require-fcd
+  --hogdiff-compatible-metrics
 
 Molecular evaluation
   validity: 1.0

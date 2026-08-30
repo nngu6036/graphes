@@ -20,16 +20,15 @@ typed_signature:
   node_attribute: atomic_num
   node_categories: [6, 7, 8, 9, 15, 16, 17, 35, 53]
   edge_attribute: bond_type
-  edge_categories: [1, 2, 3, 4]
+  edge_categories: [1, 2, 3]
   fields:
-    [atomic_num, single_degree, double_degree, triple_degree, aromatic_degree]
+    [atomic_num, single_degree, double_degree, triple_degree]
   hydrogens: implicit
   max_ordinary_degree: 6
   bond_orders:
     1: 1.0
     2: 2.0
     3: 3.0
-    4: 1.5
   size_mask: true
   domain_mask: true
 

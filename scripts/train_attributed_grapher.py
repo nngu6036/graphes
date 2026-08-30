@@ -444,7 +444,8 @@ def main() -> None:
         if tuple(observed_edges) != tuple(vocabulary.edge_values):
             raise ValueError(
                 f"Configured edge categories {vocabulary.edge_values} disagree with observed training support {tuple(observed_edges)}. "
-                "For kekulized QM9 this is normally (1, 2, 3), not aromatic category 4."
+                "For the common QM9 heavy-atom split this is normally (1, 2, 3); "
+                "native DiGress/DeFoG reserve an aromatic class but observe zero aromatic mass."
             )
 
     graphlet_cfg = dict(config.get("graphlet_prediction", {}) or {})
