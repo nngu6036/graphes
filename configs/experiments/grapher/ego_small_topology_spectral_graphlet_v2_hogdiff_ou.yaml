@@ -84,15 +84,15 @@ graphlet_diffusion:
 summary_diffusion:
   storage: streaming
   bridge: ou_bridge
-  # HOG-Diff-inspired GOUB/OU marginal (Ego-small: N=200, cosine theta schedule).
-  ou_num_scales: 200
-  ou_schedule: cosine
+  ou_num_scales: 500
+  ou_schedule: linear
   ou_eps: 0.005
   graphlet_bridge: brownian
+
   schedule: cosine
   power: 2.0
 
-  spectral_sigma: 0.20
+  spectral_sigma: 0.10   # changed from 0.20
   preserve_spectral_trace: true
   fix_spectral_lambda1: true
 
@@ -100,15 +100,7 @@ summary_diffusion:
 
   samples_per_graph: 32
   paths_per_graph: 2
-
   time_sampling: stratified
-  min_progress: 0.0
-  max_progress: 1.0
-
-  source_randomization_steps: 0
-  random_relabel_source: true
-  ensure_connected_source: true
-  max_repair_trials: 10000
 
 # ---------------------------------------------------------------------------
 # JOINT SPECTRAL + GRAPHLET PREDICTOR
