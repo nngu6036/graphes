@@ -196,3 +196,21 @@ def test_precomputed_spectre_pt_source_reads_first_adjacency_payload(tmp_path) -
     assert loaded is not None
     assert [g.number_of_nodes() for g in loaded] == [4, 5]
     assert [g.number_of_edges() for g in loaded] == [3, 5]
+
+
+def test_ego_small_config_does_not_alias_edge_ego_dataset() -> None:
+    from pathlib import Path
+    import yaml
+
+    config_path = Path(__file__).resolve().parents[1] / "configs" / "datasets" / "ego_small.yaml"
+    config = yaml.safe_load(config_path.read_text())
+
+    assert config["num_graphs"] == 200
+    assert "source" not in config
+    ego = config["ego"]
+    assert ego["source_model"] == "citeseer"
+    assert ego["radius"] == 1
+    assert ego["min_nodes"] == 4
+    assert ego["max_nodes"] == 18
+    assert ego["selection"] == "first"
+    assert config["native_reference"]["defog"]["native_ego_graphs"] == 757

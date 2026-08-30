@@ -113,11 +113,10 @@ This is a different graph population from the explicit DiGress/DeFoG SPECTRE art
 
 ### DeFoG
 
-- downloads EDGE `Ego.pkl`;
-- number of graphs is read from the artifact;
-- seed 1234;
-- train 80%, test 20%; validation is the first 20% and therefore overlaps training;
-- native evaluator uses Gaussian-TV rather than Comm20's EMD setting.
+- the attached repository's `ego` profile downloads EDGE `Ego.pkl`;
+- that artifact contains 757 graphs and is the separate **Ego** benchmark, not Ego-small;
+- therefore it must not be used as the common Ego-small source;
+- for GraphES Ego-small reruns, the DeFoG wrapper uses the prepared common small-graph split through its generic compatibility profile.
 
 ### HOG-Diff
 
@@ -138,9 +137,10 @@ No Ego-small dataset config is shipped in the attached repository.
 
 ### Updated GraphER recommendation
 
-- pin EDGE `Ego.pkl` rather than independently rebuilding Citeseer egos;
-- use a clean disjoint 64/16/20 split, seed 1234;
-- keep the common paper evaluator independent of DeFoG's native TV exception.
+- use the GDSS-style Ego-small construction: Citeseer largest connected component, radius 1, 4--18 nodes, first 200 qualifying ego graphs;
+- **do not** map EDGE `Ego.pkl` to Ego-small: it is the distinct 757-graph Ego benchmark;
+- use a clean disjoint 64/16/20 split, seed 1234, for all GraphES reruns;
+- keep the common paper evaluator independent of native baseline split/evaluator exceptions.
 
 ## 5. QM9 dataset/config comparison
 
@@ -240,7 +240,7 @@ This change requires regenerating the ZINC dataset and retraining molecular mode
 
 ### Ego-small
 
-`configs/datasets/ego_small.yaml` now pins EDGE `Ego.pkl` and uses disjoint 64/16/20 splitting with seed 1234.
+`configs/datasets/ego_small.yaml` now follows the GDSS-style Citeseer Ego-small construction (radius 1, 4--18 nodes, first 200 qualifying graphs) and uses disjoint 64/16/20 splitting with seed 1234. EDGE `Ego.pkl` is explicitly documented as the distinct 757-graph Ego benchmark and is not used for Ego-small.
 
 ### Generic source loading
 

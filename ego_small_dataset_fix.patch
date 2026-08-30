@@ -1,0 +1,147 @@
+--- a/configs/datasets/ego_small.yaml
++++ b/configs/datasets/ego_small.yaml
+@@ -1,24 +1,34 @@
+ # Common report-facing Ego-small benchmark.
+-# Pin the serialized EDGE ego-graph artifact used by DeFoG instead of rebuilding
+-# ego neighborhoods from Citeseer with potentially different filtering/order.
++#
++# IMPORTANT: Ego-small is NOT the 757-graph EDGE `Ego.pkl` benchmark.  The
++# latter is the separate, larger `Ego` dataset.  Ego-small follows the GDSS /
++# small-graph Citeseer construction: radius-1 ego networks from the largest
++# connected Citeseer component, retaining 4--18 nodes and the first 200
++# qualifying centers.
+ name: ego_small
+ type: ego
+ benchmark: ego_small
+-protocol_id: graphes_ego_small_edge_v2
++protocol_id: graphes_ego_small_gdss_v3
+ 
+ seed: 1234
+ num_graphs: 200
+ 
+-source:
+-  kind: networkx_pickle
+-  provider: EDGE
+-  artifact: Ego.pkl
+-  url: https://raw.githubusercontent.com/tufts-ml/graph-generation-EDGE/main/graphs/Ego.pkl
+-  path: outputs/datasets/sources/edge/Ego.pkl
+-  expected_graphs: 200
++# Match the GDSS Ego-small graph identity.  The Planetoid Citeseer adjacency
++# pickle is fetched on first preparation when it is not already cached.
++ego:
++  source_model: citeseer
++  source_root: outputs/datasets/planetoid
++  source_graph_url: https://github.com/kimiyoung/planetoid/raw/master/data/ind.citeseer.graph
++  largest_connected_component: true
++  radius: 1
++  min_nodes: 4
++  max_nodes: 18
++  selection: first
++  sample_with_replacement: false
+ 
+-# Common disjoint split. This preserves a 20% test set while avoiding the
+-# train/validation overlap present in some legacy loaders.
++# Common GraphES disjoint split.  This is deliberately shared by all rerun
++# baselines; it is not the overlapping validation convention used by some
++# legacy repositories.
+ split:
+   seed: 1234
+   train: 0.64
+@@ -30,20 +40,27 @@
+   reject_zero_degree: true
+ 
+ native_reference:
++  gdss:
++    construction: radius_1_citeseer_ego
++    min_nodes: 4
++    max_nodes: 18
++    selection: first_200
++    note: This is the source identity adopted by the common GraphES rerun protocol.
+   graphrnn:
+     dataset_name: citeseer_small
+     construction: radius_1_citeseer_ego
+     min_nodes: 4
+     max_nodes: 20
+-    note: native GraphRNN shuffles 200 ego graphs and uses an overlapping validation subset
++    selection: shuffled_200
++    note: Native GraphRNN differs slightly (max 20 and random shuffle); the wrapper uses the common prepared GraphES split instead.
+   defog:
+-    dataset_name: ego
+-    artifact: Ego.pkl
+-    test_fraction: 0.20
+-    note: attached loader uses validation as a subset of training; GraphES intentionally uses disjoint validation
++    native_ego_artifact: Ego.pkl
++    native_ego_graphs: 757
++    note: The attached DeFoG `ego` loader is the separate Ego benchmark, not Ego-small. GraphES therefore uses DeFoG's generic compatibility architecture on the common Ego-small split.
+   hog_diff:
+     dataset_name: ego_small
+     max_nodes: 18
+     test_fraction: 0.20
++    note: The attached archive does not include its preprocessed pickle, so exact graph ordering cannot be proven from the archive alone.
+   digress:
+     availability: no shipped Ego-small dataset config in the attached repository
+--- a/BASELINE_EVALUATION_DATASET_AUDIT.md
++++ b/BASELINE_EVALUATION_DATASET_AUDIT.md
+@@ -113,11 +113,10 @@
+ 
+ ### DeFoG
+ 
+-- downloads EDGE `Ego.pkl`;
+-- number of graphs is read from the artifact;
+-- seed 1234;
+-- train 80%, test 20%; validation is the first 20% and therefore overlaps training;
+-- native evaluator uses Gaussian-TV rather than Comm20's EMD setting.
++- the attached repository's `ego` profile downloads EDGE `Ego.pkl`;
++- that artifact contains 757 graphs and is the separate **Ego** benchmark, not Ego-small;
++- therefore it must not be used as the common Ego-small source;
++- for GraphES Ego-small reruns, the DeFoG wrapper uses the prepared common small-graph split through its generic compatibility profile.
+ 
+ ### HOG-Diff
+ 
+@@ -138,9 +137,10 @@
+ 
+ ### Updated GraphER recommendation
+ 
+-- pin EDGE `Ego.pkl` rather than independently rebuilding Citeseer egos;
+-- use a clean disjoint 64/16/20 split, seed 1234;
+-- keep the common paper evaluator independent of DeFoG's native TV exception.
++- use the GDSS-style Ego-small construction: Citeseer largest connected component, radius 1, 4--18 nodes, first 200 qualifying ego graphs;
++- **do not** map EDGE `Ego.pkl` to Ego-small: it is the distinct 757-graph Ego benchmark;
++- use a clean disjoint 64/16/20 split, seed 1234, for all GraphES reruns;
++- keep the common paper evaluator independent of native baseline split/evaluator exceptions.
+ 
+ ## 5. QM9 dataset/config comparison
+ 
+@@ -240,7 +240,7 @@
+ 
+ ### Ego-small
+ 
+-`configs/datasets/ego_small.yaml` now pins EDGE `Ego.pkl` and uses disjoint 64/16/20 splitting with seed 1234.
++`configs/datasets/ego_small.yaml` now follows the GDSS-style Citeseer Ego-small construction (radius 1, 4--18 nodes, first 200 qualifying graphs) and uses disjoint 64/16/20 splitting with seed 1234. EDGE `Ego.pkl` is explicitly documented as the distinct 757-graph Ego benchmark and is not used for Ego-small.
+ 
+ ### Generic source loading
+ 
+--- a/tests/test_generic_dataset_builders.py
++++ b/tests/test_generic_dataset_builders.py
+@@ -196,3 +196,21 @@
+     assert loaded is not None
+     assert [g.number_of_nodes() for g in loaded] == [4, 5]
+     assert [g.number_of_edges() for g in loaded] == [3, 5]
++
++
++def test_ego_small_config_does_not_alias_edge_ego_dataset() -> None:
++    from pathlib import Path
++    import yaml
++
++    config_path = Path(__file__).resolve().parents[1] / "configs" / "datasets" / "ego_small.yaml"
++    config = yaml.safe_load(config_path.read_text())
++
++    assert config["num_graphs"] == 200
++    assert "source" not in config
++    ego = config["ego"]
++    assert ego["source_model"] == "citeseer"
++    assert ego["radius"] == 1
++    assert ego["min_nodes"] == 4
++    assert ego["max_nodes"] == 18
++    assert ego["selection"] == "first"
++    assert config["native_reference"]["defog"]["native_ego_graphs"] == 757
