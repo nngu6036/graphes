@@ -94,6 +94,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume-from", type=Path, default=None)
     parser.add_argument("--digress-root", type=Path, default=None)
     parser.add_argument("--digress-python", type=Path, default=None)
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "gpu"),
+        default="auto",
+        help=(
+            "Execution device for both training and generation. Use 'gpu' to "
+            "require CUDA and fail immediately instead of silently falling "
+            "back to CPU."
+        ),
+    )
+    parser.add_argument(
+        "--gpu-id",
+        type=_nonnegative_int,
+        default=None,
+        help=(
+            "Physical CUDA device index exposed to DiGress when --device gpu "
+            "is used. Defaults to 0."
+        ),
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
         "--n-epochs",
@@ -162,10 +181,28 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
     }
     if args.training_estimate_count is not None:
         training_estimates["num_graphs"] = args.training_estimate_count
+    requested_device = str(getattr(args, "device", "auto")).lower()
+    gpu_id = getattr(args, "gpu_id", None)
+    runtime_options: dict[str, object] = {"progress": progress}
+    if requested_device == "gpu":
+        resolved_gpu_id = 0 if gpu_id is None else int(gpu_id)
+        runtime_options.update(
+            {
+                "gpus": 1,
+                "device": "gpu",
+                "cuda_visible_devices": str(resolved_gpu_id),
+                "require_cuda": True,
+            }
+        )
+    elif requested_device == "cpu":
+        runtime_options.update({"gpus": 0, "device": "cpu"})
+    elif gpu_id is not None:
+        raise ValueError("--gpu-id requires --device gpu.")
+
     training_options: dict[str, object] = {
         "experiment": profile.experiment,
         "training_estimates": training_estimates,
-        "runtime": {"progress": progress},
+        "runtime": runtime_options,
     }
     for key in (
         "n_epochs",
@@ -220,9 +257,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
         f"training completed: checkpoint={training.checkpoint_path.resolve()}",
         enabled=progress_enabled,
     )
-    generation_options: dict[str, object] = {
-        "runtime": {"progress": progress}
-    }
+    generation_options: dict[str, object] = {"runtime": dict(runtime_options)}
     if args.generation_batch_size is not None:
         generation_options["generation_batch_size"] = args.generation_batch_size
     generation = wrapper.generate(
@@ -253,6 +288,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
         "native_dataset": profile.native_id,
         "experiment": profile.experiment,
         "seed_id": args.seed_id,
+        "device": requested_device,
+        "gpu_id": (0 if requested_device == "gpu" and gpu_id is None else gpu_id),
         "run_id": run.run_id,
         "generation_id": generation.generation_dir.name,
         "num_samples": generation.num_generated,

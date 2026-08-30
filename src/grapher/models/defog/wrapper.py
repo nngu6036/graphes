@@ -907,6 +907,9 @@ class DeFoGWrapper(BaseGeneratorWrapper):
         if timeout_seconds is not None and timeout_seconds <= 0:
             raise ValueError("runtime.timeout_seconds must be positive.")
         gpus = int(runtime_cfg.get("gpus", 1))
+        require_cuda = bool(runtime_cfg.get("require_cuda", False))
+        if require_cuda and gpus != 1:
+            raise ValueError("runtime.require_cuda=true requires runtime.gpus=1.")
         if gpus not in {0, 1}:
             raise ValueError(
                 "runtime.gpus must be 0 or 1; the attached DeFoG training code "
@@ -995,6 +998,7 @@ class DeFoGWrapper(BaseGeneratorWrapper):
             )
             environment["GRAPHER_DEFOG_DATASET"] = native
             environment["GRAPHER_DEFOG_REQUESTED_GPUS"] = str(gpus)
+            environment["GRAPHER_DEFOG_REQUIRE_CUDA"] = "1" if require_cuda else "0"
             environment["GRAPHER_DEFOG_DIAGNOSTICS_PATH"] = str(
                 runtime_diagnostics_path
             )

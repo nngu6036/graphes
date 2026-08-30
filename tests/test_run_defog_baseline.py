@@ -76,6 +76,8 @@ class RunDeFoGBaselineTests(unittest.TestCase):
                 resume_from=None,
                 defog_root=None,
                 defog_python=None,
+                device="gpu",
+                gpu_id=3,
                 overwrite=False,
                 progress_interval_seconds=4.0,
                 epoch_progress_interval=2,
@@ -100,9 +102,19 @@ class RunDeFoGBaselineTests(unittest.TestCase):
                 stub.training_request.options["runtime"]["progress"],
                 expected_progress,
             )
+            self.assertEqual(stub.training_request.options["runtime"]["gpus"], 1)
+            self.assertEqual(stub.training_request.options["runtime"]["device"], "cuda")
+            self.assertEqual(
+                stub.training_request.options["runtime"]["cuda_visible_devices"], "3"
+            )
+            self.assertTrue(stub.training_request.options["runtime"]["require_cuda"])
             self.assertEqual(
                 stub.generation_request.options["runtime"]["progress"],
                 expected_progress,
+            )
+            self.assertEqual(stub.generation_request.options["runtime"]["device"], "cuda")
+            self.assertEqual(
+                stub.generation_request.options["runtime"]["cuda_visible_devices"], "3"
             )
             self.assertTrue(
                 stub.training_request.options["training_estimates"]["enabled"]

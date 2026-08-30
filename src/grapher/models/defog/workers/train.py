@@ -496,12 +496,21 @@ def main() -> None:
     diagnostics = _collect_runtime_diagnostics(dataset, requested_gpus)
     _publish_runtime_diagnostics(diagnostics)
     torch_record = diagnostics.get("torch", {})
-    if requested_gpus == 1 and not bool(torch_record.get("cuda_available")):
+    cuda_available = bool(torch_record.get("cuda_available"))
+    require_cuda = os.environ.get("GRAPHER_DEFOG_REQUIRE_CUDA", "0") == "1"
+    if requested_gpus == 1 and not cuda_available:
+        message = (
+            "one GPU was requested, but the isolated interpreter reported "
+            "torch.cuda.is_available() == False."
+        )
+        if require_cuda:
+            raise RuntimeError(
+                "GPU execution was explicitly required, but " + message
+            )
         print(
-            "[GraphER/DeFoG] WARNING: one GPU was requested, but the isolated "
-            "interpreter reported torch.cuda.is_available() == False. The "
-            "upstream DeFoG entrypoint will use its documented CPU fallback. "
-            "Review the runtime diagnostics if this was unexpected.",
+            "[GraphER/DeFoG] WARNING: " + message + " The upstream DeFoG "
+            "entrypoint will use its documented CPU fallback. Review the "
+            "runtime diagnostics if this was unexpected.",
             flush=True,
         )
     if dataset in {"qm9", "zinc"}:

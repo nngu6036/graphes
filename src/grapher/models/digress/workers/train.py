@@ -61,6 +61,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-name", required=True)
     parser.add_argument("--seed", type=_nonnegative_int, required=True)
     parser.add_argument("--gpus", type=_nonnegative_int, choices=(0, 1), default=1)
+    parser.add_argument("--require-cuda", action="store_true")
     parser.add_argument("--n-epochs", type=_positive_int, default=None)
     parser.add_argument("--batch-size", type=_positive_int, default=None)
     parser.add_argument("--num-workers", type=_nonnegative_int, default=None)
@@ -251,6 +252,12 @@ def main() -> None:
         raise FileNotFoundError(f"Missing resume checkpoint: {resume_from}")
 
     seed_everything(args.seed)
+    import torch
+    if args.require_cuda and not torch.cuda.is_available():
+        raise RuntimeError(
+            "GPU execution was explicitly requested, but the isolated "
+            "DiGress interpreter reports torch.cuda.is_available() == False."
+        )
     cfg = compose_config(
         digress_root=root,
         dataset=args.dataset,

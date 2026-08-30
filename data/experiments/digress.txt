@@ -17,8 +17,8 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.026004          0.037029      0.025194
-digress_to_test                     0.032225          0.078709      0.047449
+train_to_test                       0.028458          0.041560      0.005482
+digress_to_test                     0.035264          0.084314      0.009137
 
 
 export DIGRESS=/home/quang/DiGress
@@ -39,8 +39,8 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir "$GEN_DIR/evaluation_report"
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.026004          0.037029      0.025194
-digress_to_test                     0.049059          0.080895      0.058915
+train_to_test                       0.028458          0.041560      0.005482
+digress_to_test                     0.052418          0.083106      0.013077
 
 
 export DIGRESS=/home/quang/DiGress
@@ -61,8 +61,8 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir "$GEN_DIR/evaluation_report"
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.026004          0.037029      0.025194
-digress_to_test                     0.040109          0.072662      0.044019
+train_to_test                       0.028458          0.041560      0.005482
+digress_to_test                     0.041786          0.073038      0.008658
 
 
 
@@ -264,3 +264,25 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --output-dir "$GEN_DIR/evaluation" \
   --require-fcd
+
+  Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9921875
+  fcd: 0.4274356554780745
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1016
+  num_invalid_generated_molecules: 8
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 8
+  correction_success_rate_on_raw_invalid: 1.0
+  uniqueness_rate: 0.9940944881889764
+  unique_valid_count: 1010
+  novelty_rate: 0.27623762376237626
+  novel_unique_valid_count: 279
+  nspdk_mmd: 1.0043714412444974e-05
+  nspdk_mmd_valid_only: 1.0183943108457141e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1016
+  fcd_generated_smiles_source: valid_without_correction

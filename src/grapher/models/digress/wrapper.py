@@ -590,6 +590,9 @@ class DiGressWrapper(BaseGeneratorWrapper):
         gpus = int(runtime.get("gpus", 1))
         if gpus not in {0, 1}:
             raise ValueError("runtime.gpus must be 0 or 1.")
+        require_cuda = bool(runtime.get("require_cuda", False))
+        if require_cuda and gpus != 1:
+            raise ValueError("runtime.require_cuda=true requires runtime.gpus=1.")
         cuda_value = runtime.get("cuda_visible_devices")
         cuda_visible_devices = None if cuda_value is None else str(cuda_value)
         if cuda_visible_devices is not None and any(
@@ -724,6 +727,8 @@ class DiGressWrapper(BaseGeneratorWrapper):
                 "--gpus",
                 str(gpus),
             ]
+            if require_cuda:
+                command.append("--require-cuda")
             scalar_options = (
                 ("n_epochs", "--n-epochs"),
                 ("batch_size", "--batch-size"),

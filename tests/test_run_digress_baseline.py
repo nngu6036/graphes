@@ -70,6 +70,8 @@ def test_runner_forwards_training_and_progress_options(tmp_path: Path) -> None:
         resume_from=None,
         digress_root=None,
         digress_python=None,
+        device="gpu",
+        gpu_id=2,
         overwrite=False,
         n_epochs=123,
         batch_size=16,
@@ -105,5 +107,11 @@ def test_runner_forwards_training_and_progress_options(tmp_path: Path) -> None:
         "epoch_interval": 2,
     }
     assert stub.training_request.options["runtime"]["progress"] == expected_progress
+    assert stub.training_request.options["runtime"]["gpus"] == 1
+    assert stub.training_request.options["runtime"]["device"] == "gpu"
+    assert stub.training_request.options["runtime"]["cuda_visible_devices"] == "2"
+    assert stub.training_request.options["runtime"]["require_cuda"] is True
     assert stub.generation_request.options["runtime"]["progress"] == expected_progress
+    assert stub.generation_request.options["runtime"]["device"] == "gpu"
+    assert stub.generation_request.options["runtime"]["cuda_visible_devices"] == "2"
     assert summary["generation_id"] == "seed_13_n_7"

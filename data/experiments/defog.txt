@@ -2,7 +2,7 @@ export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
-  --dataset ego_small \
+  --dataset community_small \
   --num-samples 1024 \
   --seed-id 42 \
   --run-id seed_42 \
@@ -18,9 +18,8 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_42_n_1024"
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.026004          0.037029      0.025194
-defog_e800k_to_test                 0.057971          0.046759      0.065031
-
+train_to_test                       0.028458          0.041560      0.005482
+defog_seed_42_n_1024_to_test        0.065827          0.062066      0.129467
 
 export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
@@ -42,8 +41,8 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_43_n_1024"
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.026004          0.037029      0.025194
-defog_seed_43_n_1024_to_test        0.080293          0.076529      0.075752
+train_to_test                       0.028458          0.041560      0.005482
+defog_seed_43_n_1024_to_test        0.085265          0.077016      0.063558
 
 export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
@@ -66,8 +65,8 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.026004          0.037029      0.025194
-defog_seed_44_to_test               0.031352          0.065902      0.061298
+train_to_test                       0.028458          0.041560      0.005482
+defog_seed_44_to_test               0.033321          0.072139      0.010217
 
 
 

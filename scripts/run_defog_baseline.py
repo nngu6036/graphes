@@ -159,6 +159,25 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "gpu"),
+        default="auto",
+        help=(
+            "Execution device for both training and generation. Use 'gpu' to "
+            "require CUDA and fail immediately instead of silently falling "
+            "back to CPU."
+        ),
+    )
+    parser.add_argument(
+        "--gpu-id",
+        type=_nonnegative_int,
+        default=None,
+        help=(
+            "Physical CUDA device index exposed to DeFoG when --device gpu "
+            "is used. Defaults to 0."
+        ),
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help=(
@@ -250,9 +269,27 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
     # the explicit CLI value takes precedence over both the YAML setting and
     # DeFoG's upstream experiment default. Do not insert the key when the user
     # omits --n-epochs; this preserves the existing wrapper/default behavior.
+    requested_device = str(getattr(args, "device", "auto")).lower()
+    gpu_id = getattr(args, "gpu_id", None)
+    runtime_options: dict[str, object] = {"progress": progress_options}
+    if requested_device == "gpu":
+        resolved_gpu_id = 0 if gpu_id is None else int(gpu_id)
+        runtime_options.update(
+            {
+                "gpus": 1,
+                "device": "cuda",
+                "cuda_visible_devices": str(resolved_gpu_id),
+                "require_cuda": True,
+            }
+        )
+    elif requested_device == "cpu":
+        runtime_options.update({"gpus": 0, "device": "cpu"})
+    elif gpu_id is not None:
+        raise ValueError("--gpu-id requires --device gpu.")
+
     training_options: dict[str, object] = {
         "training_estimates": {"enabled": True},
-        "runtime": {"progress": progress_options},
+        "runtime": runtime_options,
     }
     if n_epochs_override is not None:
         training_options["n_epochs"] = n_epochs_override
@@ -330,7 +367,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
             num_graphs=args.num_samples,
             generation_seed=args.seed_id,
             generation_id=args.generation_id,
-            options={"runtime": {"progress": progress_options}},
+            options={"runtime": dict(runtime_options)},
             overwrite=args.overwrite,
         )
     )
@@ -353,6 +390,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
         "serialized_dataset": profile.serialized_id,
         "native_dataset": profile.native_id,
         "seed_id": args.seed_id,
+        "device": requested_device,
+        "gpu_id": (0 if requested_device == "gpu" and gpu_id is None else gpu_id),
         "n_epochs_cli_override": n_epochs_override,
         "run_id": run.run_id,
         "generation_id": args.generation_id

@@ -18,8 +18,8 @@ PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
 
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.026004          0.037029      0.025194
-graphrnn_to_test                    0.045888          0.034130      0.037551
+train_to_test                       0.028458          0.041560      0.005482
+graphrnn_to_test                    0.050508          0.037936      0.021301
 
 
 
@@ -43,8 +43,8 @@ PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
 
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.026004          0.037029      0.025194
-graphrnn_to_test                    0.049469          0.055346      0.037251
+train_to_test                       0.028458          0.041560      0.005482
+graphrnn_to_test                    0.052164          0.062505      0.025829
 
 export GRAPHRNN=/home/quang/GraphRNN
 
@@ -66,8 +66,8 @@ PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
 
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.026004          0.037029      0.025194
-graphrnn_to_test                    0.024188          0.038229      0.016351
+train_to_test                       0.028458          0.041560      0.005482
+graphrnn_to_test                    0.026293          0.045858      0.002348
 
 
 export GRAPHRNN=/home/quang/GraphRNN
@@ -88,7 +88,10 @@ PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
     --generated-dir "$GEN_DIR" \
     --output-dir "$GEN_DIR/evaluation_report"
 
-
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004751          0.002533      0.006985
+graphrnn_to_test                    0.280871          0.181046      0.415542
 
 export GRAPHRNN=/home/quang/GraphRNN
 
@@ -108,7 +111,9 @@ PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
     --generated-dir "$GEN_DIR" \
     --output-dir "$GEN_DIR/evaluation_report"
 
-
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004751          0.002533      0.006985
+graphrnn_to_test                    0.256020          0.190689      0.384209
 
 export GRAPHRNN=/home/quang/GraphRNN
 
@@ -127,3 +132,9 @@ PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
     --config configs/baselines/graphrnn_ego_small.yaml \
     --generated-dir "$GEN_DIR" \
     --output-dir "$GEN_DIR/evaluation_report"
+
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004751          0.002533      0.006985
+graphrnn_to_test                    0.202134          0.131355      0.323721
