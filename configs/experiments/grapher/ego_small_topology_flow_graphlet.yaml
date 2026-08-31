@@ -1,0 +1,216 @@
+experiment: ego_small_topology_flow_graphlet
+benchmark: ego_small
+seed: 42
+
+pipeline:
+  stage: topology
+  factorization: dhvae_hh_then_edge_flow_graphlet_guided_degree_rewiring
+
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  max_reference_graphs: null
+  tune_on_split: val
+  final_split: test
+
+dataset:
+  name: ego
+  benchmark: ego_small
+  config_path: configs/datasets/ego_small.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+  max_val_graphs: null
+
+# For flow matching, source and target must share the degree multiset. The flow
+# data builder then aligns target nodes inside equal-degree classes so the
+# indexed degree vector also agrees exactly before constructing P_t.
+training_sources:
+  mode: target_degree_havel_hakimi
+
+graphlet_prediction:
+  estimator: exact_connected_local_delta
+  graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: null
+  clustering_summary: true
+  clustering_bins: 20
+  spectral_summary: false
+  motif_proxy: false
+  orbit_count: true
+
+# Graphlet targets use the same per-k simplex convention as the spectral+
+# graphlet model: connected classes plus one disconnected-subset coordinate.
+graphlet_diffusion:
+  enabled: true
+  representation: clr_logits
+  include_disconnected_bin: true
+  logit_epsilon: 0.0001
+  distance: clr_rmse
+  size_weights:
+    "3": 1.5
+    "4": 2.5
+    "5": 0.75
+
+# No rewiring is used in training. For each aligned source/target pair:
+#   P_t = (1-t) A_source + t A_target
+#   U_t = A_target - A_source
+# Since indexed degrees match, every row sum of U_t is zero and every P_t has
+# exactly the source/target degree vector in soft edge mass.
+flow_matching:
+  storage: streaming
+  path: linear
+  samples_per_graph: 32
+  paths_per_graph: 2
+  time_sampling: stratified
+  min_progress: 0.0
+  max_progress: 1.0
+
+  require_same_degree_sequence: true
+  align_nodes_by_degree: true
+  randomize_equal_degree_alignment: true
+  joint_random_relabel: true
+
+  source_randomization_steps: 0
+  random_relabel_source: false
+  ensure_connected_source: true
+  max_repair_trials: 10000
+
+topology_predictor:
+  type: flow_graphlet
+  checkpoint_path: outputs/topology_grapher/ego_small_flow_graphlet/seed_42/checkpoint.pt
+  device: auto
+
+  # Shared soft-topology encoder.
+  hidden_dim: 256
+  edge_dim: 128
+  graph_dim: 256
+  num_layers: 6
+
+  # Clean graphlet prediction is embedded back into the pair-flow decoder, so
+  # the edge velocity is explicitly conditioned on the predicted higher-order
+  # destination.
+  graphlet_dim: 512
+  graphlet_context_dim: 256
+  pair_dim: 512
+  graphlet_dropout: 0.03
+  dropout: 0.05
+
+  # Exact analytical projection of the symmetric raw pair field to
+  # sum_j V_ij = 0 for every node.
+  project_degree_tangent: true
+
+  # Changed pairs are sparse relative to all n(n-1)/2 pairs; upweight them in
+  # the flow regression loss without changing the conditional target itself.
+  flow_changed_pair_weight: 4.0
+
+  batch_size: 4
+  epochs: 800
+  learning_rate: 0.0001
+  weight_decay: 0.00005
+
+  loss_weights:
+    flow: 1.0
+    flow_changed_pair_weight: 4.0
+    graphlet_logit: 2.0
+    graphlet_probability: 1.0
+
+  progress_interval: 10
+
+generation:
+  degree_source: learned
+  num_generate: 1024
+  max_attempts_per_graph: 8
+  write_legacy_hybrid_alias: false
+
+degree_generator:
+  enabled: true
+  type: degree_histogram_vae
+  checkpoint_path: outputs/baselines/dhvae_hh/ego_small/seed_42/train/checkpoints/checkpoint.pt
+  device: auto
+  deterministic: false
+  sample_num_nodes: empirical
+  max_resample: 500
+  parity_conditioned: true
+  max_parity_resample: 64
+  postprocess_policy: reject_only
+  fallback: error
+
+constructor:
+  type: havel_hakimi
+  ensure_connected: true
+  random_relabel: true
+  max_repair_trials: 10000
+
+# Generation only: valid double-edge swaps project the learned continuous flow
+# back onto the simple, connected, fixed-degree graph state space.
+topology_refiner:
+  mode: flow_graphlet
+  steps: 256
+  proposal_budget: 2048
+  valid_candidate_budget: 512
+
+  preserve_connectivity: true
+  reject_revisited_states: true
+  selection: greedy
+  temperature: 0.1
+  accept_only_improving: true
+  min_improvement: 0.0000000001
+  min_relative_improvement: 0.000001
+  relative_improvement_epsilon: 0.000000000001
+
+  flow_guidance:
+    # Candidate flow score is
+    #   sum_added V_ij - sum_removed V_ij.
+    # Division by four maps a perfectly matched double-edge swap to +1.
+    normalize_per_swap: true
+
+  graphlet_guidance:
+    distance: clr_rmse
+    logit_epsilon: 0.0001
+    size_weights:
+      "3": 1.5
+      "4": 2.5
+      "5": 0.75
+    schedule: cosine
+    min_clean_mix: 0.15
+    max_clean_mix: 1.0
+    power: 1.5
+
+  # Flow is actionable at every step; graphlet guidance becomes stronger later
+  # to correct higher-order structure within the same degree fibre.
+  global_to_local:
+    schedule: linear
+    flow_initial: 1.0
+    flow_final: 0.75
+    graphlet_initial: 0.5
+    graphlet_final: 3.0
+    power: 1.0
+
+  prediction_horizon:
+    mode: annealed
+    initial_k: 4
+    final_k: 1
+    schedule: cosine
+    refresh_on_plateau: true
+
+  debug:
+    enabled: false
+    print_every: 1
+    top_candidates: 5
+
+evaluation:
+  inline_during_generation: false
+  orca_exec: null
+  compute_orbit: true
+  compute_graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 8192
+
