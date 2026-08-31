@@ -19,6 +19,16 @@ from grapher.rewiring_mlp.generic.data import (
     collate_topology_examples,
 )
 from grapher.rewiring_mlp.generic.graphlets import TOPOLOGY_ORBIT_WIDTH
+from grapher.rewiring_mlp.generic.flow_data import (
+    TopologyFlowGraphletIterableDataset,
+    build_flow_graphlet_examples,
+    collate_flow_graphlet_examples,
+)
+from grapher.rewiring_mlp.generic.flow_model import (
+    TOPOLOGY_FLOW_GRAPHLET_CHECKPOINT_FORMAT,
+    TopologyFlowGraphletPredictor,
+    save_topology_flow_graphlet_checkpoint,
+)
 from grapher.rewiring_mlp.generic.model import (
     TOPOLOGY_CHECKPOINT_FORMAT,
     TopologyGraphletPredictor,
@@ -41,7 +51,7 @@ from grapher.rewiring_mlp.generic.training_sources import (
     build_completed_base_training_pairs,
 )
 from grapher.utils.device import resolve_torch_device
-from grapher.utils.io import ensure_dir, load_yaml, save_json
+from grapher.utils.io import apply_config_overrides, ensure_dir, load_yaml, save_json
 
 
 _SPECTRAL_TYPES = {"spectral", "spectral_transformer", "spectrum_transformer"}
@@ -50,6 +60,12 @@ _SPECTRAL_GRAPHLET_TYPES = {
     "spectral_graphlet_transformer",
     "spectral_graphlet_diffusion",
     "dual_diffusion",
+}
+_FLOW_GRAPHLET_TYPES = {
+    "flow_graphlet",
+    "flow_graphlet_predictor",
+    "flow_matching_graphlet",
+    "edge_flow_graphlet",
 }
 
 
@@ -90,6 +106,9 @@ def _streaming_teacher_report(dataset: Any) -> dict[str, Any]:
         "mean_endpoint_spectral_discrepancy",
         "mean_spectral_noise_rms",
         "mean_graphlet_noise_rms",
+        "mean_changed_pairs",
+        "mean_changed_pair_fraction",
+        "max_target_degree_tangent_residual",
         "mean_accepted_teacher_steps",
         "teacher_stop_rate",
         "mean_valid_candidates",
@@ -102,6 +121,34 @@ def _streaming_teacher_report(dataset: Any) -> dict[str, Any]:
                 else float(np.mean(values))
             )
     return report
+
+
+def _run_flow_graphlet_epoch(
+    model: TopologyFlowGraphletPredictor,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+    optimizer: torch.optim.Optimizer | None,
+    loss_weights: dict[str, float],
+) -> dict[str, float]:
+    training = optimizer is not None
+    model.train(training)
+    rows: list[dict[str, float]] = []
+    context = torch.enable_grad() if training else torch.no_grad()
+    with context:
+        for batch in loader:
+            batch = batch.to(device)
+            loss, metrics = model.loss(batch, loss_weights=loss_weights)
+            if training:
+                assert optimizer is not None
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                optimizer.step()
+            rows.append(metrics)
+    if not rows:
+        raise RuntimeError("The flow+graphlet dataset produced no examples.")
+    return _mean_metrics(rows)
 
 
 def _run_structural_epoch(
@@ -170,7 +217,8 @@ def main() -> None:
         description=(
             "Train GraphER topology guidance. Supports structural-summary, "
             "variable-length Spectral Transformer, and joint spectral + "
-            "graphlet-logit diffusion predictors."
+            "graphlet-logit diffusion predictors, plus joint adjacency-space "
+            "flow matching + graphlet prediction."
         )
     )
     parser.add_argument("--config", required=True)
@@ -181,9 +229,33 @@ def main() -> None:
     parser.add_argument("--max-val-graphs", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", default=None)
+    parser.add_argument(
+        "--predictor-type",
+        default=None,
+        help=(
+            "Override topology_predictor.type for this training run. Examples: "
+            "spectral_graphlet_transformer or flow_graphlet."
+        ),
+    )
+    parser.add_argument(
+        "--set",
+        "--override",
+        dest="config_overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help=(
+            "Override any YAML option using a dotted path. Repeat this flag for "
+            "multiple values, e.g. --set topology_predictor.type=flow_graphlet "
+            "--set flow_matching.samples_per_graph=64. Values are parsed as YAML."
+        ),
+    )
     args = parser.parse_args()
 
     config = load_yaml(args.config)
+    apply_config_overrides(config, args.config_overrides)
+    if args.predictor_type is not None:
+        config.setdefault("topology_predictor", {})["type"] = str(args.predictor_type)
     pipeline_stage = str((config.get("pipeline", {}) or {}).get("stage", "topology")).lower()
     if pipeline_stage != "topology":
         raise ValueError("train_topology_grapher.py requires pipeline.stage: topology.")
@@ -198,7 +270,8 @@ def main() -> None:
     spectral_graphlet_mode = predictor_type in _SPECTRAL_GRAPHLET_TYPES
     spectral_mode = predictor_type in _SPECTRAL_TYPES
     spectral_family_mode = spectral_mode or spectral_graphlet_mode
-    if not spectral_family_mode and predictor_type not in {
+    flow_graphlet_mode = predictor_type in _FLOW_GRAPHLET_TYPES
+    if not spectral_family_mode and not flow_graphlet_mode and predictor_type not in {
         "structural_summary",
         "graphlet",
         "graphlet_predictor",
@@ -206,7 +279,7 @@ def main() -> None:
     }:
         raise ValueError(
             "Unknown topology_predictor.type. Use structural_summary, "
-            "spectral_transformer, or spectral_graphlet_transformer."
+            "spectral_transformer, spectral_graphlet_transformer, or flow_graphlet."
         )
 
     seed = int(args.seed if args.seed is not None else config.get("seed", 0))
@@ -278,11 +351,11 @@ def main() -> None:
             seed=seed,
         )
     elif source_mode in {"target_degree_havel_hakimi", "spectral_havel_hakimi"}:
-        if not spectral_family_mode:
+        if not (spectral_family_mode or flow_graphlet_mode):
             raise ValueError(
                 "training_sources.mode: target_degree_havel_hakimi is reserved for "
-                "spectral or spectral+graphlet training because the clean target "
-                "must lie in the same degree fibre as the HH source."
+                "spectral/spectral+graphlet or flow+graphlet training because the "
+                "clean target must lie in the same degree fibre as the HH source."
             )
         train_items = train_graphs
         val_items = val_graphs
@@ -315,6 +388,7 @@ def main() -> None:
     trajectory_cfg = dict(config.get("topology_trajectory", {}) or {})
     diffusion_cfg = dict(config.get("summary_diffusion", {}) or {})
     spectral_cfg = dict(config.get("spectral_prediction", {}) or {})
+    flow_cfg = dict(config.get("flow_matching", {}) or {})
 
     # Spectral-family predictors are trained from continuous stochastic bridge
     # states in summary space.  Rewiring trajectories are intentionally NOT
@@ -387,6 +461,63 @@ def main() -> None:
             "[GraphER/DiffusionTraining] training path: source summary -> "
             "stochastic continuous Brownian bridge -> clean summary; "
             "rewiring is generation-only projection and is not used to create training states.",
+            flush=True,
+        )
+    elif flow_graphlet_mode:
+        storage_mode = str(flow_cfg.get("storage", "streaming")).lower()
+        if storage_mode not in {"eager", "streaming"}:
+            raise ValueError("flow_matching.storage must be eager or streaming.")
+        if not flow_cfg:
+            flow_cfg = {
+                "storage": storage_mode,
+                "path": "linear",
+                "samples_per_graph": max(int(trajectory_cfg.get("states_per_graph", 32)), 1),
+                "paths_per_graph": max(int(trajectory_cfg.get("paths_per_graph", 2)), 1),
+                "time_sampling": "stratified",
+                "require_same_degree_sequence": True,
+                "align_nodes_by_degree": True,
+                "randomize_equal_degree_alignment": True,
+                "joint_random_relabel": True,
+            }
+            print(
+                "[GraphER/FlowTraining] flow_matching is absent; using linear "
+                "conditional flow defaults. Rewiring teacher settings are ignored.",
+                flush=True,
+            )
+        source_construction_cfg = {
+            "ensure_connected_source": bool(
+                flow_cfg.get(
+                    "ensure_connected_source",
+                    config.get("constructor", {}).get("ensure_connected", True),
+                )
+            ),
+            # Flow alignment performs a final joint relabel after degree-class
+            # matching, so independent source relabeling is unnecessary here.
+            "random_relabel_source": bool(flow_cfg.get("random_relabel_source", False)),
+            "max_repair_trials": int(
+                flow_cfg.get(
+                    "max_repair_trials",
+                    config.get("constructor", {}).get("max_repair_trials", 10000),
+                )
+            ),
+            "source_randomization_steps": int(flow_cfg.get("source_randomization_steps", 0)),
+        }
+        if source_mode == "completed_base_outputs" and source_construction_cfg["source_randomization_steps"] != 0:
+            raise ValueError(
+                "flow_matching.source_randomization_steps must be 0 for completed base outputs."
+            )
+        guidance_name = "flow_graphlet"
+        print(
+            f"Preparing {storage_mode} continuous adjacency-flow samples "
+            f"(guidance={guidance_name}, train_pairs={len(train_items)}, "
+            f"val_pairs={len(val_items)}, source_mode={source_mode})...",
+            flush=True,
+        )
+        print(
+            "[GraphER/FlowTraining] training path: indexed-degree-aligned source/target "
+            "-> P_t=(1-t)A_source+tA_target; target velocity=A_target-A_source. "
+            "Graphlet heads predict the clean terminal graphlet simplex. Rewiring is "
+            "generation-only projection and is not used to create training states.",
             flush=True,
         )
     else:
@@ -477,6 +608,57 @@ def main() -> None:
             )
             num_train_examples = len(train_examples)
             num_val_examples = len(val_examples)
+    elif flow_graphlet_mode:
+        if graphlet_basis is None:
+            raise AssertionError("Flow+graphlet mode requires a graphlet basis.")
+        if storage_mode == "streaming":
+            train_examples = TopologyFlowGraphletIterableDataset(
+                train_items,
+                flow_config=flow_cfg,
+                source_config=source_construction_cfg,
+                graphlet_basis=graphlet_basis,
+                graphlet_logit_epsilon=graphlet_logit_epsilon,
+                seed=seed,
+                shuffle_graphs=True,
+            )
+            val_examples = TopologyFlowGraphletIterableDataset(
+                val_items,
+                flow_config=flow_cfg,
+                source_config=source_construction_cfg,
+                graphlet_basis=graphlet_basis,
+                graphlet_logit_epsilon=graphlet_logit_epsilon,
+                seed=seed + 1,
+                shuffle_graphs=False,
+            )
+            train_teacher_report = {
+                "storage": "streaming",
+                "training_state_source": "continuous_edge_probability_flow_matching",
+            }
+            val_teacher_report = {
+                "storage": "streaming",
+                "training_state_source": "continuous_edge_probability_flow_matching",
+            }
+            num_train_examples = train_examples.estimated_examples
+            num_val_examples = val_examples.estimated_examples
+        else:
+            train_examples, train_teacher_report = build_flow_graphlet_examples(
+                train_items,
+                flow_config=flow_cfg,
+                source_config=source_construction_cfg,
+                graphlet_basis=graphlet_basis,
+                graphlet_logit_epsilon=graphlet_logit_epsilon,
+                seed=seed,
+            )
+            val_examples, val_teacher_report = build_flow_graphlet_examples(
+                val_items,
+                flow_config=flow_cfg,
+                source_config=source_construction_cfg,
+                graphlet_basis=graphlet_basis,
+                graphlet_logit_epsilon=graphlet_logit_epsilon,
+                seed=seed + 1,
+            )
+            num_train_examples = len(train_examples)
+            num_val_examples = len(val_examples)
     else:
         assert graphlet_basis is not None
         if storage_mode == "streaming":
@@ -522,6 +704,8 @@ def main() -> None:
         (
             "Summary-diffusion examples (estimated for streaming): "
             if spectral_family_mode
+            else "Flow-matching examples (estimated for streaming): "
+            if flow_graphlet_mode
             else "Topology trajectory examples (estimated for streaming): "
         )
         + f"train={num_train_examples} val={num_val_examples}",
@@ -562,6 +746,29 @@ def main() -> None:
         else:
             model = TopologySpectralTransformerPredictor(**common_spectral_kwargs).to(device)
         collate_fn = collate_spectral_examples
+    elif flow_graphlet_mode:
+        assert graphlet_basis is not None
+        model = TopologyFlowGraphletPredictor(
+            graphlet_block_widths=graphlet_basis.simplex_block_widths,
+            hidden_dim=int(predictor_cfg.get("hidden_dim", 128)),
+            edge_dim=int(predictor_cfg.get("edge_dim", 64)),
+            graph_dim=int(predictor_cfg.get("graph_dim", 128)),
+            num_layers=int(predictor_cfg.get("num_layers", 4)),
+            graphlet_dim=int(predictor_cfg.get("graphlet_dim", 256)),
+            graphlet_context_dim=int(predictor_cfg.get("graphlet_context_dim", 128)),
+            pair_dim=int(predictor_cfg.get("pair_dim", 256)),
+            dropout=float(predictor_cfg.get("dropout", 0.05)),
+            graphlet_dropout=float(
+                predictor_cfg.get("graphlet_dropout", predictor_cfg.get("dropout", 0.05))
+            ),
+            project_degree_tangent=bool(
+                predictor_cfg.get("project_degree_tangent", True)
+            ),
+            flow_changed_pair_weight=float(
+                predictor_cfg.get("flow_changed_pair_weight", 4.0)
+            ),
+        ).to(device)
+        collate_fn = collate_flow_graphlet_examples
     else:
         assert graphlet_basis is not None
         model = TopologyGraphletPredictor(
@@ -637,6 +844,43 @@ def main() -> None:
         ):
             raise ValueError("At least one spectral/graphlet prediction loss must be active.")
         target_epsilon = None
+    elif flow_graphlet_mode:
+        forbidden_loss_keys = {
+            "spectrum",
+            "moment2",
+            "low_frequency",
+            "graphlet_mean",
+            "graphlet_distribution",
+            "clustering_mean",
+            "orbit",
+        } & set(loss_weights)
+        if forbidden_loss_keys:
+            if args.predictor_type is not None:
+                for key in forbidden_loss_keys:
+                    loss_weights.pop(key, None)
+                print(
+                    "[GraphER/FlowTraining] --predictor-type switched the YAML to "
+                    "flow_graphlet; ignoring incompatible inherited loss keys: "
+                    f"{sorted(forbidden_loss_keys)}. Flow+graphlet defaults remain active "
+                    "unless overridden with --set topology_predictor.loss_weights.*=...",
+                    flush=True,
+                )
+            else:
+                raise ValueError(
+                    "Flow+graphlet loss cannot contain spectral or legacy structural terms: "
+                    f"{sorted(forbidden_loss_keys)}"
+                )
+        active_loss_defaults = [
+            ("flow", 1.0),
+            ("graphlet_logit", 1.0),
+            ("graphlet_probability", 0.25),
+        ]
+        if not any(
+            float(loss_weights.get(key, default)) != 0.0
+            for key, default in active_loss_defaults
+        ):
+            raise ValueError("At least one flow/graphlet prediction loss must be active.")
+        target_epsilon = None
     else:
         forbidden_loss_keys = {"node", "edge", "consistency"} & set(loss_weights)
         if forbidden_loss_keys:
@@ -667,6 +911,8 @@ def main() -> None:
         (
             "outputs/topology_grapher/sbm_spectral_graphlet/seed_42/checkpoint.pt"
             if spectral_graphlet_mode
+            else "outputs/topology_grapher/sbm_flow_graphlet/seed_42/checkpoint.pt"
+            if flow_graphlet_mode
             else "outputs/topology_grapher/sbm_spectral/seed_42/checkpoint.pt"
             if spectral_mode
             else "outputs/topology_grapher/sbm/seed_42/checkpoint.pt"
@@ -701,6 +947,14 @@ def main() -> None:
                 "graphlet summaries from a rewiring trajectory.",
                 flush=True,
             )
+    elif flow_graphlet_mode:
+        print(
+            "Flow+graphlet predictor: learns the conditional edge velocity "
+            "A_target-A_source from soft adjacency states P_t and predicts the "
+            "clean graphlet simplex jointly. The pair velocity is projected to "
+            "zero node-wise row sum, matching degree-preserving rewiring.",
+            flush=True,
+        )
 
     history: list[dict[str, Any]] = []
     best_val = float("inf")
@@ -708,12 +962,20 @@ def main() -> None:
     for epoch in range(1, epochs + 1):
         if isinstance(
             train_examples,
-            (TopologyTrajectoryIterableDataset, TopologySpectralDiffusionIterableDataset),
+            (
+                TopologyTrajectoryIterableDataset,
+                TopologySpectralDiffusionIterableDataset,
+                TopologyFlowGraphletIterableDataset,
+            ),
         ):
             train_examples.set_epoch(epoch - 1)
         if isinstance(
             val_examples,
-            (TopologyTrajectoryIterableDataset, TopologySpectralDiffusionIterableDataset),
+            (
+                TopologyTrajectoryIterableDataset,
+                TopologySpectralDiffusionIterableDataset,
+                TopologyFlowGraphletIterableDataset,
+            ),
         ):
             val_examples.set_epoch(0)
 
@@ -726,6 +988,21 @@ def main() -> None:
                 loss_weights=loss_weights,
             )
             val_metrics = _run_spectral_epoch(
+                model,
+                val_loader,
+                device=device,
+                optimizer=None,
+                loss_weights=loss_weights,
+            )
+        elif flow_graphlet_mode:
+            train_metrics = _run_flow_graphlet_epoch(
+                model,
+                train_loader,
+                device=device,
+                optimizer=optimizer,
+                loss_weights=loss_weights,
+            )
+            val_metrics = _run_flow_graphlet_epoch(
                 model,
                 val_loader,
                 device=device,
@@ -771,6 +1048,16 @@ def main() -> None:
                     report=row,
                     training_time_horizon=None,
                 )
+            elif flow_graphlet_mode:
+                assert graphlet_basis is not None
+                save_topology_flow_graphlet_checkpoint(
+                    model,
+                    checkpoint_path,
+                    graphlet_basis=graphlet_basis,
+                    summary_config=summary_cfg,
+                    config=config,
+                    report=row,
+                )
             elif spectral_mode:
                 save_topology_spectral_checkpoint(
                     model,
@@ -810,6 +1097,19 @@ def main() -> None:
                     f"{extra}",
                     flush=True,
                 )
+            elif flow_graphlet_mode:
+                print(
+                    f"epoch={epoch:04d} "
+                    f"train={train_metrics['loss']:.5f} "
+                    f"val={val_metrics['loss']:.5f} "
+                    f"flow_rmse={val_metrics['flow_rmse']:.5f} "
+                    f"changed_rmse={val_metrics['flow_changed_rmse']:.5f} "
+                    f"sign_acc={val_metrics['flow_changed_sign_accuracy']:.5f} "
+                    f"degree_tangent_mae={val_metrics['flow_degree_tangent_mae']:.3e} "
+                    f"graphlet_logit_rmse={val_metrics['graphlet_logit_rmse']:.5f} "
+                    f"graphlet_prob_mae={val_metrics['graphlet_probability_mae']:.5f}",
+                    flush=True,
+                )
             else:
                 print(
                     f"epoch={epoch:04d} "
@@ -825,6 +1125,7 @@ def main() -> None:
     streaming_types = (
         TopologyTrajectoryIterableDataset,
         TopologySpectralDiffusionIterableDataset,
+        TopologyFlowGraphletIterableDataset,
     )
     if spectral_family_mode:
         predictor_targets: dict[str, Any] = {
@@ -852,6 +1153,26 @@ def main() -> None:
         else:
             report_format = "topology_spectral_training_v2"
             checkpoint_format = TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT
+    elif flow_graphlet_mode:
+        assert graphlet_basis is not None
+        predictor_targets = {
+            "edge_velocity": True,
+            "edge_velocity_target": "A_target_minus_A_source",
+            "training_state_source": "continuous_edge_probability_flow_matching",
+            "rewiring_used_for_training_states": False,
+            "flow_matching": flow_cfg,
+            "indexed_degree_alignment": True,
+            "degree_tangent_projection": bool(
+                predictor_cfg.get("project_degree_tangent", True)
+            ),
+            "clean_graphlet_clr_logits": True,
+            "graphlet_simplex_includes_disconnected_bin": True,
+            "graphlet_logit_epsilon": graphlet_logit_epsilon,
+            "joint_estimator": "graphlet_prediction_conditions_pair_flow",
+        }
+        graphlet_basis_report = graphlet_basis.to_dict()
+        report_format = "topology_flow_graphlet_training_v1"
+        checkpoint_format = TOPOLOGY_FLOW_GRAPHLET_CHECKPOINT_FORMAT
     else:
         assert graphlet_basis is not None
         predictor_targets = {
@@ -881,6 +1202,8 @@ def main() -> None:
     state_report_fields = (
         {"train_diffusion": state_train_report, "val_diffusion": state_val_report}
         if spectral_family_mode
+        else {"train_flow_matching": state_train_report, "val_flow_matching": state_val_report}
+        if flow_graphlet_mode
         else {"train_teacher": state_train_report, "val_teacher": state_val_report}
     )
     report = {
@@ -888,6 +1211,7 @@ def main() -> None:
         "pipeline_mode": "topology",
         "guidance_mode": (
             "spectral_graphlet" if spectral_graphlet_mode
+            else "flow_graphlet" if flow_graphlet_mode
             else "spectral" if spectral_mode
             else "structural_summary"
         ),
@@ -912,6 +1236,10 @@ def main() -> None:
                 "states and has no rewiring trajectory; prediction horizon is "
                 "generation-only."
                 if spectral_family_mode
+                else "Flow+graphlet training samples continuous soft-adjacency "
+                "states and has no rewiring trajectory; prediction horizon is "
+                "generation-only."
+                if flow_graphlet_mode
                 else "Structural-summary teacher trajectories advance one accepted "
                 "swap per step; prediction horizon remains generation-only."
             ),
@@ -922,6 +1250,8 @@ def main() -> None:
             if float(loss_weights.get(key, default)) != 0.0
         ),
         "history": history,
+        "config_overrides": list(args.config_overrides),
+        "predictor_type_cli_override": args.predictor_type,
     }
     save_json(report, output_dir / "training_report.json")
     print(f"Saved best topology checkpoint: {checkpoint_path}", flush=True)

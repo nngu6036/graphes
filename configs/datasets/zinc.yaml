@@ -1,52 +1,71 @@
-# Fixed 12k subset derived from ZINC250k. This remains a GraphES-specific
-# controlled subset, so native/published full-ZINC250k numbers are not directly
-# protocol-compatible. All rerun methods must consume this same prepared split.
+# Full ZINC250k benchmark aligned to the molecular protocol used by HOG-Diff
+# and inherited from GDSS/Jo et al. The raw row order is part of the protocol
+# because valid_idx_zinc250k.json identifies the held-out test molecules by
+# zero-based source-row index.
 name: zinc
 kind: prepared_molecular_attributed
 root: outputs/datasets
-protocol_id: graphes_zinc250k_fixed12k_v2
+protocol_id: hogdiff_gdss_zinc250k_v1
 
 source:
   dataset: ZINC250k
-  subset:
-    name: grapher_fixed_12k
-    selection: first_valid_after_seeded_shuffle
-    seed: 0
-    expected_graphs: 12000
+  provider: GDSS/HOG-Diff
+  expected_records: 249455
+  expected_graphs: 249455
+  smiles_url: https://raw.githubusercontent.com/aspuru-guzik-group/chemical_vae/main/models/zinc_properties/250k_rndm_zinc_drugs_clean_3.csv
+  gdss_smiles_mirror: https://raw.githubusercontent.com/harryjo97/GDSS/master/data/zinc250k.csv
+  test_indices_url: https://raw.githubusercontent.com/harryjo97/GDSS/master/data/valid_idx_zinc250k.json
+  selection: source_order_full
+  test_indices:
+    scheme: gdss_valid_idx_zinc250k
+    index_base: 0
+    required: true
+    path: data/zinc/valid_idx_zinc250k.json
 
 split:
-  train: 10000
-  val: 1000
-  test: 1000
+  # HOG-Diff uses the GDSS held-out index list as its molecular test set and
+  # trains on the complete complement. GraphER preserves that exact test set
+  # and reserves 1000 molecules from the HOG-Diff training complement for
+  # checkpoint selection. No test molecule is used for tuning.
+  strategy: hogdiff_gdss_fixed_test_indices
+  seed: 42
+  validation_count: 1000
+  train: complement_of_test_indices_minus_validation
+  val: deterministic_subset_of_training_complement
+  test: test_indices
 
 preprocessing:
-  representation: heavy_atom_graph
+  representation: heavy_atom_kekulized_graph
   hydrogens: implicit
   remove_hydrogens: true
   remove_self_loops: true
   undirected: true
-  keep_largest_fragment: true
+  # Preserve each source molecule rather than rewriting to its largest fragment.
+  fragment_policy: preserve
   sanitize_with_rdkit: true
-  # Align the categorical bond representation with attached HOG-Diff and
-  # DeFoG ZINC code: aromatic systems are kekulized to single/double bonds.
   kekulize: true
   retain_aromatic_bonds: false
+  # HOG-Diff's graph state contains atom identity only, not formal charge or
+  # stereochemistry. These may remain in source metadata but are projected out
+  # of the categorical graph state.
   retain_formal_charge: false
   retain_stereochemistry: false
   max_nodes: 38
 
 filters:
-  require_connected: true
-  neutral_only: true
-  # DeFoG's categorical ZINC state has no formal-charge channel. Reject even
-  # net-neutral zwitterions so the prepared source has a lossless model view.
-  uncharged_atoms_only: true
+  # Protocol assertions, not subset-selection rules. Preparation should fail if
+  # a canonical source row cannot be represented instead of silently dropping it.
+  require_connected: false
+  neutral_only: false
+  uncharged_atoms_only: false
   allowed_atomic_numbers: [6, 7, 8, 9, 15, 16, 17, 35, 53]
 
 categorical_state:
   node_attribute: atomic_num
   node_categories: [6, 7, 8, 9, 15, 16, 17, 35, 53]
   edge_attribute: bond_type
+  # HOG-Diff kekulizes aromatic systems and uses only single/double/triple
+  # bond categories (plus no-edge internally).
   edge_categories: [1, 2, 3]
 
 bond_orders:
@@ -54,20 +73,30 @@ bond_orders:
   2: 2.0
   3: 3.0
 
+evaluation:
+  generated_samples: 10000
+  molecular_protocol: hogdiff
+  use_valency_correction_for_distribution_metrics: true
+
 native_reference:
+  hog_diff:
+    dataset_name: zinc250k
+    total_graphs: 249455
+    max_nodes: 38
+    atom_channels: 9
+    atom_numbers: [6, 7, 8, 9, 15, 16, 17, 35, 53]
+    bond_categories: [1, 2, 3]
+    kekulized_bonds: true
+    split: gdss_valid_idx_zinc250k
+    evaluation_samples: 10000
+  gdss:
+    dataset_name: zinc250k
+    split: valid_idx_zinc250k
   defog:
     dataset_name: zinc
     remove_hydrogens: true
     aromatic: false
     max_nodes: 38
-    native_dataset_scope: full_ZINC250k
-  hog_diff:
-    dataset_name: zinc250k
-    atom_channels: 9
-    max_nodes: 38
-    kekulized_bonds: true
-    evaluation_samples: 10000
-    native_dataset_scope: full_ZINC250k
   digress:
     availability: no shipped ZINC dataset configuration in the attached repository
   graphrnn:

@@ -19,6 +19,53 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
   --generated-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2/seed_42 \
   --output-dir outputs/topology_grapher/community_small_topology_spectral_graphlet_v2/seed_42/evaluation
+  --max-graphs 1024
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.028458          0.041560      0.005482
+hh_source_to_test                   0.058957          0.281856      0.256149
+topology_final_to_test              0.058957          0.065885      0.084601
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --generated-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2/seed_42 \
+  --output-dir outputs/topology_grapher/community_small_topology_spectral_graphlet_v2/seed_42/evaluation \
+  --max-graphs 512
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.028458          0.041560      0.005482
+hh_source_to_test                   0.066089          0.293094      0.268501
+topology_final_to_test              0.066089          0.069445      0.093841
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --generated-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2/seed_42 \
+  --output-dir outputs/topology_grapher/community_small_topology_spectral_graphlet_v2/seed_42/evaluation \
+  --max-graphs 256
+
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.028458          0.041560      0.005482
+hh_source_to_test                   0.055356          0.307596      0.255030
+topology_final_to_test              0.055356          0.072065      0.082560
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --generated-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2/seed_42 \
+  --output-dir outputs/topology_grapher/community_small_topology_spectral_graphlet_v2/seed_42/evaluation \
+  --max-graphs 128
+
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.028458          0.041560      0.005482
+hh_source_to_test                   0.060954          0.273581      0.255340
+topology_final_to_test              0.060954          0.081648      0.093622
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --generated-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2/seed_42 \
+  --output-dir outputs/topology_grapher/community_small_topology_spectral_graphlet_v2/seed_42/evaluation \
+  --max-graphs 64
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
 train_to_test                       0.028458          0.041560      0.005482
@@ -75,7 +122,6 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --output-dir \
     outputs/attributed_grapher/qm9_spectral_graphlet/seed_42/evaluation \
   --require-fcd
-  --hogdiff-compatible-metrics
 
 Molecular evaluation
   validity: 1.0
@@ -99,8 +145,43 @@ Molecular evaluation
   fcd_num_valid_generated_molecules: 1023
   fcd_generated_smiles_source: valid_without_correction
 
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs \
+    outputs/attributed_generation/qm9_spectral_graphlet/seed_42/molecular_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir \
+    outputs/attributed_grapher/qm9_spectral_graphlet/seed_42/evaluation \
+  --require-fcd \
+  --hogdiff-compatible-metrics
 
-
+Molecular evaluation
+  validity: 0.9990234375
+  validity_with_correction: 1.0
+  validity_without_correction: 0.9990234375
+  fcd: 2.6629458595578903
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1023
+  num_invalid_generated_molecules: 1
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 1
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.9892578125
+  unique_valid_count: 1013
+  novelty_rate: 0.8469891411648569
+  novel_unique_valid_count: 858
+  nspdk_mmd: 0.006035470458999151
+  nspdk_mmd_valid_only: 0.006035470458999151
+  nspdk_proxy_mmd_all_generated: 0.0001872406507453768
+  nspdk_proxy_mmd_metric_source: 0.00018371953524226297
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
 
 PYTHONPATH=src python scripts/train_attributed_grapher.py \
   --config configs/experiments/grapher/qm9_attributed_spectral_graphlet.yaml \
@@ -211,7 +292,7 @@ PYTHONPATH=src python scripts/train_topology_grapher.py \
 PYTHONPATH=src python scripts/run_topology_grapher.py  \
 --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2_hogdiff_ou.yaml  \
 --output-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2_hogdiff_ou/seed_42   \
---num-generate 1024  \
+--num-generate 256  \
 --seed 42   \
 --device gpu 
 
@@ -226,3 +307,22 @@ train_to_test                       0.026004          0.037029      0.025194
 hh_source_to_test                   0.047347          0.277226      0.227409
 topology_final_to_test              0.047347          0.073253      0.053025
 
+
+PYTHONPATH=src python scripts/train_topology_grapher.py  \
+--config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010.yaml\
+--output-dir outputs/topology_grapher/community_small_spectral_graphlet_v2_hogdiff_ou_sigma010/seed_42   \
+--seed 42  \
+ --device gpu
+
+
+PYTHONPATH=src python scripts/run_topology_grapher.py  \
+--config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010.yaml  \
+--output-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010/seed_42   \
+--num-generate 256  \
+--seed 42   \
+--device gpu 
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010.yaml \
+  --generated-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010/seed_42 \
+  --output-dir outputs/topology_grapher/community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010/seed_42/evaluation

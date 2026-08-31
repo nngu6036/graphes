@@ -301,6 +301,7 @@ docs/
 scripts/
     prepare_generic_dataset.py
     train_degree_generator.py
+    evaluate_degree_generator.py
     train_topology_grapher.py
     run_topology_grapher.py
     run_digress_baseline.py
@@ -339,6 +340,45 @@ python -m pip install pytest ruff
 Python 3.10+ is recommended.
 
 Optional molecular workflows additionally use RDKit, PyG, and `fcd-torch`.
+
+### Train and evaluate the QM9 typed degree-sequence prior
+
+The QM9 prior models joint typed degree signatures: atom type together with
+single-, double-, and triple-bond degrees, rather than only an untyped degree
+sequence. It expects the prepared `qm9_attributed` splits under
+`outputs/datasets`; see [Prepare molecular datasets](#prepare-molecular-datasets)
+if those files do not exist yet.
+
+Train the typed degree-signature VAE:
+
+```bash
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/qm9_typed.yaml
+```
+
+The configuration writes the checkpoint and its fitted signature vocabulary to:
+
+```text
+outputs/degree_generators/qm9_typed/seed_42/checkpoint.pt
+outputs/degree_generators/qm9_typed/seed_42/typed_signature_vectorizer.json
+outputs/degree_generators/qm9_typed/seed_42/training_metrics.json
+```
+
+Evaluate held-out degree-signature matching and exact-constructor feasibility:
+
+```bash
+PYTHONPATH=src python scripts/evaluate_degree_generator.py \
+  --config configs/experiments/dhvae/qm9_typed.yaml
+```
+
+The evaluator uses the checkpoint, sample count, reference limit, batch size,
+seed, and output directory declared in the same configuration. Its main report
+and its generated typed invariants are written to:
+
+```text
+outputs/degree_generators/qm9_typed/seed_42/evaluation/degree_evaluation.json
+outputs/degree_generators/qm9_typed/seed_42/evaluation/generated_typed_invariants.json
+```
 
 ### Example: Community-small
 
@@ -555,4 +595,3 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --dataset community_small \
   --num-samples 1024 \
   --seed-id 42
-
