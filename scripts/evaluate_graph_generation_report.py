@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -81,6 +82,232 @@ def _load_json_mapping(path: Path) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         raise TypeError(f"JSON manifest {path} must contain an object.")
     return value
+
+
+
+def _sha256(path: Path) -> str:
+    """Return the SHA-256 digest of one on-disk artifact."""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _combined_split_fingerprint(split_sha256: dict[str, str]) -> str:
+    """Match the baseline-wrapper dataset fingerprint convention."""
+
+    record = {
+        split: {"path": f"{split}.pkl", "sha256": split_sha256[split]}
+        for split in sorted(split_sha256)
+    }
+    payload = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def dataset_provenance(
+    dataset_config: dict[str, Any],
+    splits: dict[str, Sequence[nx.Graph]],
+) -> dict[str, Any]:
+    """Describe the exact prepared dataset used by this evaluation.
+
+    Evaluation must be reproducible across machines.  The split pickle hashes
+    are therefore treated as the primary dataset identity, while the protocol
+    ID and config hashes provide human-readable provenance.
+    """
+
+    serialized_id = str(dataset_config.get("name", "sbm"))
+    benchmark_id = str(dataset_config.get("benchmark", serialized_id))
+    root = Path(dataset_config.get("root", "outputs/datasets"))
+    directory = root / serialized_id
+    split_paths = {
+        split: directory / f"{split}.pkl" for split in ("train", "val", "test")
+    }
+    missing = [str(path) for path in split_paths.values() if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "Cannot fingerprint the evaluation dataset; missing prepared split "
+            f"files: {missing}. Prepare the dataset before evaluation."
+        )
+    split_sha256 = {split: _sha256(path) for split, path in split_paths.items()}
+
+    requested_config_path = dataset_config.get("config_path")
+    requested_config = None
+    requested_config_sha256 = None
+    if requested_config_path is not None:
+        requested_path = Path(str(requested_config_path))
+        if requested_path.is_file():
+            requested_config = load_yaml(requested_path)
+            requested_config_sha256 = _sha256(requested_path)
+
+    resolved_path = directory / "resolved_dataset_config.yaml"
+    resolved_config = load_yaml(resolved_path) if resolved_path.is_file() else None
+    resolved_config_sha256 = _sha256(resolved_path) if resolved_path.is_file() else None
+    protocol_id = None
+    for candidate in (resolved_config, requested_config, dataset_config):
+        if isinstance(candidate, dict) and candidate.get("protocol_id"):
+            protocol_id = str(candidate["protocol_id"])
+            break
+
+    return {
+        "benchmark_id": benchmark_id,
+        "serialized_id": serialized_id,
+        "root": str(root),
+        "dataset_dir": str(directory),
+        "protocol_id": protocol_id,
+        "split_sizes": {
+            split: len(list(splits.get(split, [])))
+            for split in ("train", "val", "test")
+        },
+        "split_paths": {split: str(path) for split, path in split_paths.items()},
+        "split_sha256": split_sha256,
+        "fingerprint": _combined_split_fingerprint(split_sha256),
+        "requested_config_path": (
+            str(requested_config_path) if requested_config_path is not None else None
+        ),
+        "requested_config_sha256": requested_config_sha256,
+        "resolved_config_path": str(resolved_path) if resolved_path.is_file() else None,
+        "resolved_config_sha256": resolved_config_sha256,
+    }
+
+
+def _find_training_manifest(start: Path) -> tuple[dict[str, Any] | None, Path | None]:
+    """Find the managed baseline training manifest associated with a generation."""
+
+    start = start.expanduser().resolve(strict=False)
+    candidates = [start if start.is_dir() else start.parent, *(start.parents)]
+    seen: set[str] = set()
+    for directory in candidates[:8]:
+        candidate = directory / "train" / "manifest.json"
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        value = _load_json_mapping(candidate)
+        if value is not None:
+            return value, candidate
+    return None, None
+
+
+def _manifest_dataset_record(
+    generation_manifest: dict[str, Any] | None,
+    training_manifest: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    # Prefer the training manifest because it records the exact prepared-split
+    # fingerprint; generation manifests may only carry the benchmark name.
+    for manifest in (training_manifest, generation_manifest):
+        if not isinstance(manifest, dict):
+            continue
+        dataset = manifest.get("dataset")
+        if isinstance(dataset, dict):
+            return dataset
+    return None
+
+
+def validate_dataset_compatibility(
+    provenance: dict[str, Any],
+    *,
+    generation_manifest: dict[str, Any] | None,
+    training_manifest: dict[str, Any] | None,
+    mismatch_policy: str,
+) -> list[str]:
+    """Validate available generation/training provenance against current splits."""
+
+    policy = str(mismatch_policy).strip().lower()
+    if policy not in {"error", "warn", "ignore"}:
+        raise ValueError(f"Unknown dataset mismatch policy: {mismatch_policy!r}")
+    dataset_record = _manifest_dataset_record(generation_manifest, training_manifest)
+    if dataset_record is None:
+        return []
+
+    mismatches: list[str] = []
+    expected_benchmark = dataset_record.get("benchmark_id")
+    if expected_benchmark is not None and str(expected_benchmark) != str(
+        provenance["benchmark_id"]
+    ):
+        mismatches.append(
+            "benchmark_id differs: generation/training="
+            f"{expected_benchmark!r}, evaluation={provenance['benchmark_id']!r}"
+        )
+
+    expected_fingerprint = dataset_record.get("fingerprint")
+    if expected_fingerprint is not None and str(expected_fingerprint) != str(
+        provenance["fingerprint"]
+    ):
+        mismatches.append(
+            "dataset split fingerprint differs: generation/training="
+            f"{expected_fingerprint}, evaluation={provenance['fingerprint']}"
+        )
+
+    expected_split_hashes = dataset_record.get("split_sha256")
+    if isinstance(expected_split_hashes, dict):
+        for split in ("train", "val", "test"):
+            expected = expected_split_hashes.get(split)
+            observed = provenance["split_sha256"].get(split)
+            if expected is not None and str(expected) != str(observed):
+                mismatches.append(
+                    f"{split} split SHA-256 differs: generation/training="
+                    f"{expected}, evaluation={observed}"
+                )
+
+    if mismatches and policy == "error":
+        detail = "\n  - ".join(mismatches)
+        raise RuntimeError(
+            "Generated graphs were trained/prepared against a different dataset "
+            "than the one selected for evaluation:\n  - "
+            + detail
+            + "\nUse --dataset-mismatch-policy warn only for an intentional "
+            "cross-dataset diagnostic."
+        )
+    if mismatches and policy == "warn":
+        print("WARNING: dataset provenance mismatch detected:", flush=True)
+        for mismatch in mismatches:
+            print(f"  - {mismatch}", flush=True)
+    return mismatches
+
+
+def resolve_evaluation_counts(
+    *,
+    num_reference: int,
+    num_generated: int,
+    configured_reference_cap: int | None,
+    max_generated_graphs: int | None,
+) -> tuple[int, int]:
+    """Keep the held-out reference fixed while optionally capping candidates."""
+
+    reference_count = int(num_reference)
+    if configured_reference_cap is not None and int(configured_reference_cap) > 0:
+        reference_count = min(reference_count, int(configured_reference_cap))
+    generated_count = int(num_generated)
+    if max_generated_graphs is not None:
+        cap = int(max_generated_graphs)
+        if cap <= 0:
+            raise ValueError("--max-graphs must be positive when provided.")
+        generated_count = min(generated_count, cap)
+    return reference_count, generated_count
+
+
+def _print_dataset_provenance(provenance: dict[str, Any]) -> None:
+    sizes = provenance["split_sizes"]
+    print(
+        "Dataset: "
+        f"benchmark={provenance['benchmark_id']} "
+        f"serialized={provenance['serialized_id']} "
+        f"protocol={provenance['protocol_id'] or 'unspecified'}",
+        flush=True,
+    )
+    print(
+        "Dataset splits: "
+        f"train={sizes['train']} val={sizes['val']} test={sizes['test']}",
+        flush=True,
+    )
+    print(f"Dataset fingerprint: {provenance['fingerprint']}", flush=True)
+    for split in ("train", "val", "test"):
+        print(
+            f"  {split} SHA256: {provenance['split_sha256'][split]}",
+            flush=True,
+        )
 
 
 def _normalize_stage_label(value: str, *, field: str) -> str:
@@ -737,7 +964,34 @@ def main() -> None:
     parser.add_argument("--base-graphs", default=None)
     parser.add_argument("--coarse-graphs", default=None)
     parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--max-graphs", type=int, default=None)
+    parser.add_argument(
+        "--max-graphs",
+        type=int,
+        default=None,
+        help=(
+            "Cap generated/source candidate graphs only. The held-out test "
+            "reference remains fixed; use protocol.max_reference_graphs in "
+            "the config to cap the reference set explicitly."
+        ),
+    )
+    parser.add_argument(
+        "--dataset-mismatch-policy",
+        choices=("error", "warn", "ignore"),
+        default="error",
+        help=(
+            "Behavior when managed generation/training provenance identifies "
+            "different prepared dataset splits. Default: error."
+        ),
+    )
+    parser.add_argument(
+        "--build-dataset-if-missing",
+        action="store_true",
+        help=(
+            "Opt in to rebuilding missing prepared dataset splits during "
+            "evaluation. By default evaluation fails instead of silently "
+            "creating a new reference dataset."
+        ),
+    )
     parser.add_argument("--num-samples", type=int, default=8)
     parser.add_argument(
         "--sample-selection",
@@ -815,11 +1069,24 @@ def main() -> None:
     splits = load_dataset_splits(
         str(dataset_cfg.get("name", "sbm")),
         root=dataset_cfg.get("root", "outputs/datasets"),
-        build_if_missing=bool(dataset_cfg.get("build_if_missing", True)),
+        build_if_missing=bool(args.build_dataset_if_missing),
         config_path=dataset_cfg.get("config_path"),
     )
     train_graphs = list(splits.get("train", []))
     test_graphs = list(splits.get("test", []))
+    provenance = dataset_provenance(dataset_cfg, splits)
+    _print_dataset_provenance(provenance)
+    training_manifest, training_manifest_path = _find_training_manifest(
+        generated_path.parent
+    )
+    dataset_mismatches = validate_dataset_compatibility(
+        provenance,
+        generation_manifest=generation_manifest,
+        training_manifest=training_manifest,
+        mismatch_policy=args.dataset_mismatch_policy,
+    )
+    if training_manifest_path is not None:
+        print(f"Training manifest: {training_manifest_path}", flush=True)
     generated_graphs = _load_graph_list(generated_path)
     base_graphs = (
         _load_graph_list(base_path)
@@ -830,17 +1097,17 @@ def main() -> None:
         raise ValueError("The configured dataset has no test graphs.")
 
     protocol_cfg = config.get("protocol", {}) or {}
-    reference_count = len(test_graphs)
     configured_reference_cap = protocol_cfg.get("max_reference_graphs")
-    if configured_reference_cap is not None and int(configured_reference_cap) > 0:
-        reference_count = min(reference_count, int(configured_reference_cap))
-    generated_count = len(generated_graphs)
-    if args.max_graphs is not None:
-        requested_cap = int(args.max_graphs)
-        if requested_cap <= 0:
-            raise ValueError("--max-graphs must be positive when provided.")
-        reference_count = min(reference_count, requested_cap)
-        generated_count = min(generated_count, requested_cap)
+    reference_count, generated_count = resolve_evaluation_counts(
+        num_reference=len(test_graphs),
+        num_generated=len(generated_graphs),
+        configured_reference_cap=(
+            int(configured_reference_cap)
+            if configured_reference_cap is not None
+            else None
+        ),
+        max_generated_graphs=args.max_graphs,
+    )
     if reference_count <= 0:
         raise ValueError("No held-out reference graphs are available.")
     if generated_count <= 0:
@@ -861,6 +1128,11 @@ def main() -> None:
             flush=True,
         )
     print(f"Generated stage label: {final_stage}", flush=True)
+    print(
+        f"Evaluation counts: reference_test={len(reference)} "
+        f"generated={len(generated)} train_reference={len(train_graphs)}",
+        flush=True,
+    )
 
     rows: list[dict[str, Any]] = []
     if train_graphs:
@@ -964,12 +1236,20 @@ def main() -> None:
 
     save_json(
         {
-            "format": "graph_generation_evaluation_report_v3",
+            "format": "graph_generation_evaluation_report_v4",
             "orca_exec": orca_exec,
             "compute_orbit": compute_orbit,
             "generic_mmd_protocol": generic_mmd_protocol,
             "generic_clustering_bins": generic_clustering_bins,
             "graphlet_backend": graphlet_backend,
+            "dataset_provenance": provenance,
+            "dataset_mismatch_policy": args.dataset_mismatch_policy,
+            "dataset_provenance_mismatches": dataset_mismatches,
+            "training_manifest": (
+                str(training_manifest_path)
+                if training_manifest_path is not None
+                else None
+            ),
             "generated_graphs": str(generated_path),
             "generated_stage": final_stage,
             "generation_manifest": (
