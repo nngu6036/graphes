@@ -73,6 +73,6 @@ degree_evaluation:
   # Degree-only evaluation is cheap; use enough samples to resolve prior quality
   # before launching expensive GraphER refinement.
   num_samples: 10000
-  max_reference_sequences: 20
+  max_reference_sequences: null
   batch_size: 256
   output_dir: outputs/degree_generators/sbm/seed_42/evaluation
