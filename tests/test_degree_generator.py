@@ -374,3 +374,124 @@ def test_degree_sequence_evaluation_exposes_fixed_graphrnn_mmd():
     expected = mmd_gaussian_emd(ref_hist, cand_hist, sigma=1.0)
     assert np.isclose(metrics["degree_histogram_mmd_graphrnn"], expected)
     assert metrics["degree_mmd_sigma"] > 0.0
+
+
+def test_degree_vae_sampler_redraws_full_prior_when_reject_only_draw_fails(monkeypatch):
+    from grapher.models.dhvae_hh.degree_sampler import DegreeVAESampler
+
+    class FakeModel:
+        def __init__(self):
+            self.calls = 0
+
+        def sample_outputs(self, *args, **kwargs):
+            self.calls += 1
+            return {"call": np.asarray([[self.calls]], dtype=np.int64)}
+
+    class FakeVectorizer:
+        def sample_empirical_node_count(self, rng):
+            return 8
+
+        def outputs_to_summaries(self, outputs, **kwargs):
+            call = int(np.asarray(outputs["call"]).reshape(-1)[0])
+            if call == 1:
+                raise RuntimeError("Degree generator exhausted its samples")
+            return [{
+                "num_nodes": 8,
+                "num_edges": 7,
+                "degree_sequence": [2, 2, 2, 2, 1, 1, 1, 1],
+                "degree_hist": np.asarray([0.0, 0.5, 0.5]),
+                "density": 0.25,
+                "sampling_diagnostics": {},
+            }]
+
+    sampler = DegreeVAESampler.__new__(DegreeVAESampler)
+    sampler.checkpoint_path = "unused"
+    sampler.device = "cpu"
+    sampler.deterministic = False
+    sampler.seed = 0
+    sampler.sample_num_nodes = "empirical"
+    sampler.sample_num_edges = "model"
+    sampler.exact_degree_sum_conditioning = True
+    sampler.max_resample = 10
+    sampler.model_resample_attempts = 3
+    sampler.parity_conditioned = False
+    sampler.max_parity_resample = 1
+    sampler.fallback = "error"
+    sampler.postprocess_policy = "reject_only"
+    sampler._model = FakeModel()
+    sampler._vectorizer = FakeVectorizer()
+
+    result = sampler.sample(np.random.default_rng(0))
+    assert sampler._model.calls == 2
+    assert result["sampling_diagnostics"]["model_resample_attempts"] == 2
+    assert result["sampling_diagnostics"]["model_resample_redraws"] == 1
+
+
+def test_degree_evaluator_records_native_sampling_failure_instead_of_aborting(monkeypatch):
+    from grapher.models.dhvae_hh import evaluation as degree_eval
+
+    class FakeModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.anchor = torch.nn.Parameter(torch.zeros(()))
+
+        def sample_outputs(self, num_samples, **kwargs):
+            return {
+                "marker": torch.arange(num_samples, dtype=torch.long).reshape(-1, 1),
+                "conditioned_num_nodes": torch.full((num_samples,), 8, dtype=torch.long),
+            }
+
+    class FakeVectorizer:
+        def sample_empirical_node_count(self, rng):
+            return 8
+
+        def outputs_to_summaries(self, outputs, *, fallback, include_diagnostics, **kwargs):
+            marker = int(torch.as_tensor(outputs["marker"]).reshape(-1)[0])
+            if marker == 0 and fallback == "error":
+                raise RuntimeError("Degree generator exhausted its samples")
+            fallback_used = marker == 0 and fallback != "error"
+            return [{
+                "num_nodes": 8,
+                "num_edges": 7,
+                "degree_sequence": [2, 2, 2, 2, 1, 1, 1, 1],
+                "degree_hist": np.asarray([0.0, 0.5, 0.5]),
+                "density": 0.25,
+                "sampling_diagnostics": {
+                    "first_raw_degree_sequence": [1] * 8 if marker == 0 else [2, 2, 2, 2, 1, 1, 1, 1],
+                    "fallback_used": fallback_used,
+                    "raw_graphical": marker != 0,
+                    "raw_connected_feasible": marker != 0,
+                    "raw_even_degree_sum": True,
+                    "raw_degree_bounds_valid": True,
+                    "accepted_without_postprocessing": marker != 0,
+                },
+            }]
+
+    fake_model = FakeModel()
+    fake_vectorizer = FakeVectorizer()
+    monkeypatch.setattr(
+        degree_eval,
+        "load_degree_vae_checkpoint",
+        lambda *args, **kwargs: (fake_model, fake_vectorizer, {}),
+    )
+    summaries, diagnostics = degree_eval._sample_degree_sequences(
+        checkpoint_path="unused",
+        degree_cfg={
+            "sample_num_nodes": "empirical",
+            "sample_num_edges": "model",
+            "fallback": "error",
+            "postprocess_policy": "reject_only",
+            "max_resample": 2,
+        },
+        num_samples=3,
+        batch_size=3,
+        seed=0,
+        device="cpu",
+        prior_mode="model",
+    )
+    assert len(summaries) == 2
+    assert len(diagnostics) == 3
+    assert sum(bool(item["native_sampling_failed"]) for item in diagnostics) == 1
+    failed = next(item for item in diagnostics if item["native_sampling_failed"])
+    assert failed["evaluation_placeholder_fallback_used"]
+    assert not failed["fallback_used"]

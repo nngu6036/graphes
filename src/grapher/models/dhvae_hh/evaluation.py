@@ -62,6 +62,21 @@ def _mean_bool(diagnostics: list[dict[str, Any]], key: str) -> float:
     return float(np.mean([bool(item.get(key, False)) for item in diagnostics]))
 
 
+def _slice_model_outputs(
+    outputs: dict[str, Any], index: int
+) -> dict[str, Any]:
+    """Return one row of a batched DH-VAE output dictionary."""
+
+    row: dict[str, Any] = {}
+    for key, value in outputs.items():
+        if isinstance(value, torch.Tensor):
+            row[key] = value[index : index + 1]
+        else:
+            array = np.asarray(value)
+            row[key] = array[index : index + 1]
+    return row
+
+
 def _sample_degree_sequences(
     *,
     checkpoint_path: str | Path,
@@ -72,6 +87,15 @@ def _sample_degree_sequences(
     device: str,
     prior_mode: str = "model",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Draw prior samples without letting one infeasible draw abort evaluation.
+
+    Evaluation must measure native failure probability rather than silently
+    replacing invalid model draws.  When the configured production fallback is
+    ``error``, a temporary empirical placeholder is used only to recover the
+    first raw sequence and diagnostics from that row; the placeholder is *not*
+    included in the accepted distribution.
+    """
+
     model, vectorizer, _checkpoint = load_degree_vae_checkpoint(
         checkpoint_path, device=device
     )
@@ -80,6 +104,7 @@ def _sample_degree_sequences(
     summaries: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
     remaining = int(num_samples)
+    configured_fallback = str(degree_cfg.get("fallback", "empirical_nearest_n"))
     while remaining > 0:
         current_batch = min(int(batch_size), remaining)
         node_counts = None
@@ -106,25 +131,85 @@ def _sample_degree_sequences(
                 prior_mode=prior_mode,
                 device=next(model.parameters()).device,
             )
-        batch = vectorizer.outputs_to_summaries(
-            outputs,
-            rng=rng,
-            deterministic=bool(degree_cfg.get("deterministic", False)),
-            sample_num_nodes=str(degree_cfg.get("sample_num_nodes", "empirical")),
-            sample_num_edges=str(degree_cfg.get("sample_num_edges", "model")),
-            exact_degree_sum_conditioning=bool(
-                degree_cfg.get("exact_degree_sum_conditioning", True)
-            ),
-            max_resample=int(degree_cfg.get("max_resample", 200)),
-            fallback=str(degree_cfg.get("fallback", "empirical_nearest_n")),
-            parity_conditioned=bool(degree_cfg.get("parity_conditioned", True)),
-            max_parity_resample=int(degree_cfg.get("max_parity_resample", 32)),
-            postprocess_policy=str(degree_cfg.get("postprocess_policy", "repair")),
-            include_diagnostics=True,
-        )
-        for summary in batch:
-            diagnostics.append(dict(summary.pop("sampling_diagnostics")))
-            summaries.append(summary)
+
+        # Process rows independently.  ``outputs_to_summaries`` raises on a
+        # reject-only failure, so batching the post-processor made a single rare
+        # Ego-small failure terminate a 10k-sample diagnostic run.
+        for index in range(current_batch):
+            row_outputs = _slice_model_outputs(outputs, index)
+            try:
+                row_batch = vectorizer.outputs_to_summaries(
+                    row_outputs,
+                    rng=rng,
+                    deterministic=bool(degree_cfg.get("deterministic", False)),
+                    sample_num_nodes=str(
+                        degree_cfg.get("sample_num_nodes", "empirical")
+                    ),
+                    sample_num_edges=str(
+                        degree_cfg.get("sample_num_edges", "model")
+                    ),
+                    exact_degree_sum_conditioning=bool(
+                        degree_cfg.get("exact_degree_sum_conditioning", True)
+                    ),
+                    max_resample=int(degree_cfg.get("max_resample", 200)),
+                    fallback=configured_fallback,
+                    parity_conditioned=bool(
+                        degree_cfg.get("parity_conditioned", True)
+                    ),
+                    max_parity_resample=int(
+                        degree_cfg.get("max_parity_resample", 32)
+                    ),
+                    postprocess_policy=str(
+                        degree_cfg.get("postprocess_policy", "repair")
+                    ),
+                    include_diagnostics=True,
+                )
+                summary = row_batch[0]
+                diagnostic = dict(summary.pop("sampling_diagnostics"))
+                diagnostic["native_sampling_failed"] = False
+                diagnostic["evaluation_placeholder_fallback_used"] = False
+                summaries.append(summary)
+                diagnostics.append(diagnostic)
+            except RuntimeError as exc:
+                if configured_fallback.lower() != "error":
+                    raise
+                # Re-run the *same model output* only to expose its raw first
+                # sequence.  The empirical fallback is a diagnostic placeholder
+                # and is never counted as an accepted model sample.
+                placeholder = vectorizer.outputs_to_summaries(
+                    row_outputs,
+                    rng=rng,
+                    deterministic=bool(degree_cfg.get("deterministic", False)),
+                    sample_num_nodes=str(
+                        degree_cfg.get("sample_num_nodes", "empirical")
+                    ),
+                    sample_num_edges=str(
+                        degree_cfg.get("sample_num_edges", "model")
+                    ),
+                    exact_degree_sum_conditioning=bool(
+                        degree_cfg.get("exact_degree_sum_conditioning", True)
+                    ),
+                    max_resample=int(degree_cfg.get("max_resample", 200)),
+                    fallback="empirical_nearest_n",
+                    parity_conditioned=bool(
+                        degree_cfg.get("parity_conditioned", True)
+                    ),
+                    max_parity_resample=int(
+                        degree_cfg.get("max_parity_resample", 32)
+                    ),
+                    postprocess_policy=str(
+                        degree_cfg.get("postprocess_policy", "repair")
+                    ),
+                    include_diagnostics=True,
+                )[0]
+                diagnostic = dict(placeholder.pop("sampling_diagnostics"))
+                diagnostic["native_sampling_failed"] = True
+                diagnostic["native_sampling_error"] = str(exc)
+                diagnostic["evaluation_placeholder_fallback_used"] = True
+                # Do not report the evaluation-only placeholder as a production
+                # fallback.
+                diagnostic["fallback_used"] = False
+                diagnostics.append(diagnostic)
         remaining -= current_batch
     return summaries, diagnostics
 
@@ -293,6 +378,11 @@ def _quality_metrics(
                 constructor_success.append(False)
 
     return {
+        "native_sampling_failure_rate": _mean_bool(
+            diagnostics, "native_sampling_failed"
+        ),
+        "num_attempted_prior_draws": float(len(diagnostics)),
+        "num_native_returned_sequences": float(len(summaries)),
         "raw_graphicality_rate": _mean_bool(diagnostics, "raw_graphical"),
         "raw_connected_feasible_rate": _mean_bool(
             diagnostics, "raw_connected_feasible"
@@ -704,6 +794,7 @@ def main() -> None:
     raw_prior_sequences = [
         [int(degree) for degree in item["first_raw_degree_sequence"]]
         for item in diagnostics
+        if item.get("first_raw_degree_sequence")
     ]
     _, standard_diagnostics = _sample_degree_sequences(
         checkpoint_path=checkpoint_path,
@@ -717,6 +808,7 @@ def main() -> None:
     standard_normal_sequences = [
         [int(degree) for degree in item["first_raw_degree_sequence"]]
         for item in standard_diagnostics
+        if item.get("first_raw_degree_sequence")
     ]
     aggregate_posterior_sequences = _aggregate_posterior_sequences(
         checkpoint_path=checkpoint_path,
@@ -794,6 +886,10 @@ def main() -> None:
         "seed": seed,
         "protocol": {
             "num_generated_sequences": len(generated_sequences),
+            "num_attempted_prior_draws": len(diagnostics),
+            "native_sampling_failures": int(
+                sum(bool(item.get("native_sampling_failed", False)) for item in diagnostics)
+            ),
             "num_train_sequences": len(train_sequences),
             "num_test_sequences": len(test_sequences),
             "degree_kl_direction": "KL(test || candidate)",

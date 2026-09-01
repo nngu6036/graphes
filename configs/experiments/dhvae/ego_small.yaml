@@ -22,7 +22,7 @@ degree_generator:
   type: degree_histogram_vae
   checkpoint_path: outputs/degree_generators/ego_small/seed_42/checkpoint.pt
   device: auto
-  epochs: 10000
+  epochs: 600
   batch_size: 32
   latent_dim: 32
   hidden_dim: 128
@@ -66,6 +66,7 @@ degree_generator:
   # edge count and parity structural rather than repair-time constraints.
   exact_degree_sum_conditioning: true
   max_resample: 500
+  model_resample_attempts: 32
   parity_conditioned: false
   max_parity_resample: 1
   postprocess_policy: reject_only

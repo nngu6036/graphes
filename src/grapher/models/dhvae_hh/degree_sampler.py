@@ -26,6 +26,7 @@ class DegreeVAESampler:
         sample_num_edges: str = "model",
         exact_degree_sum_conditioning: bool = True,
         max_resample: int = 200,
+        model_resample_attempts: int = 32,
         parity_conditioned: bool = True,
         max_parity_resample: int = 32,
         fallback: str = "empirical_nearest_n",
@@ -39,6 +40,7 @@ class DegreeVAESampler:
         self.sample_num_edges = str(sample_num_edges)
         self.exact_degree_sum_conditioning = bool(exact_degree_sum_conditioning)
         self.max_resample = int(max_resample)
+        self.model_resample_attempts = max(int(model_resample_attempts), 1)
         self.parity_conditioned = bool(parity_conditioned)
         self.max_parity_resample = int(max_parity_resample)
         self.fallback = str(fallback)
@@ -72,6 +74,7 @@ class DegreeVAESampler:
                 data.get("exact_degree_sum_conditioning", True)
             ),
             max_resample=int(data.get("max_resample", 200)),
+            model_resample_attempts=int(data.get("model_resample_attempts", 32)),
             parity_conditioned=bool(data.get("parity_conditioned", True)),
             max_parity_resample=int(data.get("max_parity_resample", 32)),
             fallback=str(data.get("fallback", "empirical_nearest_n")),
@@ -84,37 +87,70 @@ class DegreeVAESampler:
         if self._model is None or self._vectorizer is None:
             self._load()
         generator = rng if rng is not None else np.random.default_rng(self.seed)
-        node_counts = None
-        if self.sample_num_nodes.lower() == "empirical":
-            node_counts = [self._vectorizer.sample_empirical_node_count(generator)]
-        edge_counts = None
-        if node_counts is not None and self.sample_num_edges.lower() == "empirical":
-            edge_counts = [
-                self._vectorizer.sample_empirical_edge_count(node_counts[0], generator)
-            ]
-        with torch.no_grad():
-            outputs = self._model.sample_outputs(
-                1,
-                node_counts=node_counts,
-                edge_counts=edge_counts,
-                deterministic_node_count=self.deterministic,
-                deterministic_edge_count=self.deterministic,
-                device=self.device,
-            )
-        return self._vectorizer.outputs_to_summaries(
-            outputs,
-            rng=generator,
-            deterministic=self.deterministic,
-            sample_num_nodes=self.sample_num_nodes,
-            sample_num_edges=self.sample_num_edges,
-            exact_degree_sum_conditioning=self.exact_degree_sum_conditioning,
-            max_resample=self.max_resample,
-            parity_conditioned=self.parity_conditioned,
-            max_parity_resample=self.max_parity_resample,
-            fallback=self.fallback,
-            postprocess_policy=self.postprocess_policy,
-            include_diagnostics=True,
-        )[0]
+
+        # ``max_resample`` controls degree-histogram rejection for a *fixed*
+        # prior draw.  Sparse datasets such as Ego-small can occasionally
+        # produce a latent/edge-count draw whose categorical degree law has
+        # negligible mass on graphical connected sequences.  Redrawing the
+        # model prior is still genuine rejection sampling from p(D); it is
+        # preferable to silently replacing the sample with an empirical
+        # sequence.
+        last_error: RuntimeError | None = None
+        full_attempt_limit = (
+            self.model_resample_attempts if self.fallback.lower() == "error" else 1
+        )
+        for full_attempt in range(1, full_attempt_limit + 1):
+            node_counts = None
+            if self.sample_num_nodes.lower() == "empirical":
+                node_counts = [self._vectorizer.sample_empirical_node_count(generator)]
+            edge_counts = None
+            if (
+                node_counts is not None
+                and self.sample_num_edges.lower() == "empirical"
+            ):
+                edge_counts = [
+                    self._vectorizer.sample_empirical_edge_count(
+                        node_counts[0], generator
+                    )
+                ]
+            with torch.no_grad():
+                outputs = self._model.sample_outputs(
+                    1,
+                    node_counts=node_counts,
+                    edge_counts=edge_counts,
+                    deterministic_node_count=self.deterministic,
+                    deterministic_edge_count=self.deterministic,
+                    device=self.device,
+                )
+            try:
+                summary = self._vectorizer.outputs_to_summaries(
+                    outputs,
+                    rng=generator,
+                    deterministic=self.deterministic,
+                    sample_num_nodes=self.sample_num_nodes,
+                    sample_num_edges=self.sample_num_edges,
+                    exact_degree_sum_conditioning=self.exact_degree_sum_conditioning,
+                    max_resample=self.max_resample,
+                    parity_conditioned=self.parity_conditioned,
+                    max_parity_resample=self.max_parity_resample,
+                    fallback=self.fallback,
+                    postprocess_policy=self.postprocess_policy,
+                    include_diagnostics=True,
+                )[0]
+                diagnostic = summary.get("sampling_diagnostics")
+                if isinstance(diagnostic, dict):
+                    diagnostic["model_resample_attempts"] = int(full_attempt)
+                    diagnostic["model_resample_redraws"] = int(full_attempt - 1)
+                return summary
+            except RuntimeError as exc:
+                last_error = exc
+
+        raise RuntimeError(
+            "Degree generator exhausted full prior redraws without a valid "
+            "graphical, connected-feasible degree sequence "
+            f"({full_attempt_limit} model draws; {self.max_resample} "
+            "degree-histogram attempts per draw)."
+        ) from last_error
 
 
 class EmpiricalDegreeSampler:
