@@ -19,7 +19,7 @@ constructor:
 degree_generator:
   checkpoint_path: outputs/degree_generators/sbm/seed_42/checkpoint.pt
   device: auto
-  epochs: 600
+  epochs: 5000
   batch_size: 32
   latent_dim: 32
   hidden_dim: 128
