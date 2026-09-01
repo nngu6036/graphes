@@ -300,6 +300,7 @@ docs/
 
 scripts/
     prepare_generic_dataset.py
+    print_dataset_statistics.py
     train_degree_generator.py
     train_topology_grapher.py
     run_topology_grapher.py
@@ -360,6 +361,16 @@ PYTHONPATH=src python scripts/run_dhvae_hh_baseline.py \
   --seed-id 42 \
   --device gpu
 ```
+
+Report aggregate and per-split dataset statistics, including the degree
+histogram and any available atom/bond category counts:
+
+```bash
+PYTHONPATH=src python scripts/print_dataset_statistics.py --dataset community_small
+```
+
+The reporter never modifies prepared dataset files. Pass `--json-out <path>`
+to save the complete report outside the prepared dataset directory.
 
 Train GraphER:
 

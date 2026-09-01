@@ -1,4 +1,47 @@
-PYTHONPATH=src python scripts/run_dhvae_hh_baseline.py \
-  --dataset community_small \
-  --num-samples 1024 \
-  --seed-id 42
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/community_small.yaml
+
+  PYTHONPATH=src python scripts/evaluate_degree_generator.py \
+  --config configs/experiments/dhvae/community_small.yaml \
+  --num-samples 10000 \
+  --skip-constructor-check
+
+
+Degree-sequence distribution matching (lower is better)
+Comparison                              KL(test||candidate)          MMD      Node TV      Edge TV
+train_to_test                                      0.022430     0.033620     0.200000     0.350000
+train_empirical_resample_to_test                   0.022585     0.034007     0.205000     0.353000
+posterior_reconstruction_to_test                   0.624095     0.083964     0.000000     0.000000
+aggregate_posterior_to_test                        0.012023     0.008362     0.132000     0.266200
+standard_normal_prior_to_test                      0.011436     0.006989     0.129100     0.257100
+learned_prior_raw_to_test                          0.012810     0.008262     0.129100     0.259000
+learned_prior_accepted_to_test                     0.012810     0.008262     0.129100     0.259000
+
+Degree-shape diagnostics (lower is better)
+Comparison                               MeanDegErr       VarErr   SecondMomErr     MaxDegTV      WedgeTV
+train_to_test                              0.274306     0.124461       2.566032     0.300000     0.700000
+train_empirical_resample_to_test           0.274243     0.122116       2.557361     0.304000     0.702400
+posterior_reconstruction_to_test           0.000000     0.819345       0.819345     0.500000     0.950000
+aggregate_posterior_to_test                0.069719     0.106255       0.482173     0.271500     0.798000
+standard_normal_prior_to_test              0.056243     0.088532       0.380340     0.260900     0.818800
+learned_prior_raw_to_test                  0.056654     0.129083       0.340179     0.268800     0.807200
+learned_prior_accepted_to_test             0.056654     0.129083       0.340179     0.268800     0.807200
+
+DH-VAE feasibility and post-processing
+raw_graphicality_rate: 1.000000
+raw_connected_feasible_rate: 1.000000
+raw_even_degree_sum_rate: 1.000000
+raw_degree_bounds_rate: 1.000000
+exact_degree_sum_conditioned_rate: 1.000000
+raw_edge_count_matches_target_rate: 1.000000
+repair_usage_rate: 0.000000
+fallback_usage_rate: 0.000000
+accepted_without_postprocessing_rate: 1.000000
+mean_repair_l1_adjustment: 0.000000
+mean_sampling_attempts: 1.000000
+mean_parity_redraws: 0.000000
+accepted_graphicality_rate: 1.000000
+accepted_connected_feasible_rate: 1.000000
+accepted_even_degree_sum_rate: 1.000000
+accepted_degree_bounds_rate: 1.000000
+constructor_success_rate: nan

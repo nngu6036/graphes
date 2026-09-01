@@ -31,6 +31,14 @@ from grapher.rewiring_mlp.generic.model import (
     TOPOLOGY_CHECKPOINT_FORMAT,
     load_topology_checkpoint,
 )
+from grapher.rewiring_mlp.generic.flow_model import (
+    TOPOLOGY_FLOW_GRAPHLET_CHECKPOINT_FORMAT,
+    load_topology_flow_graphlet_checkpoint,
+)
+from grapher.rewiring_mlp.generic.flow_graphlet_refiner import (
+    FlowGraphletRefinerConfig,
+    refine_graph_with_flow_graphlet_predictions,
+)
 from grapher.rewiring_mlp.generic.refiner import (
     TopologyRefinerConfig,
     refine_graph_with_topology_predictions,
@@ -95,8 +103,8 @@ def main() -> None:
             "Generate generic graph topologies with DH-VAE/empirical degrees, "
             "connected Havel-Hakimi construction, and GraphER rewiring. The "
             "refiner is selected automatically from the checkpoint format "
-            "(structural-summary, spectral, or joint spectral + graphlet-logit "
-            "diffusion guidance)."
+            "(structural-summary, spectral, joint spectral + graphlet-logit "
+            "diffusion guidance, or edge-flow matching + graphlet guidance)."
         )
     )
     parser.add_argument("--config", required=True)
@@ -167,6 +175,7 @@ def main() -> None:
     predictor_clustering_error: float | None = None
     predictor_orbit_log_error: float | None = None
     predictor_spectral_error: float | None = None
+    predictor_flow_error: float | None = None
     if checkpoint_format == TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT:
         guidance_mode = "spectral_graphlet"
         model, graphlet_basis, summary_config, checkpoint = (
@@ -190,6 +199,30 @@ def main() -> None:
                 "or graphlet-logit validation error."
             )
         predictor_spectral_error = float(predictor_spectral_error_raw)
+        predictor_graphlet_error = float(predictor_graphlet_error_raw)
+    elif checkpoint_format == TOPOLOGY_FLOW_GRAPHLET_CHECKPOINT_FORMAT:
+        guidance_mode = "flow_graphlet"
+        model, graphlet_basis, summary_config, checkpoint = (
+            load_topology_flow_graphlet_checkpoint(
+                checkpoint_path,
+                device=device,
+            )
+        )
+        predictor_report = checkpoint.get("report", {}) or {}
+        predictor_flow_error_raw = predictor_report.get(
+            "val_flow_rmse",
+            predictor_report.get("val_flow_mae"),
+        )
+        predictor_graphlet_error_raw = predictor_report.get(
+            "val_graphlet_logit_rmse",
+            predictor_report.get("val_graphlet_probability_mae"),
+        )
+        if predictor_flow_error_raw is None or predictor_graphlet_error_raw is None:
+            raise ValueError(
+                "The flow+graphlet checkpoint is missing held-out flow or graphlet "
+                "validation error."
+            )
+        predictor_flow_error = float(predictor_flow_error_raw)
         predictor_graphlet_error = float(predictor_graphlet_error_raw)
     elif checkpoint_format == TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT:
         guidance_mode = "spectral"
@@ -232,7 +265,8 @@ def main() -> None:
             f"Unsupported topology checkpoint format {checkpoint_format!r}. "
             f"Expected {TOPOLOGY_CHECKPOINT_FORMAT!r}, "
             f"{TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT!r}, or "
-            f"{TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT!r}."
+            f"{TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT!r}, or "
+            f"{TOPOLOGY_FLOW_GRAPHLET_CHECKPOINT_FORMAT!r}."
         )
     model_device = next(model.parameters()).device
 
@@ -356,6 +390,30 @@ def main() -> None:
             f"spectrum_values={refiner_settings.debug_spectrum_values}",
             flush=True,
         )
+    elif guidance_mode == "flow_graphlet":
+        # Flow checkpoints use normalized accepted-step progress directly;
+        # legacy spectral time-horizon compatibility does not apply.
+        refiner_cfg.pop("time_horizon", None)
+        refiner_settings = FlowGraphletRefinerConfig.from_dict(refiner_cfg)
+        if graphlet_basis is None:
+            raise ValueError("Flow+graphlet checkpoint is missing its graphlet basis.")
+        if not refiner_settings.preserve_connectivity:
+            raise ValueError(
+                "Flow+graphlet topology generation requires connectivity "
+                "preservation."
+            )
+        print(
+            "[GraphER/FlowGraphlet] loaded joint edge-flow matching + graphlet "
+            f"checkpoint format={checkpoint_format} device={model_device}",
+            flush=True,
+        )
+        print(
+            "[GraphER/FlowGraphlet] guidance: the learned degree-tangent edge "
+            "velocity scores each valid double-edge swap directly; exact local "
+            "graphlet deltas provide higher-order structural guidance. Rewiring "
+            "is projection only and was not used to create training states.",
+            flush=True,
+        )
     else:
         refiner_settings = TopologyRefinerConfig.from_dict(refiner_cfg)
         if not refiner_settings.preserve_connectivity:
@@ -407,6 +465,21 @@ def main() -> None:
         if guidance_mode == "spectral_graphlet":
             assert graphlet_basis is not None
             refined, trace = refine_graph_with_spectral_graphlet_predictions(
+                coarse,
+                model=model,
+                graphlet_basis=graphlet_basis,
+                refiner_config=refiner_settings,
+                device=model_device,
+                rng=np.random.default_rng(refiner_graph_seeds[index]),
+                return_trace=True,
+                debug_context=(
+                    f"graph={index + 1}/{num_generate} "
+                    f"n={coarse.number_of_nodes()} m={coarse.number_of_edges()}"
+                ),
+            )
+        elif guidance_mode == "flow_graphlet":
+            assert graphlet_basis is not None
+            refined, trace = refine_graph_with_flow_graphlet_predictions(
                 coarse,
                 model=model,
                 graphlet_basis=graphlet_basis,
@@ -528,6 +601,9 @@ def main() -> None:
         }
         if guidance_mode == "spectral_graphlet":
             pipeline_record["spectral_error"] = float(predictor_spectral_error)
+            pipeline_record["graphlet_error"] = float(predictor_graphlet_error)
+        elif guidance_mode == "flow_graphlet":
+            pipeline_record["flow_error"] = float(predictor_flow_error)
             pipeline_record["graphlet_error"] = float(predictor_graphlet_error)
         elif guidance_mode == "spectral":
             pipeline_record["spectral_error"] = float(predictor_spectral_error)
@@ -685,6 +761,45 @@ def main() -> None:
         )
         refresh_on_plateau = refiner_settings.refresh_on_prediction_plateau
         report_format = "topology_spectral_graphlet_generation_v1"
+    elif guidance_mode == "flow_graphlet":
+        diagnostics.update(
+            {
+                "mean_accepted_flow_gain": _mean_or_zero(
+                    accepted_rows, "flow_gain"
+                ),
+                "mean_accepted_graphlet_gain": _mean_or_zero(
+                    accepted_rows, "graphlet_gain"
+                ),
+                "mean_flow_weight": _mean_or_zero(accepted_rows, "flow_weight"),
+                "mean_graphlet_weight": _mean_or_zero(
+                    accepted_rows, "graphlet_weight"
+                ),
+                "mean_graphlet_clean_mix": _mean_or_zero(
+                    accepted_rows, "graphlet_clean_mix"
+                ),
+                "mean_soft_degree_residual": _mean_or_zero(
+                    accepted_rows, "soft_degree_residual"
+                ),
+                "mean_predicted_flow_degree_tangent_residual": _mean_or_zero(
+                    accepted_rows,
+                    "predicted_flow_degree_tangent_residual",
+                ),
+                "predictor_flow_error": float(predictor_flow_error),
+                "predictor_graphlet_logit_error": float(predictor_graphlet_error),
+                "graphlet_distance": refiner_settings.graphlet_distance,
+                "graphlet_bridge_schedule": (
+                    refiner_settings.graphlet_bridge_schedule
+                ),
+                "global_to_local_schedule": (
+                    refiner_settings.guidance_weight_schedule
+                ),
+                "flow_normalize_per_swap": (
+                    refiner_settings.flow_normalize_per_swap
+                ),
+            }
+        )
+        refresh_on_plateau = refiner_settings.refresh_on_prediction_plateau
+        report_format = "topology_flow_graphlet_generation_v1"
     elif guidance_mode == "spectral":
         diagnostics.update(
             {

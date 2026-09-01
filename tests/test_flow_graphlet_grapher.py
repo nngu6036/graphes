@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 
 import networkx as nx
 import numpy as np
+import pytest
 import torch
 
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
@@ -20,6 +23,8 @@ from grapher.rewiring_mlp.generic.flow_model import (
     load_topology_flow_graphlet_checkpoint,
     save_topology_flow_graphlet_checkpoint,
 )
+from grapher.utils.io import save_pickle, save_yaml
+from scripts import run_topology_grapher
 
 
 def _basis() -> TopologyGraphletBasis:
@@ -193,3 +198,114 @@ def test_flow_projection_generation_preserves_degree_sequence() -> None:
         graph.degree(node) for node in range(8)
     ]
     assert nx.is_connected(refined)
+
+
+def test_topology_runner_accepts_flow_graphlet_checkpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    basis = _basis()
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    save_topology_flow_graphlet_checkpoint(
+        _model(basis),
+        checkpoint_path,
+        graphlet_basis=basis,
+        config={"topology_predictor": {"type": "flow_graphlet"}},
+        report={"val_flow_rmse": 0.2, "val_graphlet_logit_rmse": 0.3},
+    )
+
+    dataset_root = tmp_path / "datasets"
+    dataset_dir = dataset_root / "toy"
+    graph = nx.cycle_graph(6)
+    for split in ("train", "val", "test"):
+        save_pickle([graph], dataset_dir / f"{split}.pkl")
+
+    config_path = tmp_path / "flow.yaml"
+    save_yaml(
+        {
+            "pipeline": {"stage": "topology"},
+            "seed": 7,
+            "dataset": {
+                "name": "toy",
+                "root": str(dataset_root),
+                "build_if_missing": False,
+            },
+            "topology_predictor": {
+                "type": "flow_graphlet",
+                "checkpoint_path": str(checkpoint_path),
+                "device": "cpu",
+            },
+            "generation": {
+                "degree_source": "test_oracle",
+                "num_generate": 1,
+                "max_attempts_per_graph": 2,
+                "write_legacy_hybrid_alias": False,
+            },
+            "degree_generator": {"type": "degree_histogram_vae"},
+            "constructor": {
+                "type": "havel_hakimi",
+                "ensure_connected": True,
+                "random_relabel": False,
+                "max_repair_trials": 1000,
+            },
+            "topology_refiner": {
+                "mode": "flow_graphlet",
+                "steps": 0,
+                "proposal_budget": 16,
+                "valid_candidate_budget": 4,
+                "preserve_connectivity": True,
+                "selection": "greedy",
+                "temperature": 0.1,
+                "accept_only_improving": True,
+                "min_improvement": 0.0,
+                "min_relative_improvement": 0.0,
+                "prediction_horizon": {"mode": "fixed", "k": 1},
+                "flow_guidance": {"normalize_per_swap": True},
+                "graphlet_guidance": {
+                    "distance": "clr_rmse",
+                    "logit_epsilon": 1.0e-4,
+                    "size_weights": {"3": 1.0, "4": 1.0},
+                },
+                "global_to_local": {
+                    "flow_initial": 1.0,
+                    "flow_final": 1.0,
+                    "graphlet_initial": 1.0,
+                    "graphlet_final": 1.0,
+                },
+            },
+            "evaluation": {"inline_during_generation": False},
+        },
+        config_path,
+    )
+    output_dir = tmp_path / "generation"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_topology_grapher.py",
+            "--config",
+            str(config_path),
+            "--output-dir",
+            str(output_dir),
+            "--num-generate",
+            "1",
+            "--seed",
+            "7",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    run_topology_grapher.main()
+
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert report["format"] == "topology_flow_graphlet_generation_v1"
+    assert report["guidance_mode"] == "flow_graphlet"
+    assert report["checkpoint_format"] == TOPOLOGY_FLOW_GRAPHLET_CHECKPOINT_FORMAT
+    assert report["diagnostics"]["predictor_flow_error"] == 0.2
+    assert report["diagnostics"]["predictor_graphlet_logit_error"] == 0.3
+    assert report["diagnostics"]["degree_preservation_rate"] == 1.0
+    assert report["diagnostics"]["connectedness_rate"] == 1.0
+    assert report["pipeline_diagnostics"]["metrics"]["flow_error"][
+        "mean"
+    ] == pytest.approx(0.2)

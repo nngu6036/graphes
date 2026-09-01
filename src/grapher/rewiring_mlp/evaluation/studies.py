@@ -1052,6 +1052,7 @@ _PIPELINE_FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "predictor_macro_f1": ("predictor_macro_f1", "macro_f1"),
     "graphlet_error": ("graphlet_error",),
     "spectral_error": ("spectral_error",),
+    "flow_error": ("flow_error",),
     "consistency_residual": ("consistency_residual",),
     "invariant_feasible": ("invariant_feasible", "invariant_feasibility"),
     "constructor_success": ("constructor_success",),
@@ -1078,8 +1079,13 @@ _TOPOLOGY_SPECTRAL_PIPELINE_FIELDS = frozenset(
 _TOPOLOGY_SPECTRAL_GRAPHLET_PIPELINE_FIELDS = frozenset(
     {*_TOPOLOGY_COMMON_PIPELINE_FIELDS, "spectral_error", "graphlet_error"}
 )
+_TOPOLOGY_FLOW_GRAPHLET_PIPELINE_FIELDS = frozenset(
+    {*_TOPOLOGY_COMMON_PIPELINE_FIELDS, "flow_error", "graphlet_error"}
+)
 _ENDPOINT_PIPELINE_FIELDS = frozenset(
-    key for key in _PIPELINE_FIELD_GROUPS if key != "spectral_error"
+    key
+    for key in _PIPELINE_FIELD_GROUPS
+    if key not in {"spectral_error", "flow_error"}
 )
 
 
@@ -1137,6 +1143,14 @@ def aggregate_pipeline_diagnostics(
             "dual_diffusion",
         }:
             required_fields = _TOPOLOGY_SPECTRAL_GRAPHLET_PIPELINE_FIELDS
+        elif guidance_mode in {
+            "flow_graphlet",
+            "flow_graphlet_predictor",
+            "flow_matching_graphlet",
+            "edge_flow_graphlet",
+            "flow+graphlet",
+        }:
+            required_fields = _TOPOLOGY_FLOW_GRAPHLET_PIPELINE_FIELDS
         elif guidance_mode in {"spectral", "spectral_transformer", "spectral_guidance"}:
             required_fields = _TOPOLOGY_SPECTRAL_PIPELINE_FIELDS
         else:
