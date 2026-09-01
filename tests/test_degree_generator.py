@@ -207,6 +207,7 @@ def test_degree_sequence_evaluation_is_zero_for_identical_sets():
         train=sequences,
     )
     assert np.isclose(metrics["degree_histogram_mmd"], 0.0)
+    assert np.isclose(metrics["degree_histogram_mmd_graphrnn"], 0.0)
     assert np.isclose(metrics["degree_marginal_kl_reference_to_candidate"], 0.0)
     assert np.isclose(metrics["node_count_total_variation"], 0.0)
     assert np.isclose(metrics["edge_count_total_variation"], 0.0)
@@ -357,3 +358,19 @@ def test_edge_conditioned_checkpoint_round_trip(tmp_path):
         exact_degree_sum_conditioning=True,
     )
     assert all(summary["num_edges"] * 2 == sum(summary["degree_sequence"]) for summary in summaries)
+
+
+def test_degree_sequence_evaluation_exposes_fixed_graphrnn_mmd():
+    reference = [[2, 2, 2, 2], [2, 1, 1]]
+    candidate = [[1, 1, 1, 1], [3, 1, 1, 1]]
+    metrics = evaluate_degree_sequence_sets(reference, candidate, train=reference)
+
+    from grapher.rewiring_mlp.evaluation.degree_sequences import degree_histogram_matrix
+    from grapher.rewiring_mlp.evaluation.metrics import mmd_gaussian_emd
+
+    max_degree = max(max(seq) for seq in reference + candidate)
+    ref_hist = degree_histogram_matrix(reference, max_degree=max_degree)
+    cand_hist = degree_histogram_matrix(candidate, max_degree=max_degree)
+    expected = mmd_gaussian_emd(ref_hist, cand_hist, sigma=1.0)
+    assert np.isclose(metrics["degree_histogram_mmd_graphrnn"], expected)
+    assert metrics["degree_mmd_sigma"] > 0.0

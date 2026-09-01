@@ -342,6 +342,7 @@ def _quality_metrics(
 def _compact_comparison(metrics: dict[str, Any]) -> dict[str, float]:
     return {
         "degree_kl": float(metrics["degree_marginal_kl_reference_to_candidate"]),
+        "degree_mmd_graphrnn": float(metrics["degree_histogram_mmd_graphrnn"]),
         "degree_mmd": float(metrics["degree_histogram_mmd"]),
         "node_count_tv": float(metrics["node_count_total_variation"]),
         "edge_count_tv": float(metrics["edge_count_total_variation"]),
@@ -800,6 +801,11 @@ def main() -> None:
                 "per-graph normalized degree histogram with a Gaussian "
                 "Earth-Mover kernel"
             ),
+            "generic_degree_mmd_protocol": "graphrnn",
+            "generic_degree_mmd_sigma": 1.0,
+            "adaptive_degree_mmd_sigma": float(train_test["degree_mmd_sigma"]),
+            # Backward-compatible name for readers that expect the adaptive
+            # diagnostic bandwidth under this key.
             "degree_mmd_sigma": float(train_test["degree_mmd_sigma"]),
             "constructor_check": not args.skip_constructor_check,
             "postprocessing_note": (
@@ -860,15 +866,26 @@ def main() -> None:
     print("\nDegree-sequence distribution matching (lower is better)")
     print(
         f"{'Comparison':<38} {'KL(test||candidate)':>20} "
-        f"{'MMD':>12} {'Node TV':>12} {'Edge TV':>12}"
+        f"{'Generic MMD':>12} {'Adaptive MMD':>13} "
+        f"{'Node TV':>12} {'Edge TV':>12}"
     )
     for name, metrics in report["comparison_table"].items():
         print(
             f"{name:<38} {metrics['degree_kl']:>20.6f} "
-            f"{metrics['degree_mmd']:>12.6f} "
+            f"{metrics['degree_mmd_graphrnn']:>12.6f} "
+            f"{metrics['degree_mmd']:>13.6f} "
             f"{metrics['node_count_tv']:>12.6f} "
             f"{metrics['edge_count_tv']:>12.6f}"
         )
+    print(
+        "  Generic MMD uses the same GraphRNN/GDSS/HOG-Diff degree "
+        "protocol as evaluate_graph_generation_report.py (Gaussian EMD, "
+        "sigma=1.0)."
+    )
+    print(
+        "  Adaptive MMD retains the DH-VAE median-bandwidth diagnostic "
+        "for backward compatibility."
+    )
 
     print("\nDegree-shape diagnostics (lower is better)")
     print(

@@ -236,6 +236,14 @@ def evaluate_degree_sequence_sets(
     metrics: dict[str, Any] = {
         "num_candidate_sequences": len(candidate),
         "num_reference_sequences": len(reference),
+        # Historical GraphRNN/GDSS/HOG-Diff generic-graph degree MMD.
+        # Keep this fixed at sigma=1.0 so the DH-VAE diagnostic is directly
+        # comparable to evaluate_graph_generation_report.py.
+        "degree_histogram_mmd_graphrnn": mmd_gaussian_emd(
+            ref_hist, candidate_hist, sigma=1.0
+        ),
+        # Adaptive-bandwidth diagnostic retained for backward compatibility
+        # and degree-prior model selection.
         "degree_histogram_mmd": mmd_gaussian_emd(
             ref_hist, candidate_hist, sigma=degree_mmd_sigma
         ),
