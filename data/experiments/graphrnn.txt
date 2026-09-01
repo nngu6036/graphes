@@ -138,3 +138,24 @@ Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
 train_to_test                       0.004751          0.002533      0.006985
 graphrnn_to_test                    0.202134          0.131355      0.323721
+
+
+
+
+export GRAPHRNN=/home/quang/GraphRNN
+
+PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_spectre_v2 \
+  --wrapper-config configs/baselines/graphrnn_community_small.yaml \
+  --skip-training-estimates
+
+
+GEN_DIR="outputs/baselines/graphrnn/community_small/seed_42_spectre_v2/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"

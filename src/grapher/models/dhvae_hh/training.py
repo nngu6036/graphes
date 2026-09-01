@@ -137,10 +137,6 @@ def _train_typed_signature_vae(
                 logvar,
                 beta=effective_beta,
                 weights=weights,
-                prior_outputs=prior_outputs,
-                prior_distribution_sigma=float(
-                    degree_cfg.get("prior_distribution_kernel_sigma", 0.25)
-                ),
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -386,6 +382,10 @@ def main() -> None:
                 logvar,
                 beta=effective_beta,
                 weights=weights,
+                prior_outputs=prior_outputs,
+                prior_distribution_sigma=float(
+                    degree_cfg.get("prior_distribution_kernel_sigma", 0.25)
+                ),
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
