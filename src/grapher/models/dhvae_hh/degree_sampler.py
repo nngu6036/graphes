@@ -23,6 +23,8 @@ class DegreeVAESampler:
         deterministic: bool = False,
         seed: int = 0,
         sample_num_nodes: str = "empirical",
+        sample_num_edges: str = "model",
+        exact_degree_sum_conditioning: bool = True,
         max_resample: int = 200,
         parity_conditioned: bool = True,
         max_parity_resample: int = 32,
@@ -34,6 +36,8 @@ class DegreeVAESampler:
         self.deterministic = bool(deterministic)
         self.seed = int(seed)
         self.sample_num_nodes = str(sample_num_nodes)
+        self.sample_num_edges = str(sample_num_edges)
+        self.exact_degree_sum_conditioning = bool(exact_degree_sum_conditioning)
         self.max_resample = int(max_resample)
         self.parity_conditioned = bool(parity_conditioned)
         self.max_parity_resample = int(max_parity_resample)
@@ -63,6 +67,10 @@ class DegreeVAESampler:
             deterministic=bool(data.get("deterministic", False)),
             seed=int(data.get("seed", seed)),
             sample_num_nodes=str(data.get("sample_num_nodes", "empirical")),
+            sample_num_edges=str(data.get("sample_num_edges", "model")),
+            exact_degree_sum_conditioning=bool(
+                data.get("exact_degree_sum_conditioning", True)
+            ),
             max_resample=int(data.get("max_resample", 200)),
             parity_conditioned=bool(data.get("parity_conditioned", True)),
             max_parity_resample=int(data.get("max_parity_resample", 32)),
@@ -79,11 +87,18 @@ class DegreeVAESampler:
         node_counts = None
         if self.sample_num_nodes.lower() == "empirical":
             node_counts = [self._vectorizer.sample_empirical_node_count(generator)]
+        edge_counts = None
+        if node_counts is not None and self.sample_num_edges.lower() == "empirical":
+            edge_counts = [
+                self._vectorizer.sample_empirical_edge_count(node_counts[0], generator)
+            ]
         with torch.no_grad():
             outputs = self._model.sample_outputs(
                 1,
                 node_counts=node_counts,
+                edge_counts=edge_counts,
                 deterministic_node_count=self.deterministic,
+                deterministic_edge_count=self.deterministic,
                 device=self.device,
             )
         return self._vectorizer.outputs_to_summaries(
@@ -91,6 +106,8 @@ class DegreeVAESampler:
             rng=generator,
             deterministic=self.deterministic,
             sample_num_nodes=self.sample_num_nodes,
+            sample_num_edges=self.sample_num_edges,
+            exact_degree_sum_conditioning=self.exact_degree_sum_conditioning,
             max_resample=self.max_resample,
             parity_conditioned=self.parity_conditioned,
             max_parity_resample=self.max_parity_resample,

@@ -41,7 +41,7 @@ def _targets_to_tensors(
     out: dict[str, torch.Tensor] = {}
     for key, value in targets.items():
         tensor = torch.as_tensor(value, device=device)
-        if key in {"num_nodes", "num_nodes_count"}:
+        if key in {"num_nodes", "num_nodes_count", "num_edges_count"}:
             tensor = tensor.long()
         else:
             tensor = tensor.float()
@@ -137,6 +137,10 @@ def _train_typed_signature_vae(
                 logvar,
                 beta=effective_beta,
                 weights=weights,
+                prior_outputs=prior_outputs,
+                prior_distribution_sigma=float(
+                    degree_cfg.get("prior_distribution_kernel_sigma", 0.25)
+                ),
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -276,6 +280,13 @@ def main() -> None:
             require_config(degree_cfg, "hidden_dim", context="config.degree_generator")
         ),
         size_condition_dim=int(degree_cfg.get("size_condition_dim", 16)),
+        edge_condition_dim=int(degree_cfg.get("edge_condition_dim", 16)),
+        use_edge_count_conditioning=bool(
+            degree_cfg.get("use_edge_count_conditioning", False)
+        ),
+        prior_condition_on_edges=bool(
+            degree_cfg.get("prior_condition_on_edges", False)
+        ),
         prior_type=str(degree_cfg.get("prior_type", "conditional_gmm")),
         prior_components=int(degree_cfg.get("prior_components", 4)),
         prior_hidden_dim=int(
@@ -310,6 +321,7 @@ def main() -> None:
                 degree_cfg.get("node_weight", 1.0),
             )
         ),
+        "num_edges": float(degree_cfg.get("edge_count_loss_weight", 0.0)),
         "degree": float(
             degree_cfg.get(
                 "degree_histogram_loss_weight",
@@ -321,6 +333,12 @@ def main() -> None:
                 "degree_moment_loss_weight",
                 degree_cfg.get("edge_moment_weight", 0.1),
             )
+        ),
+        "aggregate_prior_moment": float(
+            degree_cfg.get("aggregate_prior_moment_loss_weight", 0.0)
+        ),
+        "prior_distribution": float(
+            degree_cfg.get("prior_distribution_loss_weight", 0.0)
         ),
     }
 
@@ -341,7 +359,23 @@ def main() -> None:
             batch_targets = {
                 key: value[batch_idx.to(device)] for key, value in all_targets.items()
             }
-            outputs, mu, logvar = model(batch_x, batch_targets["num_nodes_count"])
+            outputs, mu, logvar = model(
+                batch_x,
+                batch_targets["num_nodes_count"],
+                batch_targets.get("num_edges_count"),
+            )
+            prior_outputs = None
+            if weights["prior_distribution"] > 0.0:
+                prior_z = model.sample_prior(
+                    batch_targets["num_nodes_count"],
+                    edge_counts=batch_targets.get("num_edges_count"),
+                    prior_mode="model",
+                )
+                prior_outputs = model.decode(
+                    prior_z,
+                    batch_targets["num_nodes_count"],
+                    batch_targets.get("num_edges_count"),
+                )
             effective_beta = kl_loss_weight
             if kl_warmup_epochs > 0:
                 effective_beta *= min(float(epoch) / kl_warmup_epochs, 1.0)
@@ -371,8 +405,12 @@ def main() -> None:
         ):
             print(
                 f"epoch={epoch:04d} loss={mean_metrics['loss']:.4f} "
-                f"degree={mean_metrics['degree_loss']:.4f} nodes={mean_metrics['num_nodes_loss']:.4f} "
+                f"degree={mean_metrics['degree_loss']:.4f} "
+                f"nodes={mean_metrics['num_nodes_loss']:.4f} "
+                f"edges={mean_metrics['num_edges_loss']:.4f} "
                 f"moment={mean_metrics['degree_moment_loss']:.4f} "
+                f"prior_mmd={mean_metrics['prior_distribution_loss']:.4f} "
+                f"prior_moment={mean_metrics['aggregate_prior_moment_loss']:.4f} "
                 f"kl={mean_metrics['kl_loss']:.4f} beta={effective_beta:.6f}",
                 flush=True,
             )

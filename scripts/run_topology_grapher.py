@@ -31,14 +31,6 @@ from grapher.rewiring_mlp.generic.model import (
     TOPOLOGY_CHECKPOINT_FORMAT,
     load_topology_checkpoint,
 )
-from grapher.rewiring_mlp.generic.flow_model import (
-    TOPOLOGY_FLOW_GRAPHLET_CHECKPOINT_FORMAT,
-    load_topology_flow_graphlet_checkpoint,
-)
-from grapher.rewiring_mlp.generic.flow_graphlet_refiner import (
-    FlowGraphletRefinerConfig,
-    refine_graph_with_flow_graphlet_predictions,
-)
 from grapher.rewiring_mlp.generic.refiner import (
     TopologyRefinerConfig,
     refine_graph_with_topology_predictions,
@@ -97,68 +89,14 @@ def _mean_or_zero(rows: list[dict[str, Any]], key: str) -> float:
     return float(np.mean(values)) if values else 0.0
 
 
-def _build_generation_degree_sampler(
-    degree_source: str,
-    degree_cfg: dict[str, Any],
-    *,
-    train_graphs: list[nx.Graph],
-    reference_graphs: list[nx.Graph],
-    seed: int,
-):
-    """Build the degree prior selected for topology generation.
-
-    ``test_empirical`` deliberately samples only the held-out test degree
-    sequences. ``test_oracle``/``oracle`` are handled per graph in ``main``
-    because they preserve index-wise correspondence to the reference split.
-    """
-
-    degree_source = str(degree_source).lower()
-    degree_type = str(degree_cfg.get("type", "degree_histogram_vae")).lower()
-    if "typed" in degree_type:
-        raise ValueError("The generic topology stage requires the ordinary DH-VAE.")
-
-    if degree_source in {"learned", "degree_vae"}:
-        if str(degree_cfg.get("postprocess_policy", "")).lower() != "reject_only":
-            raise ValueError(
-                "Learned topology generation requires degree_generator."
-                "postprocess_policy: reject_only."
-            )
-        if str(degree_cfg.get("fallback", "")).lower() != "error":
-            raise ValueError(
-                "Learned topology generation requires degree_generator.fallback: error."
-            )
-        learned_cfg = dict(degree_cfg)
-        learned_cfg["enabled"] = True
-        return build_degree_sampler(learned_cfg, train_graphs, seed=seed)
-
-    if degree_source in {"empirical", "train_empirical"}:
-        return EmpiricalDegreeSampler.fit_from_graphs(train_graphs, seed=seed)
-
-    if degree_source == "test_empirical":
-        if not reference_graphs:
-            raise ValueError(
-                "generation.degree_source=test_empirical requires a non-empty test split."
-            )
-        return EmpiricalDegreeSampler.fit_from_graphs(reference_graphs, seed=seed)
-
-    if degree_source in {"oracle", "test_oracle"}:
-        if not reference_graphs:
-            raise ValueError(
-                "generation.degree_source=test_oracle requires a non-empty test split."
-            )
-        return None
-
-    raise ValueError(f"Unknown generation.degree_source: {degree_source!r}")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Generate generic graph topologies with DH-VAE/empirical degrees, "
             "connected Havel-Hakimi construction, and GraphER rewiring. The "
             "refiner is selected automatically from the checkpoint format "
-            "(structural-summary, spectral, joint spectral + graphlet-logit "
-            "diffusion guidance, or edge-flow matching + graphlet guidance)."
+            "(structural-summary, spectral, or joint spectral + graphlet-logit "
+            "diffusion guidance)."
         )
     )
     parser.add_argument("--config", required=True)
@@ -167,28 +105,6 @@ def main() -> None:
     parser.add_argument("--num-generate", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", default=None)
-    parser.add_argument(
-        "--degree-source",
-        default=None,
-        choices=[
-            "learned",
-            "degree_vae",
-            "empirical",
-            "train_empirical",
-            "test_empirical",
-            "oracle",
-            "test_oracle",
-        ],
-        help=(
-            "Override generation.degree_source. 'learned'/'degree_vae' samples "
-            "from DH-VAE; 'empirical'/'train_empirical' samples degree "
-            "sequences from the training split; 'test_empirical' samples "
-            "degree sequences from the held-out test split; 'oracle'/"
-            "'test_oracle' uses the degree sequence of the corresponding test "
-            "graph. Test-based modes are oracle diagnostics and should not be "
-            "reported as unconditional generation results."
-        ),
-    )
     parser.add_argument(
         "--set",
         "--override",
@@ -230,11 +146,6 @@ def main() -> None:
     train_graphs = list(splits["train"])
     reference_graphs = list(splits.get("test", []))
     generation_cfg = dict(config.get("generation", {}) or {})
-    if args.degree_source is not None:
-        generation_cfg["degree_source"] = str(args.degree_source)
-    # Keep the effective generation settings in the saved report, including
-    # dedicated CLI overrides such as --degree-source.
-    config["generation"] = generation_cfg
     num_generate = int(
         args.num_generate
         if args.num_generate is not None
@@ -256,7 +167,6 @@ def main() -> None:
     predictor_clustering_error: float | None = None
     predictor_orbit_log_error: float | None = None
     predictor_spectral_error: float | None = None
-    predictor_flow_error: float | None = None
     if checkpoint_format == TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT:
         guidance_mode = "spectral_graphlet"
         model, graphlet_basis, summary_config, checkpoint = (
@@ -280,30 +190,6 @@ def main() -> None:
                 "or graphlet-logit validation error."
             )
         predictor_spectral_error = float(predictor_spectral_error_raw)
-        predictor_graphlet_error = float(predictor_graphlet_error_raw)
-    elif checkpoint_format == TOPOLOGY_FLOW_GRAPHLET_CHECKPOINT_FORMAT:
-        guidance_mode = "flow_graphlet"
-        model, graphlet_basis, summary_config, checkpoint = (
-            load_topology_flow_graphlet_checkpoint(
-                checkpoint_path,
-                device=device,
-            )
-        )
-        predictor_report = checkpoint.get("report", {}) or {}
-        predictor_flow_error_raw = predictor_report.get(
-            "val_flow_rmse",
-            predictor_report.get("val_flow_mae"),
-        )
-        predictor_graphlet_error_raw = predictor_report.get(
-            "val_graphlet_logit_rmse",
-            predictor_report.get("val_graphlet_probability_mae"),
-        )
-        if predictor_flow_error_raw is None or predictor_graphlet_error_raw is None:
-            raise ValueError(
-                "The flow+graphlet checkpoint is missing held-out flow or graphlet "
-                "validation error."
-            )
-        predictor_flow_error = float(predictor_flow_error_raw)
         predictor_graphlet_error = float(predictor_graphlet_error_raw)
     elif checkpoint_format == TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT:
         guidance_mode = "spectral"
@@ -346,54 +232,32 @@ def main() -> None:
             f"Unsupported topology checkpoint format {checkpoint_format!r}. "
             f"Expected {TOPOLOGY_CHECKPOINT_FORMAT!r}, "
             f"{TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT!r}, or "
-            f"{TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT!r}, or "
-            f"{TOPOLOGY_FLOW_GRAPHLET_CHECKPOINT_FORMAT!r}."
+            f"{TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT!r}."
         )
     model_device = next(model.parameters()).device
 
     degree_source = str(generation_cfg.get("degree_source", "learned")).lower()
     degree_cfg = dict(config.get("degree_generator", {}) or {})
-    degree_sampler = _build_generation_degree_sampler(
-        degree_source,
-        degree_cfg,
-        train_graphs=train_graphs,
-        reference_graphs=reference_graphs,
-        seed=seed,
-    )
-
-    degree_source_uses_test_data = degree_source in {
-        "test_empirical",
-        "oracle",
-        "test_oracle",
-    }
-    if degree_source == "test_empirical":
-        degree_source_sampling_mode = "random_with_replacement_from_test"
-    elif degree_source in {"oracle", "test_oracle"}:
-        degree_source_sampling_mode = "paired_test_index"
+    degree_type = str(degree_cfg.get("type", "degree_histogram_vae")).lower()
+    if "typed" in degree_type:
+        raise ValueError("The generic topology stage requires the ordinary DH-VAE.")
+    degree_sampler = None
+    if degree_source in {"learned", "degree_vae"}:
+        if str(degree_cfg.get("postprocess_policy", "")).lower() != "reject_only":
+            raise ValueError(
+                "Learned topology generation requires degree_generator."
+                "postprocess_policy: reject_only."
+            )
+        if str(degree_cfg.get("fallback", "")).lower() != "error":
+            raise ValueError(
+                "Learned topology generation requires degree_generator.fallback: error."
+            )
+        degree_cfg["enabled"] = True
+        degree_sampler = build_degree_sampler(degree_cfg, train_graphs, seed=seed)
     elif degree_source in {"empirical", "train_empirical"}:
-        degree_source_sampling_mode = "random_with_replacement_from_train"
-    else:
-        degree_source_sampling_mode = "learned_dhvae"
-
-    if degree_source_uses_test_data:
-        print(
-            "[GraphER/DegreePrior] WARNING: using held-out test degree sequences "
-            f"via degree_source={degree_source!r}. This is an oracle diagnostic, "
-            "not unconditional generation.",
-            flush=True,
-        )
-    elif degree_source in {"empirical", "train_empirical"}:
-        print(
-            "[GraphER/DegreePrior] sampling empirical degree sequences from the "
-            "training split.",
-            flush=True,
-        )
-    else:
-        print(
-            "[GraphER/DegreePrior] sampling degree sequences from the learned "
-            "DH-VAE prior.",
-            flush=True,
-        )
+        degree_sampler = EmpiricalDegreeSampler.fit_from_graphs(train_graphs, seed=seed)
+    elif degree_source not in {"oracle", "test_oracle"}:
+        raise ValueError(f"Unknown generation.degree_source: {degree_source!r}")
 
     constructor_cfg = dict(config.get("constructor", {}) or {})
     if str(constructor_cfg.get("type", "havel_hakimi")).lower() != "havel_hakimi":
@@ -492,25 +356,6 @@ def main() -> None:
             f"spectrum_values={refiner_settings.debug_spectrum_values}",
             flush=True,
         )
-    elif guidance_mode == "flow_graphlet":
-        refiner_cfg.pop("time_horizon", None)
-        refiner_settings = FlowGraphletRefinerConfig.from_dict(refiner_cfg)
-        if graphlet_basis is None:
-            raise ValueError("Flow+graphlet checkpoint is missing its graphlet basis.")
-        if not refiner_settings.preserve_connectivity:
-            raise ValueError("Flow+graphlet topology generation requires connectivity preservation.")
-        print(
-            "[GraphER/FlowGraphlet] loaded joint edge-flow matching + graphlet "
-            f"checkpoint format={checkpoint_format} device={model_device}",
-            flush=True,
-        )
-        print(
-            "[GraphER/FlowGraphlet] guidance: the learned degree-tangent edge "
-            "velocity scores each valid double-edge swap directly; exact local "
-            "graphlet deltas provide higher-order structural guidance. Rewiring "
-            "is projection only and was not used to create training states.",
-            flush=True,
-        )
     else:
         refiner_settings = TopologyRefinerConfig.from_dict(refiner_cfg)
         if not refiner_settings.preserve_connectivity:
@@ -562,21 +407,6 @@ def main() -> None:
         if guidance_mode == "spectral_graphlet":
             assert graphlet_basis is not None
             refined, trace = refine_graph_with_spectral_graphlet_predictions(
-                coarse,
-                model=model,
-                graphlet_basis=graphlet_basis,
-                refiner_config=refiner_settings,
-                device=model_device,
-                rng=np.random.default_rng(refiner_graph_seeds[index]),
-                return_trace=True,
-                debug_context=(
-                    f"graph={index + 1}/{num_generate} "
-                    f"n={coarse.number_of_nodes()} m={coarse.number_of_edges()}"
-                ),
-            )
-        elif guidance_mode == "flow_graphlet":
-            assert graphlet_basis is not None
-            refined, trace = refine_graph_with_flow_graphlet_predictions(
                 coarse,
                 model=model,
                 graphlet_basis=graphlet_basis,
@@ -699,9 +529,6 @@ def main() -> None:
         if guidance_mode == "spectral_graphlet":
             pipeline_record["spectral_error"] = float(predictor_spectral_error)
             pipeline_record["graphlet_error"] = float(predictor_graphlet_error)
-        elif guidance_mode == "flow_graphlet":
-            pipeline_record["flow_error"] = float(predictor_flow_error)
-            pipeline_record["graphlet_error"] = float(predictor_graphlet_error)
         elif guidance_mode == "spectral":
             pipeline_record["spectral_error"] = float(predictor_spectral_error)
         else:
@@ -785,10 +612,6 @@ def main() -> None:
     diagnostics: dict[str, Any] = {
         "pipeline_mode": "topology",
         "guidance_mode": guidance_mode,
-        "degree_source": degree_source,
-        "degree_source_sampling_mode": degree_source_sampling_mode,
-        "degree_source_uses_test_data": bool(degree_source_uses_test_data),
-        "degree_source_is_oracle_diagnostic": bool(degree_source_uses_test_data),
         "degree_preservation_rate": degree_preservation_rate(coarse_graphs, refined_graphs),
         "constructor_target_degree_match_rate": degree_target_match_rate(
             coarse_graphs,
@@ -862,36 +685,6 @@ def main() -> None:
         )
         refresh_on_plateau = refiner_settings.refresh_on_prediction_plateau
         report_format = "topology_spectral_graphlet_generation_v1"
-    elif guidance_mode == "flow_graphlet":
-        diagnostics.update(
-            {
-                "mean_accepted_flow_gain": _mean_or_zero(accepted_rows, "flow_gain"),
-                "mean_accepted_graphlet_gain": _mean_or_zero(
-                    accepted_rows, "graphlet_gain"
-                ),
-                "mean_flow_weight": _mean_or_zero(accepted_rows, "flow_weight"),
-                "mean_graphlet_weight": _mean_or_zero(
-                    accepted_rows, "graphlet_weight"
-                ),
-                "mean_graphlet_clean_mix": _mean_or_zero(
-                    accepted_rows, "graphlet_clean_mix"
-                ),
-                "mean_soft_degree_residual": _mean_or_zero(
-                    accepted_rows, "soft_degree_residual"
-                ),
-                "mean_predicted_flow_degree_tangent_residual": _mean_or_zero(
-                    accepted_rows, "predicted_flow_degree_tangent_residual"
-                ),
-                "predictor_flow_error": float(predictor_flow_error),
-                "predictor_graphlet_logit_error": float(predictor_graphlet_error),
-                "graphlet_distance": refiner_settings.graphlet_distance,
-                "graphlet_bridge_schedule": refiner_settings.graphlet_bridge_schedule,
-                "global_to_local_schedule": refiner_settings.guidance_weight_schedule,
-                "flow_normalize_per_swap": refiner_settings.flow_normalize_per_swap,
-            }
-        )
-        refresh_on_plateau = refiner_settings.refresh_on_prediction_plateau
-        report_format = "topology_flow_graphlet_generation_v1"
     elif guidance_mode == "spectral":
         diagnostics.update(
             {
@@ -945,10 +738,6 @@ def main() -> None:
         "guidance_mode": guidance_mode,
         "checkpoint_format": checkpoint.get("format"),
         "degree_source": degree_source,
-        "degree_source_sampling_mode": degree_source_sampling_mode,
-        "degree_source_uses_test_data": bool(degree_source_uses_test_data),
-        "degree_source_is_oracle_diagnostic": bool(degree_source_uses_test_data),
-        "degree_source_cli_override": args.degree_source,
         "prediction_horizon": {
             "mode": refiner_settings.prediction_horizon_mode,
             "initial_k": refiner_settings.prediction_horizon_initial_k,

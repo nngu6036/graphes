@@ -1,5 +1,5 @@
 # Full ZINC250k benchmark aligned to the molecular protocol used by HOG-Diff
-# and inherited from GDSS/Jo et al. The raw row order is part of the protocol
+# and inherited from GDSS/Jo et al.  The raw row order is part of the protocol
 # because valid_idx_zinc250k.json identifies the held-out test molecules by
 # zero-based source-row index.
 name: zinc
@@ -12,6 +12,7 @@ source:
   provider: GDSS/HOG-Diff
   expected_records: 249455
   expected_graphs: 249455
+  # HOG-Diff README points to the original Chemical-VAE ZINC250k CSV.
   smiles_url: https://raw.githubusercontent.com/aspuru-guzik-group/chemical_vae/main/models/zinc_properties/250k_rndm_zinc_drugs_clean_3.csv
   gdss_smiles_mirror: https://raw.githubusercontent.com/harryjo97/GDSS/master/data/zinc250k.csv
   test_indices_url: https://raw.githubusercontent.com/harryjo97/GDSS/master/data/valid_idx_zinc250k.json
@@ -24,9 +25,9 @@ source:
 
 split:
   # HOG-Diff uses the GDSS held-out index list as its molecular test set and
-  # trains on the complete complement. GraphER preserves that exact test set
-  # and reserves 1000 molecules from the HOG-Diff training complement for
-  # checkpoint selection. No test molecule is used for tuning.
+  # trains on the complete complement.  GraphER preserves that exact test set
+  # and reserves only 1000 molecules from the HOG-Diff training complement for
+  # checkpoint selection.  No test molecule is used for tuning.
   strategy: hogdiff_gdss_fixed_test_indices
   seed: 42
   validation_count: 1000
@@ -40,21 +41,23 @@ preprocessing:
   remove_hydrogens: true
   remove_self_loops: true
   undirected: true
-  # Preserve each source molecule rather than rewriting to its largest fragment.
+  # HOG-Diff processes each source SMILES as one molecule and does not apply a
+  # largest-fragment rewrite.  Preserve source connectivity exactly.
   fragment_policy: preserve
   sanitize_with_rdkit: true
   kekulize: true
   retain_aromatic_bonds: false
   # HOG-Diff's graph state contains atom identity only, not formal charge or
-  # stereochemistry. These may remain in source metadata but are projected out
-  # of the categorical graph state.
+  # stereochemistry.  Charges/stereo may remain in source SMILES metadata but
+  # are deliberately projected out of the categorical graph state.
   retain_formal_charge: false
   retain_stereochemistry: false
   max_nodes: 38
 
 filters:
-  # Protocol assertions, not subset-selection rules. Preparation should fail if
-  # a canonical source row cannot be represented instead of silently dropping it.
+  # These are protocol assertions rather than a subset-selection policy.  The
+  # canonical HOG-Diff/GDSS source is expected to satisfy them for all 249455
+  # rows; preparation fails if a row cannot be represented.
   require_connected: false
   neutral_only: false
   uncharged_atoms_only: false

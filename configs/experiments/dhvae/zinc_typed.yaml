@@ -1,6 +1,6 @@
-# Joint typed-signature DH-VAE configuration for ZINC heavy-atom graphs.
+# Joint typed-signature DH-VAE for the HOG-Diff/GDSS ZINC250k benchmark.
 experiment: zinc_typed_degree_histogram_vae
-benchmark: zinc_12k_heavy_atom
+benchmark: zinc250k_hogdiff_gdss
 implementation_status: implemented
 seed: 42
 

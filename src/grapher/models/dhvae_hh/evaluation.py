@@ -88,11 +88,21 @@ def _sample_degree_sequences(
                 vectorizer.sample_empirical_node_count(rng)
                 for _ in range(current_batch)
             ]
+        edge_counts = None
+        if (
+            node_counts is not None
+            and str(degree_cfg.get("sample_num_edges", "model")).lower() == "empirical"
+        ):
+            edge_counts = [
+                vectorizer.sample_empirical_edge_count(int(n), rng) for n in node_counts
+            ]
         with torch.no_grad():
             outputs = model.sample_outputs(
                 current_batch,
                 node_counts=node_counts,
+                edge_counts=edge_counts,
                 deterministic_node_count=bool(degree_cfg.get("deterministic", False)),
+                deterministic_edge_count=bool(degree_cfg.get("deterministic", False)),
                 prior_mode=prior_mode,
                 device=next(model.parameters()).device,
             )
@@ -101,10 +111,15 @@ def _sample_degree_sequences(
             rng=rng,
             deterministic=bool(degree_cfg.get("deterministic", False)),
             sample_num_nodes=str(degree_cfg.get("sample_num_nodes", "empirical")),
+            sample_num_edges=str(degree_cfg.get("sample_num_edges", "model")),
+            exact_degree_sum_conditioning=bool(
+                degree_cfg.get("exact_degree_sum_conditioning", True)
+            ),
             max_resample=int(degree_cfg.get("max_resample", 200)),
             fallback=str(degree_cfg.get("fallback", "empirical_nearest_n")),
             parity_conditioned=bool(degree_cfg.get("parity_conditioned", True)),
             max_parity_resample=int(degree_cfg.get("max_parity_resample", 32)),
+            postprocess_policy=str(degree_cfg.get("postprocess_policy", "repair")),
             include_diagnostics=True,
         )
         for summary in batch:
@@ -146,15 +161,24 @@ def _aggregate_posterior_sequences(
             dtype=torch.long,
             device=model_device,
         )
+        edge_counts = torch.as_tensor(
+            targets_np["num_edges_count"][indices],
+            dtype=torch.long,
+            device=model_device,
+        )
         with torch.no_grad():
             mu, logvar = model.encode(batch_x)
             z = model.reparameterize(mu, logvar)
-            outputs = model.decode(z, node_counts)
+            outputs = model.decode(z, node_counts, edge_counts)
         decoded = vectorizer.outputs_to_summaries(
             outputs,
             rng=rng,
             deterministic=False,
             sample_num_nodes="conditioned",
+            sample_num_edges="conditioned",
+            exact_degree_sum_conditioning=bool(
+                degree_cfg.get("exact_degree_sum_conditioning", True)
+            ),
             max_resample=1,
             fallback="empirical_nearest_n",
             parity_conditioned=bool(degree_cfg.get("parity_conditioned", True)),
@@ -201,13 +225,22 @@ def _posterior_reconstruction_sequences(
             dtype=torch.long,
             device=model_device,
         )
+        edge_counts = torch.as_tensor(
+            targets_np["num_edges_count"][start:stop],
+            dtype=torch.long,
+            device=model_device,
+        )
         with torch.no_grad():
-            outputs = model.reconstruct_outputs(batch_x, node_counts, use_mean=True)
+            outputs = model.reconstruct_outputs(
+                batch_x, node_counts, edge_counts=edge_counts, use_mean=True
+            )
         decoded = vectorizer.outputs_to_summaries(
             outputs,
             rng=rng,
             deterministic=True,
             sample_num_nodes="conditioned",
+            sample_num_edges="conditioned",
+            exact_degree_sum_conditioning=True,
             max_resample=1,
             fallback="empirical_nearest_n",
             parity_conditioned=False,
@@ -266,6 +299,12 @@ def _quality_metrics(
         ),
         "raw_even_degree_sum_rate": _mean_bool(diagnostics, "raw_even_degree_sum"),
         "raw_degree_bounds_rate": _mean_bool(diagnostics, "raw_degree_bounds_valid"),
+        "exact_degree_sum_conditioned_rate": _mean_bool(
+            diagnostics, "exact_degree_sum_conditioned"
+        ),
+        "raw_edge_count_matches_target_rate": _mean_bool(
+            diagnostics, "raw_edge_count_matches_target"
+        ),
         "repair_usage_rate": _mean_bool(diagnostics, "repair_used"),
         "fallback_usage_rate": _mean_bool(diagnostics, "fallback_used"),
         "accepted_without_postprocessing_rate": _mean_bool(
@@ -306,6 +345,20 @@ def _compact_comparison(metrics: dict[str, Any]) -> dict[str, float]:
         "degree_mmd": float(metrics["degree_histogram_mmd"]),
         "node_count_tv": float(metrics["node_count_total_variation"]),
         "edge_count_tv": float(metrics["edge_count_total_variation"]),
+    }
+
+
+def _shape_comparison(metrics: dict[str, Any]) -> dict[str, float]:
+    return {
+        "mean_degree_abs_error": float(metrics.get("mean_degree_mean_abs_error", 0.0)),
+        "degree_variance_abs_error": float(
+            metrics.get("degree_variance_mean_abs_error", 0.0)
+        ),
+        "degree_second_moment_abs_error": float(
+            metrics.get("degree_second_moment_mean_abs_error", 0.0)
+        ),
+        "max_degree_tv": float(metrics.get("max_degree_total_variation", 0.0)),
+        "wedge_count_tv": float(metrics.get("wedge_count_total_variation", 0.0)),
     }
 
 
@@ -685,6 +738,17 @@ def main() -> None:
         test_sequences,
         train_sequences,
     )
+    empirical_rng = np.random.default_rng(seed + 991)
+    empirical_train_sequences = [
+        list(train_sequences[int(empirical_rng.integers(0, len(train_sequences)))])
+        for _ in range(int(num_samples))
+    ]
+    empirical_train_test = evaluate_degree_sequence_sets(
+        test_sequences,
+        empirical_train_sequences,
+        train=train_sequences,
+        degree_mmd_sigma=float(train_test["degree_mmd_sigma"]),
+    )
     generated_test = evaluate_degree_sequence_sets(
         test_sequences,
         generated_sequences,
@@ -750,6 +814,7 @@ def main() -> None:
         },
         "comparison_table": {
             "train_to_test": _compact_comparison(train_test),
+            "train_empirical_resample_to_test": _compact_comparison(empirical_train_test),
             "posterior_reconstruction_to_test": _compact_comparison(posterior_test),
             "aggregate_posterior_to_test": _compact_comparison(
                 aggregate_posterior_test
@@ -757,6 +822,15 @@ def main() -> None:
             "standard_normal_prior_to_test": _compact_comparison(standard_normal_test),
             "learned_prior_raw_to_test": _compact_comparison(raw_prior_test),
             "learned_prior_accepted_to_test": _compact_comparison(generated_test),
+        },
+        "degree_shape_table": {
+            "train_to_test": _shape_comparison(train_test),
+            "train_empirical_resample_to_test": _shape_comparison(empirical_train_test),
+            "posterior_reconstruction_to_test": _shape_comparison(posterior_test),
+            "aggregate_posterior_to_test": _shape_comparison(aggregate_posterior_test),
+            "standard_normal_prior_to_test": _shape_comparison(standard_normal_test),
+            "learned_prior_raw_to_test": _shape_comparison(raw_prior_test),
+            "learned_prior_accepted_to_test": _shape_comparison(generated_test),
         },
         "dh_vae_quality": quality,
         "posterior_reconstruction_distribution": posterior_test,
@@ -768,11 +842,13 @@ def main() -> None:
         "prior_raw_distribution": raw_prior_test,
         "prior_accepted_distribution": generated_test,
         "train_test_baseline": train_test,
+        "train_empirical_resample_distribution": empirical_train_test,
     }
     save_json(report, output_dir / "degree_evaluation.json")
     save_json(
         {
             "accepted_degree_sequences": generated_sequences,
+            "train_empirical_resample_degree_sequences": empirical_train_sequences,
             "raw_prior_degree_sequences": raw_prior_sequences,
             "standard_normal_prior_degree_sequences": standard_normal_sequences,
             "aggregate_posterior_degree_sequences": (aggregate_posterior_sequences),
@@ -792,6 +868,20 @@ def main() -> None:
             f"{metrics['degree_mmd']:>12.6f} "
             f"{metrics['node_count_tv']:>12.6f} "
             f"{metrics['edge_count_tv']:>12.6f}"
+        )
+
+    print("\nDegree-shape diagnostics (lower is better)")
+    print(
+        f"{'Comparison':<38} {'MeanDegErr':>12} {'VarErr':>12} "
+        f"{'SecondMomErr':>14} {'MaxDegTV':>12} {'WedgeTV':>12}"
+    )
+    for name, metrics in report["degree_shape_table"].items():
+        print(
+            f"{name:<38} {metrics['mean_degree_abs_error']:>12.6f} "
+            f"{metrics['degree_variance_abs_error']:>12.6f} "
+            f"{metrics['degree_second_moment_abs_error']:>14.6f} "
+            f"{metrics['max_degree_tv']:>12.6f} "
+            f"{metrics['wedge_count_tv']:>12.6f}"
         )
 
     print("\nDH-VAE feasibility and post-processing")

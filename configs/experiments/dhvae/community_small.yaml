@@ -19,11 +19,20 @@ constructor:
 degree_generator:
   checkpoint_path: outputs/degree_generators/sbm/seed_42/checkpoint.pt
   device: auto
-  epochs: 300
+  epochs: 600
   batch_size: 32
   latent_dim: 32
   hidden_dim: 128
   size_condition_dim: 16
+
+  # V2: factor the invariant prior as p(n) p(m|n) p(D|n,m).  Graph size is
+  # sampled empirically; an explicit learned edge-count head captures density;
+  # the degree decoder and learned latent prior are then conditioned on n and m.
+  use_edge_count_conditioning: true
+  edge_condition_dim: 16
+  prior_condition_on_edges: true
+  edge_count_loss_weight: 2.0
+
   prior_type: conditional_gmm
   prior_components: 4
   prior_hidden_dim: 128
@@ -37,19 +46,33 @@ degree_generator:
   kl_warmup_epochs: 50
   node_count_loss_weight: 1.0
   degree_histogram_loss_weight: 5.0
-  degree_moment_loss_weight: 0.1
+  degree_moment_loss_weight: 0.25
+
+  # Unconditional-prior regularization.  The RBF-MMD term matches decoded
+  # prior degree histograms to the training distribution, while aggregate
+  # latent moments reduce q(z) / p(z|n,m) mismatch.
+  prior_distribution_loss_weight: 1.0
+  prior_distribution_kernel_sigma: 0.20
+  aggregate_prior_moment_loss_weight: 0.05
   progress_interval: 10
 
   # Sampling/feasibility settings used by evaluation and end-to-end generation.
   deterministic: false
   sample_num_nodes: empirical
+  sample_num_edges: model
+  # Condition categorical degree draws on sum_i d_i = 2m exactly.  This makes
+  # edge count and parity structural rather than repair-time constraints.
+  exact_degree_sum_conditioning: true
   max_resample: 500
-  parity_conditioned: true
-  max_parity_resample: 64
+  parity_conditioned: false
+  max_parity_resample: 1
+  postprocess_policy: reject_only
   fallback: error
 
 degree_evaluation:
-  num_samples: 1024
+  # Degree-only evaluation is cheap; use enough samples to resolve prior quality
+  # before launching expensive GraphER refinement.
+  num_samples: 10000
   max_reference_sequences: 20
   batch_size: 256
   output_dir: outputs/degree_generators/sbm/seed_42/evaluation

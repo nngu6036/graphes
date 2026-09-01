@@ -90,6 +90,99 @@ def _sample_even_degree_counts(
     return counts, attempts
 
 
+def _logsumexp_np(values: list[float]) -> float:
+    if not values:
+        return float("-inf")
+    array = np.asarray(values, dtype=np.float64)
+    maximum = float(np.max(array))
+    if not np.isfinite(maximum):
+        return float("-inf")
+    return maximum + float(np.log(np.exp(array - maximum).sum()))
+
+
+def _sample_degree_counts_exact_sum(
+    n: int,
+    probs: np.ndarray,
+    total_degree: int,
+    rng: np.random.Generator,
+    *,
+    min_degree: int = 0,
+    max_degree: int | None = None,
+    deterministic: bool = False,
+) -> np.ndarray | None:
+    """Sample iid categorical degrees conditioned on an exact degree sum.
+
+    Dynamic programming computes the conditional normalizer for the remaining
+    nodes and degree sum.  This keeps the decoder distribution intact while
+    enforcing ``sum_i d_i = total_degree`` exactly, so parity and edge count do
+    not need post-hoc repair.
+    """
+
+    n = int(n)
+    total_degree = int(total_degree)
+    probs = _normalize(np.asarray(probs, dtype=np.float64).reshape(-1))
+    if n < 0 or total_degree < 0 or probs.size == 0:
+        return None
+    upper = probs.size - 1 if max_degree is None else min(int(max_degree), probs.size - 1)
+    lower = max(int(min_degree), 0)
+    if lower > upper:
+        return None
+    if total_degree < n * lower or total_degree > n * upper:
+        return None
+
+    support = [degree for degree in range(lower, upper + 1) if probs[degree] > 0.0]
+    if not support:
+        return None
+    log_probs = np.full(probs.size, float("-inf"), dtype=np.float64)
+    for degree in support:
+        log_probs[degree] = float(np.log(max(probs[degree], 1.0e-300)))
+
+    # dp[k, s] is log mass of k remaining iid draws summing to s.
+    dp = np.full((n + 1, total_degree + 1), float("-inf"), dtype=np.float64)
+    dp[0, 0] = 0.0
+    for k in range(1, n + 1):
+        min_sum = max(0, k * lower)
+        max_sum = min(total_degree, k * upper)
+        for degree_sum in range(min_sum, max_sum + 1):
+            values = [
+                float(log_probs[degree] + dp[k - 1, degree_sum - degree])
+                for degree in support
+                if degree <= degree_sum and np.isfinite(dp[k - 1, degree_sum - degree])
+            ]
+            dp[k, degree_sum] = _logsumexp_np(values)
+    if not np.isfinite(dp[n, total_degree]):
+        return None
+
+    counts = np.zeros(probs.size, dtype=np.int64)
+    remaining_nodes = n
+    remaining_sum = total_degree
+    while remaining_nodes > 0:
+        candidates: list[int] = []
+        log_weights: list[float] = []
+        for degree in support:
+            if degree > remaining_sum:
+                continue
+            suffix = dp[remaining_nodes - 1, remaining_sum - degree]
+            if not np.isfinite(suffix):
+                continue
+            candidates.append(degree)
+            log_weights.append(float(log_probs[degree] + suffix))
+        if not candidates:
+            return None
+        if deterministic:
+            chosen = candidates[int(np.argmax(np.asarray(log_weights)))]
+        else:
+            weights = np.asarray(log_weights, dtype=np.float64)
+            weights -= float(np.max(weights))
+            weights = np.exp(weights)
+            weights /= float(weights.sum())
+            chosen = int(rng.choice(np.asarray(candidates, dtype=np.int64), p=weights))
+        counts[chosen] += 1
+        remaining_sum -= chosen
+        remaining_nodes -= 1
+    return counts
+
+
 def connected_feasible_degree_sequence(sequence: list[int]) -> bool:
     n = len(sequence)
     if n <= 1:
@@ -179,6 +272,7 @@ class DegreeVectorizer:
     max_edges: int
     require_connected: bool = True
     empirical_node_counts: list[int] | None = None
+    empirical_edge_counts: list[int] | None = None
     empirical_degree_sequences: list[list[int]] | None = None
 
     @classmethod
@@ -192,6 +286,7 @@ class DegreeVectorizer:
         if not graphs:
             raise ValueError("Cannot fit DegreeVectorizer on an empty graph list.")
         node_counts = [int(g.number_of_nodes()) for g in graphs]
+        edge_counts = [int(g.number_of_edges()) for g in graphs]
         degree_sequences = [_sorted_degree_sequence(g) for g in graphs]
         observed_max_degree = max(max(seq) if seq else 0 for seq in degree_sequences)
         max_degree = observed_max_degree if max_degree is None else int(max_degree)
@@ -203,6 +298,7 @@ class DegreeVectorizer:
             max_edges=int(max(max_edges, 1)),
             require_connected=bool(require_connected),
             empirical_node_counts=[int(x) for x in node_counts],
+            empirical_edge_counts=[int(x) for x in edge_counts],
             empirical_degree_sequences=[
                 [int(d) for d in seq] for seq in degree_sequences
             ],
@@ -222,9 +318,14 @@ class DegreeVectorizer:
         # an independent encoder input.
         return int(1 + self.degree_dim)
 
+    @property
+    def edge_count_classes(self) -> int:
+        return int(self.max_edges + 1)
+
     def head_dims(self) -> dict[str, int]:
         return {
             "num_nodes": self.node_count_classes,
+            "num_edges": self.edge_count_classes,
             "degree": self.degree_dim,
         }
 
@@ -253,6 +354,7 @@ class DegreeVectorizer:
         return {
             "num_nodes": np.int64(self.node_index(n)),
             "num_nodes_count": np.int64(n),
+            "num_edges_count": np.int64(m),
             "degree": self.degree_hist_from_sequence(seq).astype(np.float32),
             "mean_degree": np.asarray(
                 [(2.0 * m / n) if n > 0 else 0.0], dtype=np.float32
@@ -279,6 +381,29 @@ class DegreeVectorizer:
         probs = self.empirical_node_distribution()
         idx = int(rng.choice(np.arange(self.node_count_classes), p=probs))
         return self.node_count_from_index(idx)
+
+    def empirical_edge_distribution(self, n: int) -> np.ndarray:
+        """Empirical p(m | n), with nearest-size fallback for sparse sizes."""
+
+        node_counts = self.empirical_node_counts or []
+        edge_counts = self.empirical_edge_counts or []
+        probs = np.zeros(self.edge_count_classes, dtype=np.float64)
+        if node_counts and len(node_counts) == len(edge_counts):
+            distances = np.asarray([abs(int(x) - int(n)) for x in node_counts])
+            best_distance = int(distances.min()) if distances.size else 0
+            for observed_n, observed_m, distance in zip(node_counts, edge_counts, distances):
+                if int(distance) == best_distance and 0 <= int(observed_m) < probs.size:
+                    probs[int(observed_m)] += 1.0
+        if probs.sum() <= 0:
+            low = max(int(n) - 1, 0) if self.require_connected and int(n) > 1 else 0
+            high = min(int(n) * (int(n) - 1) // 2, self.max_edges)
+            if low <= high:
+                probs[low : high + 1] = 1.0
+        return _normalize(probs)
+
+    def sample_empirical_edge_count(self, n: int, rng: np.random.Generator) -> int:
+        probs = self.empirical_edge_distribution(int(n))
+        return int(rng.choice(np.arange(self.edge_count_classes), p=probs))
 
     def empirical_nearest_degree_sequence(
         self, n: int, rng: np.random.Generator | None = None
@@ -316,6 +441,8 @@ class DegreeVectorizer:
         rng: np.random.Generator | None = None,
         deterministic: bool = False,
         sample_num_nodes: str = "empirical",
+        sample_num_edges: str = "model",
+        exact_degree_sum_conditioning: bool = True,
         max_resample: int = 200,
         fallback: str = "empirical_nearest_n",
         parity_conditioned: bool = True,
@@ -353,6 +480,27 @@ class DegreeVectorizer:
                     )
                 n = self.node_count_from_index(n_idx)
 
+            target_num_edges: int | None = None
+            conditioned_edges = arrays.get("conditioned_num_edges")
+            if conditioned_edges is not None:
+                target_num_edges = int(np.asarray(conditioned_edges[i]).reshape(-1)[0])
+            elif str(sample_num_edges).lower() == "empirical":
+                target_num_edges = self.sample_empirical_edge_count(n, generator)
+            elif "num_edges_logits" in arrays:
+                edge_probs = _softmax_np(arrays["num_edges_logits"][i]).astype(np.float64)
+                low_edges = max(n - 1, 0) if self.require_connected and n > 1 else 0
+                high_edges = min(n * (n - 1) // 2, self.max_edges)
+                edge_probs[:low_edges] = 0.0
+                if high_edges + 1 < edge_probs.size:
+                    edge_probs[high_edges + 1 :] = 0.0
+                edge_probs = _normalize(edge_probs)
+                if deterministic:
+                    target_num_edges = int(np.argmax(edge_probs))
+                else:
+                    target_num_edges = int(
+                        generator.choice(np.arange(edge_probs.size), p=edge_probs)
+                    )
+
             degree_probs = _softmax_np(arrays["degree_logits"][i]).astype(np.float64)
             if n < degree_probs.size:
                 degree_probs[n:] = 0.0
@@ -369,8 +517,24 @@ class DegreeVectorizer:
             accepted_without_postprocessing = False
             parity_draws_total = 0
             attempt_limit = 1 if deterministic else max(int(max_resample), 1)
+            exact_sum_used = bool(
+                exact_degree_sum_conditioning and target_num_edges is not None
+            )
             for attempt in range(attempt_limit):
-                if deterministic:
+                if exact_sum_used:
+                    counts = _sample_degree_counts_exact_sum(
+                        n,
+                        degree_probs,
+                        2 * int(target_num_edges),
+                        generator,
+                        min_degree=(1 if self.require_connected and n > 1 else 0),
+                        max_degree=max(n - 1, 0),
+                        deterministic=deterministic,
+                    )
+                    parity_draws = 1
+                    if counts is None:
+                        break
+                elif deterministic:
                     counts = _integer_counts_from_probs(n, degree_probs)
                     parity_draws = 1
                 elif parity_conditioned:
@@ -489,6 +653,15 @@ class DegreeVectorizer:
                         accepted_without_postprocessing
                     ),
                     "postprocess_policy": policy,
+                    "target_num_edges": (
+                        int(target_num_edges) if target_num_edges is not None else None
+                    ),
+                    "exact_degree_sum_conditioned": bool(exact_sum_used),
+                    "raw_edge_count_matches_target": bool(
+                        raw_seq is not None
+                        and target_num_edges is not None
+                        and sum(raw_seq) == 2 * int(target_num_edges)
+                    ),
                     "first_raw_degree_sequence": (
                         [int(d) for d in raw_seq] if raw_seq is not None else []
                     ),
@@ -546,7 +719,12 @@ class DegreeHistogramVAE(nn.Module):
         min_nodes: int,
         max_nodes: int,
         max_degree: int,
+        max_edges: int | None = None,
+        require_connected: bool = True,
         size_condition_dim: int = 16,
+        edge_condition_dim: int = 16,
+        use_edge_count_conditioning: bool = False,
+        prior_condition_on_edges: bool = False,
         prior_type: str = "conditional_gmm",
         prior_components: int = 4,
         prior_hidden_dim: int | None = None,
@@ -570,7 +748,11 @@ class DegreeHistogramVAE(nn.Module):
             prior_components = 1
         if int(prior_components) < 1:
             raise ValueError("prior_components must be at least one.")
-        self.architecture_version = 3
+        self.use_edge_count_conditioning = bool(use_edge_count_conditioning)
+        self.prior_condition_on_edges = bool(
+            prior_condition_on_edges and self.use_edge_count_conditioning
+        )
+        self.architecture_version = 4 if self.use_edge_count_conditioning else 3
         self.input_dim = int(input_dim)
         self.latent_dim = int(latent_dim)
         self.hidden_dim = int(hidden_dim)
@@ -578,7 +760,14 @@ class DegreeHistogramVAE(nn.Module):
         self.min_nodes = int(min_nodes)
         self.max_nodes = int(max_nodes)
         self.max_degree = int(max_degree)
+        self.max_edges = int(
+            max_edges
+            if max_edges is not None
+            else max_nodes * (max_nodes - 1) // 2
+        )
+        self.require_connected = bool(require_connected)
         self.size_condition_dim = int(size_condition_dim)
+        self.edge_condition_dim = int(edge_condition_dim)
         self.prior_type = prior_type
         self.prior_components = int(prior_components)
         self.prior_hidden_dim = int(prior_hidden_dim or hidden_dim)
@@ -602,9 +791,24 @@ class DegreeHistogramVAE(nn.Module):
             num_layers=1,
             dropout=dropout,
         )
+        if self.use_edge_count_conditioning:
+            self.edge_count_decoder = MLP(
+                2,
+                hidden_dim,
+                num_layers=max(num_layers - 1, 1),
+                dropout=dropout,
+            )
+            self.num_edges_head = nn.Linear(hidden_dim, head_dims["num_edges"])
+            self.edge_encoder = MLP(
+                2,
+                hidden_dim,
+                output_dim=self.edge_condition_dim,
+                num_layers=1,
+                dropout=dropout,
+            )
         if self.prior_type != "standard_normal":
             self.conditional_prior = MLP(
-                2,
+                4 if self.prior_condition_on_edges else 2,
                 self.prior_hidden_dim,
                 output_dim=self.prior_components * (1 + 2 * self.latent_dim),
                 num_layers=1,
@@ -627,7 +831,9 @@ class DegreeHistogramVAE(nn.Module):
                             device=bias.device,
                         )
         self.degree_decoder = MLP(
-            latent_dim + self.size_condition_dim,
+            latent_dim
+            + self.size_condition_dim
+            + (self.edge_condition_dim if self.use_edge_count_conditioning else 0),
             hidden_dim,
             num_layers=num_layers,
             dropout=dropout,
@@ -653,17 +859,65 @@ class DegreeHistogramVAE(nn.Module):
         logarithmic = torch.log1p(n) / max(float(np.log1p(self.max_nodes)), 1.0)
         return torch.cat([linear, logarithmic], dim=-1)
 
-    def prior_parameters(self, node_counts: torch.Tensor) -> dict[str, torch.Tensor]:
+    def _edge_features(
+        self, node_counts: torch.Tensor, edge_counts: torch.Tensor
+    ) -> torch.Tensor:
+        n = node_counts.to(dtype=torch.float32).reshape(-1, 1)
+        m = edge_counts.to(dtype=torch.float32).reshape(-1, 1)
+        scaled_m = m / max(float(self.max_edges), 1.0)
+        possible = torch.clamp(n * (n - 1.0) / 2.0, min=1.0)
+        density = m / possible
+        return torch.cat([scaled_m, density], dim=-1)
+
+    def edge_count_logits(self, node_counts: torch.Tensor) -> torch.Tensor:
+        if not self.use_edge_count_conditioning:
+            raise RuntimeError("This DH-VAE checkpoint has no edge-count head.")
         node_counts = node_counts.to(
             device=next(self.parameters()).device, dtype=torch.long
         ).reshape(-1)
+        hidden = self.edge_count_decoder(self._size_features(node_counts))
+        logits = self.num_edges_head(hidden)
+        edges = torch.arange(logits.shape[-1], device=logits.device).unsqueeze(0)
+        if self.require_connected:
+            lower = torch.where(
+                node_counts > 1, node_counts - 1, torch.zeros_like(node_counts)
+            ).unsqueeze(1)
+        else:
+            lower = torch.zeros_like(node_counts).unsqueeze(1)
+        upper = torch.minimum(
+            node_counts * (node_counts - 1) // 2,
+            torch.full_like(node_counts, self.max_edges),
+        ).unsqueeze(1)
+        invalid = (edges < lower) | (edges > upper)
+        return logits.masked_fill(invalid, -1.0e9)
+
+    def prior_parameters(
+        self,
+        node_counts: torch.Tensor,
+        edge_counts: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
+        node_counts = node_counts.to(
+            device=next(self.parameters()).device, dtype=torch.long
+        ).reshape(-1)
+        if self.prior_condition_on_edges:
+            if edge_counts is None:
+                edge_counts = torch.argmax(self.edge_count_logits(node_counts), dim=-1)
+            edge_counts = edge_counts.to(
+                device=node_counts.device, dtype=torch.long
+            ).reshape(-1)
         batch = int(node_counts.shape[0])
         if self.prior_type == "standard_normal":
             logits = torch.zeros(batch, 1, device=node_counts.device)
             means = torch.zeros(batch, 1, self.latent_dim, device=node_counts.device)
             logvars = torch.zeros_like(means)
         else:
-            raw = self.conditional_prior(self._size_features(node_counts))
+            prior_features = self._size_features(node_counts)
+            if self.prior_condition_on_edges:
+                prior_features = torch.cat(
+                    [prior_features, self._edge_features(node_counts, edge_counts)],
+                    dim=-1,
+                )
+            raw = self.conditional_prior(prior_features)
             raw = raw.reshape(batch, self.prior_components, 1 + 2 * self.latent_dim)
             logits = raw[..., 0]
             means = raw[..., 1 : 1 + self.latent_dim]
@@ -680,6 +934,7 @@ class DegreeHistogramVAE(nn.Module):
         self,
         node_counts: torch.Tensor,
         *,
+        edge_counts: torch.Tensor | None = None,
         prior_mode: str = "model",
     ) -> torch.Tensor:
         prior_mode = str(prior_mode).lower()
@@ -694,7 +949,7 @@ class DegreeHistogramVAE(nn.Module):
             )
         if prior_mode != "model":
             raise ValueError("prior_mode must be 'model' or 'standard_normal'.")
-        params = self.prior_parameters(node_counts)
+        params = self.prior_parameters(node_counts, edge_counts)
         components = torch.distributions.Categorical(
             logits=params["prior_logits"]
         ).sample()
@@ -704,7 +959,10 @@ class DegreeHistogramVAE(nn.Module):
         return means + torch.randn_like(means) * torch.exp(0.5 * logvars)
 
     def decode(
-        self, z: torch.Tensor, node_counts: torch.Tensor
+        self,
+        z: torch.Tensor,
+        node_counts: torch.Tensor,
+        edge_counts: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         node_counts = node_counts.to(device=z.device, dtype=torch.long).reshape(-1)
         if node_counts.shape[0] != z.shape[0]:
@@ -719,7 +977,20 @@ class DegreeHistogramVAE(nn.Module):
 
         node_logits = self.node_count_logits(z)
         size_embedding = self.size_encoder(self._size_features(node_counts))
-        degree_hidden = self.degree_decoder(torch.cat([z, size_embedding], dim=-1))
+        edge_logits = None
+        decoder_inputs = [z, size_embedding]
+        if self.use_edge_count_conditioning:
+            edge_logits = self.edge_count_logits(node_counts)
+            if edge_counts is None:
+                edge_counts = torch.argmax(edge_logits, dim=-1)
+            edge_counts = edge_counts.to(device=z.device, dtype=torch.long).reshape(-1)
+            if edge_counts.shape[0] != z.shape[0]:
+                raise ValueError("edge_counts must have one value per latent sample.")
+            edge_embedding = self.edge_encoder(
+                self._edge_features(node_counts, edge_counts)
+            )
+            decoder_inputs.append(edge_embedding)
+        degree_hidden = self.degree_decoder(torch.cat(decoder_inputs, dim=-1))
         degree_logits = self.degree_head(degree_hidden)
         degrees = torch.arange(
             degree_logits.shape[-1], device=z.device, dtype=torch.long
@@ -732,22 +1003,29 @@ class DegreeHistogramVAE(nn.Module):
             dim=-1,
             keepdim=True,
         )
-        return {
+        result = {
             "num_nodes_logits": node_logits,
             "degree_logits": degree_logits,
             "conditioned_num_nodes": node_counts,
             "expected_mean_degree": expected_mean_degree,
         }
+        if edge_logits is not None:
+            result["num_edges_logits"] = edge_logits
+            result["conditioned_num_edges"] = edge_counts
+        return result
 
     def forward(
-        self, x: torch.Tensor, node_counts: torch.Tensor | None = None
+        self,
+        x: torch.Tensor,
+        node_counts: torch.Tensor | None = None,
+        edge_counts: torch.Tensor | None = None,
     ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
         if node_counts is None:
             node_counts = torch.round(x[:, 0] * float(self.max_nodes)).long()
-        outputs = self.decode(z, node_counts)
-        outputs.update(self.prior_parameters(node_counts))
+        outputs = self.decode(z, node_counts, edge_counts)
+        outputs.update(self.prior_parameters(node_counts, edge_counts))
         outputs["latent_z"] = z
         return outputs, mu, logvar
 
@@ -757,11 +1035,12 @@ class DegreeHistogramVAE(nn.Module):
         x: torch.Tensor,
         node_counts: torch.Tensor,
         *,
+        edge_counts: torch.Tensor | None = None,
         use_mean: bool = True,
     ) -> dict[str, torch.Tensor]:
         mu, logvar = self.encode(x)
         z = mu if use_mean else self.reparameterize(mu, logvar)
-        return self.decode(z, node_counts)
+        return self.decode(z, node_counts, edge_counts)
 
     @torch.no_grad()
     def sample_outputs(
@@ -769,7 +1048,9 @@ class DegreeHistogramVAE(nn.Module):
         num_samples: int,
         *,
         node_counts: torch.Tensor | np.ndarray | list[int] | None = None,
+        edge_counts: torch.Tensor | np.ndarray | list[int] | None = None,
         deterministic_node_count: bool = False,
+        deterministic_edge_count: bool = False,
         prior_mode: str = "model",
         device: torch.device | str | None = None,
     ) -> dict[str, torch.Tensor]:
@@ -785,8 +1066,23 @@ class DegreeHistogramVAE(nn.Module):
             node_counts = indices + self.min_nodes
         else:
             node_counts = torch.as_tensor(node_counts, dtype=torch.long, device=device)
-        z = self.sample_prior(node_counts, prior_mode=prior_mode)
-        return self.decode(z, node_counts)
+        if self.use_edge_count_conditioning:
+            edge_logits = self.edge_count_logits(node_counts)
+            if edge_counts is None:
+                if deterministic_edge_count:
+                    edge_counts = torch.argmax(edge_logits, dim=-1)
+                else:
+                    edge_counts = torch.distributions.Categorical(
+                        logits=edge_logits
+                    ).sample()
+            else:
+                edge_counts = torch.as_tensor(
+                    edge_counts, dtype=torch.long, device=device
+                )
+        z = self.sample_prior(
+            node_counts, edge_counts=edge_counts, prior_mode=prior_mode
+        )
+        return self.decode(z, node_counts, edge_counts)
 
     def model_config(self) -> dict[str, Any]:
         return {
@@ -798,7 +1094,12 @@ class DegreeHistogramVAE(nn.Module):
             "min_nodes": self.min_nodes,
             "max_nodes": self.max_nodes,
             "max_degree": self.max_degree,
+            "max_edges": self.max_edges,
+            "require_connected": self.require_connected,
             "size_condition_dim": self.size_condition_dim,
+            "edge_condition_dim": self.edge_condition_dim,
+            "use_edge_count_conditioning": self.use_edge_count_conditioning,
+            "prior_condition_on_edges": self.prior_condition_on_edges,
             "prior_type": self.prior_type,
             "prior_components": self.prior_components,
             "prior_hidden_dim": self.prior_hidden_dim,
@@ -816,6 +1117,50 @@ def soft_histogram_ce(logits: torch.Tensor, target: torch.Tensor) -> torch.Tenso
 
 def kl_loss(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
     return -0.5 * torch.mean(torch.sum(1.0 + logvar - mu.pow(2) - logvar.exp(), dim=-1))
+
+
+def _rbf_mmd_torch(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    sigma: float = 0.25,
+) -> torch.Tensor:
+    """Biased differentiable RBF MMD used as a prior-distribution surrogate."""
+
+    if x.ndim != 2 or y.ndim != 2 or x.shape[1] != y.shape[1]:
+        raise ValueError("RBF MMD inputs must be 2-D with matching feature width.")
+    scale = max(float(sigma), 1.0e-6)
+    gamma = 1.0 / (2.0 * scale * scale)
+    k_xx = torch.exp(-gamma * torch.cdist(x, x, p=2).pow(2)).mean()
+    k_yy = torch.exp(-gamma * torch.cdist(y, y, p=2).pow(2)).mean()
+    k_xy = torch.exp(-gamma * torch.cdist(x, y, p=2).pow(2)).mean()
+    return k_xx + k_yy - 2.0 * k_xy
+
+
+def aggregate_prior_moment_loss(
+    mu: torch.Tensor,
+    logvar: torch.Tensor,
+    prior_logits: torch.Tensor,
+    prior_means: torch.Tensor,
+    prior_logvars: torch.Tensor,
+) -> torch.Tensor:
+    """Match first/second moments of q(z) and the learned conditional prior.
+
+    The usual per-sample KL remains the principal regularizer.  This auxiliary
+    aggregate term directly reduces the train-time aggregate-posterior / prior
+    gap that can otherwise hurt unconditional sampling.
+    """
+
+    weights = F.softmax(prior_logits, dim=-1).unsqueeze(-1)
+    prior_first = torch.sum(weights * prior_means, dim=1)
+    prior_second = torch.sum(
+        weights * (torch.exp(prior_logvars) + prior_means.pow(2)), dim=1
+    )
+    q_first = mu
+    q_second = torch.exp(logvar) + mu.pow(2)
+    first_loss = F.mse_loss(prior_first.mean(dim=0), q_first.mean(dim=0))
+    second_loss = F.mse_loss(prior_second.mean(dim=0), q_second.mean(dim=0))
+    return first_loss + second_loss
 
 
 def conditional_prior_kl(
@@ -855,9 +1200,17 @@ def degree_vae_loss(
     *,
     beta: float = 5.0e-3,
     weights: dict[str, float] | None = None,
+    prior_outputs: dict[str, torch.Tensor] | None = None,
+    prior_distribution_sigma: float = 0.25,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     weights = weights or {}
     n_loss = F.cross_entropy(outputs["num_nodes_logits"], targets["num_nodes"].long())
+    if "num_edges_logits" in outputs and "num_edges_count" in targets:
+        edge_count_loss = F.cross_entropy(
+            outputs["num_edges_logits"], targets["num_edges_count"].long()
+        )
+    else:
+        edge_count_loss = torch.zeros((), device=mu.device, dtype=mu.dtype)
     degree_loss = soft_histogram_ce(outputs["degree_logits"], targets["degree"])
     predicted_mean_degree = outputs["expected_mean_degree"].reshape(-1)
     target_mean_degree = targets["mean_degree"].reshape(-1)
@@ -882,18 +1235,47 @@ def degree_vae_loss(
         )
     else:
         kld = kl_loss(mu, logvar)
+
+    if {"prior_logits", "prior_means", "prior_logvars"}.issubset(outputs):
+        aggregate_moment = aggregate_prior_moment_loss(
+            mu,
+            logvar,
+            outputs["prior_logits"],
+            outputs["prior_means"],
+            outputs["prior_logvars"],
+        )
+    else:
+        aggregate_moment = torch.zeros((), device=mu.device, dtype=mu.dtype)
+
+    if prior_outputs is not None and "degree_logits" in prior_outputs:
+        prior_degree = F.softmax(prior_outputs["degree_logits"], dim=-1)
+        target_degree = targets["degree"].to(dtype=prior_degree.dtype)
+        prior_distribution = _rbf_mmd_torch(
+            prior_degree,
+            target_degree,
+            sigma=prior_distribution_sigma,
+        )
+    else:
+        prior_distribution = torch.zeros((), device=mu.device, dtype=mu.dtype)
+
     total = (
         float(weights.get("num_nodes", 1.0)) * n_loss
+        + float(weights.get("num_edges", 0.0)) * edge_count_loss
         + float(weights.get("degree", 5.0)) * degree_loss
         + float(weights.get("degree_moment", weights.get("edge_scalar", 0.1)))
         * moment_loss
+        + float(weights.get("aggregate_prior_moment", 0.0)) * aggregate_moment
+        + float(weights.get("prior_distribution", 0.0)) * prior_distribution
         + float(beta) * kld
     )
     metrics = {
         "loss": float(total.detach().cpu()),
         "num_nodes_loss": float(n_loss.detach().cpu()),
+        "num_edges_loss": float(edge_count_loss.detach().cpu()),
         "degree_loss": float(degree_loss.detach().cpu()),
         "degree_moment_loss": float(moment_loss.detach().cpu()),
+        "aggregate_prior_moment_loss": float(aggregate_moment.detach().cpu()),
+        "prior_distribution_loss": float(prior_distribution.detach().cpu()),
         "kl_loss": float(kld.detach().cpu()),
     }
     return total, metrics
@@ -905,6 +1287,9 @@ def build_degree_vae(
     latent_dim: int = 32,
     hidden_dim: int = 128,
     size_condition_dim: int = 16,
+    edge_condition_dim: int = 16,
+    use_edge_count_conditioning: bool = False,
+    prior_condition_on_edges: bool = False,
     prior_type: str = "conditional_gmm",
     prior_components: int = 4,
     prior_hidden_dim: int | None = None,
@@ -921,7 +1306,12 @@ def build_degree_vae(
         min_nodes=vectorizer.min_nodes,
         max_nodes=vectorizer.max_nodes,
         max_degree=vectorizer.max_degree,
+        max_edges=vectorizer.max_edges,
+        require_connected=vectorizer.require_connected,
         size_condition_dim=int(size_condition_dim),
+        edge_condition_dim=int(edge_condition_dim),
+        use_edge_count_conditioning=bool(use_edge_count_conditioning),
+        prior_condition_on_edges=bool(prior_condition_on_edges),
         prior_type=str(prior_type),
         prior_components=int(prior_components),
         prior_hidden_dim=prior_hidden_dim,
@@ -972,7 +1362,16 @@ def load_degree_vae_checkpoint(
         # standard-normal prior. Keep it loadable for baseline evaluation.
         model_config.setdefault("prior_type", "standard_normal")
         model_config.setdefault("prior_components", 1)
-    elif architecture_version != 3:
+        model_config.setdefault("use_edge_count_conditioning", False)
+        model_config.setdefault("prior_condition_on_edges", False)
+        model_config.setdefault("require_connected", True)
+    elif architecture_version == 3:
+        # Version 3 adds the learned conditional latent prior but still decodes
+        # a degree histogram without an explicit edge-count condition.
+        model_config.setdefault("use_edge_count_conditioning", False)
+        model_config.setdefault("prior_condition_on_edges", False)
+        model_config.setdefault("require_connected", True)
+    elif architecture_version != 4:
         raise RuntimeError(
             f"Unsupported DH-VAE architecture version {architecture_version}."
         )

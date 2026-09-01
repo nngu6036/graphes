@@ -456,3 +456,30 @@ Molecular evaluation
   fcd_num_reference_molecules: 915
   fcd_num_valid_generated_molecules: 1024
   fcd_generated_smiles_source: valid_with_correction
+
+
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+
+  PYTHONPATH=src python scripts/run_defog_baseline.py   \
+  --dataset community_small   \
+  --num-samples 1024   \
+  --seed-id 42   \
+  --run-id seed_42_e1m   \
+  --n-epochs 1000000   \
+  --epoch-progress-interval 10000   \
+  --device gp
+
+
+DEFOG_GENERATION_DIR="outputs/baselines/defog/community_small/seed_42_e1m/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_defog_corrector.yaml \
+  --generated-dir "$DEFOG_GENERATION_DIR" \
+  --generated-stage defog_seed_42_n_1024 \
+  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_42_n_1024"
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+defog_seed_42_n_1024_to_test        0.010739          0.046336      0.012637

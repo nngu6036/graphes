@@ -1,12 +1,12 @@
 experiment: zinc_attributed_hybrid_endpoint_graphlet
-benchmark: zinc_12k_heavy_atom
+benchmark: zinc250k_hogdiff_gdss
 implementation_status: implemented
 seed: 42
 
 protocol:
   evaluation_seeds: [42, 43, 44]
   report_mean_and_std: true
-  generated_graphs_per_seed: 1024
+  generated_graphs_per_seed: 10000
   tune_on_split: val
   final_split: test
 
@@ -22,7 +22,7 @@ categorical_state:
   node_attribute: atomic_num
   node_categories: [6, 7, 8, 9, 15, 16, 17, 35, 53]
   edge_attribute: bond_type
-  edge_categories: [1, 2, 3, 4]
+  edge_categories: [1, 2, 3]
 
 graphlet_prediction:
   graphlet_history: true
@@ -97,7 +97,7 @@ candidate_selector:
 
 generation:
   degree_source: learned
-  num_generate: 1024
+  num_generate: 10000
 
 degree_generator:
   enabled: true
@@ -112,7 +112,7 @@ degree_generator:
 typed_signature:
   node_attribute: atomic_num
   edge_attribute: bond_type
-  edge_categories: [1, 2, 3, 4]
+  edge_categories: [1, 2, 3]
   max_ordinary_degree: 6
 
 constructor:
@@ -126,7 +126,7 @@ constructor:
 molecular_generation:
   enabled: true
   allowed_atom_types: [6, 7, 8, 9, 15, 16, 17, 35, 53]
-  allowed_bond_types: [1, 2, 3, 4]
+  allowed_bond_types: [1, 2, 3]
   sample_attributes: false
   require_rdkit_source_validity: true
 
@@ -154,7 +154,7 @@ hybrid_refiner:
   require_same_edge_type_pair: true
   preserve_removed_edge_type: true
   enforce_molecular_valence: true
-  molecular_allowed_bond_types: [1, 2, 3, 4]
+  molecular_allowed_bond_types: [1, 2, 3]
   molecular_candidate_attempt_multiplier: 4
   rdkit_candidate_check: true
 

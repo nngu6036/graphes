@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Prepare the fixed ZINC heavy-atom graph benchmark from a local SMILES file."""
+"""Prepare legacy or HOG-Diff/GDSS-aligned ZINC heavy-atom benchmarks."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import copy
 import csv
 import hashlib
+import json
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,9 +42,14 @@ class ZincProtocol:
     expected_graphs: int
     selection: str
     seed: int
+    split_strategy: str
     split_counts: dict[str, int]
+    test_index_scheme: str | None
+    test_index_base: int
+    test_indices_required: bool
+    configured_test_indices_path: str | None
     remove_hydrogens: bool
-    keep_largest_fragment: bool
+    fragment_policy: str
     kekulize: bool
     retain_aromatic_bonds: bool
     retain_formal_charge: bool
@@ -63,26 +69,71 @@ class ZincProtocol:
         preprocessing = config.get("preprocessing", {}) or {}
         filters = config.get("filters", {}) or {}
         categorical = config.get("categorical_state", {}) or {}
-
-        selection = str(subset.get("selection", "first_valid_after_seeded_shuffle"))
-        if selection != "first_valid_after_seeded_shuffle":
-            raise NotImplementedError(
-                "Only source.subset.selection="
-                "'first_valid_after_seeded_shuffle' is implemented."
-            )
-
-        expected_graphs = int(subset.get("expected_graphs", 0))
-        if expected_graphs <= 0:
-            raise ValueError("source.subset.expected_graphs must be positive.")
-
         split_cfg = config.get("split", {}) or {}
-        split_counts = {name: int(split_cfg.get(name, 0)) for name in SPLIT_NAMES}
-        if any(count < 0 for count in split_counts.values()):
-            raise ValueError("ZINC split counts must be non-negative.")
-        if sum(split_counts.values()) != expected_graphs:
-            raise ValueError(
-                "ZINC split counts must sum to source.subset.expected_graphs."
+
+        if subset:
+            # Backward-compatible support for the earlier fixed-subset protocol.
+            selection = str(
+                subset.get("selection", "first_valid_after_seeded_shuffle")
             )
+            expected_graphs = int(subset.get("expected_graphs", 0))
+            seed = int(subset.get("seed", 0))
+        else:
+            selection = str(source.get("selection", "source_order_full"))
+            expected_graphs = int(
+                source.get("expected_graphs", source.get("expected_records", 0))
+            )
+            seed = int(split_cfg.get("seed", 0))
+
+        if selection not in {
+            "first_valid_after_seeded_shuffle",
+            "source_order_full",
+        }:
+            raise NotImplementedError(
+                "Unsupported ZINC source selection: " f"{selection!r}."
+            )
+        if expected_graphs <= 0:
+            raise ValueError(
+                "source.expected_graphs/source.expected_records must be positive."
+            )
+
+        split_strategy = str(
+            split_cfg.get(
+                "strategy",
+                "fixed_counts" if subset else "hogdiff_gdss_fixed_test_indices",
+            )
+        )
+        split_counts: dict[str, int] = {}
+        if split_strategy == "fixed_counts":
+            split_counts = {
+                name: int(split_cfg.get(name, 0)) for name in SPLIT_NAMES
+            }
+            if any(count < 0 for count in split_counts.values()):
+                raise ValueError("ZINC split counts must be non-negative.")
+            if sum(split_counts.values()) != expected_graphs:
+                raise ValueError(
+                    "ZINC split counts must sum to the configured graph count."
+                )
+        elif split_strategy != "hogdiff_gdss_fixed_test_indices":
+            raise NotImplementedError(
+                f"Unsupported ZINC split strategy: {split_strategy!r}."
+            )
+
+        test_index_cfg = source.get("test_indices", {}) or {}
+        test_index_scheme = (
+            str(test_index_cfg.get("scheme")) if test_index_cfg else None
+        )
+        test_index_base = int(test_index_cfg.get("index_base", 0))
+        if test_index_base not in {0, 1}:
+            raise ValueError("source.test_indices.index_base must be 0 or 1.")
+        test_indices_required = bool(
+            test_index_cfg.get(
+                "required", split_strategy == "hogdiff_gdss_fixed_test_indices"
+            )
+        )
+        configured_test_indices_path = test_index_cfg.get("path")
+        if configured_test_indices_path is not None:
+            configured_test_indices_path = str(configured_test_indices_path)
 
         if not bool(preprocessing.get("sanitize_with_rdkit", True)):
             raise ValueError("Strict RDKit sanitization cannot be disabled.")
@@ -103,6 +154,20 @@ class ZincProtocol:
         if bool(preprocessing.get("retain_stereochemistry", False)):
             raise NotImplementedError(
                 "Stereochemical graph attributes are not implemented."
+            )
+
+        fragment_policy_raw = preprocessing.get("fragment_policy")
+        if fragment_policy_raw is None:
+            fragment_policy = (
+                "largest"
+                if bool(preprocessing.get("keep_largest_fragment", True))
+                else "reject"
+            )
+        else:
+            fragment_policy = str(fragment_policy_raw).lower()
+        if fragment_policy not in {"preserve", "largest", "reject"}:
+            raise ValueError(
+                "preprocessing.fragment_policy must be preserve, largest, or reject."
             )
 
         dataset_name = str(config.get("name", "zinc"))
@@ -164,15 +229,20 @@ class ZincProtocol:
             dataset_name=dataset_name,
             expected_graphs=expected_graphs,
             selection=selection,
-            seed=int(subset.get("seed", 0)),
+            seed=seed,
+            split_strategy=split_strategy,
             split_counts=split_counts,
+            test_index_scheme=test_index_scheme,
+            test_index_base=test_index_base,
+            test_indices_required=test_indices_required,
+            configured_test_indices_path=configured_test_indices_path,
             remove_hydrogens=bool(preprocessing.get("remove_hydrogens", True)),
-            keep_largest_fragment=bool(
-                preprocessing.get("keep_largest_fragment", True)
-            ),
+            fragment_policy=fragment_policy,
             kekulize=kekulize,
             retain_aromatic_bonds=retain_aromatic_bonds,
-            retain_formal_charge=bool(preprocessing.get("retain_formal_charge", False)),
+            retain_formal_charge=bool(
+                preprocessing.get("retain_formal_charge", False)
+            ),
             retain_stereochemistry=False,
             max_nodes=max_nodes,
             require_connected=bool(filters.get("require_connected", True)),
@@ -184,7 +254,6 @@ class ZincProtocol:
             allowed_bond_types=allowed_bonds,
             bond_orders=bond_orders,
         )
-
 
 def download_bundled_zinc_source(
     destination: str | Path | None = None,
@@ -275,6 +344,40 @@ def read_zinc_smiles(
     return records
 
 
+def read_zinc_test_indices(
+    path: str | Path,
+    *,
+    index_base: int = 0,
+) -> list[int]:
+    """Read the fixed GDSS/HOG-Diff ZINC250k held-out index list."""
+
+    source_path = Path(path)
+    if not source_path.is_file():
+        raise FileNotFoundError(
+            f"ZINC test-index file does not exist: {source_path}"
+        )
+    payload = json.loads(source_path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        if "valid_idxs" in payload:
+            payload = payload["valid_idxs"]
+        elif len(payload) == 1:
+            payload = next(iter(payload.values()))
+        else:
+            raise ValueError(
+                "Unsupported ZINC test-index JSON object; expected a list or "
+                "a single list-valued field."
+            )
+    if not isinstance(payload, list):
+        raise ValueError("ZINC test-index JSON must contain a list of indices.")
+
+    indices = [int(value) - int(index_base) for value in payload]
+    if any(index < 0 for index in indices):
+        raise ValueError("ZINC test indices must be non-negative after index-base conversion.")
+    if len(set(indices)) != len(indices):
+        raise ValueError("ZINC test-index list contains duplicate entries.")
+    return indices
+
+
 def _bond_type_from_rdkit(bond: Any) -> int:
     Chem = require_rdkit()
     if bond.GetIsAromatic() or bond.GetBondType() == Chem.BondType.AROMATIC:
@@ -316,30 +419,31 @@ def smiles_to_zinc_graph(
     except Exception as exc:
         raise ZincRecordError("sanitization_failure", str(exc)) from exc
 
-    try:
-        fragments = tuple(
-            Chem.GetMolFrags(
-                molecule,
-                asMols=True,
-                sanitizeFrags=True,
+    if protocol.fragment_policy != "preserve":
+        try:
+            fragments = tuple(
+                Chem.GetMolFrags(
+                    molecule,
+                    asMols=True,
+                    sanitizeFrags=True,
+                )
             )
-        )
-    except Exception as exc:
-        raise ZincRecordError("sanitization_failure", str(exc)) from exc
-    if len(fragments) > 1:
-        if not protocol.keep_largest_fragment:
-            raise ZincRecordError(
-                "multiple_fragments",
-                "The molecule contains multiple disconnected fragments.",
-            )
-        molecule = max(
-            enumerate(fragments),
-            key=lambda item: (
-                int(item[1].GetNumHeavyAtoms()),
-                int(item[1].GetNumAtoms()),
-                -item[0],
-            ),
-        )[1]
+        except Exception as exc:
+            raise ZincRecordError("sanitization_failure", str(exc)) from exc
+        if len(fragments) > 1:
+            if protocol.fragment_policy == "reject":
+                raise ZincRecordError(
+                    "multiple_fragments",
+                    "The molecule contains multiple disconnected fragments.",
+                )
+            molecule = max(
+                enumerate(fragments),
+                key=lambda item: (
+                    int(item[1].GetNumHeavyAtoms()),
+                    int(item[1].GetNumAtoms()),
+                    -item[0],
+                ),
+            )[1]
 
     try:
         if protocol.remove_hydrogens:
@@ -526,8 +630,9 @@ def prepare_zinc_dataset(
     *,
     root: str | Path | None = None,
     smiles_column: str | int | None = None,
+    test_indices_file: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Prepare, persist, and report the configured deterministic ZINC subset."""
+    """Prepare and persist the configured ZINC benchmark protocol."""
 
     protocol = ZincProtocol.from_config(config)
     source_path = Path(smiles_file)
@@ -538,13 +643,30 @@ def prepare_zinc_dataset(
     if not smiles_records:
         raise RuntimeError(f"No SMILES records found in {source_path}.")
 
-    rng = np.random.default_rng(protocol.seed)
-    shuffled_indices = rng.permutation(len(smiles_records)).tolist()
     selected: list[nx.Graph] = []
     rejected: Counter[str] = Counter()
     attempted = 0
-    for source_index in shuffled_indices:
-        if len(selected) >= protocol.expected_graphs:
+    resolved_test_indices_path: Path | None = None
+    test_indices: list[int] = []
+    validation_indices: list[int] = []
+
+    if protocol.selection == "source_order_full":
+        if len(smiles_records) != protocol.expected_graphs:
+            raise RuntimeError(
+                "HOG-Diff/GDSS ZINC250k preparation requires the complete "
+                f"ordered source: observed {len(smiles_records)} records, "
+                f"expected {protocol.expected_graphs}."
+            )
+        source_indices = list(range(len(smiles_records)))
+    else:
+        rng = np.random.default_rng(protocol.seed)
+        source_indices = rng.permutation(len(smiles_records)).tolist()
+
+    for source_index in source_indices:
+        if (
+            protocol.selection == "first_valid_after_seeded_shuffle"
+            and len(selected) >= protocol.expected_graphs
+        ):
             break
         attempted += 1
         try:
@@ -555,9 +677,19 @@ def prepare_zinc_dataset(
             )
         except ZincRecordError as exc:
             rejected[exc.reason] += 1
+            if protocol.selection == "source_order_full":
+                # Fixed GDSS/HOG-Diff test indices refer to the original row
+                # order.  Skipping even one row would invalidate that identity.
+                continue
             continue
         selected.append(graph)
 
+    if protocol.selection == "source_order_full" and rejected:
+        raise RuntimeError(
+            "HOG-Diff/GDSS ZINC250k source-order preparation cannot reject "
+            "records because valid_idx_zinc250k.json is row-index based. "
+            f"rejected={dict(sorted(rejected.items()))}"
+        )
     if len(selected) != protocol.expected_graphs:
         raise RuntimeError(
             f"Only {len(selected)} valid ZINC graphs were found; expected "
@@ -565,7 +697,70 @@ def prepare_zinc_dataset(
             f"rejected={dict(sorted(rejected.items()))}"
         )
 
-    splits = _split_selected_graphs(selected, protocol.split_counts)
+    if protocol.split_strategy == "hogdiff_gdss_fixed_test_indices":
+        configured = protocol.configured_test_indices_path
+        resolved_test_indices_path = Path(
+            test_indices_file if test_indices_file is not None else configured or ""
+        )
+        if not str(resolved_test_indices_path):
+            raise ValueError(
+                "HOG-Diff/GDSS ZINC250k preparation requires "
+                "--test-indices-file or source.test_indices.path."
+            )
+        if protocol.test_indices_required and not resolved_test_indices_path.is_file():
+            raise FileNotFoundError(
+                "Missing HOG-Diff/GDSS ZINC250k test indices: "
+                f"{resolved_test_indices_path}"
+            )
+        test_indices = read_zinc_test_indices(
+            resolved_test_indices_path,
+            index_base=protocol.test_index_base,
+        )
+        if not test_indices:
+            raise RuntimeError("The ZINC250k test-index list is empty.")
+        if max(test_indices) >= len(selected):
+            raise ValueError(
+                "ZINC250k test-index list references rows outside the source "
+                f"range 0..{len(selected) - 1}."
+            )
+        test_index_set = set(test_indices)
+        training_complement = [
+            source_index
+            for source_index in range(len(selected))
+            if source_index not in test_index_set
+        ]
+        validation_count = int(
+            (config.get("split", {}) or {}).get("validation_count", 0)
+        )
+        if validation_count < 0 or validation_count >= len(training_complement):
+            raise ValueError(
+                "split.validation_count must be non-negative and smaller than "
+                "the HOG-Diff/GDSS training complement."
+            )
+        validation_indices = []
+        if validation_count:
+            split_rng = np.random.default_rng(protocol.seed)
+            permuted = split_rng.permutation(training_complement).tolist()
+            validation_indices = [
+                int(value) for value in permuted[:validation_count]
+            ]
+        validation_index_set = set(validation_indices)
+        train_indices = [
+            source_index
+            for source_index in training_complement
+            if source_index not in validation_index_set
+        ]
+        splits = {
+            "train": [selected[source_index] for source_index in train_indices],
+            # HOG-Diff itself trains on the complete complement.  GraphER keeps
+            # the exact HOG-Diff test set fixed, but optionally reserves a small
+            # validation subset from that training complement for checkpointing.
+            "val": [selected[source_index] for source_index in validation_indices],
+            "test": [selected[source_index] for source_index in test_indices],
+        }
+    else:
+        splits = _split_selected_graphs(selected, protocol.split_counts)
+
     output_root = Path(
         root if root is not None else config.get("root", "outputs/datasets")
     )
@@ -574,6 +769,14 @@ def prepare_zinc_dataset(
     resolved_source["local_file"] = str(source_path.resolve())
     resolved_source["local_file_sha256"] = _sha256_file(source_path)
     resolved_source["smiles_column"] = smiles_column
+    if resolved_test_indices_path is not None:
+        resolved_test_cfg = resolved_source.setdefault("test_indices", {})
+        resolved_test_cfg["local_file"] = str(resolved_test_indices_path.resolve())
+        resolved_test_cfg["local_file_sha256"] = _sha256_file(
+            resolved_test_indices_path
+        )
+        resolved_test_cfg["count"] = len(test_indices)
+
     save_dataset_splits(
         protocol.dataset_name,
         splits,
@@ -591,17 +794,39 @@ def prepare_zinc_dataset(
     report = {
         "status": "pass",
         "dataset": protocol.dataset_name,
+        "protocol_id": config.get("protocol_id"),
         "source": str(source_path.resolve()),
         "source_sha256": resolved_source["local_file_sha256"],
         "smiles_column": smiles_column,
         "selection": protocol.selection,
         "selection_seed": protocol.seed,
+        "split_strategy": protocol.split_strategy,
         **common_report,
         # Backward-compatible aliases retained for existing consumers.
         "num_attempted_records": attempted,
         "num_selected_graphs": len(selected),
         "selected_records_sha256": _selected_records_sha256(selected),
         "split_sizes": {name: len(splits[name]) for name in SPLIT_NAMES},
+        "test_indices": (
+            {
+                "scheme": protocol.test_index_scheme,
+                "path": str(resolved_test_indices_path.resolve()),
+                "sha256": _sha256_file(resolved_test_indices_path),
+                "count": len(test_indices),
+                "index_base": protocol.test_index_base,
+            }
+            if resolved_test_indices_path is not None
+            else None
+        ),
+        "validation": (
+            {
+                "count": len(validation_indices),
+                "seed": protocol.seed,
+                "source": "hogdiff_gdss_training_complement",
+            }
+            if protocol.split_strategy == "hogdiff_gdss_fixed_test_indices"
+            else None
+        ),
         "filter_diagnostics": {
             "num_rejected": int(sum(rejected.values())),
             "rejection_reasons": rejection_reasons,
@@ -613,18 +838,19 @@ def prepare_zinc_dataset(
             "bond_types": list(protocol.allowed_bond_types),
             "kekulize": bool(protocol.kekulize),
             "retain_aromatic_bonds": bool(protocol.retain_aromatic_bonds),
+            "formal_charge_in_graph_state": bool(protocol.retain_formal_charge),
+            "fragment_policy": protocol.fragment_policy,
         },
     }
     output_dir = ensure_dir(output_root / protocol.dataset_name)
     save_json(report, output_dir / "prep_report.json")
     return report
 
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Prepare the deterministic ZINC heavy-atom benchmark from a local "
-            "SMILES/CSV source."
+            "Prepare the HOG-Diff/GDSS-aligned ZINC250k heavy-atom benchmark "
+            "from a local SMILES/CSV source."
         )
     )
     parser.add_argument(
@@ -650,6 +876,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="CSV/TSV SMILES column name or zero-based index.",
     )
     parser.add_argument(
+        "--test-indices-file",
+        default=None,
+        help=(
+            "GDSS/HOG-Diff valid_idx_zinc250k.json. Defaults to "
+            "source.test_indices.path in the dataset config."
+        ),
+    )
+    parser.add_argument(
         "--root",
         default=None,
         help="Output root override; defaults to config.root.",
@@ -669,10 +903,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         config,
         root=args.root,
         smiles_column=args.smiles_column,
+        test_indices_file=args.test_indices_file,
     )
     output_root = Path(args.root or config.get("root", "outputs/datasets"))
     print_preparation_summary(
-        dataset="ZINC250k-GraphER12k",
+        dataset="ZINC250k-HOGDiff/GDSS",
         source=report["source"],
         input_records=report["num_input_records"],
         processed_records=report["num_processed_records"],

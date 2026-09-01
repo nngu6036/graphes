@@ -211,3 +211,149 @@ def test_degree_sequence_evaluation_is_zero_for_identical_sets():
     assert np.isclose(metrics["node_count_total_variation"], 0.0)
     assert np.isclose(metrics["edge_count_total_variation"], 0.0)
     assert metrics["sequence_novelty_rate"] == 0.0
+
+
+def test_edge_conditioned_dhvae_models_p_m_given_n_and_p_d_given_n_m():
+    graphs = [
+        nx.path_graph(8),          # m=7
+        nx.cycle_graph(8),         # m=8
+        nx.watts_strogatz_graph(8, 4, 0.0),  # m=16
+    ]
+    vectorizer = DegreeVectorizer.fit(graphs, require_connected=True)
+    model = build_degree_vae(
+        vectorizer,
+        latent_dim=4,
+        hidden_dim=24,
+        size_condition_dim=8,
+        edge_condition_dim=8,
+        use_edge_count_conditioning=True,
+        prior_condition_on_edges=True,
+    )
+    z = torch.zeros(2, 4)
+    n = torch.tensor([8, 8])
+    outputs = model.decode(z, n, torch.tensor([7, 16]))
+    assert outputs["num_edges_logits"].shape[-1] == vectorizer.edge_count_classes
+    assert outputs["conditioned_num_edges"].tolist() == [7, 16]
+    assert not torch.allclose(outputs["degree_logits"][0], outputs["degree_logits"][1])
+    # Connected simple 8-node graphs require 7 <= m <= 28.
+    assert float(outputs["num_edges_logits"][0, 6].detach()) < -1.0e8
+
+
+def test_exact_degree_sum_conditioning_preserves_sampled_edge_count_before_rejection():
+    vectorizer = DegreeVectorizer.fit(
+        [nx.path_graph(8), nx.cycle_graph(8)], require_connected=True
+    )
+    outputs = {
+        "num_nodes_logits": torch.zeros(1, vectorizer.node_count_classes),
+        "num_edges_logits": torch.zeros(1, vectorizer.edge_count_classes),
+        "conditioned_num_nodes": torch.tensor([8]),
+        "conditioned_num_edges": torch.tensor([8]),
+        "degree_logits": torch.tensor(
+            [[-20.0, 0.0, 2.0, 1.0] + [-20.0] * (vectorizer.degree_dim - 4)]
+        ),
+    }
+    summaries = vectorizer.outputs_to_summaries(
+        outputs,
+        rng=np.random.default_rng(5),
+        max_resample=100,
+        fallback="error",
+        postprocess_policy="reject_only",
+        exact_degree_sum_conditioning=True,
+        include_diagnostics=True,
+    )
+    summary = summaries[0]
+    diagnostic = summary["sampling_diagnostics"]
+    assert summary["num_edges"] == 8
+    assert sum(diagnostic["first_raw_degree_sequence"]) == 16
+    assert diagnostic["exact_degree_sum_conditioned"]
+    assert diagnostic["raw_edge_count_matches_target"]
+    assert diagnostic["raw_even_degree_sum"]
+    assert not diagnostic["repair_used"]
+
+
+def test_enhanced_prior_loss_reaches_edge_and_prior_parameters():
+    graphs = [nx.path_graph(8), nx.cycle_graph(8), nx.watts_strogatz_graph(8, 4, 0.0)]
+    vectorizer = DegreeVectorizer.fit(graphs, require_connected=True)
+    x_np, targets_np = vectorizer.to_training_arrays(graphs)
+    model = build_degree_vae(
+        vectorizer,
+        latent_dim=4,
+        hidden_dim=24,
+        size_condition_dim=8,
+        edge_condition_dim=8,
+        use_edge_count_conditioning=True,
+        prior_condition_on_edges=True,
+        prior_components=2,
+    )
+    x = torch.as_tensor(x_np, dtype=torch.float32)
+    targets = {
+        key: torch.as_tensor(
+            value,
+            dtype=(
+                torch.long
+                if key in {"num_nodes", "num_nodes_count", "num_edges_count"}
+                else torch.float32
+            ),
+        )
+        for key, value in targets_np.items()
+    }
+    outputs, mu, logvar = model(
+        x, targets["num_nodes_count"], targets["num_edges_count"]
+    )
+    prior_z = model.sample_prior(
+        targets["num_nodes_count"], edge_counts=targets["num_edges_count"]
+    )
+    prior_outputs = model.decode(
+        prior_z, targets["num_nodes_count"], targets["num_edges_count"]
+    )
+    loss, metrics = degree_vae_loss(
+        outputs,
+        targets,
+        mu,
+        logvar,
+        weights={
+            "num_nodes": 1.0,
+            "num_edges": 2.0,
+            "degree": 5.0,
+            "degree_moment": 0.25,
+            "aggregate_prior_moment": 0.05,
+            "prior_distribution": 1.0,
+        },
+        prior_outputs=prior_outputs,
+        prior_distribution_sigma=0.2,
+    )
+    loss.backward()
+    assert np.isfinite(metrics["num_edges_loss"])
+    assert np.isfinite(metrics["prior_distribution_loss"])
+    assert np.isfinite(metrics["aggregate_prior_moment_loss"])
+    assert model.num_edges_head.weight.grad is not None
+    assert model.degree_head.weight.grad is not None
+    assert any(p.grad is not None for p in model.conditional_prior.parameters())
+
+
+def test_edge_conditioned_checkpoint_round_trip(tmp_path):
+    graphs = [nx.path_graph(8), nx.cycle_graph(8)]
+    vectorizer = DegreeVectorizer.fit(graphs, require_connected=True)
+    model = build_degree_vae(
+        vectorizer,
+        latent_dim=4,
+        hidden_dim=16,
+        use_edge_count_conditioning=True,
+        prior_condition_on_edges=True,
+    )
+    checkpoint = tmp_path / "edge_conditioned.pt"
+    save_degree_vae_checkpoint(checkpoint, model, vectorizer)
+    loaded, restored, _ = load_degree_vae_checkpoint(checkpoint, device="cpu")
+    assert loaded.architecture_version == 4
+    assert loaded.use_edge_count_conditioning
+    assert loaded.prior_condition_on_edges
+    outputs = loaded.sample_outputs(4, node_counts=[8, 8, 8, 8], device="cpu")
+    summaries = restored.outputs_to_summaries(
+        outputs,
+        rng=np.random.default_rng(9),
+        max_resample=100,
+        fallback="error",
+        postprocess_policy="reject_only",
+        exact_degree_sum_conditioning=True,
+    )
+    assert all(summary["num_edges"] * 2 == sum(summary["degree_sequence"]) for summary in summaries)

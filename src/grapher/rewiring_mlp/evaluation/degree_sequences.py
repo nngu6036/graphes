@@ -203,6 +203,32 @@ def evaluate_degree_sequence_sets(
     edge_reference = [sum(sequence) // 2 for sequence in reference]
     edge_candidate = [sum(sequence) // 2 for sequence in candidate]
 
+    def _mean_degree(sequence: Sequence[int]) -> float:
+        return float(sum(sequence) / len(sequence)) if sequence else 0.0
+
+    def _degree_variance(sequence: Sequence[int]) -> float:
+        return float(np.var(np.asarray(sequence, dtype=np.float64))) if sequence else 0.0
+
+    def _degree_second_moment(sequence: Sequence[int]) -> float:
+        if not sequence:
+            return 0.0
+        values = np.asarray(sequence, dtype=np.float64)
+        return float(np.mean(values * values))
+
+    def _wedge_count(sequence: Sequence[int]) -> int:
+        return int(sum(int(d) * (int(d) - 1) // 2 for d in sequence))
+
+    mean_degree_reference = [_mean_degree(sequence) for sequence in reference]
+    mean_degree_candidate = [_mean_degree(sequence) for sequence in candidate]
+    degree_variance_reference = [_degree_variance(sequence) for sequence in reference]
+    degree_variance_candidate = [_degree_variance(sequence) for sequence in candidate]
+    second_moment_reference = [_degree_second_moment(sequence) for sequence in reference]
+    second_moment_candidate = [_degree_second_moment(sequence) for sequence in candidate]
+    max_degree_reference = [max(sequence, default=0) for sequence in reference]
+    max_degree_candidate = [max(sequence, default=0) for sequence in candidate]
+    wedge_reference = [_wedge_count(sequence) for sequence in reference]
+    wedge_candidate = [_wedge_count(sequence) for sequence in candidate]
+
     candidate_keys = [tuple(sequence) for sequence in candidate]
     train_keys = set(tuple(sequence) for sequence in (train or []))
     reference_keys = set(tuple(sequence) for sequence in reference)
@@ -256,6 +282,52 @@ def evaluate_degree_sequence_sets(
         else 0.0,
         "reference_num_edges_std": float(np.std(edge_reference))
         if edge_reference
+        else 0.0,
+        "candidate_mean_degree_mean": float(np.mean(mean_degree_candidate))
+        if mean_degree_candidate
+        else 0.0,
+        "reference_mean_degree_mean": float(np.mean(mean_degree_reference))
+        if mean_degree_reference
+        else 0.0,
+        "mean_degree_mean_abs_error": abs(
+            float(np.mean(mean_degree_candidate)) - float(np.mean(mean_degree_reference))
+        )
+        if mean_degree_candidate and mean_degree_reference
+        else 0.0,
+        "candidate_degree_variance_mean": float(np.mean(degree_variance_candidate))
+        if degree_variance_candidate
+        else 0.0,
+        "reference_degree_variance_mean": float(np.mean(degree_variance_reference))
+        if degree_variance_reference
+        else 0.0,
+        "degree_variance_mean_abs_error": abs(
+            float(np.mean(degree_variance_candidate))
+            - float(np.mean(degree_variance_reference))
+        )
+        if degree_variance_candidate and degree_variance_reference
+        else 0.0,
+        "candidate_degree_second_moment_mean": float(np.mean(second_moment_candidate))
+        if second_moment_candidate
+        else 0.0,
+        "reference_degree_second_moment_mean": float(np.mean(second_moment_reference))
+        if second_moment_reference
+        else 0.0,
+        "degree_second_moment_mean_abs_error": abs(
+            float(np.mean(second_moment_candidate)) - float(np.mean(second_moment_reference))
+        )
+        if second_moment_candidate and second_moment_reference
+        else 0.0,
+        "max_degree_total_variation": discrete_total_variation(
+            max_degree_reference, max_degree_candidate
+        ),
+        "wedge_count_total_variation": discrete_total_variation(
+            wedge_reference, wedge_candidate
+        ),
+        "candidate_wedge_count_mean": float(np.mean(wedge_candidate))
+        if wedge_candidate
+        else 0.0,
+        "reference_wedge_count_mean": float(np.mean(wedge_reference))
+        if wedge_reference
         else 0.0,
     }
     if train is not None:

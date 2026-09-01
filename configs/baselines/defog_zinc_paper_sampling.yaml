@@ -1,8 +1,9 @@
 defog:
   # DeFoG paper-reported ZINC250k sampling configuration.
   #
-  # Note: GraphES may use a ZINC subset rather than the full ZINC250k
-  # benchmark, so results should be reported as a rerun on the GraphES split.
+  # GraphER now prepares the full HOG-Diff/GDSS ZINC250k benchmark rather
+  # than the former fixed 12k subset.  Reruns still use GraphER's explicit
+  # validation holdout from the native training complement.
 
   hydra_overrides:
     # Molecular experiments use 500 sampling steps in the DeFoG paper.
