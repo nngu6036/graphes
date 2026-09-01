@@ -45,3 +45,12 @@ accepted_connected_feasible_rate: 1.000000
 accepted_even_degree_sum_rate: 1.000000
 accepted_degree_bounds_rate: 1.000000
 constructor_success_rate: nan
+
+
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/ego_small.yaml
+
+  PYTHONPATH=src python scripts/evaluate_degree_generator.py \
+  --config configs/experiments/dhvae/ego_small.yaml \
+  --num-samples 10000 \
+  --skip-constructor-check

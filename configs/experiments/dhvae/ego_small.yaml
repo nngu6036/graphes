@@ -22,7 +22,7 @@ degree_generator:
   type: degree_histogram_vae
   checkpoint_path: outputs/degree_generators/ego_small/seed_42/checkpoint.pt
   device: auto
-  epochs: 600
+  epochs: 10000
   batch_size: 32
   latent_dim: 32
   hidden_dim: 128
