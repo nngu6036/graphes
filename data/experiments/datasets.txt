@@ -1,0 +1,6 @@
+PYTHONPATH=src python scripts/prepare_generic_dataset.py \
+  --dataset community_small
+
+
+PYTHONPATH=src python scripts/prepare_generic_dataset.py \
+  --dataset ego_small

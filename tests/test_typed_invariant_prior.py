@@ -15,6 +15,7 @@ from grapher.rewiring_mlp.molecular.typed_invariants import (
 )
 from grapher.models.dhvae_hh.typed_degree_vae import (
     TypedSignatureVectorizer,
+    _stable_multinomial_probabilities,
     build_typed_signature_vae,
     load_typed_signature_checkpoint,
     save_typed_signature_checkpoint,
@@ -62,6 +63,36 @@ def test_typed_vectorizer_json_round_trip_and_exact_construction() -> None:
     )
     assert diagnostics["success"]
     assert typed_invariant_matches_graph(realized, invariant)
+
+
+def test_typed_multinomial_probabilities_are_safe_after_float64_cast() -> None:
+    # This float32 decoder row reproduces NumPy's strict
+    # ``sum(pvals[:-1]) > 1`` failure with the previous sampler.
+    logits = np.asarray(
+        [
+            3.131406,
+            1.8464339,
+            -1.6557019,
+            9.069928,
+            4.059108,
+            -1.0170567,
+            -7.8859954,
+            1.8647577,
+            -5.7187004,
+            -8.57973,
+        ],
+        dtype=np.float32,
+    )
+    probabilities = _stable_multinomial_probabilities(logits)
+
+    assert probabilities.dtype == np.float64
+    assert np.all(np.isfinite(probabilities))
+    assert np.all(probabilities >= 0.0)
+    assert float(np.sum(probabilities[:-1], dtype=np.float64)) <= 1.0
+    assert np.isclose(float(np.sum(probabilities, dtype=np.float64)), 1.0)
+
+    counts = np.random.default_rng(7).multinomial(9, probabilities)
+    assert int(counts.sum()) == 9
 
 
 def test_typed_vae_checkpoint_and_feasible_decode(tmp_path) -> None:

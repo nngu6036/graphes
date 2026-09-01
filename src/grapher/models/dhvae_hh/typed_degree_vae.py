@@ -28,6 +28,57 @@ from grapher.utils.device import resolve_torch_device
 TYPED_CHECKPOINT_FORMAT = "typed_signature_histogram_vae_v1"
 
 
+def _stable_multinomial_probabilities(logits: np.ndarray) -> np.ndarray:
+    """Return a float64 probability vector safe for NumPy multinomial draws.
+
+    Torch decoder logits are usually float32. Normalizing them in float32 and then
+    passing the result to ``Generator.multinomial`` can fail because NumPy casts
+    the probabilities to float64 and strictly checks that ``sum(p[:-1]) <= 1``.
+    Tiny float32 round-off can therefore make an otherwise valid softmax fail.
+    Normalize in float64 and make the final entry the exact residual mass.
+    """
+
+    values = np.asarray(logits, dtype=np.float64).reshape(-1)
+    if values.size == 0:
+        raise ValueError("Typed signature logits must contain at least one class.")
+    if not np.all(np.isfinite(values)):
+        raise ValueError("Typed signature logits contain non-finite values.")
+
+    shifted = values - np.max(values)
+    probabilities = np.exp(shifted)
+    probabilities = np.clip(probabilities, 0.0, None)
+    total = float(np.sum(probabilities, dtype=np.float64))
+    if not np.isfinite(total) or total <= 0.0:
+        raise ValueError("Typed signature logits produced invalid probability mass.")
+    probabilities /= total
+
+    if probabilities.size == 1:
+        probabilities[0] = 1.0
+        return probabilities
+
+    # NumPy's multinomial samples the last category from the residual mass and
+    # validates only the sum of p[:-1]. Keep that prefix strictly below 1 and
+    # assign the last category from an exact float64 residual.
+    prefix = float(np.sum(probabilities[:-1], dtype=np.float64))
+    if prefix >= 1.0:
+        target = float(np.nextafter(1.0, 0.0))
+        if prefix > 0.0:
+            probabilities[:-1] *= target / prefix
+        prefix = float(np.sum(probabilities[:-1], dtype=np.float64))
+    probabilities[-1] = max(0.0, 1.0 - prefix)
+
+    # A final normalization protects against platform-specific summation drift.
+    total = float(np.sum(probabilities, dtype=np.float64))
+    probabilities /= total
+    prefix = float(np.sum(probabilities[:-1], dtype=np.float64))
+    if prefix > 1.0:
+        target = float(np.nextafter(1.0, 0.0))
+        probabilities[:-1] *= target / prefix
+        prefix = float(np.sum(probabilities[:-1], dtype=np.float64))
+        probabilities[-1] = 1.0 - prefix
+    return probabilities
+
+
 @dataclass(frozen=True)
 class TypedSignatureVocabulary:
     signatures: tuple[TypedDegreeSignature, ...]
@@ -235,8 +286,7 @@ class TypedSignatureVectorizer:
         node_counts = outputs["conditioned_num_nodes"].detach().cpu().numpy()
         summaries: list[dict[str, Any]] = []
         for row, node_count in zip(logits, node_counts):
-            probabilities = np.exp(row - np.max(row))
-            probabilities /= probabilities.sum()
+            probabilities = _stable_multinomial_probabilities(row)
             accepted: TypedInvariant | None = None
             first_errors: list[str] = []
             attempts = 0
