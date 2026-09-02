@@ -31,7 +31,7 @@ wget -O data/zinc/valid_idx_zinc250k.json \
 
   PYTHONPATH=src python scripts/prepare_zinc_dataset.py \
   --config configs/datasets/zinc.yaml \
-  --smiles-file data/zinc/zinc250k.csv \
+  --smiles-file data/zinc250k.csv \
   --smiles-column smiles \
   --test-indices-file data/zinc/valid_idx_zinc250k.json \
   --root outputs/datasets

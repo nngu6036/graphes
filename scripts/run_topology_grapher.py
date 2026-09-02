@@ -79,6 +79,59 @@ def _oracle_degree_summary(graph: nx.Graph) -> dict[str, Any]:
     }
 
 
+def _build_generation_degree_sampler(
+    degree_source: str,
+    degree_cfg: dict[str, Any],
+    *,
+    train_graphs: list[nx.Graph],
+    reference_graphs: list[nx.Graph],
+    seed: int,
+):
+    """Build the configured ordinary-degree sampler for generic generation.
+
+    ``test_oracle`` is handled per reference graph in the generation loop and
+    therefore intentionally returns ``None``. ``test_empirical`` samples only
+    from held-out degree sequences and is intended for an explicitly labelled
+    diagnostic, not unconditional main-table generation.
+    """
+
+    source = str(degree_source).lower()
+    cfg = dict(degree_cfg or {})
+    degree_type = str(cfg.get("type", "degree_histogram_vae")).lower()
+    if "typed" in degree_type:
+        raise ValueError(
+            "The generic topology stage requires the ordinary DH-VAE."
+        )
+
+    if source in {"learned", "degree_vae"}:
+        if str(cfg.get("postprocess_policy", "")).lower() != "reject_only":
+            raise ValueError(
+                "Learned topology generation requires degree_generator."
+                "postprocess_policy: reject_only."
+            )
+        if str(cfg.get("fallback", "")).lower() != "error":
+            raise ValueError(
+                "Learned topology generation requires degree_generator.fallback: error."
+            )
+        cfg["enabled"] = True
+        return build_degree_sampler(cfg, train_graphs, seed=seed)
+
+    if source in {"empirical", "train_empirical"}:
+        return EmpiricalDegreeSampler.fit_from_graphs(train_graphs, seed=seed)
+
+    if source == "test_empirical":
+        if not reference_graphs:
+            raise ValueError(
+                "generation.degree_source=test_empirical requires a non-empty test split."
+            )
+        return EmpiricalDegreeSampler.fit_from_graphs(reference_graphs, seed=seed)
+
+    if source in {"oracle", "test_oracle"}:
+        return None
+
+    raise ValueError(f"Unknown generation.degree_source: {source!r}")
+
+
 def _checkpoint_format(path: str | Path) -> str:
     checkpoint = torch.load(Path(path), map_location="cpu")
     if not isinstance(checkpoint, dict):
@@ -240,26 +293,13 @@ def main() -> None:
 
     degree_source = str(generation_cfg.get("degree_source", "learned")).lower()
     degree_cfg = dict(config.get("degree_generator", {}) or {})
-    degree_type = str(degree_cfg.get("type", "degree_histogram_vae")).lower()
-    if "typed" in degree_type:
-        raise ValueError("The generic topology stage requires the ordinary DH-VAE.")
-    degree_sampler = None
-    if degree_source in {"learned", "degree_vae"}:
-        if str(degree_cfg.get("postprocess_policy", "")).lower() != "reject_only":
-            raise ValueError(
-                "Learned topology generation requires degree_generator."
-                "postprocess_policy: reject_only."
-            )
-        if str(degree_cfg.get("fallback", "")).lower() != "error":
-            raise ValueError(
-                "Learned topology generation requires degree_generator.fallback: error."
-            )
-        degree_cfg["enabled"] = True
-        degree_sampler = build_degree_sampler(degree_cfg, train_graphs, seed=seed)
-    elif degree_source in {"empirical", "train_empirical"}:
-        degree_sampler = EmpiricalDegreeSampler.fit_from_graphs(train_graphs, seed=seed)
-    elif degree_source not in {"oracle", "test_oracle"}:
-        raise ValueError(f"Unknown generation.degree_source: {degree_source!r}")
+    degree_sampler = _build_generation_degree_sampler(
+        degree_source,
+        degree_cfg,
+        train_graphs=train_graphs,
+        reference_graphs=reference_graphs,
+        seed=seed,
+    )
 
     constructor_cfg = dict(config.get("constructor", {}) or {})
     if str(constructor_cfg.get("type", "havel_hakimi")).lower() != "havel_hakimi":
