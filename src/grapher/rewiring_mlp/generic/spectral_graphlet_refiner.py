@@ -25,6 +25,7 @@ from grapher.rewiring_mlp.generic.rewiring import (
     topology_state_key,
 )
 from grapher.rewiring_mlp.generic.spectral import (
+    batched_laplacian_eigenvalues,
     laplacian_eigenvalues,
     spectral_distance,
     spectral_scale,
@@ -48,6 +49,16 @@ class SpectralGraphletPrediction:
     clean_graphlet_probabilities: np.ndarray
     current_graphlet_logits: np.ndarray
     current_graphlet_probabilities: np.ndarray
+    graphlet_coordinate_mask: np.ndarray
+    trace: float
+    second_moment: float
+
+
+@dataclass(frozen=True)
+class DegreeConditionedSummaryPrediction:
+    clean_spectrum: np.ndarray
+    clean_graphlet_logits: np.ndarray
+    clean_graphlet_probabilities: np.ndarray
     graphlet_coordinate_mask: np.ndarray
     trace: float
     second_moment: float
@@ -252,6 +263,232 @@ def predict_clean_spectrum_and_graphlets(
     )
 
 
+@torch.no_grad()
+def predict_degree_conditioned_summary(
+    model: TopologySpectralGraphletTransformerPredictor,
+    graph: nx.Graph,
+    *,
+    graphlet_basis: TopologyGraphletBasis,
+    device: torch.device | str,
+    graphlet_logit_epsilon: float,
+) -> DegreeConditionedSummaryPrediction:
+    """Predict a target summary using only the graph's degree multiset.
+
+    ``graph`` is normally the raw HH realization.  Its adjacency is required by
+    the common batch container only for the exact trace 2m; the learned branch
+    itself reads sorted degrees, graph size, and masks only.
+    """
+
+    if not model.degree_summary_enabled:
+        raise ValueError("The loaded checkpoint has no degree-conditioned summary estimator.")
+    model.eval()
+    source_spectrum = laplacian_eigenvalues(graph)
+    source_prob, source_mask, _ = extract_topology_graphlet_simplex(
+        graph,
+        graphlet_basis=graphlet_basis,
+    )
+    source_logits = graphlet_simplex_to_clr(
+        source_prob,
+        graphlet_basis=graphlet_basis,
+        epsilon=graphlet_logit_epsilon,
+        coordinate_mask=source_mask,
+    )
+    example = TopologySpectralExample(
+        current_graph=graph,
+        time=0.0,
+        current_spectrum=source_spectrum.astype(np.float32),
+        source_spectrum=source_spectrum.astype(np.float32),
+        clean_spectrum_target=source_spectrum.astype(np.float32),
+        current_graphlet_probabilities=source_prob.astype(np.float32),
+        source_graphlet_probabilities=source_prob.astype(np.float32),
+        clean_graphlet_probabilities_target=source_prob.astype(np.float32),
+        current_graphlet_logits=source_logits.astype(np.float32),
+        source_graphlet_logits=source_logits.astype(np.float32),
+        clean_graphlet_logits_target=source_logits.astype(np.float32),
+        graphlet_coordinate_mask=source_mask.astype(np.bool_),
+    )
+    batch = collate_spectral_examples([example]).to(device)
+    outputs = model.degree_summary(batch)
+    n = graph.number_of_nodes()
+    spectrum = (
+        outputs["degree_clean_spectrum"][0, :n]
+        .detach()
+        .cpu()
+        .numpy()
+        .astype(np.float64)
+    )
+    logits = (
+        outputs["degree_clean_graphlet_logits"][0]
+        .detach()
+        .cpu()
+        .numpy()
+        .astype(np.float64)
+    )
+    probabilities = (
+        outputs["degree_clean_graphlet_probabilities"][0]
+        .detach()
+        .cpu()
+        .numpy()
+        .astype(np.float64)
+    )
+    trace, second = spectrum_moments(spectrum)
+    return DegreeConditionedSummaryPrediction(
+        clean_spectrum=spectrum,
+        clean_graphlet_logits=logits,
+        clean_graphlet_probabilities=probabilities,
+        graphlet_coordinate_mask=source_mask,
+        trace=trace,
+        second_moment=second,
+    )
+
+
+def enrich_graph_with_degree_summary(
+    graph: nx.Graph,
+    *,
+    target: DegreeConditionedSummaryPrediction,
+    graphlet_basis: TopologyGraphletBasis,
+    refiner_config: SpectralGraphletRefinerConfig | dict[str, Any],
+    device: torch.device | str = "cpu",
+    rng: np.random.Generator | None = None,
+    return_trace: bool = False,
+) -> nx.Graph | tuple[nx.Graph, list[dict[str, Any]]]:
+    """Move HH to the best same-degree realization matching predicted S(D).
+
+    This is a short, fixed-target pre-refinement stage.  Unlike the main
+    diffusion refiner it never refreshes a neural target: the degree-conditioned
+    summary is predicted once, then valid swaps greedily reduce its joint
+    spectral/graphlet energy.  The best visited state is returned as the base
+    graph for the main GraphER refinement.
+    """
+
+    cfg = (
+        refiner_config
+        if isinstance(refiner_config, SpectralGraphletRefinerConfig)
+        else SpectralGraphletRefinerConfig.from_dict(refiner_config)
+    )
+    generator = rng if rng is not None else np.random.default_rng(0)
+    current = normalize_topology_graph(graph)
+    initial_degrees = [int(current.degree(node)) for node in sorted(current.nodes())]
+    if current.number_of_nodes() > 1 and not nx.is_connected(current):
+        raise ValueError("Source enrichment requires a connected HH graph.")
+    current_prob, current_mask, current_counts = extract_topology_graphlet_simplex(
+        current,
+        graphlet_basis=graphlet_basis,
+    )
+    if not np.array_equal(current_mask, target.graphlet_coordinate_mask):
+        raise ValueError("Degree-summary target graphlet mask does not match HH graph size.")
+    visited = {topology_state_key(current)}
+    trace: list[dict[str, Any]] = []
+    best_graph = current.copy()
+    best_counts = {key: dict(values) for key, values in current_counts.items()}
+    best_energy = float("inf")
+
+    for step in range(max(int(cfg.steps), 0)):
+        progress = float(step / max(cfg.steps - 1, 1))
+        spectral_weight, graphlet_weight = cfg.guidance_weights_at(progress)
+        selected_row: dict[str, Any] | None = None
+        proposal_diag: dict[str, Any] = {}
+        budget_expansion = 0
+        while True:
+            proposal_budget, valid_budget = cfg.candidate_budgets_at(
+                progress,
+                plateau_expansion=budget_expansion,
+            )
+            candidates, candidate_graphs, proposal_diag = propose_valid_topology_swaps(
+                current,
+                proposal_budget=proposal_budget,
+                valid_candidate_budget=valid_budget,
+                preserve_connectivity=cfg.preserve_connectivity,
+                rng=generator,
+                excluded_states=visited if cfg.reject_revisited_states else None,
+            )
+            if not candidates:
+                break
+            prepared = prepare_spectral_graphlet_candidate_states(
+                current,
+                candidates,
+                candidate_graphs=candidate_graphs,
+                current_graphlet_counts=current_counts,
+                graphlet_basis=graphlet_basis,
+                config=cfg,
+                device=device,
+            )
+            rows = score_prepared_spectral_graphlet_candidates(
+                prepared,
+                graphlet_basis=graphlet_basis,
+                clean_spectrum=target.clean_spectrum,
+                next_spectrum_target=target.clean_spectrum,
+                clean_graphlet_logits=target.clean_graphlet_logits,
+                next_graphlet_logits_target=target.clean_graphlet_logits,
+                graphlet_coordinate_mask=current_mask,
+                spectral_weight=spectral_weight,
+                graphlet_weight=graphlet_weight,
+                config=cfg,
+            )
+            selected, _, _ = _select_row(rows, config=cfg, rng=generator)
+            if selected is not None:
+                selected_row = rows[selected]
+                break
+            if (
+                not cfg.expand_candidate_budget_on_plateau
+                or budget_expansion >= cfg.max_candidate_budget_expansions
+            ):
+                break
+            next_proposal, next_valid = cfg.candidate_budgets_at(
+                progress,
+                plateau_expansion=budget_expansion + 1,
+            )
+            if next_proposal == proposal_budget and next_valid == valid_budget:
+                break
+            budget_expansion += 1
+
+        if selected_row is None:
+            trace.append(
+                {
+                    "step": step,
+                    "accepted": False,
+                    "reason": "source_enrichment_plateau",
+                    "candidate_budget_expansions": budget_expansion,
+                    **proposal_diag,
+                }
+            )
+            break
+        candidate = selected_row["candidate_graph"]
+        if [int(candidate.degree(node)) for node in sorted(candidate.nodes())] != initial_degrees:
+            raise AssertionError("Source enrichment changed indexed degrees.")
+        current = candidate
+        current_counts = selected_row["candidate_graphlet_counts"]
+        current_mask = np.asarray(prepared["current_graphlet_mask"], dtype=np.bool_)
+        visited.add(topology_state_key(current))
+        energy = float(selected_row["candidate_clean_energy"])
+        if energy < best_energy:
+            best_energy = energy
+            best_graph = current.copy()
+            best_counts = {key: dict(values) for key, values in current_counts.items()}
+        trace.append(
+            {
+                "step": step,
+                "accepted": True,
+                "reason": "degree_summary_source_enrichment_swap",
+                "action": selected_row["action"],
+                "energy": energy,
+                "energy_improvement": float(selected_row["energy_improvement"]),
+                "spectral_gain": float(selected_row["spectral_gain"]),
+                "graphlet_gain": float(selected_row["graphlet_gain"]),
+                "candidate_budget_expansions": budget_expansion,
+                **proposal_diag,
+            }
+        )
+
+    # ``best_counts`` is intentionally retained above for debugging symmetry
+    # with current state tracking; the returned object remains a plain graph.
+    del best_counts
+    result = best_graph if cfg.return_best_state else current
+    if return_trace:
+        return result, trace
+    return result
+
+
 def _select_row(
     rows: Sequence[dict[str, Any]],
     *,
@@ -297,6 +534,7 @@ def prepare_spectral_graphlet_candidate_states(
     current_graphlet_counts: TopologyGraphletCounts,
     graphlet_basis: TopologyGraphletBasis,
     config: SpectralGraphletRefinerConfig,
+    device: torch.device | str = "cpu",
 ) -> dict[str, Any]:
     """Compute target-independent candidate summaries exactly once.
 
@@ -320,10 +558,15 @@ def prepare_spectral_graphlet_candidate_states(
         epsilon=config.graphlet_logit_epsilon,
         coordinate_mask=current_mask,
     )
+    candidate_list = [candidate_graphs[action] for action in candidates]
+    spectra = batched_laplacian_eigenvalues(
+        candidate_list,
+        device=device,
+        backend=config.candidate_spectrum_backend,
+        batch_size=config.candidate_spectrum_batch_size,
+    )
     prepared_rows: list[dict[str, Any]] = []
-    for action in candidates:
-        candidate = candidate_graphs[action]
-        spectrum = laplacian_eigenvalues(candidate)
+    for action, candidate, spectrum in zip(candidates, candidate_list, spectra):
         candidate_logits, candidate_prob, candidate_counts = (
             candidate_graphlet_logits_from_counts(
                 graph,
@@ -577,6 +820,7 @@ def refine_graph_with_spectral_graphlet_predictions(
     return_trace: bool = False,
     prediction_fn: Any | None = None,
     debug_context: str | None = None,
+    conditioning_graph: nx.Graph | None = None,
 ) -> nx.Graph | tuple[nx.Graph, list[dict[str, Any]]]:
     """Denoise global spectrum and local graphlet logits through valid swaps.
 
@@ -595,11 +839,21 @@ def refine_graph_with_spectral_graphlet_predictions(
         raise ValueError("Joint predictor graphlet widths do not match the configured graphlet basis.")
     generator = rng if rng is not None else np.random.default_rng(0)
     current = normalize_topology_graph(graph)
-    conditioning_graph = current.copy()
-    source_spectrum = laplacian_eigenvalues(conditioning_graph)
+    source_context = (
+        current.copy()
+        if conditioning_graph is None
+        else normalize_topology_graph(conditioning_graph)
+    )
+    if current.number_of_nodes() != source_context.number_of_nodes():
+        raise ValueError("Refinement base and conditioning HH graph must have equal size.")
+    if [int(current.degree(node)) for node in sorted(current.nodes())] != [
+        int(source_context.degree(node)) for node in sorted(source_context.nodes())
+    ]:
+        raise ValueError("Refinement base and conditioning HH graph must share indexed degrees.")
+    source_spectrum = laplacian_eigenvalues(source_context)
     source_probabilities, source_graphlet_mask, source_graphlet_counts = (
         extract_topology_graphlet_simplex(
-            conditioning_graph, graphlet_basis=graphlet_basis
+            source_context, graphlet_basis=graphlet_basis
         )
     )
     source_graphlet_logits = graphlet_simplex_to_clr(
@@ -611,13 +865,17 @@ def refine_graph_with_spectral_graphlet_predictions(
     if current.number_of_nodes() > 1 and not nx.is_connected(current):
         raise ValueError("Spectral+graphlet refinement requires a connected source graph.")
     initial_degrees = [int(current.degree(node)) for node in sorted(current.nodes())]
-    # The refinement starts from the same graph as the fixed source context,
-    # so reuse its exact count cache instead of recounting graphlets.  Every
-    # accepted candidate below then advances this cache with an exact local
-    # delta update.
-    current_counts: TopologyGraphletCounts = {
-        key: dict(counts) for key, counts in source_graphlet_counts.items()
-    }
+    if topology_state_key(current) == topology_state_key(source_context):
+        current_counts: TopologyGraphletCounts = {
+            key: dict(counts) for key, counts in source_graphlet_counts.items()
+        }
+    else:
+        _, current_mask, current_counts = extract_topology_graphlet_simplex(
+            current,
+            graphlet_basis=graphlet_basis,
+        )
+        if not np.array_equal(current_mask, source_graphlet_mask):
+            raise AssertionError("Equal-size base/source graphs must share graphlet masks.")
     visited = {topology_state_key(current)}
     trace: list[dict[str, Any]] = []
     prediction: SpectralGraphletPrediction | None = None
@@ -645,7 +903,7 @@ def refine_graph_with_spectral_graphlet_predictions(
                     time=prediction_time,
                     device=device,
                     graphlet_logit_epsilon=cfg.graphlet_logit_epsilon,
-                    conditioning_graph=conditioning_graph,
+                    conditioning_graph=source_context,
                     source_spectrum=source_spectrum,
                     source_graphlet_probabilities=source_probabilities,
                     source_graphlet_logits=source_graphlet_logits,
@@ -659,7 +917,7 @@ def refine_graph_with_spectral_graphlet_predictions(
                     time=prediction_time,
                     device=device,
                     graphlet_logit_epsilon=cfg.graphlet_logit_epsilon,
-                    conditioning_graph=conditioning_graph,
+                    conditioning_graph=source_context,
                     source_spectrum=source_spectrum,
                     source_graphlet_probabilities=source_probabilities,
                     source_graphlet_logits=source_graphlet_logits,
@@ -739,15 +997,129 @@ def refine_graph_with_spectral_graphlet_predictions(
             accepted_step=accepted_steps,
             total_steps=max(cfg.steps, 1),
         )
-        candidates, candidate_graphs, proposal_diagnostics = propose_valid_topology_swaps(
-            current,
-            proposal_budget=cfg.proposal_budget,
-            valid_candidate_budget=cfg.valid_candidate_budget,
-            preserve_connectivity=cfg.preserve_connectivity,
-            rng=generator,
-            excluded_states=visited if cfg.reject_revisited_states else None,
-        )
-        if not candidates:
+        # Start with a progress-adapted candidate budget.  If no improving
+        # action is found even after bridge-target expansion, optionally grow
+        # the search budget and retry before declaring a plateau.
+        candidate_budget_expansion = 0
+        expansion_count = 0
+        rows: list[dict[str, Any]] = []
+        selected: int | None = None
+        stop_probability = 1.0
+        probabilities: list[float] = []
+        next_spectrum = current_spectrum.copy()
+        next_graphlet_logits = current_logits.copy()
+        proposal_diagnostics: dict[str, Any] = {}
+        no_candidates = False
+
+        while True:
+            proposal_budget, valid_candidate_budget = cfg.candidate_budgets_at(
+                progress,
+                plateau_expansion=candidate_budget_expansion,
+            )
+            candidates, candidate_graphs, proposal_diagnostics = propose_valid_topology_swaps(
+                current,
+                proposal_budget=proposal_budget,
+                valid_candidate_budget=valid_candidate_budget,
+                preserve_connectivity=cfg.preserve_connectivity,
+                rng=generator,
+                excluded_states=visited if cfg.reject_revisited_states else None,
+            )
+            proposal_diagnostics = dict(proposal_diagnostics)
+            proposal_diagnostics["candidate_budget_expansions"] = int(
+                candidate_budget_expansion
+            )
+            if not candidates:
+                no_candidates = True
+                break
+
+            # Candidate graph structure is fixed throughout bridge-target
+            # expansion. Candidate spectra are evaluated in a single batched
+            # eigensolve and graphlet states use exact local deltas.
+            prepared_candidates = prepare_spectral_graphlet_candidate_states(
+                current,
+                candidates,
+                candidate_graphs=candidate_graphs,
+                current_graphlet_counts=current_counts,
+                graphlet_basis=graphlet_basis,
+                config=cfg,
+                device=device,
+            )
+
+            expansion_count = 0
+            while True:
+                next_spectrum = cfg.bridge.target(
+                    current_spectrum,
+                    prediction.clean_spectrum,
+                    spectral_mix,
+                )
+                next_graphlet_logits = cfg.graphlet_bridge.target(
+                    current_logits,
+                    prediction.clean_graphlet_logits,
+                    graphlet_mix,
+                )
+                rows = score_prepared_spectral_graphlet_candidates(
+                    prepared_candidates,
+                    graphlet_basis=graphlet_basis,
+                    clean_spectrum=prediction.clean_spectrum,
+                    next_spectrum_target=next_spectrum,
+                    clean_graphlet_logits=prediction.clean_graphlet_logits,
+                    next_graphlet_logits_target=next_graphlet_logits,
+                    graphlet_coordinate_mask=current_mask,
+                    spectral_weight=spectral_weight,
+                    graphlet_weight=graphlet_weight,
+                    config=cfg,
+                )
+                selected, stop_probability, probabilities = _select_row(
+                    rows,
+                    config=cfg,
+                    rng=generator,
+                )
+                if selected is not None:
+                    break
+                if (
+                    not cfg.expand_on_plateau
+                    or expansion_count >= cfg.max_plateau_expansions
+                    or (
+                        spectral_mix >= cfg.bridge_max_clean_mix - 1.0e-12
+                        and graphlet_mix >= cfg.graphlet_bridge_max_clean_mix - 1.0e-12
+                    )
+                ):
+                    break
+                spectral_mix = min(
+                    cfg.bridge_max_clean_mix,
+                    max(
+                        spectral_mix * cfg.plateau_expand_factor,
+                        spectral_mix + 1.0e-6,
+                    ),
+                )
+                graphlet_mix = min(
+                    cfg.graphlet_bridge_max_clean_mix,
+                    max(
+                        graphlet_mix * cfg.graphlet_plateau_expand_factor,
+                        graphlet_mix + 1.0e-6,
+                    ),
+                )
+                expansion_count += 1
+
+            if selected is not None:
+                break
+            if (
+                not cfg.expand_candidate_budget_on_plateau
+                or candidate_budget_expansion >= cfg.max_candidate_budget_expansions
+            ):
+                break
+            next_proposal, next_valid = cfg.candidate_budgets_at(
+                progress,
+                plateau_expansion=candidate_budget_expansion + 1,
+            )
+            if (
+                next_proposal == proposal_budget
+                and next_valid == valid_candidate_budget
+            ):
+                break
+            candidate_budget_expansion += 1
+
+        if no_candidates:
             trace.append(
                 {
                     "step": decision_step,
@@ -771,78 +1143,6 @@ def refine_graph_with_spectral_graphlet_predictions(
             )
             _debug_print(cfg, decision_step, prefix, "stop reason=no_valid_candidates")
             break
-
-        # Candidate graph structure is fixed throughout plateau expansion.
-        # Precompute each candidate spectrum and exact local-delta graphlet
-        # state once, then only rescore the cached summaries as the continuous
-        # bridge target moves toward the predicted clean endpoint.
-        prepared_candidates = prepare_spectral_graphlet_candidate_states(
-            current,
-            candidates,
-            candidate_graphs=candidate_graphs,
-            current_graphlet_counts=current_counts,
-            graphlet_basis=graphlet_basis,
-            config=cfg,
-        )
-
-        expansion_count = 0
-        rows: list[dict[str, Any]] = []
-        selected: int | None = None
-        stop_probability = 1.0
-        probabilities: list[float] = []
-        next_spectrum = current_spectrum.copy()
-        next_graphlet_logits = current_logits.copy()
-        while True:
-            next_spectrum = cfg.bridge.target(
-                current_spectrum,
-                prediction.clean_spectrum,
-                spectral_mix,
-            )
-            next_graphlet_logits = cfg.graphlet_bridge.target(
-                current_logits,
-                prediction.clean_graphlet_logits,
-                graphlet_mix,
-            )
-            rows = score_prepared_spectral_graphlet_candidates(
-                prepared_candidates,
-                graphlet_basis=graphlet_basis,
-                clean_spectrum=prediction.clean_spectrum,
-                next_spectrum_target=next_spectrum,
-                clean_graphlet_logits=prediction.clean_graphlet_logits,
-                next_graphlet_logits_target=next_graphlet_logits,
-                graphlet_coordinate_mask=current_mask,
-                spectral_weight=spectral_weight,
-                graphlet_weight=graphlet_weight,
-                config=cfg,
-            )
-            selected, stop_probability, probabilities = _select_row(
-                rows,
-                config=cfg,
-                rng=generator,
-            )
-            if selected is not None:
-                break
-            if (
-                not cfg.expand_on_plateau
-                or expansion_count >= cfg.max_plateau_expansions
-                or (
-                    spectral_mix >= cfg.bridge_max_clean_mix - 1.0e-12
-                    and graphlet_mix >= cfg.graphlet_bridge_max_clean_mix - 1.0e-12
-                )
-            ):
-                break
-            spectral_mix = min(
-                cfg.bridge_max_clean_mix,
-                max(spectral_mix * cfg.plateau_expand_factor, spectral_mix + 1.0e-6),
-            )
-            graphlet_mix = min(
-                cfg.graphlet_bridge_max_clean_mix,
-                max(
-                    graphlet_mix * cfg.graphlet_plateau_expand_factor,
-                    graphlet_mix + 1.0e-6,
-                ),
-            )
-            expansion_count += 1
 
         if cfg.debug_enabled and decision_step % cfg.debug_print_every == 0:
             current_graphlet_distance = graphlet_logit_distance(

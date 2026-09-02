@@ -550,6 +550,10 @@ def main() -> None:
         }
         if spectral_graphlet_mode:
             assert graphlet_basis is not None
+            source_enrichment_cfg = dict(config.get("source_enrichment", {}) or {})
+            degree_summary_cfg = dict(
+                source_enrichment_cfg.get("summary_estimator", {}) or {}
+            )
             model = TopologySpectralGraphletTransformerPredictor(
                 graphlet_block_widths=graphlet_basis.simplex_block_widths,
                 graphlet_dim=int(predictor_cfg.get("graphlet_dim", 256)),
@@ -557,6 +561,16 @@ def main() -> None:
                     predictor_cfg.get("graphlet_dropout", predictor_cfg.get("dropout", 0.05))
                 ),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
+                degree_summary_enabled=bool(
+                    degree_summary_cfg.get(
+                        "enabled", source_enrichment_cfg.get("enabled", False)
+                    )
+                ),
+                degree_summary_dim=int(degree_summary_cfg.get("hidden_dim", 256)),
+                degree_summary_layers=int(degree_summary_cfg.get("layers", 2)),
+                degree_summary_dropout=float(
+                    degree_summary_cfg.get("dropout", predictor_cfg.get("dropout", 0.05))
+                ),
                 **common_spectral_kwargs,
             ).to(device)
         else:

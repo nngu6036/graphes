@@ -22,6 +22,7 @@ from grapher.models.dhvae_hh.typed_constructor import (
 )
 from grapher.rewiring_mlp.attributed.spectral_graphlet_refiner import (
     AttributedSpectralGraphletRefinerConfig,
+    enrich_attributed_graph_with_invariant_summary,
     refine_attributed_graph_with_spectral_graphlet_diffusion,
 )
 from grapher.rewiring_mlp.attributed.spectral_model import (
@@ -401,6 +402,18 @@ def main() -> None:
     refiner_cfg = AttributedSpectralGraphletRefinerConfig.from_dict(
         dict(config.get("attributed_refiner", {}) or {})
     )
+    source_enrichment_cfg = dict(config.get("source_enrichment", {}) or {})
+    source_enrichment_enabled = bool(source_enrichment_cfg.get("enabled", False))
+    source_enrichment_refiner: AttributedSpectralGraphletRefinerConfig | None = None
+    if source_enrichment_enabled:
+        if not bool(getattr(model, "invariant_summary_enabled", False)):
+            raise ValueError(
+                "source_enrichment.enabled requires a checkpoint trained with "
+                "source_enrichment.summary_estimator.enabled: true."
+            )
+        source_enrichment_refiner = AttributedSpectralGraphletRefinerConfig.from_dict(
+            dict(source_enrichment_cfg.get("rewiring", {}) or {})
+        )
     print(
         "[GraphER/AttributedSpectralGraphlet] "
         f"debug={refiner_cfg.debug_enabled} steps={refiner_cfg.steps} "
@@ -411,9 +424,21 @@ def main() -> None:
         flush=True,
     )
 
+    if source_enrichment_enabled:
+        assert source_enrichment_refiner is not None
+        print(
+            "[GraphER/AttributedSpectralGraphlet] source_enrichment=hard_invariant_summary "
+            f"steps={source_enrichment_refiner.steps} "
+            f"proposal_budget={source_enrichment_refiner.proposal_budget} "
+            f"valid_candidate_budget={source_enrichment_refiner.valid_candidate_budget}",
+            flush=True,
+        )
+
     output_dir = ensure_dir(args.output_dir)
     source_graphs: list[nx.Graph] = []
+    enriched_base_graphs: list[nx.Graph] = []
     final_graphs: list[nx.Graph] = []
+    enrichment_traces: list[list[dict[str, Any]]] = []
     traces: list[list[dict[str, Any]]] = []
     graph_runtimes: list[float] = []
     attempts_per_graph: list[int] = []
@@ -479,12 +504,42 @@ def main() -> None:
                     rejection_reasons["rdkit_invalid_source"] += 1
                     continue
 
+                base_graph = source
+                enrichment_trace: list[dict[str, Any]] = []
+                if source_enrichment_enabled:
+                    assert source_enrichment_refiner is not None
+                    enrichment_rng = np.random.default_rng(
+                        np.random.SeedSequence([seed, graph_index, attempt, 3571])
+                    )
+                    base_graph, enrichment_trace = enrich_attributed_graph_with_invariant_summary(
+                        model,
+                        source,
+                        vocabulary=vocabulary,
+                        graphlet_basis=graphlet_basis,
+                        config=source_enrichment_refiner,
+                        device=model_device,
+                        rng=enrichment_rng,
+                        return_trace=True,
+                        debug_context=f"graph={graph_index + 1}/{num_generate}",
+                    )
+                    base_graph = _complete_molecular_aliases(
+                        base_graph,
+                        node_attribute=node_attribute,
+                        edge_attribute=edge_attribute,
+                    )
+                    if not attributed_rewiring_invariant_matches_graph(
+                        base_graph, indexed_source_rewiring_invariant
+                    ):
+                        raise AssertionError("Source enrichment changed the hard molecular invariant.")
+                    if base_graph.number_of_nodes() > 1 and not nx.is_connected(base_graph):
+                        raise AssertionError("Source enrichment returned a disconnected molecule.")
+
                 attempt_rng = np.random.default_rng(
                     np.random.SeedSequence([seed, graph_index, attempt, 7919])
                 )
                 refined, trace = refine_attributed_graph_with_spectral_graphlet_diffusion(
                     model,
-                    source,
+                    base_graph,
                     vocabulary=vocabulary,
                     graphlet_basis=graphlet_basis,
                     config=refiner_cfg,
@@ -492,6 +547,7 @@ def main() -> None:
                     rng=attempt_rng,
                     return_trace=True,
                     debug_context=f"graph={graph_index + 1}/{num_generate}",
+                    conditioning_graph=source,
                 )
                 refined = _complete_molecular_aliases(
                     refined,
@@ -527,7 +583,9 @@ def main() -> None:
                     continue
 
                 source_graphs.append(source)
+                enriched_base_graphs.append(base_graph)
                 final_graphs.append(refined)
+                enrichment_traces.append(enrichment_trace)
                 traces.append(trace)
                 graph_runtimes.append(float(time.perf_counter() - graph_started))
                 attempts_per_graph.append(attempt)
@@ -548,6 +606,9 @@ def main() -> None:
                         edge_attribute=edge_attribute,
                     )
                 )
+                enrichment_accepted = sum(
+                    bool(row.get("accepted")) for row in enrichment_trace
+                )
                 accepted = sum(bool(row.get("accepted")) for row in trace)
                 prediction_calls = max(
                     (int(row.get("prediction_calls", 0)) for row in trace), default=0
@@ -555,7 +616,8 @@ def main() -> None:
                 print(
                     f"graph={graph_index + 1}/{num_generate} guidance=attributed_spectral_graphlet "
                     f"n={refined.number_of_nodes()} m={refined.number_of_edges()} "
-                    f"accepted_steps={accepted} prediction_calls={prediction_calls} "
+                    f"enrichment_steps={enrichment_accepted} accepted_steps={accepted} "
+                    f"prediction_calls={prediction_calls} "
                     f"source_valid={source_is_valid} final_valid={final_is_valid} "
                     f"attempts={attempt} runtime={graph_runtimes[-1]:.3f}s",
                     flush=True,
@@ -585,6 +647,10 @@ def main() -> None:
             _atomic_pickle(
                 source_graphs, output_dir / "typed_source_graphs.partial.pkl"
             )
+            if source_enrichment_enabled:
+                _atomic_pickle(
+                    enriched_base_graphs, output_dir / "enriched_base_graphs.partial.pkl"
+                )
             _atomic_json(
                 _partial_report(
                     generated=len(final_graphs),
@@ -600,7 +666,11 @@ def main() -> None:
             )
 
     trace_rows = [row for trace in traces for row in trace]
+    enrichment_trace_rows = [row for trace in enrichment_traces for row in trace]
     accepted_rows = [row for row in trace_rows if bool(row.get("accepted"))]
+    enrichment_accepted_rows = [
+        row for row in enrichment_trace_rows if bool(row.get("accepted"))
+    ]
     source_validity = [is_valid_molecular_graph(graph) for graph in source_graphs]
     final_validity = [is_valid_molecular_graph(graph) for graph in final_graphs]
     rewiring_invariant_preservation = [
@@ -640,7 +710,17 @@ def main() -> None:
         "pipeline_mode": "attributed",
         "guidance_mode": "dual_spectral_attributed_graphlet",
         "invariant_source": invariant_source,
+        "source_enrichment_enabled": bool(source_enrichment_enabled),
         "num_generated": len(final_graphs),
+        "mean_source_enrichment_accepted_steps": float(
+            np.mean([sum(bool(row.get("accepted")) for row in trace) for trace in enrichment_traces])
+        ) if enrichment_traces else 0.0,
+        "mean_source_enrichment_candidate_pass_rate": _mean(
+            enrichment_trace_rows, "candidate_pass_rate"
+        ),
+        "mean_source_enrichment_energy_improvement": _mean(
+            enrichment_accepted_rows, "energy_improvement"
+        ),
         "rewiring_invariant_preservation_rate": float(
             np.mean(rewiring_invariant_preservation)
         ),
@@ -737,6 +817,8 @@ def main() -> None:
     }
 
     save_pickle(source_graphs, output_dir / "typed_source_graphs.pkl")
+    if source_enrichment_enabled:
+        save_pickle(enriched_base_graphs, output_dir / "enriched_base_graphs.pkl")
     save_pickle(final_graphs, output_dir / "molecular_graphs.pkl")
     save_pickle(final_graphs, output_dir / "generated_graphs.pkl")
     valid_smiles = [
@@ -774,6 +856,7 @@ def main() -> None:
         "diagnostics": diagnostics,
         "constructor_records": constructor_records,
         "source_metadata": source_metadata,
+        "source_enrichment_traces": enrichment_traces if store_traces else [],
         "traces": traces if store_traces else [],
         "seed": seed,
         "config": config,

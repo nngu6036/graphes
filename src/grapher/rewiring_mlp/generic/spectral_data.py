@@ -177,7 +177,13 @@ def collate_spectral_examples(
         )
         graph_sizes[index] = float(n)
         times[index] = float(np.clip(example.time, 0.0, 1.0))
-        graph_spectrum = laplacian_eigenvalues(graph).astype(np.float32)
+        # Most diffusion examples already carry both current and source
+        # spectra.  Avoid recomputing the fixed conditioning-graph spectrum in
+        # every collation call; fall back to an eigensolve only for legacy
+        # examples that omit one of those fields.
+        graph_spectrum = None
+        if example.current_spectrum is None or example.source_spectrum is None:
+            graph_spectrum = laplacian_eigenvalues(graph).astype(np.float32)
         current = (
             graph_spectrum
             if example.current_spectrum is None
@@ -1024,6 +1030,226 @@ def _resolve_spectral_diffusion_endpoints(
     return source, target, metadata
 
 
+@dataclass(frozen=True)
+class TopologySpectralDiffusionEndpoint:
+    source: nx.Graph
+    target: nx.Graph
+    metadata: dict[str, Any]
+    source_spectrum: np.ndarray
+    clean_spectrum: np.ndarray
+    spectral_scale: float
+    source_graphlet_probabilities: np.ndarray | None = None
+    clean_graphlet_probabilities: np.ndarray | None = None
+    source_graphlet_logits: np.ndarray | None = None
+    clean_graphlet_logits: np.ndarray | None = None
+    graphlet_coordinate_mask: np.ndarray | None = None
+    spectral_endpoint_distance: float = 0.0
+
+
+def _prepare_spectral_diffusion_endpoint(
+    raw_item: nx.Graph | TopologyTrainingPair,
+    *,
+    source_config: dict[str, Any],
+    spectral_config: dict[str, Any],
+    graphlet_basis: TopologyGraphletBasis | None,
+    graphlet_logit_epsilon: float,
+    require_same_degree_sequence: bool,
+    rng: np.random.Generator,
+) -> TopologySpectralDiffusionEndpoint:
+    source, target, metadata = _resolve_spectral_diffusion_endpoints(
+        raw_item,
+        source_config=source_config,
+        require_same_degree_sequence=require_same_degree_sequence,
+        rng=rng,
+    )
+    source_spectrum = laplacian_eigenvalues(source)
+    clean_spectrum = laplacian_eigenvalues(target)
+    scale = spectral_scale(
+        source,
+        mode=str(spectral_config.get("normalization", "mean_degree")),
+    )
+
+    source_prob = source_logits = clean_prob = clean_logits = graphlet_mask = None
+    if graphlet_basis is not None:
+        source_prob, source_mask, _ = extract_topology_graphlet_simplex(
+            source,
+            graphlet_basis=graphlet_basis,
+        )
+        clean_prob, clean_mask, _ = extract_topology_graphlet_simplex(
+            target,
+            graphlet_basis=graphlet_basis,
+        )
+        if not np.array_equal(source_mask, clean_mask):
+            raise AssertionError(
+                "Equal-size source and clean graphs must share graphlet coordinate masks."
+            )
+        graphlet_mask = source_mask
+        source_logits = graphlet_simplex_to_clr(
+            source_prob,
+            graphlet_basis=graphlet_basis,
+            epsilon=float(graphlet_logit_epsilon),
+            coordinate_mask=graphlet_mask,
+        )
+        clean_logits = graphlet_simplex_to_clr(
+            clean_prob,
+            graphlet_basis=graphlet_basis,
+            epsilon=float(graphlet_logit_epsilon),
+            coordinate_mask=graphlet_mask,
+        )
+
+    return TopologySpectralDiffusionEndpoint(
+        source=source,
+        target=target,
+        metadata=dict(metadata),
+        source_spectrum=source_spectrum,
+        clean_spectrum=clean_spectrum,
+        spectral_scale=float(scale),
+        source_graphlet_probabilities=source_prob,
+        clean_graphlet_probabilities=clean_prob,
+        source_graphlet_logits=source_logits,
+        clean_graphlet_logits=clean_logits,
+        graphlet_coordinate_mask=graphlet_mask,
+        spectral_endpoint_distance=spectral_distance(
+            source_spectrum,
+            clean_spectrum,
+            metric=str(spectral_config.get("distance", "rmse")),
+            scale=scale,
+            low_frequency_weight=float(
+                spectral_config.get("low_frequency_weight", 1.0)
+            ),
+            low_frequency_cutoff=int(
+                spectral_config.get("low_frequency_cutoff", 0)
+            ),
+        ),
+    )
+
+
+def _sample_spectral_diffusion_endpoint_examples(
+    endpoint: TopologySpectralDiffusionEndpoint,
+    *,
+    diffusion_config: dict[str, Any],
+    graphlet_basis: TopologyGraphletBasis | None,
+    seed: int,
+) -> tuple[list[TopologySpectralExample], dict[str, Any]]:
+    diff_values = dict(diffusion_config or {})
+    diff_cfg = SummaryDiffusionConfig.from_dict(diff_values)
+    rng = np.random.default_rng(int(seed))
+    samples_per_graph = max(int(diff_values.get("samples_per_graph", 32)), 1)
+    paths_per_graph = max(int(diff_values.get("paths_per_graph", 1)), 1)
+    spectral_noise_rms: list[float] = []
+    graphlet_noise_rms: list[float] = []
+    examples: list[TopologySpectralExample] = []
+
+    for path in range(paths_per_graph):
+        progresses = diff_cfg.sample_progresses(samples_per_graph, rng=rng)
+        for local_index, progress in enumerate(progresses):
+            current_spectrum, spec_diag = sample_spectral_bridge_marginal(
+                endpoint.source_spectrum,
+                endpoint.clean_spectrum,
+                progress=float(progress),
+                sigma=diff_cfg.spectral_sigma,
+                scale=endpoint.spectral_scale,
+                preserve_trace=diff_cfg.preserve_spectral_trace,
+                fix_lambda1=diff_cfg.fix_spectral_lambda1,
+                schedule=diff_cfg,
+                rng=rng,
+            )
+            spectral_noise_rms.append(float(spec_diag["noise_rms"]))
+
+            current_prob = current_logits = None
+            if graphlet_basis is not None:
+                assert endpoint.source_graphlet_logits is not None
+                assert endpoint.clean_graphlet_logits is not None
+                assert endpoint.graphlet_coordinate_mask is not None
+                current_logits, graph_diag = sample_graphlet_clr_bridge_marginal(
+                    endpoint.source_graphlet_logits,
+                    endpoint.clean_graphlet_logits,
+                    progress=float(progress),
+                    sigma=diff_cfg.graphlet_sigma,
+                    graphlet_basis=graphlet_basis,
+                    coordinate_mask=endpoint.graphlet_coordinate_mask,
+                    schedule=diff_cfg,
+                    rng=rng,
+                )
+                current_prob = graphlet_clr_to_simplex(
+                    current_logits,
+                    graphlet_basis=graphlet_basis,
+                    coordinate_mask=endpoint.graphlet_coordinate_mask,
+                )
+                graphlet_noise_rms.append(float(graph_diag["noise_rms"]))
+
+            examples.append(
+                TopologySpectralExample(
+                    current_graph=endpoint.source,
+                    time=float(progress),
+                    current_spectrum=current_spectrum.astype(np.float32),
+                    source_spectrum=endpoint.source_spectrum.astype(np.float32),
+                    clean_spectrum_target=endpoint.clean_spectrum.astype(np.float32),
+                    current_graphlet_probabilities=(
+                        None if current_prob is None else current_prob.astype(np.float32)
+                    ),
+                    source_graphlet_probabilities=(
+                        None
+                        if endpoint.source_graphlet_probabilities is None
+                        else endpoint.source_graphlet_probabilities.astype(np.float32)
+                    ),
+                    clean_graphlet_probabilities_target=(
+                        None
+                        if endpoint.clean_graphlet_probabilities is None
+                        else endpoint.clean_graphlet_probabilities.astype(np.float32)
+                    ),
+                    current_graphlet_logits=(
+                        None if current_logits is None else current_logits.astype(np.float32)
+                    ),
+                    source_graphlet_logits=(
+                        None
+                        if endpoint.source_graphlet_logits is None
+                        else endpoint.source_graphlet_logits.astype(np.float32)
+                    ),
+                    clean_graphlet_logits_target=(
+                        None
+                        if endpoint.clean_graphlet_logits is None
+                        else endpoint.clean_graphlet_logits.astype(np.float32)
+                    ),
+                    graphlet_coordinate_mask=(
+                        None
+                        if endpoint.graphlet_coordinate_mask is None
+                        else endpoint.graphlet_coordinate_mask.astype(np.bool_)
+                    ),
+                    base_generator=str(endpoint.metadata["base_generator"]),
+                    source_index=int(endpoint.metadata["source_index"]),
+                    target_index=int(endpoint.metadata["target_index"]),
+                    matching_cost=float(endpoint.metadata["matching_cost"]),
+                    trajectory_id=path,
+                    step=local_index,
+                )
+            )
+
+    diagnostics = {
+        "format": "summary_diffusion_training_states_v1",
+        "training_state_source": "continuous_summary_diffusion",
+        "rewiring_used_for_training_states": False,
+        "num_graphs": 1,
+        "num_paths": paths_per_graph,
+        "num_examples": len(examples),
+        "samples_per_graph": samples_per_graph,
+        "paths_per_graph": paths_per_graph,
+        "bridge": diff_cfg.bridge,
+        "graphlet_bridge": diff_cfg.resolved_graphlet_bridge,
+        "schedule": diff_cfg.schedule,
+        "spectral_sigma": diff_cfg.spectral_sigma,
+        "graphlet_sigma": diff_cfg.graphlet_sigma if graphlet_basis is not None else None,
+        "preserve_spectral_trace": diff_cfg.preserve_spectral_trace,
+        "fix_spectral_lambda1": diff_cfg.fix_spectral_lambda1,
+        "mean_spectral_noise_rms": float(np.mean(spectral_noise_rms)) if spectral_noise_rms else 0.0,
+        "mean_graphlet_noise_rms": float(np.mean(graphlet_noise_rms)) if graphlet_noise_rms else 0.0,
+        "mean_endpoint_spectral_discrepancy": float(endpoint.spectral_endpoint_distance),
+        "source_modes": [str(endpoint.metadata["source_mode"])],
+        "base_generators": [str(endpoint.metadata["base_generator"])],
+    }
+    return examples, diagnostics
+
+
 def build_spectral_diffusion_examples(
     graphs: Sequence[nx.Graph | TopologyTrainingPair],
     *,
@@ -1248,6 +1474,33 @@ class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset)
         self.shuffle_graphs = bool(shuffle_graphs)
         self.epoch = 0
         self.last_diagnostics: list[dict[str, Any]] = []
+        requested_cache = bool(self.diffusion_config.get("cache_endpoints", True))
+        # Structural source randomization intentionally changes the HH
+        # realization, so only cache when source_randomization_steps=0.  A
+        # random relabel alone is harmless because all endpoint summaries are
+        # permutation invariant and the graph encoder pools equivariantly.
+        self.cache_endpoints = requested_cache and int(
+            self.source_config.get("source_randomization_steps", 0)
+        ) == 0
+        self._endpoint_cache: tuple[TopologySpectralDiffusionEndpoint, ...] | None = None
+        if self.cache_endpoints:
+            require_same_degree_sequence = bool(
+                self.spectral_config.get("require_same_degree_sequence", True)
+            )
+            prepared: list[TopologySpectralDiffusionEndpoint] = []
+            for graph_index, raw_item in enumerate(self.graphs):
+                prepared.append(
+                    _prepare_spectral_diffusion_endpoint(
+                        raw_item,
+                        source_config=self.source_config,
+                        spectral_config=self.spectral_config,
+                        graphlet_basis=self.graphlet_basis,
+                        graphlet_logit_epsilon=self.graphlet_logit_epsilon,
+                        require_same_degree_sequence=require_same_degree_sequence,
+                        rng=np.random.default_rng(self.seed + 10_007 * graph_index),
+                    )
+                )
+            self._endpoint_cache = tuple(prepared)
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
@@ -1272,20 +1525,33 @@ class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset)
         if worker is None:
             self.last_diagnostics = []
         for position, graph_index in enumerate(indices):
-            examples, diagnostics = build_spectral_diffusion_examples(
-                [self.graphs[int(graph_index)]],
-                diffusion_config=self.diffusion_config,
-                source_config=self.source_config,
-                spectral_config=self.spectral_config,
-                graphlet_basis=self.graphlet_basis,
-                graphlet_logit_epsilon=self.graphlet_logit_epsilon,
-                seed=(
-                    self.seed
-                    + 1_000_003 * self.epoch
-                    + 10_007 * int(graph_index)
-                    + position
-                ),
+            sample_seed = (
+                self.seed
+                + 1_000_003 * self.epoch
+                + 10_007 * int(graph_index)
+                + position
             )
+            if self._endpoint_cache is not None:
+                examples, diagnostics = _sample_spectral_diffusion_endpoint_examples(
+                    self._endpoint_cache[int(graph_index)],
+                    diffusion_config=self.diffusion_config,
+                    graphlet_basis=self.graphlet_basis,
+                    seed=sample_seed,
+                )
+                diagnostics = dict(diagnostics)
+                diagnostics["endpoint_cache"] = True
+            else:
+                examples, diagnostics = build_spectral_diffusion_examples(
+                    [self.graphs[int(graph_index)]],
+                    diffusion_config=self.diffusion_config,
+                    source_config=self.source_config,
+                    spectral_config=self.spectral_config,
+                    graphlet_basis=self.graphlet_basis,
+                    graphlet_logit_epsilon=self.graphlet_logit_epsilon,
+                    seed=sample_seed,
+                )
+                diagnostics = dict(diagnostics)
+                diagnostics["endpoint_cache"] = False
             if worker is None:
                 self.last_diagnostics.append(diagnostics)
             yield from examples

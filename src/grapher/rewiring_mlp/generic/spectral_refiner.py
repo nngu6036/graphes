@@ -15,6 +15,7 @@ from grapher.rewiring_mlp.generic.rewiring import (
 )
 from grapher.rewiring_mlp.generic.spectral import (
     SpectralBridgeSchedule,
+    batched_laplacian_eigenvalues,
     laplacian_eigenvalues,
     spectral_distance,
     spectral_scale,
@@ -47,6 +48,22 @@ class SpectralRefinerConfig:
     time_horizon: int | None = None
     proposal_budget: int = 128
     valid_candidate_budget: int = 32
+    # Candidate search can start cheaply and grow only as refinement becomes
+    # harder.  The top-level proposal/valid budgets remain hard maxima.
+    adaptive_candidate_budget: bool = False
+    adaptive_proposal_initial: int = 128
+    adaptive_proposal_final: int = 128
+    adaptive_valid_initial: int = 32
+    adaptive_valid_final: int = 32
+    adaptive_budget_schedule: str = "linear"
+    adaptive_budget_power: float = 1.0
+    expand_candidate_budget_on_plateau: bool = False
+    candidate_budget_plateau_factor: float = 2.0
+    max_candidate_budget_expansions: int = 0
+    # Candidate spectra are naturally batchable because all candidate graphs
+    # in one decision have the same order.
+    candidate_spectrum_backend: str = "auto"
+    candidate_spectrum_batch_size: int = 0
     preserve_connectivity: bool = True
     selection: str = "greedy"
     temperature: float = 0.1
@@ -129,6 +146,40 @@ class SpectralRefinerConfig:
             )
         return max(1, int(np.floor(value + 0.5)))
 
+    def candidate_budgets_at(
+        self,
+        progress: float,
+        *,
+        plateau_expansion: int = 0,
+    ) -> tuple[int, int]:
+        """Return proposal/valid budgets for one refinement decision."""
+
+        if not self.adaptive_candidate_budget:
+            return int(self.proposal_budget), int(self.valid_candidate_budget)
+        p = float(np.clip(progress, 0.0, 1.0))
+        if self.adaptive_budget_schedule == "cosine":
+            shaped = 0.5 - 0.5 * np.cos(np.pi * p)
+        elif self.adaptive_budget_schedule == "power":
+            shaped = p ** float(self.adaptive_budget_power)
+        else:
+            shaped = p
+        proposal = self.adaptive_proposal_initial + (
+            self.adaptive_proposal_final - self.adaptive_proposal_initial
+        ) * shaped
+        valid = self.adaptive_valid_initial + (
+            self.adaptive_valid_final - self.adaptive_valid_initial
+        ) * shaped
+        factor = float(self.candidate_budget_plateau_factor) ** max(
+            int(plateau_expansion), 0
+        )
+        proposal = int(np.ceil(proposal * factor))
+        valid = int(np.ceil(valid * factor))
+        if self.proposal_budget > 0:
+            proposal = min(proposal, int(self.proposal_budget))
+        if self.valid_candidate_budget > 0:
+            valid = min(valid, int(self.valid_candidate_budget))
+        return max(proposal, 1), max(valid, 1)
+
     @classmethod
     def from_dict(
         cls,
@@ -190,6 +241,7 @@ class SpectralRefinerConfig:
             )
 
         debug = dict(values.get("debug", {}) or {})
+        candidate_search = dict(values.get("candidate_search", {}) or {})
         raw_time_horizon = values.get("time_horizon")
         config = cls(
             steps=int(values.get("steps", 24)),
@@ -198,6 +250,38 @@ class SpectralRefinerConfig:
             ),
             proposal_budget=proposal_budget,
             valid_candidate_budget=valid_budget,
+            adaptive_candidate_budget=bool(candidate_search.get("adaptive", False)),
+            adaptive_proposal_initial=int(
+                candidate_search.get("initial_proposal_budget", proposal_budget)
+            ),
+            adaptive_proposal_final=int(
+                candidate_search.get("final_proposal_budget", proposal_budget)
+            ),
+            adaptive_valid_initial=int(
+                candidate_search.get("initial_valid_candidate_budget", valid_budget)
+            ),
+            adaptive_valid_final=int(
+                candidate_search.get("final_valid_candidate_budget", valid_budget)
+            ),
+            adaptive_budget_schedule=str(
+                candidate_search.get("schedule", "linear")
+            ).lower(),
+            adaptive_budget_power=float(candidate_search.get("power", 1.0)),
+            expand_candidate_budget_on_plateau=bool(
+                candidate_search.get("expand_on_plateau", False)
+            ),
+            candidate_budget_plateau_factor=float(
+                candidate_search.get("plateau_expand_factor", 2.0)
+            ),
+            max_candidate_budget_expansions=int(
+                candidate_search.get("max_plateau_expansions", 0)
+            ),
+            candidate_spectrum_backend=str(
+                candidate_search.get("spectrum_backend", "auto")
+            ).lower(),
+            candidate_spectrum_batch_size=int(
+                candidate_search.get("spectrum_batch_size", 0)
+            ),
             preserve_connectivity=bool(values.get("preserve_connectivity", True)),
             selection=str(values.get("selection", "greedy")).lower(),
             temperature=float(values.get("temperature", 0.1)),
@@ -253,6 +337,27 @@ class SpectralRefinerConfig:
             raise ValueError("topology_refiner.time_horizon must be positive.")
         if config.proposal_budget == 0 or config.valid_candidate_budget == 0:
             raise ValueError("Topology proposal budgets must be non-zero.")
+        adaptive_values = [
+            config.adaptive_proposal_initial,
+            config.adaptive_proposal_final,
+            config.adaptive_valid_initial,
+            config.adaptive_valid_final,
+        ]
+        if config.adaptive_candidate_budget and any(value <= 0 for value in adaptive_values):
+            raise ValueError("Adaptive candidate budgets must be positive.")
+        if config.adaptive_budget_schedule not in {"linear", "cosine", "power"}:
+            raise ValueError("candidate_search.schedule must be linear, cosine, or power.")
+        if config.adaptive_budget_power <= 0.0 or not np.isfinite(config.adaptive_budget_power):
+            raise ValueError("candidate_search.power must be finite and positive.")
+        if (
+            config.expand_candidate_budget_on_plateau
+            and config.candidate_budget_plateau_factor <= 1.0
+        ):
+            raise ValueError("candidate_search.plateau_expand_factor must exceed 1.")
+        if config.max_candidate_budget_expansions < 0:
+            raise ValueError("candidate_search.max_plateau_expansions must be nonnegative.")
+        if config.candidate_spectrum_backend not in {"auto", "torch", "numpy"}:
+            raise ValueError("candidate_search.spectrum_backend must be auto, torch, or numpy.")
         if config.selection not in {"greedy", "argmax", "softmax", "sample"}:
             raise ValueError("Spectral topology selection must be greedy or softmax.")
         if config.temperature <= 0.0:
@@ -383,6 +488,7 @@ def score_spectral_candidates(
     next_spectrum_target: np.ndarray,
     config: SpectralRefinerConfig,
     candidate_graphs: dict[Action, nx.Graph],
+    device: torch.device | str = "cpu",
 ) -> list[dict[str, Any]]:
     current_spectrum = laplacian_eigenvalues(graph)
     scale = spectral_scale(graph, mode=config.normalization)
@@ -402,10 +508,15 @@ def score_spectral_candidates(
         low_frequency_weight=config.low_frequency_weight,
         low_frequency_cutoff=config.low_frequency_cutoff,
     )
+    candidate_list = [candidate_graphs[action] for action in candidates]
+    spectra = batched_laplacian_eigenvalues(
+        candidate_list,
+        device=device,
+        backend=config.candidate_spectrum_backend,
+        batch_size=config.candidate_spectrum_batch_size,
+    )
     rows: list[dict[str, Any]] = []
-    for action in candidates:
-        candidate = candidate_graphs[action]
-        spectrum = laplacian_eigenvalues(candidate)
+    for action, candidate, spectrum in zip(candidates, candidate_list, spectra):
         candidate_local = spectral_distance(
             spectrum,
             next_spectrum_target,
@@ -730,6 +841,7 @@ def refine_graph_with_spectral_predictions(
                 next_spectrum_target=next_target,
                 config=cfg,
                 candidate_graphs=candidate_graphs,
+                device=device,
             )
             selected, stop_probability, probabilities = _select_row(
                 rows,

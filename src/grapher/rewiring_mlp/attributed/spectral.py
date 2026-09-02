@@ -4,6 +4,7 @@ from typing import Any, Mapping, Sequence
 
 import networkx as nx
 import numpy as np
+import torch
 
 from grapher.rewiring_mlp.generic.spectral import spectral_distance
 from grapher.rewiring_mlp.molecular.constraints import bond_order
@@ -73,6 +74,82 @@ def attributed_laplacian_spectra(
         ],
         axis=0,
     )
+
+
+
+
+def batched_attributed_laplacian_spectra(
+    graphs: Sequence[nx.Graph],
+    *,
+    edge_attribute: str = "bond_type",
+    device: str | torch.device = "cpu",
+    backend: str = "auto",
+    batch_size: int | None = None,
+) -> list[np.ndarray]:
+    """Return topology/bond-weighted spectra for an equal-size candidate batch.
+
+    Candidate molecules in one rewiring decision have identical node counts.
+    Stacking both Laplacian channels lets NumPy or PyTorch solve all symmetric
+    eigenproblems in batches instead of dispatching ``eigvalsh`` twice per
+    candidate from Python.  ``auto`` selects CUDA PyTorch when available and
+    otherwise falls back to NumPy.
+    """
+
+    items = [normalize_attributed_graph(graph) for graph in graphs]
+    if not items:
+        return []
+    n = items[0].number_of_nodes()
+    if any(graph.number_of_nodes() != n for graph in items):
+        raise ValueError("Batched attributed spectra require equal graph sizes.")
+    if n == 0:
+        return [np.zeros((2, 0), dtype=np.float64) for _ in items]
+
+    weights = np.zeros((len(items), 2, n, n), dtype=np.float64)
+    for graph_index, graph in enumerate(items):
+        for u, v, data in graph.edges(data=True):
+            u = int(u)
+            v = int(v)
+            weights[graph_index, 0, u, v] = weights[graph_index, 0, v, u] = 1.0
+            if edge_attribute not in data:
+                raise KeyError(f"Edge {(u, v)!r} is missing {edge_attribute!r}.")
+            value = float(bond_order(int(data[edge_attribute])))
+            weights[graph_index, 1, u, v] = weights[graph_index, 1, v, u] = value
+
+    degrees = weights.sum(axis=-1)
+    laplacian = -weights
+    diagonal = np.arange(n)
+    laplacian[:, :, diagonal, diagonal] += degrees
+
+    resolved = str(backend).lower()
+    if resolved == "np":
+        resolved = "numpy"
+    torch_device = torch.device(device)
+    if resolved == "auto":
+        resolved = "torch" if torch_device.type == "cuda" else "numpy"
+    if resolved not in {"torch", "numpy"}:
+        raise ValueError("candidate spectrum backend must be auto, torch, or numpy.")
+    chunk = len(items) if batch_size is None or int(batch_size) <= 0 else int(batch_size)
+    outputs: list[np.ndarray] = []
+    for start in range(0, len(items), chunk):
+        stop = min(start + chunk, len(items))
+        block = laplacian[start:stop]
+        flat = block.reshape((-1, n, n))
+        if resolved == "torch":
+            try:
+                tensor = torch.as_tensor(flat, dtype=torch.float64, device=torch_device)
+                values = torch.linalg.eigvalsh(tensor).detach().cpu().numpy()
+            except (RuntimeError, NotImplementedError):
+                if str(backend).lower() != "auto":
+                    raise
+                values = np.linalg.eigvalsh(flat)
+        else:
+            values = np.linalg.eigvalsh(flat)
+        values = np.sort(np.asarray(values, dtype=np.float64), axis=1)
+        values[np.abs(values) < 1.0e-10] = 0.0
+        values = np.maximum(values, 0.0)
+        values = values.reshape((stop - start, 2, n))
+        outputs.extend([row.copy() for row in values])
+    return outputs
 
 
 def attributed_spectral_scales(

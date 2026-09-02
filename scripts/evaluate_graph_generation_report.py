@@ -1093,6 +1093,12 @@ def main() -> None:
         if base_path is not None and base_path.is_file()
         else []
     )
+    enriched_base_path = generated_dir / "enriched_base_graphs.pkl"
+    enriched_base_graphs = (
+        _load_graph_list(enriched_base_path)
+        if enriched_base_path.is_file()
+        else []
+    )
     if not test_graphs:
         raise ValueError("The configured dataset has no test graphs.")
 
@@ -1158,6 +1164,22 @@ def main() -> None:
                 **_paper_mmd(
                     reference,
                     base_graphs[:base_count],
+                    compute_orbit=compute_orbit,
+                    metric_protocol=generic_mmd_protocol,
+                    clustering_bins=generic_clustering_bins,
+                ),
+            }
+        )
+    if enriched_base_graphs and not _same_artifact(enriched_base_path, generated_path):
+        enriched_count = len(enriched_base_graphs)
+        if args.max_graphs is not None:
+            enriched_count = min(enriched_count, int(args.max_graphs))
+        rows.append(
+            {
+                "comparison": "enriched_base_to_test",
+                **_paper_mmd(
+                    reference,
+                    enriched_base_graphs[:enriched_count],
                     compute_orbit=compute_orbit,
                     metric_protocol=generic_mmd_protocol,
                     clustering_bins=generic_clustering_bins,

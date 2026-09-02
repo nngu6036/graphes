@@ -48,6 +48,8 @@ from grapher.rewiring_mlp.generic.spectral_refiner import (
 )
 from grapher.rewiring_mlp.generic.spectral_graphlet_refiner import (
     SpectralGraphletRefinerConfig,
+    enrich_graph_with_degree_summary,
+    predict_degree_conditioned_summary,
     refine_graph_with_spectral_graphlet_predictions,
 )
 from grapher.utils.io import (
@@ -361,10 +363,30 @@ def main() -> None:
         if not refiner_settings.preserve_connectivity:
             raise ValueError("Topology generation requires topology_refiner.preserve_connectivity.")
 
+    source_enrichment_cfg = dict(config.get("source_enrichment", {}) or {})
+    source_enrichment_enabled = bool(source_enrichment_cfg.get("enabled", False))
+    source_enrichment_settings = None
+    if source_enrichment_enabled:
+        if guidance_mode != "spectral_graphlet":
+            raise ValueError(
+                "Degree-conditioned source enrichment currently requires the "
+                "spectral_graphlet predictor."
+            )
+        if not bool(getattr(model, "degree_summary_enabled", False)):
+            raise ValueError(
+                "source_enrichment.enabled requires a checkpoint trained with "
+                "source_enrichment.summary_estimator.enabled: true."
+            )
+        source_enrichment_settings = SpectralGraphletRefinerConfig.from_dict(
+            dict(source_enrichment_cfg.get("rewiring", {}) or {})
+        )
+
     coarse_graphs: list[nx.Graph] = []
+    enriched_base_graphs: list[nx.Graph] = []
     refined_graphs: list[nx.Graph] = []
     target_degree_sequences: list[list[int]] = []
     traces: list[list[dict[str, Any]]] = []
+    enrichment_traces: list[list[dict[str, Any]]] = []
     graph_runtimes: list[float] = []
     pipeline_records: list[dict[str, Any]] = []
     max_attempts_per_graph = int(generation_cfg.get("max_attempts_per_graph", 8))
@@ -404,19 +426,42 @@ def main() -> None:
                 f"rejections={dict(generation_rejections)}."
             )
 
+        base_graph = coarse
+        enrichment_trace: list[dict[str, Any]] = []
+        if source_enrichment_enabled:
+            assert graphlet_basis is not None
+            assert source_enrichment_settings is not None
+            degree_target = predict_degree_conditioned_summary(
+                model,
+                coarse,
+                graphlet_basis=graphlet_basis,
+                device=model_device,
+                graphlet_logit_epsilon=source_enrichment_settings.graphlet_logit_epsilon,
+            )
+            base_graph, enrichment_trace = enrich_graph_with_degree_summary(
+                coarse,
+                target=degree_target,
+                graphlet_basis=graphlet_basis,
+                refiner_config=source_enrichment_settings,
+                device=model_device,
+                rng=np.random.default_rng(refiner_graph_seeds[index] ^ 0x5A5A5A5A),
+                return_trace=True,
+            )
+
         if guidance_mode == "spectral_graphlet":
             assert graphlet_basis is not None
             refined, trace = refine_graph_with_spectral_graphlet_predictions(
-                coarse,
+                base_graph,
                 model=model,
                 graphlet_basis=graphlet_basis,
                 refiner_config=refiner_settings,
                 device=model_device,
                 rng=np.random.default_rng(refiner_graph_seeds[index]),
                 return_trace=True,
+                conditioning_graph=coarse,
                 debug_context=(
                     f"graph={index + 1}/{num_generate} "
-                    f"n={coarse.number_of_nodes()} m={coarse.number_of_edges()}"
+                    f"n={base_graph.number_of_nodes()} m={base_graph.number_of_edges()}"
                 ),
             )
         elif guidance_mode == "spectral":
@@ -447,9 +492,11 @@ def main() -> None:
 
         runtime = float(time.perf_counter() - graph_started)
         coarse_graphs.append(coarse)
+        enriched_base_graphs.append(base_graph)
         refined_graphs.append(refined)
         target_degree_sequences.append([int(value) for value in degree_summary["degree_sequence"]])
         traces.append(trace)
+        enrichment_traces.append(enrichment_trace)
         graph_runtimes.append(runtime)
         sampling_diagnostics = dict(degree_summary.get("sampling_diagnostics", {}) or {})
 
@@ -457,6 +504,7 @@ def main() -> None:
         proposals = sum(int(row.get("num_proposals", 0)) for row in decision_rows)
         passes = sum(int(row.get("num_valid_candidates", 0)) for row in decision_rows)
         accepted = sum(bool(row.get("accepted")) for row in trace)
+        enrichment_accepted = sum(bool(row.get("accepted")) for row in enrichment_trace)
         terminal_rows = [row for row in trace if bool(row.get("terminal_stop", False))]
         terminal_stop = bool(terminal_rows)
         prediction_calls = max(
@@ -490,6 +538,8 @@ def main() -> None:
             "invariant_feasible": 1.0,
             "constructor_success": 1.0,
             "accepted_swaps": accepted,
+            "source_enrichment_enabled": float(source_enrichment_enabled),
+            "source_enrichment_accepted_swaps": enrichment_accepted,
             "runtime_seconds": runtime,
             "fallback_used": float(
                 bool(sampling_diagnostics.get("fallback_used", False))
@@ -545,7 +595,8 @@ def main() -> None:
         print(
             f"graph={index + 1}/{num_generate} guidance={guidance_mode} "
             f"n={refined.number_of_nodes()} m={refined.number_of_edges()} "
-            f"accepted_steps={accepted} prediction_calls={prediction_calls} "
+            f"enrichment_steps={enrichment_accepted} accepted_steps={accepted} "
+            f"prediction_calls={prediction_calls} "
             f"plateau_refreshes={plateau_refreshes} runtime={runtime:.3f}s",
             flush=True,
         )
@@ -554,6 +605,7 @@ def main() -> None:
     inline_evaluation = bool(evaluation_cfg.get("inline_during_generation", False))
     orca_exec = None
     coarse_metrics: dict[str, Any] = {}
+    enriched_metrics: dict[str, Any] = {}
     refined_metrics: dict[str, Any] = {}
     if inline_evaluation:
         compute_orbit = bool(evaluation_cfg.get("compute_orbit", True))
@@ -583,6 +635,13 @@ def main() -> None:
             "graphlet_backend": graphlet_backend,
         }
         coarse_metrics = evaluate_graph_sets(references, coarse_graphs, train_graphs, **metric_kwargs)
+        if source_enrichment_enabled:
+            enriched_metrics = evaluate_graph_sets(
+                references,
+                enriched_base_graphs,
+                train_graphs,
+                **metric_kwargs,
+            )
         refined_metrics = evaluate_graph_sets(references, refined_graphs, train_graphs, **metric_kwargs)
 
     aggregated_pipeline = aggregate_pipeline_diagnostics(
@@ -613,6 +672,18 @@ def main() -> None:
         "pipeline_mode": "topology",
         "guidance_mode": guidance_mode,
         "degree_preservation_rate": degree_preservation_rate(coarse_graphs, refined_graphs),
+        "source_enrichment_degree_preservation_rate": degree_preservation_rate(
+            coarse_graphs, enriched_base_graphs
+        ),
+        "source_enrichment_connectedness_rate": float(
+            np.mean(
+                [
+                    graph.number_of_nodes() > 0
+                    and (graph.number_of_nodes() == 1 or nx.is_connected(graph))
+                    for graph in enriched_base_graphs
+                ]
+            )
+        ),
         "constructor_target_degree_match_rate": degree_target_match_rate(
             coarse_graphs,
             target_degree_sequences,
@@ -654,6 +725,12 @@ def main() -> None:
         ),
         "plateau_refresh_count": int(plateau_refresh_count),
         "mean_graph_runtime_seconds": float(np.mean(graph_runtimes)),
+        "source_enrichment_enabled": bool(source_enrichment_enabled),
+        "mean_source_enrichment_accepted_steps": float(
+            np.mean(
+                [sum(bool(row.get("accepted")) for row in trace) for trace in enrichment_traces]
+            )
+        ) if enrichment_traces else 0.0,
         "runtime_seconds": float(time.perf_counter() - run_started),
         "inline_evaluation": inline_evaluation,
     }
@@ -750,6 +827,7 @@ def main() -> None:
         "orca_exec": orca_exec,
         "num_generated": len(refined_graphs),
         "hh_source": coarse_metrics,
+        "enriched_base": enriched_metrics,
         "topology_refined": refined_metrics,
         "coarse": coarse_metrics,
         "hybrid_refined": refined_metrics,
@@ -757,6 +835,7 @@ def main() -> None:
         "pipeline_diagnostics": aggregated_pipeline,
         "pipeline_records": pipeline_records,
         "traces": traces,
+        "source_enrichment_traces": enrichment_traces,
         "seed": seed,
         "config_overrides": list(args.config_overrides),
         "rng_streams": {
@@ -767,6 +846,8 @@ def main() -> None:
     }
     output_dir = ensure_dir(args.output_dir)
     save_pickle(coarse_graphs, output_dir / "coarse_graphs.pkl")
+    if source_enrichment_enabled:
+        save_pickle(enriched_base_graphs, output_dir / "enriched_base_graphs.pkl")
     save_pickle(refined_graphs, output_dir / "topology_refined_graphs.pkl")
     if bool(generation_cfg.get("write_legacy_hybrid_alias", False)):
         save_pickle(refined_graphs, output_dir / "hybrid_refined_graphs.pkl")

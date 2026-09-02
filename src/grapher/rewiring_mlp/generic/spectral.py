@@ -5,6 +5,7 @@ from typing import Any, Sequence
 
 import networkx as nx
 import numpy as np
+import torch
 
 
 def laplacian_eigenvalues(graph: nx.Graph) -> np.ndarray:
@@ -33,6 +34,85 @@ def laplacian_eigenvalues(graph: nx.Graph) -> np.ndarray:
     values[np.abs(values) < 1.0e-10] = 0.0
     values = np.maximum(values, 0.0)
     return values
+
+
+def batched_laplacian_eigenvalues(
+    graphs: Sequence[nx.Graph],
+    *,
+    device: str | torch.device = "cpu",
+    backend: str = "auto",
+    batch_size: int | None = None,
+) -> list[np.ndarray]:
+    """Return Laplacian spectra for an equal-size graph batch.
+
+    Candidate rewiring states in one GraphER decision all have the same node
+    count.  The previous implementation called ``np.linalg.eigvalsh`` once per
+    candidate, incurring hundreds of Python/BLAS dispatches per step.  This
+    routine stacks Laplacians and performs one or a few batched eigensolves.
+
+    ``backend=auto`` uses ``torch.linalg.eigvalsh`` on CUDA devices and NumPy's
+    batched ``eigvalsh`` otherwise.  Float64 is retained so candidate rankings
+    remain numerically consistent with the scalar implementation.
+    """
+
+    items = list(graphs)
+    if not items:
+        return []
+    node_lists = [sorted(graph.nodes()) for graph in items]
+    n = len(node_lists[0])
+    if any(len(nodes) != n for nodes in node_lists):
+        raise ValueError("Batched candidate spectra require equal graph sizes.")
+    for graph in items:
+        if graph.is_directed() or graph.is_multigraph():
+            raise ValueError("Spectral GraphER requires simple undirected graphs.")
+        if nx.number_of_selfloops(graph):
+            raise ValueError("Spectral GraphER does not support self-loops.")
+    if n == 0:
+        return [np.zeros(0, dtype=np.float64) for _ in items]
+
+    adjacency = np.stack(
+        [
+            nx.to_numpy_array(graph, nodelist=nodes, dtype=np.float64)
+            for graph, nodes in zip(items, node_lists)
+        ],
+        axis=0,
+    )
+    degree = adjacency.sum(axis=2)
+    laplacian = -adjacency
+    diagonal = np.arange(n)
+    laplacian[:, diagonal, diagonal] += degree
+
+    resolved = str(backend).lower()
+    torch_device = torch.device(device)
+    if resolved == "auto":
+        resolved = "torch" if torch_device.type == "cuda" else "numpy"
+    if resolved not in {"torch", "numpy"}:
+        raise ValueError("candidate spectrum backend must be auto, torch, or numpy.")
+
+    chunk = len(items) if batch_size is None or int(batch_size) <= 0 else int(batch_size)
+    outputs: list[np.ndarray] = []
+    for start in range(0, len(items), chunk):
+        stop = min(start + chunk, len(items))
+        block = laplacian[start:stop]
+        if resolved == "torch":
+            try:
+                tensor = torch.as_tensor(block, dtype=torch.float64, device=torch_device)
+                values = torch.linalg.eigvalsh(tensor).detach().cpu().numpy()
+            except (RuntimeError, NotImplementedError):
+                # Some accelerator/runtime combinations have incomplete
+                # float64 symmetric-eigensolver support.  ``auto`` should
+                # remain usable rather than turning an optimization into a
+                # generation failure.
+                if str(backend).lower() != "auto":
+                    raise
+                values = np.linalg.eigvalsh(block)
+        else:
+            values = np.linalg.eigvalsh(block)
+        values = np.sort(np.asarray(values, dtype=np.float64), axis=1)
+        values[np.abs(values) < 1.0e-10] = 0.0
+        values = np.maximum(values, 0.0)
+        outputs.extend([row.copy() for row in values])
+    return outputs
 
 
 def degree_spectral_moments(graph: nx.Graph) -> tuple[float, float]:

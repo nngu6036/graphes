@@ -48,6 +48,10 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
         min_gap: float = 1.0e-6,
         input_normalization: str = "mean_degree",
         graphlet_logit_epsilon: float = 1.0e-4,
+        invariant_summary_enabled: bool = False,
+        invariant_summary_dim: int = 256,
+        invariant_summary_layers: int = 2,
+        invariant_summary_dropout: float = 0.05,
     ) -> None:
         super().__init__()
         self.num_node_categories = int(num_node_categories)
@@ -67,6 +71,10 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
         self.min_gap = float(min_gap)
         self.input_normalization = str(input_normalization).lower()
         self.graphlet_logit_epsilon = float(graphlet_logit_epsilon)
+        self.invariant_summary_enabled = bool(invariant_summary_enabled)
+        self.invariant_summary_dim = int(invariant_summary_dim)
+        self.invariant_summary_layers = int(invariant_summary_layers)
+        self.invariant_summary_dropout_p = float(invariant_summary_dropout)
         if self.num_node_categories <= 0 or self.num_edge_categories < 2:
             raise ValueError("Attributed model requires node categories and no-edge + edge categories.")
         if not self.graphlet_block_widths or any(width <= 1 for width in self.graphlet_block_widths):
@@ -149,6 +157,71 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
                 for width in self.graphlet_block_widths
             ]
         )
+
+        # Optional source-summary estimator conditioned only on the hard
+        # attributed rewiring invariant used by the cross-type molecular
+        # kernel.  It deliberately does NOT consume adjacency topology or
+        # per-node typed degree because the latter is allowed to change during
+        # bond-reassigning swaps.  Node tokens contain atom category + ordinary
+        # degree; global bond-category counts are pooled separately.
+        if self.invariant_summary_enabled:
+            if self.invariant_summary_dim <= 0 or self.invariant_summary_layers <= 0:
+                raise ValueError("Invariant-summary dimensions/layers must be positive.")
+            invariant_token_width = self.num_node_categories + 3
+            self.invariant_token_in = nn.Sequential(
+                nn.Linear(invariant_token_width, self.invariant_summary_dim),
+                nn.SiLU(),
+                nn.Linear(self.invariant_summary_dim, self.invariant_summary_dim),
+                nn.SiLU(),
+            )
+            self.invariant_token_layers = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.LayerNorm(self.invariant_summary_dim),
+                        nn.Linear(self.invariant_summary_dim, self.invariant_summary_dim),
+                        nn.SiLU(),
+                        nn.Dropout(self.invariant_summary_dropout_p),
+                        nn.Linear(self.invariant_summary_dim, self.invariant_summary_dim),
+                    )
+                    for _ in range(self.invariant_summary_layers)
+                ]
+            )
+            present_edge_types = self.num_edge_categories - 1
+            invariant_graph_width = (
+                2 * self.invariant_summary_dim
+                + self.num_node_categories
+                + 2 * present_edge_types
+                + 4
+            )
+            self.invariant_graph_encoder = nn.Sequential(
+                nn.Linear(invariant_graph_width, self.invariant_summary_dim),
+                nn.SiLU(),
+                nn.Linear(self.invariant_summary_dim, self.invariant_summary_dim),
+                nn.SiLU(),
+            )
+            self.invariant_spectral_token_in = nn.Sequential(
+                nn.Linear(3, self.invariant_summary_dim),
+                nn.SiLU(),
+                nn.Linear(self.invariant_summary_dim, self.invariant_summary_dim),
+            )
+            self.invariant_channel_embedding = nn.Embedding(2, self.invariant_summary_dim)
+            self.invariant_spectral_head = nn.Sequential(
+                nn.LayerNorm(self.invariant_summary_dim),
+                nn.Linear(self.invariant_summary_dim, self.invariant_summary_dim),
+                nn.SiLU(),
+                nn.Linear(self.invariant_summary_dim, 1),
+            )
+            self.invariant_graphlet_heads = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.Linear(self.invariant_summary_dim, self.graphlet_dim),
+                        nn.SiLU(),
+                        nn.Dropout(self.invariant_summary_dropout_p),
+                        nn.Linear(self.graphlet_dim, width),
+                    )
+                    for width in self.graphlet_block_widths
+                ]
+            )
 
     @staticmethod
     def _make_slices(widths: Sequence[int]) -> tuple[tuple[int, int], ...]:
@@ -376,10 +449,128 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
             "graphlet_mask": mask,
         }
 
+    def _invariant_summary_outputs(
+        self, batch: AttributedSpectralBatch
+    ) -> dict[str, torch.Tensor]:
+        if not self.invariant_summary_enabled:
+            return {}
+        node_mask = batch.node_mask.bool()
+        batch_size, node_count = node_mask.shape
+        dtype = batch.degrees.dtype
+        node_labels = batch.source_node_labels.clamp(0, self.num_node_categories - 1)
+        node_onehot = F.one_hot(node_labels, self.num_node_categories).to(dtype)
+        size_feature = batch.graph_size / (batch.graph_size + 1.0).clamp_min(1.0)
+        token_features = torch.cat(
+            [
+                node_onehot,
+                batch.degrees.unsqueeze(-1),
+                size_feature.view(batch_size, 1, 1).expand(batch_size, node_count, 1),
+                node_mask.unsqueeze(-1).to(dtype),
+            ],
+            dim=-1,
+        )
+        hidden = self.invariant_token_in(token_features)
+        weights = node_mask.unsqueeze(-1).to(hidden.dtype)
+        hidden = hidden * weights
+        for layer in self.invariant_token_layers:
+            hidden = (hidden + layer(hidden)) * weights
+        count = weights.sum(dim=1).clamp_min(1.0)
+        mean_pool = hidden.sum(dim=1) / count
+        neg_inf = torch.finfo(hidden.dtype).min
+        max_pool = hidden.masked_fill(~node_mask.unsqueeze(-1), neg_inf).max(dim=1).values
+        max_pool = torch.where(torch.isfinite(max_pool), max_pool, torch.zeros_like(max_pool))
+
+        # Permutation-invariant hard-invariant statistics.  Bond counts are
+        # extracted from the upper triangle only, then represented both as
+        # counts-per-node and proportions among present bonds.
+        node_prop = (node_onehot * weights).sum(dim=1) / count
+        upper = torch.triu(
+            torch.ones((node_count, node_count), dtype=torch.bool, device=node_mask.device),
+            diagonal=1,
+        ).view(1, node_count, node_count)
+        pair_mask = batch.pair_mask.bool() & upper
+        edge_labels = batch.source_edge_labels
+        bond_count_blocks = []
+        for category in range(1, self.num_edge_categories):
+            bond_count_blocks.append(
+                ((edge_labels == category) & pair_mask).to(dtype).sum(dim=(1, 2))
+            )
+        bond_counts = torch.stack(bond_count_blocks, dim=1)
+        total_bonds = bond_counts.sum(dim=1, keepdim=True).clamp_min(1.0)
+        bond_prop = bond_counts / total_bonds
+        bond_per_node = bond_counts / batch.graph_size.unsqueeze(1).clamp_min(1.0)
+
+        degree_mask = node_mask.to(dtype)
+        degree_count = degree_mask.sum(dim=1).clamp_min(1.0)
+        degree_mean = (batch.degrees * degree_mask).sum(dim=1) / degree_count
+        degree_var = (
+            (batch.degrees - degree_mean.unsqueeze(1)).square() * degree_mask
+        ).sum(dim=1) / degree_count
+        degree_max = batch.degrees.masked_fill(~node_mask, 0.0).max(dim=1).values
+        graph_hidden = self.invariant_graph_encoder(
+            torch.cat(
+                [
+                    mean_pool,
+                    max_pool,
+                    node_prop,
+                    bond_prop,
+                    bond_per_node,
+                    degree_mean.unsqueeze(1),
+                    torch.sqrt(degree_var.clamp_min(0.0)).unsqueeze(1),
+                    degree_max.unsqueeze(1),
+                    size_feature.unsqueeze(1),
+                ],
+                dim=-1,
+            )
+        )
+
+        spectrum_mask = batch.spectrum_mask.bool()
+        width = spectrum_mask.shape[1]
+        index = torch.arange(width, device=node_mask.device, dtype=dtype)
+        rank = index.view(1, 1, -1) / (batch.graph_size - 1.0).clamp_min(1.0).view(-1, 1, 1)
+        rank = rank.expand(batch_size, 2, width)
+        size = size_feature.view(-1, 1, 1).expand(batch_size, 2, width)
+        token_mask = spectrum_mask.unsqueeze(1).expand(batch_size, 2, width)
+        spectral_features = torch.stack([rank, size, token_mask.to(dtype)], dim=-1)
+        spectral_hidden = self.invariant_spectral_token_in(spectral_features)
+        channel_ids = torch.arange(2, device=node_mask.device).view(1, 2, 1).expand(batch_size, 2, width)
+        spectral_hidden = spectral_hidden + self.invariant_channel_embedding(channel_ids)
+        spectral_hidden = spectral_hidden + graph_hidden.view(batch_size, 1, 1, -1)
+        raw_gap = self.invariant_spectral_head(spectral_hidden).squeeze(-1)
+        clean_spectra = self._constrained_spectrum(
+            raw_gap,
+            spectrum_mask,
+            batch.graph_size,
+            self._spectral_trace(batch),
+        )
+
+        graphlet_mask = batch.graphlet_coordinate_mask.bool()
+        clean_blocks: list[torch.Tensor] = []
+        probability_blocks: list[torch.Tensor] = []
+        for (start, stop), head in zip(self.graphlet_slices, self.invariant_graphlet_heads):
+            valid = graphlet_mask[:, start:stop].any(dim=1, keepdim=True)
+            block = head(graph_hidden)
+            block = block - block.mean(dim=-1, keepdim=True)
+            block = block * valid.to(block.dtype)
+            prob = torch.softmax(block, dim=-1) * valid.to(block.dtype)
+            clean_blocks.append(block)
+            probability_blocks.append(prob)
+        return {
+            "invariant_clean_spectra": clean_spectra,
+            "invariant_clean_graphlet_logits": torch.cat(clean_blocks, dim=-1),
+            "invariant_clean_graphlet_probabilities": torch.cat(probability_blocks, dim=-1),
+        }
+
+    def invariant_summary(self, batch: AttributedSpectralBatch) -> dict[str, torch.Tensor]:
+        if not self.invariant_summary_enabled:
+            raise ValueError("This checkpoint has no hard-invariant-conditioned summary estimator.")
+        return self._invariant_summary_outputs(batch)
+
     def forward(self, batch: AttributedSpectralBatch) -> dict[str, torch.Tensor]:
         graph_hidden = self._graph_context(batch)
         outputs = self._spectral_outputs(batch, graph_hidden)
         outputs.update(self._graphlet_outputs(batch, graph_hidden))
+        outputs.update(self._invariant_summary_outputs(batch))
         return outputs
 
     def loss(
@@ -475,6 +666,82 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
         )
         total = spectral_total + graphlet_total
 
+        invariant_summary_weight = float(weights.get("invariant_summary", 0.0))
+        invariant_summary_total = predicted_logits.sum() * 0.0
+        invariant_metrics: dict[str, float] = {}
+        if self.invariant_summary_enabled and invariant_summary_weight > 0.0:
+            invariant_spectra = outputs["invariant_clean_spectra"]
+            inv_normalized = (invariant_spectra - target) / scale
+            inv_channel_loss = (
+                F.smooth_l1_loss(invariant_spectra / scale, target / scale, reduction="none")
+                * valid
+            ).sum(dim=-1) / channel_count
+            inv_topology_loss = inv_channel_loss[:, 0].mean()
+            inv_bond_loss = inv_channel_loss[:, 1].mean()
+            inv_spectral_loss = (
+                float(weights.get("topology_spectrum", 1.0)) * inv_topology_loss
+                + float(weights.get("bond_spectrum", 1.0)) * inv_bond_loss
+            )
+            inv_low_loss = invariant_spectra.sum() * 0.0
+            if low_k > 0:
+                index = torch.arange(invariant_spectra.shape[-1], device=invariant_spectra.device).view(1, 1, -1)
+                low_mask = mask & (index > 0) & (index <= low_k)
+                low_weight = low_mask.to(invariant_spectra.dtype)
+                if torch.any(low_mask):
+                    inv_low_loss = (
+                        F.smooth_l1_loss(invariant_spectra / scale, target / scale, reduction="none")
+                        * low_weight
+                    ).sum() / low_weight.sum().clamp_min(1.0)
+            inv_pred_moment2 = (invariant_spectra.square() * valid).sum(dim=-1)
+            inv_moment2_loss = F.smooth_l1_loss(
+                inv_pred_moment2 / second_scale.clamp_min(1.0e-8),
+                target_moment2 / second_scale.clamp_min(1.0e-8),
+            )
+            inv_spectral_total = (
+                float(weights.get("spectrum", 1.0)) * inv_spectral_loss
+                + float(weights.get("low_frequency", 0.0)) * inv_low_loss
+                + float(weights.get("moment2", 0.0)) * inv_moment2_loss
+            )
+
+            inv_logits = outputs["invariant_clean_graphlet_logits"]
+            inv_prob = outputs["invariant_clean_graphlet_probabilities"]
+            inv_logit_loss = (
+                F.smooth_l1_loss(inv_logits, target_logits, reduction="none") * graphlet_weight
+            ).sum() / coordinate_count
+            inv_kl_terms: list[torch.Tensor] = []
+            for start, stop in self.graphlet_slices:
+                valid_rows = graphlet_mask[:, start:stop].any(dim=1)
+                if not torch.any(valid_rows):
+                    continue
+                pred = inv_prob[valid_rows, start:stop].clamp_min(1.0e-12)
+                truth = target_prob[valid_rows, start:stop]
+                truth = truth / truth.sum(dim=-1, keepdim=True).clamp_min(1.0e-12)
+                truth_safe = truth.clamp_min(1.0e-12)
+                inv_kl_terms.append(
+                    (truth * (torch.log(truth_safe) - torch.log(pred))).sum(dim=-1).mean()
+                )
+            inv_probability_loss = (
+                torch.stack(inv_kl_terms).mean() if inv_kl_terms else inv_logits.sum() * 0.0
+            )
+            inv_graphlet_total = (
+                float(weights.get("graphlet_logit", 1.0)) * inv_logit_loss
+                + float(weights.get("graphlet_probability", 0.25)) * inv_probability_loss
+            )
+            invariant_summary_total = inv_spectral_total + inv_graphlet_total
+            total = total + invariant_summary_weight * invariant_summary_total
+            with torch.no_grad():
+                inv_channel_rmse = torch.sqrt(
+                    (inv_normalized.square() * valid).sum(dim=-1) / channel_count
+                ).mean(dim=0)
+            invariant_metrics = {
+                "invariant_summary_loss": float(invariant_summary_total.detach().cpu()),
+                "invariant_summary_spectral_loss": float(inv_spectral_total.detach().cpu()),
+                "invariant_summary_topology_nrmse": float(inv_channel_rmse[0].detach().cpu()),
+                "invariant_summary_bond_nrmse": float(inv_channel_rmse[1].detach().cpu()),
+                "invariant_summary_graphlet_logit_loss": float(inv_logit_loss.detach().cpu()),
+                "invariant_summary_graphlet_probability_loss": float(inv_probability_loss.detach().cpu()),
+            }
+
         with torch.no_grad():
             channel_rmse = torch.sqrt(
                 (normalized_delta.square() * valid).sum(dim=-1) / channel_count
@@ -524,6 +791,7 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
             "graphlet_logit_mae": float(graphlet_mae.detach().cpu()),
             "graphlet_probability_mae": float(probability_mae.detach().cpu()),
         }
+        metrics.update(invariant_metrics)
         return total, metrics
 
     def model_config(self) -> dict[str, Any]:
@@ -545,6 +813,10 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
             "min_gap": self.min_gap,
             "input_normalization": self.input_normalization,
             "graphlet_logit_epsilon": self.graphlet_logit_epsilon,
+            "invariant_summary_enabled": self.invariant_summary_enabled,
+            "invariant_summary_dim": self.invariant_summary_dim,
+            "invariant_summary_layers": self.invariant_summary_layers,
+            "invariant_summary_dropout": self.invariant_summary_dropout_p,
         }
 
 

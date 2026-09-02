@@ -21,6 +21,7 @@ from grapher.rewiring_mlp.attributed.graphlet_diffusion import (
 )
 from grapher.rewiring_mlp.attributed.spectral import (
     attributed_laplacian_spectra,
+    batched_attributed_laplacian_spectra,
     attributed_spectral_distance,
     attributed_spectral_scales,
     attributed_spectrum_moments,
@@ -36,8 +37,9 @@ from grapher.rewiring_mlp.attributed.spectral_model import (
 from grapher.rewiring_mlp.core.rewiring import (
     Action,
     candidate_actions_from_edge_pair,
-    is_valid_action,
+    canonical_edge,
 )
+from grapher.rewiring_mlp.generic.rewiring import _fast_valid_action
 from grapher.rewiring_mlp.generic.spectral import SpectralBridgeSchedule
 from grapher.rewiring_mlp.molecular.constraints import (
     bond_order,
@@ -67,10 +69,28 @@ class AttributedSpectralGraphletPrediction:
 
 
 @dataclass(frozen=True)
+class AttributedInvariantSummaryPrediction:
+    clean_spectra: np.ndarray
+    clean_graphlet_logits: np.ndarray
+    clean_graphlet_probabilities: np.ndarray
+    graphlet_coordinate_mask: np.ndarray
+    spectral_moments: dict[str, list[float]]
+
+
+@dataclass(frozen=True)
 class AttributedSpectralGraphletRefinerConfig:
     steps: int = 48
     proposal_budget: int = 256
     valid_candidate_budget: int = 64
+    adaptive_candidate_search: bool = False
+    initial_proposal_budget: int = 256
+    initial_valid_candidate_budget: int = 64
+    final_proposal_budget: int = 256
+    final_valid_candidate_budget: int = 64
+    candidate_budget_schedule: str = "cosine"
+    candidate_budget_power: float = 1.0
+    spectrum_backend: str = "auto"
+    spectrum_batch_size: int = 256
     preserve_connectivity: bool = True
     selection: str = "greedy"
     temperature: float = 0.1
@@ -179,6 +199,35 @@ class AttributedSpectralGraphletRefinerConfig:
         ) * shaped
         return float(spectral), float(graphlet)
 
+    def candidate_budgets_at(self, progress: float) -> tuple[int, int]:
+        if not self.adaptive_candidate_search:
+            return int(self.proposal_budget), int(self.valid_candidate_budget)
+        p = float(np.clip(progress, 0.0, 1.0))
+        if self.candidate_budget_schedule == "linear":
+            shaped = p
+        elif self.candidate_budget_schedule == "cosine":
+            shaped = 0.5 - 0.5 * np.cos(np.pi * p)
+        elif self.candidate_budget_schedule == "power":
+            shaped = p ** float(self.candidate_budget_power)
+        else:
+            raise ValueError(
+                f"Unknown candidate_search.schedule {self.candidate_budget_schedule!r}."
+            )
+        proposal = int(round(
+            self.initial_proposal_budget
+            + (self.final_proposal_budget - self.initial_proposal_budget) * shaped
+        ))
+        valid = int(round(
+            self.initial_valid_candidate_budget
+            + (self.final_valid_candidate_budget - self.initial_valid_candidate_budget) * shaped
+        ))
+        # The legacy top-level budgets remain hard maxima.
+        if self.proposal_budget > 0:
+            proposal = min(proposal, int(self.proposal_budget))
+        if self.valid_candidate_budget > 0:
+            valid = min(valid, int(self.valid_candidate_budget))
+        return max(proposal, 1), max(valid, 1)
+
     def prediction_horizon_at(self, progress: float) -> int:
         if self.prediction_horizon_mode == "fixed":
             return max(int(self.prediction_horizon_initial_k), 1)
@@ -217,6 +266,7 @@ class AttributedSpectralGraphletRefinerConfig:
         global_to_local = dict(values.get("global_to_local", {}) or {})
         horizon = dict(values.get("prediction_horizon", {}) or {})
         molecular = dict(values.get("molecular", {}) or {})
+        candidate_search = dict(values.get("candidate_search", {}) or {})
         debug = dict(values.get("debug", {}) or {})
         channel_weights = spectral.get("channel_weights", [1.0, 1.0])
         if isinstance(channel_weights, Mapping):
@@ -233,6 +283,15 @@ class AttributedSpectralGraphletRefinerConfig:
             steps=int(values.get("steps", 48)),
             proposal_budget=int(values.get("proposal_budget", 256)),
             valid_candidate_budget=int(values.get("valid_candidate_budget", 64)),
+            adaptive_candidate_search=bool(candidate_search.get("adaptive", False)),
+            initial_proposal_budget=int(candidate_search.get("initial_proposal_budget", values.get("proposal_budget", 256))),
+            initial_valid_candidate_budget=int(candidate_search.get("initial_valid_candidate_budget", values.get("valid_candidate_budget", 64))),
+            final_proposal_budget=int(candidate_search.get("final_proposal_budget", values.get("proposal_budget", 256))),
+            final_valid_candidate_budget=int(candidate_search.get("final_valid_candidate_budget", values.get("valid_candidate_budget", 64))),
+            candidate_budget_schedule=str(candidate_search.get("schedule", "cosine")).lower(),
+            candidate_budget_power=float(candidate_search.get("power", 1.0)),
+            spectrum_backend=str(candidate_search.get("spectrum_backend", "auto")).lower(),
+            spectrum_batch_size=max(int(candidate_search.get("spectrum_batch_size", 256)), 1),
             preserve_connectivity=bool(values.get("preserve_connectivity", True)),
             selection=str(values.get("selection", "greedy")).lower(),
             temperature=float(values.get("temperature", 0.1)),
@@ -351,6 +410,12 @@ class AttributedSpectralGraphletRefinerConfig:
             raise ValueError("prediction_horizon.mode must be fixed or annealed.")
         if cfg.prediction_horizon_initial_k <= 0 or cfg.prediction_horizon_final_k <= 0:
             raise ValueError("Prediction horizons must be positive.")
+        if cfg.candidate_budget_schedule not in {"linear", "cosine", "power"}:
+            raise ValueError("candidate_search.schedule must be linear, cosine, or power.")
+        if cfg.candidate_budget_power <= 0.0:
+            raise ValueError("candidate_search.power must be positive.")
+        if cfg.spectrum_backend not in {"auto", "torch", "numpy", "np"}:
+            raise ValueError("candidate_search.spectrum_backend must be auto, torch, or numpy.")
         return cfg
 
 
@@ -511,6 +576,52 @@ def _typed_actions_for_topology_action(
     return out
 
 
+def _fast_molecular_valence_after_action(
+    graph: nx.Graph,
+    action: AttributedRewireAction,
+    *,
+    vocabulary: GraphCategoryVocabulary,
+    config: AttributedSpectralGraphletRefinerConfig,
+) -> bool:
+    """Check the four affected weighted valences without materializing a graph."""
+
+    affected = {node for edge in action.removed for node in edge}
+    current: dict[int, float] = {}
+    for node in affected:
+        current[node] = float(
+            sum(
+                bond_order(int(data[str(vocabulary.edge_attribute)]))
+                for _, _, data in graph.edges(node, data=True)
+            )
+        )
+    delta = {node: 0.0 for node in affected}
+    for edge, category in zip(action.removed, action.removed_edge_categories):
+        order = bond_order(int(vocabulary.edge_value(category)))
+        delta[edge[0]] -= order
+        delta[edge[1]] -= order
+    for edge, category in zip(action.added, action.added_edge_categories):
+        order = bond_order(int(vocabulary.edge_value(category)))
+        delta.setdefault(edge[0], 0.0)
+        delta.setdefault(edge[1], 0.0)
+        delta[edge[0]] += order
+        delta[edge[1]] += order
+    for node, change in delta.items():
+        atom = int(graph.nodes[node][str(vocabulary.node_attribute)])
+        if atom not in set(int(v) for v in vocabulary.node_values):
+            return False
+        limit = (
+            float(config.molecular_max_valence[atom])
+            if atom in config.molecular_max_valence
+            else None
+        )
+        value = current.get(node, 0.0) + float(change)
+        if value < -1.0e-8:
+            return False
+        if limit is not None and value > limit + 1.0e-8:
+            return False
+    return True
+
+
 def _propose_attributed_candidates(
     graph: nx.Graph,
     *,
@@ -518,6 +629,8 @@ def _propose_attributed_candidates(
     config: AttributedSpectralGraphletRefinerConfig,
     rng: np.random.Generator,
     excluded_states: set[tuple[Any, ...]] | None,
+    proposal_budget: int | None = None,
+    valid_candidate_budget: int | None = None,
 ) -> tuple[
     list[AttributedRewireAction],
     dict[AttributedRewireAction, nx.Graph],
@@ -543,8 +656,18 @@ def _propose_attributed_candidates(
             "candidate_rejection_reasons": {"too_few_edges": 1},
         }
 
-    target = int(config.valid_candidate_budget)
-    proposal_limit = int(config.proposal_budget)
+    edge_set = set(edges)
+    nodes = sorted(int(node) for node in graph.nodes())
+    adjacency = {node: {int(v) for v in graph.neighbors(node)} for node in nodes}
+
+    target = int(
+        config.valid_candidate_budget
+        if valid_candidate_budget is None
+        else valid_candidate_budget
+    )
+    proposal_limit = int(
+        config.proposal_budget if proposal_budget is None else proposal_budget
+    )
     complete = target < 0 or proposal_limit < 0
     if complete:
         pair_indices = [
@@ -565,7 +688,7 @@ def _propose_attributed_candidates(
     max_attempts = (
         len(pair_indices)
         if complete
-        else max(100, int(config.proposal_budget) * 50)
+        else max(100, int(proposal_limit) * 50)
     )
 
     while (
@@ -594,9 +717,12 @@ def _propose_attributed_candidates(
         topology_actions = candidate_actions_from_edge_pair(e1, e2)
         rng.shuffle(topology_actions)
         for topology_action in topology_actions:
-            if not is_valid_action(
+            if not _fast_valid_action(
                 graph,
                 topology_action,
+                edge_set=edge_set,
+                nodes=nodes,
+                adjacency=adjacency,
                 preserve_connectivity=config.preserve_connectivity,
             ):
                 rejections["topology_or_connectivity"] = rejections.get(
@@ -616,6 +742,13 @@ def _propose_attributed_candidates(
                 seen.add(action)
                 if len(seen) > proposal_limit:
                     break
+                if config.enforce_molecular_valence and not _fast_molecular_valence_after_action(
+                    graph, action, vocabulary=vocabulary, config=config
+                ):
+                    rejections["molecular_valence_fast"] = rejections.get(
+                        "molecular_valence_fast", 0
+                    ) + 1
+                    continue
                 try:
                     candidate = _apply_attributed_action(graph, action, vocabulary)
                 except (KeyError, TypeError, ValueError):
@@ -653,6 +786,8 @@ def _propose_attributed_candidates(
 
     proposals = len(seen)
     return candidates, candidate_graphs, {
+        "proposal_budget": int(proposal_limit),
+        "valid_candidate_budget": int(target),
         "num_proposals": proposals,
         "num_valid_candidates": len(candidates),
         "candidate_pass_rate": float(len(candidates) / max(proposals, 1)),
@@ -726,6 +861,73 @@ def predict_clean_attributed_summaries(
     )
 
 
+@torch.no_grad()
+def predict_attributed_invariant_summary(
+    model: AttributedSpectralGraphletTransformerPredictor,
+    graph: nx.Graph,
+    *,
+    vocabulary: GraphCategoryVocabulary,
+    graphlet_basis: GraphletBasis,
+    device: torch.device | str,
+    graphlet_logit_epsilon: float,
+) -> AttributedInvariantSummaryPrediction:
+    """Predict a clean summary using only the hard molecular rewiring invariant."""
+
+    if not model.invariant_summary_enabled:
+        raise ValueError(
+            "Source enrichment requires a checkpoint trained with the hard-invariant summary head."
+        )
+    context = normalize_attributed_graph(graph)
+    spectra = attributed_laplacian_spectra(
+        context, edge_attribute=str(vocabulary.edge_attribute)
+    )
+    prob, mask, _ = extract_attributed_graphlet_simplex(
+        context, graphlet_basis=graphlet_basis
+    )
+    logits = attributed_graphlet_simplex_to_clr(
+        prob,
+        graphlet_basis=graphlet_basis,
+        epsilon=graphlet_logit_epsilon,
+        coordinate_mask=mask,
+    )
+    example = AttributedSpectralExample(
+        conditioning_graph=context,
+        time=0.0,
+        current_spectra=spectra.astype(np.float32),
+        source_spectra=spectra.astype(np.float32),
+        clean_spectra_target=np.zeros_like(spectra, dtype=np.float32),
+        current_graphlet_probabilities=prob.astype(np.float32),
+        source_graphlet_probabilities=prob.astype(np.float32),
+        clean_graphlet_probabilities_target=np.zeros_like(prob, dtype=np.float32),
+        current_graphlet_logits=logits.astype(np.float32),
+        source_graphlet_logits=logits.astype(np.float32),
+        clean_graphlet_logits_target=np.zeros_like(logits, dtype=np.float32),
+        graphlet_coordinate_mask=mask.astype(np.bool_),
+    )
+    batch = collate_attributed_spectral_examples([example], vocabulary).to(device)
+    outputs = model.invariant_summary(batch)
+    n = context.number_of_nodes()
+    clean_spectra = (
+        outputs["invariant_clean_spectra"][0, :, :n]
+        .detach().cpu().numpy().astype(np.float64)
+    )
+    clean_logits = (
+        outputs["invariant_clean_graphlet_logits"][0]
+        .detach().cpu().numpy().astype(np.float64)
+    )
+    clean_prob = (
+        outputs["invariant_clean_graphlet_probabilities"][0]
+        .detach().cpu().numpy().astype(np.float64)
+    )
+    return AttributedInvariantSummaryPrediction(
+        clean_spectra=clean_spectra,
+        clean_graphlet_logits=clean_logits,
+        clean_graphlet_probabilities=clean_prob,
+        graphlet_coordinate_mask=mask,
+        spectral_moments=attributed_spectrum_moments(clean_spectra),
+    )
+
+
 def _prepare_candidate_states(
     graph: nx.Graph,
     candidates: Sequence[AttributedRewireAction],
@@ -735,6 +937,7 @@ def _prepare_candidate_states(
     vocabulary: GraphCategoryVocabulary,
     graphlet_basis: GraphletBasis,
     config: AttributedSpectralGraphletRefinerConfig,
+    device: torch.device | str = "cpu",
 ) -> dict[str, Any]:
     current_spectra = attributed_laplacian_spectra(
         graph, edge_attribute=str(vocabulary.edge_attribute)
@@ -756,7 +959,15 @@ def _prepare_candidate_states(
         coordinate_mask=current_mask,
     )
     rows: list[dict[str, Any]] = []
-    for action in candidates:
+    materialized = [candidate_graphs[action] for action in candidates]
+    candidate_spectra_batch = batched_attributed_laplacian_spectra(
+        materialized,
+        edge_attribute=str(vocabulary.edge_attribute),
+        device=device,
+        backend=config.spectrum_backend,
+        batch_size=config.spectrum_batch_size,
+    )
+    for action, candidate_spectra in zip(candidates, candidate_spectra_batch):
         candidate = candidate_graphs[action]
         candidate_logits, candidate_prob, candidate_counts = (
             candidate_attributed_graphlet_logits_from_counts(
@@ -772,9 +983,7 @@ def _prepare_candidate_states(
             {
                 "action": action,
                 "candidate_graph": candidate,
-                "candidate_spectra": attributed_laplacian_spectra(
-                    candidate, edge_attribute=str(vocabulary.edge_attribute)
-                ),
+                "candidate_spectra": np.asarray(candidate_spectra, dtype=np.float64),
                 "candidate_graphlet_logits": candidate_logits,
                 "candidate_graphlet_probabilities": candidate_prob,
                 "candidate_graphlet_counts": candidate_counts,
@@ -969,7 +1178,7 @@ def _choose_candidate(
     return selected, {"rdkit_checked": checked, "rdkit_rejected": rejected}
 
 
-def refine_attributed_graph_with_spectral_graphlet_diffusion(
+def enrich_attributed_graph_with_invariant_summary(
     model: AttributedSpectralGraphletTransformerPredictor,
     graph: nx.Graph,
     *,
@@ -981,10 +1190,214 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
     return_trace: bool = False,
     debug_context: str = "",
 ) -> nx.Graph | tuple[nx.Graph, list[dict[str, Any]]]:
+    """Enrich a typed source by matching a fixed hard-invariant-conditioned summary.
+
+    Unlike the main reverse-summary refiner, this stage predicts exactly one
+    target S(I) from the source's preserved molecular invariant and optimizes a
+    fixed energy against it.  Therefore energies are comparable across steps
+    and ``return_best_state`` has its literal global-within-search meaning.
+    """
+
+    cfg = (
+        config
+        if isinstance(config, AttributedSpectralGraphletRefinerConfig)
+        else AttributedSpectralGraphletRefinerConfig.from_dict(config)
+    )
+    generator = rng if rng is not None else np.random.default_rng(0)
+    current = normalize_attributed_graph(graph)
+    invariant = extract_attributed_rewiring_invariant(
+        current,
+        edge_types=vocabulary.edge_values,
+        node_attribute=str(vocabulary.node_attribute),
+        edge_attribute=str(vocabulary.edge_attribute),
+    )
+    if cfg.require_rdkit_source_validity and not is_valid_molecular_graph(
+        current,
+        infer_projected_formal_charges=cfg.rdkit_infer_projected_formal_charges,
+    ):
+        raise ValueError("Attributed source graph failed RDKit sanitization before enrichment.")
+
+    prediction = predict_attributed_invariant_summary(
+        model,
+        current,
+        vocabulary=vocabulary,
+        graphlet_basis=graphlet_basis,
+        device=device,
+        graphlet_logit_epsilon=cfg.graphlet_logit_epsilon,
+    )
+    current_prob, current_mask, current_counts_raw = extract_attributed_graphlet_simplex(
+        current, graphlet_basis=graphlet_basis
+    )
+    current_counts = {key: dict(value) for key, value in current_counts_raw.items()}
+    current_logits = attributed_graphlet_simplex_to_clr(
+        current_prob,
+        graphlet_basis=graphlet_basis,
+        epsilon=cfg.graphlet_logit_epsilon,
+        coordinate_mask=current_mask,
+    )
+    current_spectra = attributed_laplacian_spectra(
+        current, edge_attribute=str(vocabulary.edge_attribute)
+    )
+    scales = attributed_spectral_scales(
+        current,
+        mode=cfg.spectral_normalization,
+        edge_attribute=str(vocabulary.edge_attribute),
+    )
+    spectral_weight = float(cfg.spectral_weight_initial)
+    graphlet_weight = float(cfg.graphlet_weight_initial)
+    initial_spec, _ = attributed_spectral_distance(
+        current_spectra,
+        prediction.clean_spectra,
+        scales=scales,
+        metric=cfg.spectral_distance,
+        channel_weights=cfg.spectral_channel_weights,
+        low_frequency_weight=cfg.low_frequency_weight,
+        low_frequency_cutoff=cfg.low_frequency_cutoff,
+    )
+    initial_graphlet = attributed_graphlet_logit_distance(
+        current_logits,
+        prediction.clean_graphlet_logits,
+        graphlet_basis=graphlet_basis,
+        coordinate_mask=current_mask,
+        metric=cfg.graphlet_distance,
+        size_weights=cfg.graphlet_size_weights,
+    )
+    best_energy = spectral_weight * initial_spec + graphlet_weight * initial_graphlet
+    best_graph = current.copy()
+    visited = {
+        attributed_state_key(
+            current,
+            node_attribute=str(vocabulary.node_attribute),
+            edge_attribute=str(vocabulary.edge_attribute),
+        )
+    }
+    trace: list[dict[str, Any]] = []
+    prefix = f" {debug_context}" if debug_context else ""
+
+    for step in range(max(int(cfg.steps), 0)):
+        progress = float(step / max(cfg.steps - 1, 1))
+        proposal_budget, valid_candidate_budget = cfg.candidate_budgets_at(progress)
+        candidates, candidate_graphs, proposal_diag = _propose_attributed_candidates(
+            current,
+            vocabulary=vocabulary,
+            config=cfg,
+            rng=generator,
+            excluded_states=visited if cfg.reject_revisited_states else None,
+            proposal_budget=proposal_budget,
+            valid_candidate_budget=valid_candidate_budget,
+        )
+        if not candidates:
+            trace.append(
+                {
+                    "step": step,
+                    "accepted": False,
+                    "reason": "source_enrichment_no_valid_candidate",
+                    **proposal_diag,
+                }
+            )
+            break
+        prepared = _prepare_candidate_states(
+            current,
+            candidates,
+            candidate_graphs=candidate_graphs,
+            current_counts=current_counts,
+            vocabulary=vocabulary,
+            graphlet_basis=graphlet_basis,
+            config=cfg,
+            device=device,
+        )
+        rows = _score_prepared(
+            prepared,
+            graphlet_basis=graphlet_basis,
+            clean_spectra=prediction.clean_spectra,
+            next_spectra=prediction.clean_spectra,
+            clean_graphlet_logits=prediction.clean_graphlet_logits,
+            next_graphlet_logits=prediction.clean_graphlet_logits,
+            graphlet_mask=current_mask,
+            spectral_weight=spectral_weight,
+            graphlet_weight=graphlet_weight,
+            config=cfg,
+        )
+        selected, rdkit_diag = _choose_candidate(rows, config=cfg, rng=generator)
+        if selected is None:
+            trace.append(
+                {
+                    "step": step,
+                    "accepted": False,
+                    "reason": "source_enrichment_plateau",
+                    "best_energy": float(best_energy),
+                    **proposal_diag,
+                    **rdkit_diag,
+                }
+            )
+            break
+        chosen = rows[selected]
+        candidate = chosen["candidate_graph"]
+        if not attributed_rewiring_invariant_matches_graph(candidate, invariant):
+            raise AssertionError("Source enrichment changed the hard attributed rewiring invariant.")
+        current = candidate
+        current_counts = {
+            key: dict(value) for key, value in chosen["candidate_graphlet_counts"].items()
+        }
+        visited.add(
+            attributed_state_key(
+                current,
+                node_attribute=str(vocabulary.node_attribute),
+                edge_attribute=str(vocabulary.edge_attribute),
+            )
+        )
+        candidate_energy = float(chosen["candidate_energy"])
+        if candidate_energy < best_energy:
+            best_energy = candidate_energy
+            best_graph = current.copy()
+        trace.append(
+            {
+                "step": step,
+                "accepted": True,
+                "reason": "invariant_summary_source_enrichment_swap",
+                "energy": candidate_energy,
+                "best_energy": float(best_energy),
+                "energy_improvement": float(chosen["energy_improvement"]),
+                "relative_energy_improvement": float(chosen["relative_energy_improvement"]),
+                "action": _attributed_action_trace(chosen["action"], vocabulary),
+                **proposal_diag,
+                **rdkit_diag,
+            }
+        )
+        _debug(
+            cfg,
+            step,
+            f"{prefix} source_enrichment accepted={step + 1}/{cfg.steps} "
+            f"energy={candidate_energy:.6f} best={best_energy:.6f}",
+        )
+
+    result = best_graph if cfg.return_best_state else current
+    if return_trace:
+        return result, trace
+    return result
+
+
+def refine_attributed_graph_with_spectral_graphlet_diffusion(
+    model: AttributedSpectralGraphletTransformerPredictor,
+    graph: nx.Graph,
+    *,
+    vocabulary: GraphCategoryVocabulary,
+    graphlet_basis: GraphletBasis,
+    config: AttributedSpectralGraphletRefinerConfig | dict[str, Any] | None = None,
+    device: torch.device | str = "cpu",
+    rng: np.random.Generator | None = None,
+    return_trace: bool = False,
+    debug_context: str = "",
+    conditioning_graph: nx.Graph | None = None,
+) -> nx.Graph | tuple[nx.Graph, list[dict[str, Any]]]:
     cfg = config if isinstance(config, AttributedSpectralGraphletRefinerConfig) else AttributedSpectralGraphletRefinerConfig.from_dict(config)
     generator = rng if rng is not None else np.random.default_rng(0)
     current = normalize_attributed_graph(graph)
-    conditioning_graph = current.copy()
+    context_graph = normalize_attributed_graph(
+        graph if conditioning_graph is None else conditioning_graph
+    )
+    if context_graph.number_of_nodes() != current.number_of_nodes():
+        raise ValueError("Attributed conditioning graph and current graph must have equal size.")
     rewiring_invariant = extract_attributed_rewiring_invariant(
         current,
         edge_types=vocabulary.edge_values,
@@ -1020,10 +1433,10 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
     ):
         raise ValueError("Attributed source graph failed RDKit sanitization.")
     source_spectra = attributed_laplacian_spectra(
-        conditioning_graph, edge_attribute=str(vocabulary.edge_attribute)
+        context_graph, edge_attribute=str(vocabulary.edge_attribute)
     )
-    source_prob, source_mask, source_counts = extract_attributed_graphlet_simplex(
-        conditioning_graph, graphlet_basis=graphlet_basis
+    source_prob, source_mask, _source_counts = extract_attributed_graphlet_simplex(
+        context_graph, graphlet_basis=graphlet_basis
     )
     source_logits = attributed_graphlet_simplex_to_clr(
         source_prob,
@@ -1031,7 +1444,19 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
         epsilon=cfg.graphlet_logit_epsilon,
         coordinate_mask=source_mask,
     )
-    current_counts = {key: dict(value) for key, value in source_counts.items()}
+    if current is context_graph or attributed_state_key(
+        current, node_attribute=str(vocabulary.node_attribute), edge_attribute=str(vocabulary.edge_attribute)
+    ) == attributed_state_key(
+        context_graph, node_attribute=str(vocabulary.node_attribute), edge_attribute=str(vocabulary.edge_attribute)
+    ):
+        _, _, current_counts_raw = extract_attributed_graphlet_simplex(
+            context_graph, graphlet_basis=graphlet_basis
+        )
+    else:
+        _, _, current_counts_raw = extract_attributed_graphlet_simplex(
+            current, graphlet_basis=graphlet_basis
+        )
+    current_counts = {key: dict(value) for key, value in current_counts_raw.items()}
     visited = {
         attributed_state_key(
             current,
@@ -1058,7 +1483,7 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
             prediction = predict_clean_attributed_summaries(
                 model,
                 current,
-                conditioning_graph=conditioning_graph,
+                conditioning_graph=context_graph,
                 source_spectra=source_spectra,
                 source_graphlet_probabilities=source_prob,
                 source_graphlet_logits=source_logits,
@@ -1102,12 +1527,15 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
         graphlet_mix = cfg.graphlet_bridge.clean_mix_for_step(
             accepted_step=accepted_steps, total_steps=max(cfg.steps, 1)
         )
+        proposal_budget, valid_candidate_budget = cfg.candidate_budgets_at(progress)
         candidates, candidate_graphs, proposal_diag = _propose_attributed_candidates(
             current,
             vocabulary=vocabulary,
             config=cfg,
             rng=generator,
             excluded_states=visited if cfg.reject_revisited_states else None,
+            proposal_budget=proposal_budget,
+            valid_candidate_budget=valid_candidate_budget,
         )
         if not candidates:
             trace.append(
@@ -1128,6 +1556,7 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
             vocabulary=vocabulary,
             graphlet_basis=graphlet_basis,
             config=cfg,
+            device=device,
         )
 
         expansion = 0
@@ -1309,7 +1738,10 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
 __all__ = [
     "AttributedRewireAction",
     "AttributedSpectralGraphletPrediction",
+    "AttributedInvariantSummaryPrediction",
     "AttributedSpectralGraphletRefinerConfig",
     "predict_clean_attributed_summaries",
+    "predict_attributed_invariant_summary",
+    "enrich_attributed_graph_with_invariant_summary",
     "refine_attributed_graph_with_spectral_graphlet_diffusion",
 ]

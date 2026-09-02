@@ -529,6 +529,7 @@ def main() -> None:
             graphlet_logit_epsilon=epsilon,
             seed=seed,
             shuffle_graphs=True,
+            cache_namespace="train",
         )
         val_examples = AttributedSpectralDiffusionIterableDataset(
             val_graphs,
@@ -540,6 +541,7 @@ def main() -> None:
             graphlet_logit_epsilon=epsilon,
             seed=seed + 1,
             shuffle_graphs=False,
+            cache_namespace="val",
         )
         train_diffusion_report: dict[str, Any] = {"storage": "streaming"}
         val_diffusion_report: dict[str, Any] = {"storage": "streaming"}
@@ -567,6 +569,8 @@ def main() -> None:
 
     predictor_cfg = dict(config.get("attributed_predictor", {}) or {})
     device = resolve_torch_device(args.device or predictor_cfg.get("device", "auto"))
+    source_enrichment_cfg = dict(config.get("source_enrichment", {}) or {})
+    invariant_summary_cfg = dict(source_enrichment_cfg.get("summary_estimator", {}) or {})
     model = AttributedSpectralGraphletTransformerPredictor(
         num_node_categories=vocabulary.num_node_categories,
         num_edge_categories=vocabulary.num_edge_categories,
@@ -589,6 +593,16 @@ def main() -> None:
             )
         ),
         graphlet_logit_epsilon=epsilon,
+        invariant_summary_enabled=bool(
+            invariant_summary_cfg.get(
+                "enabled", source_enrichment_cfg.get("enabled", False)
+            )
+        ),
+        invariant_summary_dim=int(invariant_summary_cfg.get("hidden_dim", 256)),
+        invariant_summary_layers=int(invariant_summary_cfg.get("layers", 2)),
+        invariant_summary_dropout=float(
+            invariant_summary_cfg.get("dropout", predictor_cfg.get("dropout", 0.05))
+        ),
     ).to(device)
     batch_size = int(
         args.batch_size if args.batch_size is not None else predictor_cfg.get("batch_size", 32)
@@ -665,12 +679,21 @@ def main() -> None:
         flush=True,
     )
     if storage == "streaming":
-        print(
-            "[AttributedTraining] status=loading_batch covers CPU typed-endpoint "
-            "construction, dual spectra, and exact attributed graphlets before "
-            "the batch reaches CUDA.",
-            flush=True,
-        )
+        if bool(diffusion_cfg.get("cache_endpoints", False)):
+            print(
+                "[AttributedTraining] streaming endpoint cache enabled: the first pass "
+                "constructs typed sources + dual spectra + exact attributed graphlets; "
+                "later epochs reload those fixed endpoints and resample only bridge "
+                "time/noise (plus shared relabel augmentation).",
+                flush=True,
+            )
+        else:
+            print(
+                "[AttributedTraining] status=loading_batch covers CPU typed-endpoint "
+                "construction, dual spectra, and exact attributed graphlets before "
+                "the batch reaches CUDA.",
+                flush=True,
+            )
 
     best_loss = float("inf")
     best_epoch = 0

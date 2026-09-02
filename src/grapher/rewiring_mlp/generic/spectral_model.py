@@ -477,6 +477,10 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
         graphlet_dim: int = 256,
         graphlet_dropout: float = 0.05,
         graphlet_logit_epsilon: float = 1.0e-5,
+        degree_summary_enabled: bool = False,
+        degree_summary_dim: int = 256,
+        degree_summary_layers: int = 2,
+        degree_summary_dropout: float = 0.05,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -486,6 +490,10 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
         self.graphlet_dim = int(graphlet_dim)
         self.graphlet_dropout_p = float(graphlet_dropout)
         self.graphlet_logit_epsilon = float(graphlet_logit_epsilon)
+        self.degree_summary_enabled = bool(degree_summary_enabled)
+        self.degree_summary_dim = int(degree_summary_dim)
+        self.degree_summary_layers = int(degree_summary_layers)
+        self.degree_summary_dropout_p = float(degree_summary_dropout)
         if self.graphlet_dim <= 0:
             raise ValueError("graphlet_dim must be positive.")
         if self.graphlet_logit_epsilon <= 0.0:
@@ -506,6 +514,54 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
                 for width in self.graphlet_block_widths
             ]
         )
+        if self.degree_summary_enabled:
+            if self.degree_summary_dim <= 0 or self.degree_summary_layers <= 0:
+                raise ValueError("degree summary dimensions/layers must be positive.")
+            self.degree_token_in = nn.Sequential(
+                nn.Linear(4, self.degree_summary_dim),
+                nn.SiLU(),
+                nn.Linear(self.degree_summary_dim, self.degree_summary_dim),
+            )
+            self.degree_token_layers = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.LayerNorm(self.degree_summary_dim),
+                        nn.Linear(self.degree_summary_dim, self.degree_summary_dim),
+                        nn.SiLU(),
+                        nn.Dropout(self.degree_summary_dropout_p),
+                        nn.Linear(self.degree_summary_dim, self.degree_summary_dim),
+                    )
+                    for _ in range(self.degree_summary_layers)
+                ]
+            )
+            self.degree_graph_encoder = nn.Sequential(
+                nn.Linear(2 * self.degree_summary_dim + 4, self.degree_summary_dim),
+                nn.SiLU(),
+                nn.Linear(self.degree_summary_dim, self.degree_summary_dim),
+                nn.SiLU(),
+            )
+            self.degree_spectral_token_in = nn.Sequential(
+                nn.Linear(3, self.degree_summary_dim),
+                nn.SiLU(),
+                nn.Linear(self.degree_summary_dim, self.degree_summary_dim),
+            )
+            self.degree_spectral_head = nn.Sequential(
+                nn.LayerNorm(self.degree_summary_dim),
+                nn.Linear(self.degree_summary_dim, self.degree_summary_dim),
+                nn.SiLU(),
+                nn.Linear(self.degree_summary_dim, 1),
+            )
+            self.degree_graphlet_heads = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.Linear(self.degree_summary_dim, self.graphlet_dim),
+                        nn.SiLU(),
+                        nn.Dropout(self.degree_summary_dropout_p),
+                        nn.Linear(self.graphlet_dim, width),
+                    )
+                    for width in self.graphlet_block_widths
+                ]
+            )
 
     @staticmethod
     def _make_slices(widths: Sequence[int]) -> tuple[tuple[int, int], ...]:
@@ -566,10 +622,125 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
             "graphlet_mask": mask,
         }
 
+    def _degree_summary_outputs(
+        self,
+        batch: TopologySpectralBatch,
+    ) -> dict[str, torch.Tensor]:
+        """Predict clean spectrum/graphlets from the degree multiset alone.
+
+        Degrees are sorted canonically before encoding, so this branch is
+        invariant to node relabeling.  It deliberately does not read adjacency,
+        current spectrum, graphlets, or diffusion time.  The resulting summary
+        is used to enrich a sampled HH realization before the main refiner.
+        """
+
+        if not self.degree_summary_enabled:
+            return {}
+        mask = batch.node_mask.bool()
+        batch_size, width = mask.shape
+        # Padding gets -1 before sorting so every real normalized degree stays
+        # in the first n positions even when isolated nodes are possible.
+        padded = batch.degrees.masked_fill(~mask, -1.0)
+        sorted_degree, _ = torch.sort(padded, dim=1, descending=True)
+        sorted_mask = (
+            torch.arange(width, device=mask.device).view(1, -1)
+            < batch.graph_size.long().view(-1, 1)
+        )
+        sorted_degree = sorted_degree.masked_fill(~sorted_mask, 0.0)
+        denom = (batch.graph_size - 1.0).clamp_min(1.0).unsqueeze(1)
+        rank = torch.arange(
+            width, device=mask.device, dtype=batch.degrees.dtype
+        ).view(1, -1).expand(batch_size, -1) / denom
+        size_feature = batch.graph_size / (batch.graph_size + 1.0).clamp_min(1.0)
+        token_features = torch.stack(
+            [
+                sorted_degree,
+                sorted_degree.square(),
+                rank,
+                size_feature.unsqueeze(1).expand(batch_size, width),
+            ],
+            dim=-1,
+        )
+        hidden = self.degree_token_in(token_features)
+        weights = sorted_mask.unsqueeze(-1).to(hidden.dtype)
+        hidden = hidden * weights
+        for layer in self.degree_token_layers:
+            hidden = (hidden + layer(hidden)) * weights
+        count = weights.sum(dim=1).clamp_min(1.0)
+        mean_pool = (hidden * weights).sum(dim=1) / count
+        neg_inf = torch.finfo(hidden.dtype).min
+        max_pool = hidden.masked_fill(~sorted_mask.unsqueeze(-1), neg_inf).max(dim=1).values
+        max_pool = torch.where(torch.isfinite(max_pool), max_pool, torch.zeros_like(max_pool))
+
+        degree_count = sorted_mask.to(batch.degrees.dtype).sum(dim=1).clamp_min(1.0)
+        degree_mean = (sorted_degree * sorted_mask).sum(dim=1) / degree_count
+        degree_var = (
+            (sorted_degree - degree_mean.unsqueeze(1)).square()
+            * sorted_mask.to(sorted_degree.dtype)
+        ).sum(dim=1) / degree_count
+        degree_max = sorted_degree.max(dim=1).values
+        graph_hidden = self.degree_graph_encoder(
+            torch.cat(
+                [
+                    mean_pool,
+                    max_pool,
+                    degree_mean.unsqueeze(1),
+                    torch.sqrt(degree_var.clamp_min(0.0)).unsqueeze(1),
+                    degree_max.unsqueeze(1),
+                    size_feature.unsqueeze(1),
+                ],
+                dim=-1,
+            )
+        )
+
+        spectrum_mask = batch.spectrum_mask.bool()
+        spectral_rank = torch.arange(
+            spectrum_mask.shape[1],
+            device=mask.device,
+            dtype=batch.degrees.dtype,
+        ).view(1, -1).expand(batch_size, -1) / denom
+        spectral_features = torch.stack(
+            [
+                spectral_rank,
+                size_feature.unsqueeze(1).expand_as(spectral_rank),
+                spectrum_mask.to(batch.degrees.dtype),
+            ],
+            dim=-1,
+        )
+        spectral_hidden = self.degree_spectral_token_in(spectral_features)
+        spectral_hidden = spectral_hidden + graph_hidden.unsqueeze(1)
+        raw_gap = self.degree_spectral_head(spectral_hidden).squeeze(-1)
+        clean_spectrum = self._constrained_spectrum(raw_gap, batch)
+
+        clean_blocks: list[torch.Tensor] = []
+        probability_blocks: list[torch.Tensor] = []
+        graphlet_mask = batch.graphlet_coordinate_mask
+        if graphlet_mask is None:
+            raise ValueError("Degree-conditioned graphlet summary requires a graphlet mask.")
+        for (start, stop), head in zip(self.graphlet_slices, self.degree_graphlet_heads):
+            valid = graphlet_mask[:, start:stop].any(dim=1, keepdim=True)
+            block = head(graph_hidden)
+            block = block - block.mean(dim=-1, keepdim=True)
+            block = block * valid.to(block.dtype)
+            probability = torch.softmax(block, dim=-1) * valid.to(block.dtype)
+            clean_blocks.append(block)
+            probability_blocks.append(probability)
+        return {
+            "degree_clean_spectrum": clean_spectrum,
+            "degree_clean_graphlet_logits": torch.cat(clean_blocks, dim=-1),
+            "degree_clean_graphlet_probabilities": torch.cat(probability_blocks, dim=-1),
+        }
+
+    def degree_summary(self, batch: TopologySpectralBatch) -> dict[str, torch.Tensor]:
+        if not self.degree_summary_enabled:
+            raise ValueError("This checkpoint has no degree-conditioned summary estimator.")
+        return self._degree_summary_outputs(batch)
+
     def forward(self, batch: TopologySpectralBatch) -> dict[str, torch.Tensor]:
         graph_hidden = self._graph_context(batch)
         outputs = self._spectral_outputs_from_graph_hidden(batch, graph_hidden)
         outputs.update(self._graphlet_outputs_from_graph_hidden(batch, graph_hidden))
+        outputs.update(self._degree_summary_outputs(batch))
         return outputs
 
     def loss(
@@ -636,6 +807,63 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
             + float(weights.get("graphlet_probability", 0.25)) * graphlet_probability_loss
         )
         total = spectral_total + graphlet_total
+        degree_summary_weight = float(weights.get("degree_summary", 0.0))
+        degree_summary_total = predicted_logits.sum() * 0.0
+        degree_metrics: dict[str, float] = {}
+        if self.degree_summary_enabled and degree_summary_weight > 0.0:
+            degree_spectral_outputs = {
+                "clean_spectrum": outputs["degree_clean_spectrum"]
+            }
+            degree_spectral_total, raw_degree_metrics = self._spectral_loss_from_outputs(
+                batch,
+                degree_spectral_outputs,
+                loss_weights=weights,
+            )
+            degree_logits = outputs["degree_clean_graphlet_logits"]
+            degree_prob = outputs["degree_clean_graphlet_probabilities"]
+            degree_logit_loss = (
+                F.smooth_l1_loss(degree_logits, target_logits, reduction="none")
+                * mask_weight
+            ).sum() / coordinate_count
+            degree_probability_terms: list[torch.Tensor] = []
+            for start, stop in self.graphlet_slices:
+                valid = mask[:, start:stop].any(dim=1)
+                if not torch.any(valid):
+                    continue
+                pred = degree_prob[valid, start:stop].clamp_min(1.0e-12)
+                target = target_prob[valid, start:stop]
+                target = target / target.sum(dim=-1, keepdim=True).clamp_min(1.0e-12)
+                target_safe = target.clamp_min(1.0e-12)
+                degree_probability_terms.append(
+                    (target * (torch.log(target_safe) - torch.log(pred))).sum(dim=-1).mean()
+                )
+            degree_probability_loss = (
+                torch.stack(degree_probability_terms).mean()
+                if degree_probability_terms
+                else degree_logits.sum() * 0.0
+            )
+            degree_graphlet_total = (
+                float(weights.get("graphlet_logit", 1.0)) * degree_logit_loss
+                + float(weights.get("graphlet_probability", 0.25)) * degree_probability_loss
+            )
+            degree_summary_total = degree_spectral_total + degree_graphlet_total
+            total = total + degree_summary_weight * degree_summary_total
+            degree_metrics = {
+                f"degree_summary_{key}": value
+                for key, value in raw_degree_metrics.items()
+                if key != "loss"
+            }
+            degree_metrics.update(
+                {
+                    "degree_summary_loss": float(degree_summary_total.detach().cpu()),
+                    "degree_summary_spectral_loss": float(degree_spectral_total.detach().cpu()),
+                    "degree_summary_graphlet_loss": float(degree_graphlet_total.detach().cpu()),
+                    "degree_summary_graphlet_logit_loss": float(degree_logit_loss.detach().cpu()),
+                    "degree_summary_graphlet_probability_loss": float(
+                        degree_probability_loss.detach().cpu()
+                    ),
+                }
+            )
         with torch.no_grad():
             normalized_logit_rmse = torch.sqrt(
                 (((predicted_logits - target_logits).square()) * mask_weight).sum()
@@ -657,6 +885,7 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
                 "graphlet_probability_mae": float(probability_mae.detach().cpu()),
             }
         )
+        metrics.update(degree_metrics)
         return total, metrics
 
     def model_config(self) -> dict[str, Any]:
@@ -667,6 +896,10 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
                 "graphlet_dim": self.graphlet_dim,
                 "graphlet_dropout": self.graphlet_dropout_p,
                 "graphlet_logit_epsilon": self.graphlet_logit_epsilon,
+                "degree_summary_enabled": self.degree_summary_enabled,
+                "degree_summary_dim": self.degree_summary_dim,
+                "degree_summary_layers": self.degree_summary_layers,
+                "degree_summary_dropout": self.degree_summary_dropout_p,
             }
         )
         return config

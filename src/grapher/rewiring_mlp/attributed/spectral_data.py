@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import pickle
+import sqlite3
 from typing import Any, Sequence
+import zlib
 
 import networkx as nx
 import numpy as np
@@ -474,6 +478,113 @@ def build_attributed_spectral_diffusion_examples(
     return examples, diagnostics
 
 
+def _sample_from_endpoint_template(
+    template: AttributedSpectralExample,
+    *,
+    vocabulary: GraphCategoryVocabulary,
+    graphlet_basis: GraphletBasis,
+    diffusion_config: dict[str, Any],
+    spectral_config: dict[str, Any],
+    graphlet_logit_epsilon: float,
+    rng: np.random.Generator,
+    relabel: bool,
+) -> list[AttributedSpectralExample]:
+    diff_cfg = SummaryDiffusionConfig.from_dict(diffusion_config)
+    samples_per_graph = max(int(diffusion_config.get("samples_per_graph", 8)), 1)
+    paths_per_graph = max(int(diffusion_config.get("paths_per_graph", 1)), 1)
+    conditioning_graph = template.conditioning_graph.copy()
+    if relabel:
+        n = conditioning_graph.number_of_nodes()
+        permutation = rng.permutation(n)
+        conditioning_graph = nx.relabel_nodes(
+            conditioning_graph,
+            {old: int(permutation[old]) for old in range(n)},
+            copy=True,
+        )
+        conditioning_graph = normalize_attributed_graph(conditioning_graph)
+    source_spectra = np.asarray(template.source_spectra, dtype=np.float64)
+    clean_spectra = np.asarray(template.clean_spectra_target, dtype=np.float64)
+    source_prob = np.asarray(template.source_graphlet_probabilities, dtype=np.float64)
+    clean_prob = np.asarray(template.clean_graphlet_probabilities_target, dtype=np.float64)
+    source_logits = np.asarray(template.source_graphlet_logits, dtype=np.float64)
+    clean_logits = np.asarray(template.clean_graphlet_logits_target, dtype=np.float64)
+    source_mask = np.asarray(template.graphlet_coordinate_mask, dtype=np.bool_)
+    scales = attributed_spectral_scales(
+        conditioning_graph,
+        mode=str(spectral_config.get("normalization", "mean_degree")),
+        edge_attribute=str(vocabulary.edge_attribute or "bond_type"),
+    )
+    examples: list[AttributedSpectralExample] = []
+    path_id = 0
+    for _path in range(paths_per_graph):
+        progresses = diff_cfg.sample_progresses(samples_per_graph, rng=rng)
+        for sample_id, progress in enumerate(progresses):
+            channels: list[np.ndarray] = []
+            for channel in range(2):
+                current, _diag = sample_spectral_bridge_marginal(
+                    source_spectra[channel],
+                    clean_spectra[channel],
+                    progress=float(progress),
+                    sigma=diff_cfg.spectral_sigma,
+                    scale=float(scales[channel]),
+                    preserve_trace=diff_cfg.preserve_spectral_trace,
+                    fix_lambda1=diff_cfg.fix_spectral_lambda1,
+                    schedule=diff_cfg,
+                    rng=rng,
+                )
+                channels.append(current)
+            current_logits, _graph_diag = sample_graphlet_clr_bridge_marginal(
+                source_logits,
+                clean_logits,
+                progress=float(progress),
+                sigma=diff_cfg.graphlet_sigma,
+                graphlet_basis=graphlet_basis,
+                coordinate_mask=source_mask,
+                schedule=diff_cfg,
+                rng=rng,
+            )
+            current_prob = attributed_graphlet_clr_to_simplex(
+                current_logits,
+                graphlet_basis=graphlet_basis,
+                coordinate_mask=source_mask,
+            )
+            examples.append(
+                AttributedSpectralExample(
+                    conditioning_graph=conditioning_graph.copy(),
+                    time=float(progress),
+                    current_spectra=np.stack(channels).astype(np.float32),
+                    source_spectra=source_spectra.astype(np.float32),
+                    clean_spectra_target=clean_spectra.astype(np.float32),
+                    current_graphlet_probabilities=current_prob.astype(np.float32),
+                    source_graphlet_probabilities=source_prob.astype(np.float32),
+                    clean_graphlet_probabilities_target=clean_prob.astype(np.float32),
+                    current_graphlet_logits=current_logits.astype(np.float32),
+                    source_graphlet_logits=source_logits.astype(np.float32),
+                    clean_graphlet_logits_target=clean_logits.astype(np.float32),
+                    graphlet_coordinate_mask=source_mask.astype(np.bool_),
+                    base_generator=template.base_generator,
+                    source_index=template.source_index,
+                    target_index=template.target_index,
+                    matching_cost=template.matching_cost,
+                    path_id=path_id,
+                    sample_id=sample_id,
+                )
+            )
+        path_id += 1
+    return examples
+
+
+def _endpoint_cache_db_path(
+    configured: str | None, namespace: str
+) -> Path | None:
+    if not configured:
+        return None
+    path = Path(str(configured))
+    if path.suffix.lower() in {".sqlite", ".db"}:
+        return path.with_name(f"{path.stem}_{namespace}{path.suffix}")
+    return path / f"attributed_endpoints_{namespace}.sqlite"
+
+
 class AttributedSpectralDiffusionIterableDataset(torch.utils.data.IterableDataset):
     def __init__(
         self,
@@ -487,6 +598,7 @@ class AttributedSpectralDiffusionIterableDataset(torch.utils.data.IterableDatase
         graphlet_logit_epsilon: float = 1.0e-4,
         seed: int = 0,
         shuffle_graphs: bool = True,
+        cache_namespace: str = "train",
     ) -> None:
         super().__init__()
         self.graphs = tuple(graphs)
@@ -498,6 +610,16 @@ class AttributedSpectralDiffusionIterableDataset(torch.utils.data.IterableDatase
         self.graphlet_logit_epsilon = float(graphlet_logit_epsilon)
         self.seed = int(seed)
         self.shuffle_graphs = bool(shuffle_graphs)
+        self.cache_namespace = str(cache_namespace)
+        self.cache_endpoints = bool(self.diffusion_config.get("cache_endpoints", False))
+        self.endpoint_cache_path = _endpoint_cache_db_path(
+            self.diffusion_config.get("endpoint_cache_path"),
+            self.cache_namespace,
+        )
+        if self.cache_endpoints and self.endpoint_cache_path is None:
+            self.endpoint_cache_path = _endpoint_cache_db_path(
+                "outputs/cache/attributed_spectral_endpoints", self.cache_namespace
+            )
         self.epoch = 0
         self.last_diagnostics: list[dict[str, Any]] = []
 
@@ -523,25 +645,97 @@ class AttributedSpectralDiffusionIterableDataset(torch.utils.data.IterableDatase
         indices = indices[worker_id::worker_count]
         if worker is None:
             self.last_diagnostics = []
-        for position, graph_index in enumerate(indices):
-            examples, diagnostics = build_attributed_spectral_diffusion_examples(
-                [self.graphs[int(graph_index)]],
-                vocabulary=self.vocabulary,
-                graphlet_basis=self.graphlet_basis,
-                diffusion_config=self.diffusion_config,
-                source_config=self.source_config,
-                spectral_config=self.spectral_config,
-                graphlet_logit_epsilon=self.graphlet_logit_epsilon,
-                seed=(
+        connection: sqlite3.Connection | None = None
+        if self.cache_endpoints:
+            assert self.endpoint_cache_path is not None
+            self.endpoint_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            connection = sqlite3.connect(str(self.endpoint_cache_path), timeout=60.0)
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS endpoints "
+                "(graph_index INTEGER PRIMARY KEY, payload BLOB NOT NULL)"
+            )
+            connection.commit()
+        try:
+            for position, graph_index in enumerate(indices):
+                graph_index_int = int(graph_index)
+                sample_seed = (
                     self.seed
                     + 1_000_003 * self.epoch
-                    + 10_007 * int(graph_index)
+                    + 10_007 * graph_index_int
                     + position
-                ),
-            )
-            if worker is None:
-                self.last_diagnostics.append(diagnostics)
-            yield from examples
+                )
+                sample_rng = np.random.default_rng(sample_seed)
+                if connection is None:
+                    examples, diagnostics = build_attributed_spectral_diffusion_examples(
+                        [self.graphs[graph_index_int]],
+                        vocabulary=self.vocabulary,
+                        graphlet_basis=self.graphlet_basis,
+                        diffusion_config=self.diffusion_config,
+                        source_config=self.source_config,
+                        spectral_config=self.spectral_config,
+                        graphlet_logit_epsilon=self.graphlet_logit_epsilon,
+                        seed=sample_seed,
+                    )
+                else:
+                    row = connection.execute(
+                        "SELECT payload FROM endpoints WHERE graph_index = ?",
+                        (graph_index_int,),
+                    ).fetchone()
+                    cache_hit = row is not None
+                    if row is None:
+                        # Endpoint construction uses a graph-specific seed that
+                        # is independent of epoch.  Subsequent epochs reuse the
+                        # same typed source/clean summaries but still draw fresh
+                        # bridge times/noise and fresh shared relabelings.
+                        endpoint_cfg = dict(self.diffusion_config)
+                        endpoint_cfg["samples_per_graph"] = 1
+                        endpoint_cfg["paths_per_graph"] = 1
+                        built, _ = build_attributed_spectral_diffusion_examples(
+                            [self.graphs[graph_index_int]],
+                            vocabulary=self.vocabulary,
+                            graphlet_basis=self.graphlet_basis,
+                            diffusion_config=endpoint_cfg,
+                            source_config=self.source_config,
+                            spectral_config=self.spectral_config,
+                            graphlet_logit_epsilon=self.graphlet_logit_epsilon,
+                            seed=self.seed + 10_007 * graph_index_int,
+                        )
+                        if not built:
+                            raise RuntimeError("Endpoint cache construction produced no example.")
+                        template = built[0]
+                        payload = zlib.compress(
+                            pickle.dumps(template, protocol=pickle.HIGHEST_PROTOCOL),
+                            level=3,
+                        )
+                        connection.execute(
+                            "INSERT OR REPLACE INTO endpoints(graph_index, payload) VALUES (?, ?)",
+                            (graph_index_int, sqlite3.Binary(payload)),
+                        )
+                        connection.commit()
+                    else:
+                        template = pickle.loads(zlib.decompress(bytes(row[0])))
+                    examples = _sample_from_endpoint_template(
+                        template,
+                        vocabulary=self.vocabulary,
+                        graphlet_basis=self.graphlet_basis,
+                        diffusion_config=self.diffusion_config,
+                        spectral_config=self.spectral_config,
+                        graphlet_logit_epsilon=self.graphlet_logit_epsilon,
+                        rng=sample_rng,
+                        relabel=bool(self.source_config.get("shared_relabel_augmentation", False)),
+                    )
+                    diagnostics = {
+                        "storage": "streaming_cached",
+                        "endpoint_cache_hit": bool(cache_hit),
+                        "num_examples": len(examples),
+                    }
+                if worker is None:
+                    self.last_diagnostics.append(diagnostics)
+                yield from examples
+        finally:
+            if connection is not None:
+                connection.close()
 
 
 __all__ = [
