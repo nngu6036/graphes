@@ -166,14 +166,15 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --reference-split test \
   --train-split train \
   --output-dir "$GEN_DIR/evaluation" \
-   --require-fcd
+    --require-fcd \
+ --hogdiff-compatible-metrics
 
 
 Molecular evaluation
-  validity: 1.0
+  validity: 0.9892578125
   validity_with_correction: 1.0
   validity_without_correction: 0.9892578125
-  fcd: 0.4075531445147327
+  fcd: 0.4084666944103361
   num_generated_graphs: 1024
   num_valid_generated_molecules: 1013
   num_invalid_generated_molecules: 11
@@ -181,15 +182,19 @@ Molecular evaluation
   num_invalid_generated_molecules_after_correction: 0
   num_molecules_corrected_to_valid: 11
   correction_success_rate_on_raw_invalid: 1.0
-  uniqueness_rate: 0.9950641658440277
-  unique_valid_count: 1008
-  novelty_rate: 0.2837301587301587
-  novel_unique_valid_count: 286
-  nspdk_mmd: 8.364006275022426e-06
-  nspdk_mmd_valid_only: 8.231630162851501e-06
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.9951171875
+  unique_valid_count: 1019
+  novelty_rate: 0.2904808635917566
+  novel_unique_valid_count: 296
+  nspdk_mmd: 0.0013185582814104725
+  nspdk_mmd_valid_only: 0.0013185582814104725
+  nspdk_proxy_mmd_all_generated: 8.36400627502328e-06
+  nspdk_proxy_mmd_metric_source: 1.7786508298988836e-05
   fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1013
-  fcd_generated_smiles_source: valid_without_correction
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
   
 
 export DIGRESS=/home/quang/DiGress
@@ -212,14 +217,17 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --reference-split test \
   --train-split train \
   --output-dir "$GEN_DIR/evaluation" \
-  --require-fcd
+    --require-fcd \
+ --hogdiff-compatible-metrics
 
 
-  Molecular evaluation
-  validity: 1.0
+
+
+Molecular evaluation
+  validity: 0.9873046875
   validity_with_correction: 1.0
   validity_without_correction: 0.9873046875
-  fcd: 0.4245433681641231
+  fcd: 0.42703299629275193
   num_generated_graphs: 1024
   num_valid_generated_molecules: 1011
   num_invalid_generated_molecules: 13
@@ -227,19 +235,19 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   num_invalid_generated_molecules_after_correction: 0
   num_molecules_corrected_to_valid: 13
   correction_success_rate_on_raw_invalid: 1.0
-  uniqueness_rate: 0.9920870425321464
-  unique_valid_count: 1003
-  novelty_rate: 0.27018943170488535
-  novel_unique_valid_count: 271
-  nspdk_mmd: 1.574874999061238e-05
-  nspdk_mmd_valid_only: 1.5942734972552522e-05
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.9921875
+  unique_valid_count: 1016
+  novelty_rate: 0.2795275590551181
+  novel_unique_valid_count: 284
+  nspdk_mmd: 0.0013525345229555784
+  nspdk_mmd_valid_only: 0.0013525345229555784
+  nspdk_proxy_mmd_all_generated: 1.5748749990613984e-05
+  nspdk_proxy_mmd_metric_source: 2.3865562642139906e-05
   fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1011
-  fcd_generated_smiles_source: valid_without_correction
-
-
-
-
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
 
 
   
@@ -263,13 +271,14 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --reference-split test \
   --train-split train \
   --output-dir "$GEN_DIR/evaluation" \
-  --require-fcd
+    --require-fcd \
+ --hogdiff-compatible-metrics
 
-  Molecular evaluation
-  validity: 1.0
+Molecular evaluation
+  validity: 0.9921875
   validity_with_correction: 1.0
   validity_without_correction: 0.9921875
-  fcd: 0.4274356554780745
+  fcd: 0.42543994709353683
   num_generated_graphs: 1024
   num_valid_generated_molecules: 1016
   num_invalid_generated_molecules: 8
@@ -277,12 +286,42 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   num_invalid_generated_molecules_after_correction: 0
   num_molecules_corrected_to_valid: 8
   correction_success_rate_on_raw_invalid: 1.0
-  uniqueness_rate: 0.9940944881889764
-  unique_valid_count: 1010
-  novelty_rate: 0.27623762376237626
-  novel_unique_valid_count: 279
-  nspdk_mmd: 1.0043714412444974e-05
-  nspdk_mmd_valid_only: 1.0183943108457141e-05
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.994140625
+  unique_valid_count: 1018
+  novelty_rate: 0.28094302554027506
+  novel_unique_valid_count: 286
+  nspdk_mmd: 0.0015187392031712269
+  nspdk_mmd_valid_only: 0.0015187392031712269
+  nspdk_proxy_mmd_all_generated: 1.0043714412445772e-05
+  nspdk_proxy_mmd_metric_source: 2.0683601009675223e-05
   fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1016
-  fcd_generated_smiles_source: valid_without_correction
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+
+
+  
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset qm9 \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_e1000 \
+  --wrapper-config configs/baselines/digress_qm9.yaml
+
+GEN_DIR="outputs/baselines/digress/qm9/seed_42_e1000/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+    --require-fcd \
+ --hogdiff-compatible-metrics

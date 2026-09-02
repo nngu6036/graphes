@@ -190,39 +190,6 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --output-dir \
     outputs/attributed_grapher/qm9_spectral_graphlet/seed_42/evaluation \
-  --require-fcd
-
-Molecular evaluation
-  validity: 1.0
-  validity_with_correction: 1.0
-  validity_without_correction: 0.9990234375
-  fcd: 2.4381281385924396
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 1023
-  num_invalid_generated_molecules: 1
-  num_valid_generated_molecules_with_correction: 1024
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 1
-  correction_success_rate_on_raw_invalid: 1.0
-  uniqueness_rate: 0.989247311827957
-  unique_valid_count: 1012
-  novelty_rate: 0.8458498023715415
-  novel_unique_valid_count: 856
-  nspdk_mmd: 0.00020439745240377957
-  nspdk_mmd_valid_only: 0.00020391667742086618
-  fcd_num_reference_molecules: 13174
-  fcd_num_valid_generated_molecules: 1023
-  fcd_generated_smiles_source: valid_without_correction
-
-PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs \
-    outputs/attributed_generation/qm9_spectral_graphlet/seed_42/molecular_graphs.pkl \
-  --dataset-root outputs/datasets \
-  --dataset qm9_attributed \
-  --reference-split test \
-  --train-split train \
-  --output-dir \
-    outputs/attributed_grapher/qm9_spectral_graphlet/seed_42/evaluation \
   --require-fcd \
   --hogdiff-compatible-metrics
 
@@ -244,10 +211,10 @@ Molecular evaluation
   unique_valid_count: 1013
   novelty_rate: 0.8469891411648569
   novel_unique_valid_count: 858
-  nspdk_mmd: 0.006035470458999151
-  nspdk_mmd_valid_only: 0.006035470458999151
-  nspdk_proxy_mmd_all_generated: 0.0001872406507453768
-  nspdk_proxy_mmd_metric_source: 0.00018371953524226297
+  nspdk_mmd: 0.006019995068831
+  nspdk_mmd_valid_only: 0.006019995068831
+  nspdk_proxy_mmd_all_generated: 0.00018724065074532167
+  nspdk_proxy_mmd_metric_source: 0.00018371953524219426
   fcd_num_reference_molecules: 12997
   fcd_num_valid_generated_molecules: 1024
   fcd_generated_smiles_source: valid_with_correction
@@ -276,14 +243,14 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --output-dir \
     outputs/attributed_grapher/qm9_spectral_graphlet/seed_43/evaluation \
-  --require-fcd
-
+  --require-fcd \
+  --hogdiff-compatible-metrics
 
 Molecular evaluation
   validity: 1.0
   validity_with_correction: 1.0
   validity_without_correction: 1.0
-  fcd: 2.252526630191092
+  fcd: 2.465028972976423
   num_generated_graphs: 1024
   num_valid_generated_molecules: 1024
   num_invalid_generated_molecules: 0
@@ -291,17 +258,21 @@ Molecular evaluation
   num_invalid_generated_molecules_after_correction: 0
   num_molecules_corrected_to_valid: 0
   correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
   uniqueness_rate: 0.9931640625
   unique_valid_count: 1017
-  novelty_rate: 0.8652900688298918
-  novel_unique_valid_count: 880
-  nspdk_mmd: 0.00017804688651992483
-  nspdk_mmd_valid_only: 0.00017804688651992483
-  fcd_num_reference_molecules: 13174
+  novelty_rate: 0.8623402163225172
+  novel_unique_valid_count: 877
+  nspdk_mmd: 0.005469287145371211
+  nspdk_mmd_valid_only: 0.005469287145371211
+  nspdk_proxy_mmd_all_generated: 0.0001659572936008156
+  nspdk_proxy_mmd_metric_source: 0.00016153714150614736
+  fcd_num_reference_molecules: 12997
   fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_without_correction
+  fcd_generated_smiles_source: valid_with_correction
 
-  
+
 PYTHONPATH=src python scripts/train_attributed_grapher.py \
   --config configs/experiments/grapher/qm9_attributed_spectral_graphlet.yaml \
   --output-dir outputs/attributed_grapher/qm9_spectral_graphlet/seed_44 \
@@ -326,31 +297,34 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --output-dir \
     outputs/attributed_grapher/qm9_spectral_graphlet/seed_44/evaluation \
-  --require-fcd
+  --require-fcd \
+  --hogdiff-compatible-metrics
 
-
-  Molecular evaluation
+Molecular evaluation
   validity: 1.0
   validity_with_correction: 1.0
-  validity_without_correction: 0.9990234375
-  fcd: 2.1971773765876925
+  validity_without_correction: 1.0
+  fcd: 2.465028972976423
   num_generated_graphs: 1024
-  num_valid_generated_molecules: 1023
-  num_invalid_generated_molecules: 1
+  num_valid_generated_molecules: 1024
+  num_invalid_generated_molecules: 0
   num_valid_generated_molecules_with_correction: 1024
   num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 1
+  num_molecules_corrected_to_valid: 0
   correction_success_rate_on_raw_invalid: 1.0
-  uniqueness_rate: 0.9980449657869013
-  unique_valid_count: 1021
-  novelty_rate: 0.8746327130264446
-  novel_unique_valid_count: 893
-  nspdk_mmd: 0.0001669894590978374
-  nspdk_mmd_valid_only: 0.0001663896554304608
-  fcd_num_reference_molecules: 13174
-  fcd_num_valid_generated_molecules: 1023
-  fcd_generated_smiles_source: valid_without_correction
-
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.9931640625
+  unique_valid_count: 1017
+  novelty_rate: 0.8623402163225172
+  novel_unique_valid_count: 877
+  nspdk_mmd: 0.005546610109608153
+  nspdk_mmd_valid_only: 0.005546610109608153
+  nspdk_proxy_mmd_all_generated: 0.00016595729360090864
+  nspdk_proxy_mmd_metric_source: 0.00016153714150624857
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
 
 PYTHONPATH=src python scripts/train_topology_grapher.py \
   --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2_hogdiff_ou.yaml \

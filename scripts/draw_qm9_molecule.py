@@ -1,39 +1,52 @@
 #!/usr/bin/env python3
-"""Draw one or more QM9 molecules with coloured atom and bond types.
+"""Draw random molecular or generic graphs from a prepared dataset by name.
 
-This version auto-detects the project's QM9 dataset (typically data/QM9)
-so the user does not need to pass --root.
+The input is a prepared molecular dataset under
+``outputs/datasets/<dataset>``. Pass its name with ``--dataset``; the script
+then resolves the directory using the same convention as the training and
+evaluation commands and reads only the requested split. ``--count`` molecules
+are sampled without replacement; ``--seed`` makes the selection reproducible.
 
 Main features
 -------------
-- auto-detect the QM9 dataset inside the current project
-- draw a single molecule or a range of molecules
+- resolve a prepared molecular dataset by name
+- select its train, validation, or test split explicitly
+- draw a random sample without replacement
 - arrange molecules in a row x col grid
 - if the range is larger than row * col, continue on the next figure/page
-- atom colours represent node types; bond colours represent edge types
-- works from an existing processed PyG QM9 cache when available, otherwise
-  loads directly from raw/gdb9.sdf without preprocessing the whole dataset
+- automatically use molecular rendering when atom/bond attributes are present
+- otherwise draw a deterministic generic node-link diagram
 
 Examples
 --------
-Draw molecule 40 only::
+Draw one random molecule::
 
-    python scripts/draw_qm9_molecule.py \
-      --index-from 40 --index-to 40 \
+    PYTHONPATH=src python scripts/draw_qm9_molecule.py \
+      --dataset qm9_attributed --split test \
+      --count 1 --seed 42 \
       --row 1 --col 1 \
-      --output outputs/qm9_40.png
+      --output outputs/qm9_random.png
 
-Draw molecules 40..55, 4 per row and 3 rows per page::
+Draw 16 random molecules, 4 per row and 3 rows per page::
 
-    python scripts/draw_qm9_molecule.py \
-      --index-from 40 --index-to 55 \
+    PYTHONPATH=src python scripts/draw_qm9_molecule.py \
+      --dataset qm9_attributed --split test \
+      --count 16 --seed 42 \
       --row 3 --col 4 \
-      --output outputs/qm9_40_55.png
+      --output outputs/qm9_random_16.png
 
 If more than 12 molecules are requested in the example above, the script saves
 multiple files such as:
-- outputs/qm9_40_55_page_001.png
-- outputs/qm9_40_55_page_002.png
+- outputs/qm9_random_16_page_001.png
+- outputs/qm9_random_16_page_002.png
+
+Draw eight generic community graphs::
+
+    PYTHONPATH=src python scripts/draw_qm9_molecule.py \
+      --dataset community_small --split test \
+      --count 8 --seed 42 \
+      --row 2 --col 4 \
+      --output outputs/community_small_random_8.png
 """
 
 from __future__ import annotations
@@ -41,10 +54,17 @@ from __future__ import annotations
 import argparse
 import io
 import math
+import random
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
+
+import networkx as nx
+
+from grapher.data.statistics import resolve_prepared_dataset
+from grapher.rewiring_mlp.molecular.graph_io import nx_to_rdkit_mol
+from grapher.utils.io import load_pickle
 
 
 ATOM_COLOURS_HEX: Mapping[str, str] = {
@@ -77,6 +97,17 @@ BOND_LABELS: Mapping[str, str] = {
     "OTHER": "other",
 }
 
+GENERIC_NODE_COLOURS = (
+    "#2563EB",
+    "#DC2626",
+    "#16A34A",
+    "#9333EA",
+    "#EA580C",
+    "#0891B2",
+    "#CA8A04",
+    "#4F46E5",
+)
+
 
 @dataclass(frozen=True)
 class MoleculeInfo:
@@ -84,13 +115,16 @@ class MoleculeInfo:
     name: str
     smiles: str
     dataset_index: Optional[int] = None
-    raw_index: Optional[int] = None
+    source_index: Optional[int] = None
+    index_label: Optional[str] = None
 
 
 @dataclass(frozen=True)
 class LoadedItem:
     info: MoleculeInfo
-    mol: Any | None
+    mol: Any | None = None
+    graph: nx.Graph | None = None
+    render_mode: str = "molecule"
     error: str | None = None
 
 
@@ -130,262 +164,210 @@ def _safe_smiles(mol: Any) -> str:
         return "<unavailable>"
 
 
-def _candidate_project_roots() -> list[Path]:
-    candidates: list[Path] = []
-    seen: set[Path] = set()
+def _load_prepared_dataset_split(
+    dataset: str,
+    root: str | Path,
+    split: str,
+) -> tuple[list[Any], Path, str]:
+    """Resolve and load one prepared split without building or downloading data."""
 
-    def add(path: Path) -> None:
-        path = path.resolve()
-        if path not in seen:
-            seen.add(path)
-            candidates.append(path)
-
-    cwd = Path.cwd().resolve()
-    add(cwd)
-    for parent in cwd.parents:
-        add(parent)
-
-    here = Path(__file__).resolve()
-    for parent in [here.parent, *here.parents]:
-        add(parent)
-
-    return candidates
+    if split not in {"train", "val", "test"}:
+        raise ValueError(f"Unknown prepared dataset split: {split!r}")
+    resolved = resolve_prepared_dataset(dataset, root=root)
+    split_path = resolved.directory / f"{split}.pkl"
+    payload = load_pickle(split_path)
+    if not isinstance(payload, (list, tuple)):
+        raise TypeError(
+            f"Prepared dataset split {split_path} must contain a list of "
+            f"NetworkX graphs, not {type(payload).__name__}."
+        )
+    return list(payload), split_path, resolved.serialized_name
 
 
-def _detect_qm9_root() -> Path:
-    for base in _candidate_project_roots():
-        candidate = base / "data" / "QM9"
-        if (candidate / "raw" / "gdb9.sdf").is_file() or (candidate / "processed" / "data_v3.pt").is_file():
-            return candidate
-    raise FileNotFoundError(
-        "Could not auto-detect the QM9 dataset. Expected a project dataset like data/QM9/ "
-        "with raw/gdb9.sdf or processed/data_v3.pt."
-    )
+def _sample_graph_indices(dataset_size: int, count: int, seed: int) -> list[int]:
+    """Sample distinct split-local graph indices reproducibly."""
+
+    if count <= 0:
+        raise ValueError("--count must be positive")
+    if count > dataset_size:
+        raise ValueError(
+            f"--count {count} exceeds the selected split size {dataset_size}"
+        )
+    return random.Random(seed).sample(range(dataset_size), count)
 
 
-def _find_qm9_raw_file(root: Path, filename: str) -> Optional[Path]:
-    for candidate in (root / "raw" / filename, root / filename):
-        if candidate.is_file():
-            return candidate
+def _first_attribute(data: Mapping[str, Any], names: Sequence[str]) -> Any | None:
+    for name in names:
+        if name in data:
+            return data[name]
     return None
 
 
-def _read_uncharacterized_indices(path: Optional[Path]) -> set[int]:
-    if path is None or not path.is_file():
-        return set()
+def _is_molecular_graph(graph: Any) -> bool:
+    """Return whether every node and edge carries molecular attributes."""
 
-    excluded: set[int] = set()
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        parts = line.split()
-        if not parts:
-            continue
+    if not isinstance(graph, nx.Graph) or graph.number_of_nodes() == 0:
+        return False
+    for _node, data in graph.nodes(data=True):
+        value = _first_attribute(
+            data,
+            ("atomic_num", "atomic_number", "atom_type", "z"),
+        )
+        if value is None:
+            return False
         try:
-            one_based = int(parts[0])
+            atomic_number = int(_python_scalar(value))
+        except (TypeError, ValueError):
+            return False
+        if atomic_number < 1 or atomic_number > 118:
+            return False
+    for u, v, data in graph.edges(data=True):
+        value = _first_attribute(data, ("bond_type", "edge_type", "bond_order"))
+        if value is None:
+            return False
+        try:
+            _prepared_bond_type(value, edge=(u, v))
         except ValueError:
-            continue
-        if one_based > 0:
-            excluded.add(one_based - 1)
-    return excluded
+            return False
+    return True
 
 
-def _pyg_index_to_raw_index(index: int, raw_count: int, excluded: set[int]) -> int:
-    if index < 0:
-        raise IndexError("index must be non-negative")
+def _prepared_source_index(graph: nx.Graph) -> int | None:
+    source_index = _python_scalar(graph.graph.get("source_index"))
+    try:
+        return int(source_index) if source_index is not None else None
+    except (TypeError, ValueError):
+        return None
 
-    kept_position = 0
-    valid_excluded = {i for i in excluded if 0 <= i < raw_count}
-    for raw_index in range(raw_count):
-        if raw_index in valid_excluded:
-            continue
-        if kept_position == index:
-            return raw_index
-        kept_position += 1
 
-    raise IndexError(
-        f"PyG QM9 index {index} is outside the filtered dataset after excluding "
-        f"{len(valid_excluded)} uncharacterized records"
+def _generic_graph_info(
+    graph: Any,
+    index: int,
+    dataset_name: str,
+    split: str,
+) -> MoleculeInfo:
+    if not isinstance(graph, nx.Graph):
+        raise TypeError(
+            f"{dataset_name}/{split}[{index}] is not a NetworkX graph "
+            f"({type(graph).__name__})."
+        )
+    node_count = graph.number_of_nodes()
+    edge_count = graph.number_of_edges()
+    if node_count == 0:
+        component_count = 0
+    elif graph.is_directed():
+        component_count = nx.number_weakly_connected_components(graph)
+    else:
+        component_count = nx.number_connected_components(graph)
+    index_label = f"{dataset_name}/{split}[{index}]"
+    name = str(graph.graph.get("name", index_label))
+    caption = (
+        f"nodes={node_count}, edges={edge_count}, components={component_count}"
+    )
+    return MoleculeInfo(
+        source=f"prepared dataset {dataset_name}/{split}",
+        name=name,
+        smiles=caption,
+        dataset_index=index,
+        source_index=_prepared_source_index(graph),
+        index_label=index_label,
     )
 
 
-def _load_from_sdf(
-    path: Path,
+def _prepared_bond_type(value: Any, *, edge: tuple[Any, Any]) -> int:
+    raw = _python_scalar(value)
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Edge {edge!r} has invalid molecular bond type {raw!r}."
+        ) from exc
+    if abs(numeric - 1.5) <= 1.0e-8:
+        return 4
+    rounded = int(round(numeric))
+    if abs(numeric - rounded) > 1.0e-8 or rounded not in {1, 2, 3, 4}:
+        raise ValueError(
+            f"Edge {edge!r} has unsupported molecular bond type {raw!r}."
+        )
+    return rounded
+
+
+def _load_from_prepared_graph(
+    graph: Any,
     index: int,
-    *,
-    dataset_index: Optional[int] = None,
-    source_label: Optional[str] = None,
+    dataset_name: str,
+    split: str,
 ) -> Tuple[Any, MoleculeInfo]:
+    """Convert one prepared attributed NetworkX graph into an RDKit molecule."""
+
     from rdkit import Chem
 
-    if not path.is_file():
-        raise FileNotFoundError(f"SDF file does not exist: {path}")
-    if index < 0:
-        raise IndexError("index must be non-negative")
-
-    supplier = Chem.SDMolSupplier(str(path), removeHs=False, sanitize=False)
-    record_count = len(supplier)
-    if index >= record_count:
-        raise IndexError(f"SDF index {index} is outside [0, {record_count - 1}]")
-
-    mol = supplier[index]
-    if mol is None:
-        raise ValueError(
-            f"RDKit could not read SDF record {index} from {path}. "
-            "The record may be malformed or the SDF download may be incomplete."
+    if not isinstance(graph, nx.Graph):
+        raise TypeError(
+            f"{dataset_name}/{split}[{index}] is not a NetworkX graph "
+            f"({type(graph).__name__})."
         )
 
+    normalized = nx.Graph()
+    node_map: dict[Any, int] = {}
+    for normalized_index, (node, data) in enumerate(graph.nodes(data=True)):
+        atomic_number = _first_attribute(
+            data,
+            ("atomic_num", "atomic_number", "atom_type", "z"),
+        )
+        if atomic_number is None:
+            raise ValueError(
+                f"Node {node!r} in {dataset_name}/{split}[{index}] is missing "
+                "atomic_num/atom_type. Use an attributed molecular dataset "
+                "such as 'qm9_attributed', not a topology-only dataset."
+            )
+        try:
+            atomic_number = int(_python_scalar(atomic_number))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Node {node!r} in {dataset_name}/{split}[{index}] has invalid "
+                f"atomic number {atomic_number!r}."
+            ) from exc
+        node_map[node] = normalized_index
+        normalized.add_node(normalized_index, atomic_num=atomic_number)
+
+    for u, v, data in graph.edges(data=True):
+        raw_bond_type = _first_attribute(
+            data,
+            ("bond_type", "edge_type", "bond_order"),
+        )
+        if raw_bond_type is None:
+            raise ValueError(
+                f"Edge {(u, v)!r} in {dataset_name}/{split}[{index}] is missing "
+                "bond_type. Use an attributed molecular dataset such as "
+                "'qm9_attributed', not a topology-only dataset."
+            )
+        normalized.add_edge(
+            node_map[u],
+            node_map[v],
+            bond_type=_prepared_bond_type(raw_bond_type, edge=(u, v)),
+        )
+
+    mol = nx_to_rdkit_mol(
+        normalized,
+        sanitize=False,
+        infer_projected_formal_charges=True,
+    )
     try:
         Chem.SanitizeMol(mol)
     except Exception:
         mol.UpdatePropertyCache(strict=False)
 
-    name = mol.GetProp("_Name") if mol.HasProp("_Name") else f"SDF record {index}"
+    index_label = f"{dataset_name}/{split}[{index}]"
+    name = str(graph.graph.get("name", index_label))
     return mol, MoleculeInfo(
-        source=source_label or str(path),
+        source=f"prepared dataset {dataset_name}/{split}",
         name=name,
         smiles=_safe_smiles(mol),
-        dataset_index=index if dataset_index is None else dataset_index,
-        raw_index=index,
-    )
-
-
-def _pyg_graph_to_rdkit(data: Any) -> Any:
-    from rdkit import Chem
-    from rdkit.Chem.rdchem import BondType
-
-    if not hasattr(data, "z") or not hasattr(data, "edge_index"):
-        raise ValueError("PyG data object has neither a usable SMILES nor z/edge_index fields")
-
-    z_values = data.z.detach().cpu().tolist()
-    edge_index = data.edge_index.detach().cpu()
-    edge_attr = getattr(data, "edge_attr", None)
-    if edge_attr is not None:
-        edge_attr = edge_attr.detach().cpu()
-
-    rw_mol = Chem.RWMol()
-    for atomic_number in z_values:
-        rw_mol.AddAtom(Chem.Atom(int(atomic_number)))
-
-    bond_types = {
-        0: BondType.SINGLE,
-        1: BondType.DOUBLE,
-        2: BondType.TRIPLE,
-        3: BondType.AROMATIC,
-    }
-
-    seen = set()
-    for edge_pos in range(edge_index.size(1)):
-        u = int(edge_index[0, edge_pos])
-        v = int(edge_index[1, edge_pos])
-        if u == v:
-            continue
-        pair = (min(u, v), max(u, v))
-        if pair in seen:
-            continue
-        seen.add(pair)
-
-        bond_class = 0
-        if edge_attr is not None:
-            if edge_attr.dim() == 1:
-                bond_class = int(edge_attr[edge_pos])
-            else:
-                bond_class = int(edge_attr[edge_pos].argmax())
-        rw_mol.AddBond(pair[0], pair[1], bond_types.get(bond_class, BondType.SINGLE))
-
-    mol = rw_mol.GetMol()
-    try:
-        Chem.SanitizeMol(mol)
-    except Exception:
-        mol.UpdatePropertyCache(strict=False)
-    return mol
-
-
-def _load_from_pyg_qm9(root: Path, index: int) -> Tuple[Any, MoleculeInfo]:
-    from rdkit import Chem
-
-    try:
-        from torch_geometric.datasets import QM9
-    except ImportError as exc:
-        raise RuntimeError(
-            "PyG input mode requires torch-geometric. Install it or rely on raw/gdb9.sdf."
-        ) from exc
-
-    dataset = QM9(root=str(root))
-    if index < 0 or index >= len(dataset):
-        raise IndexError(f"QM9 index {index} is outside [0, {len(dataset) - 1}]")
-
-    data = dataset[index]
-    raw_smiles = _python_scalar(getattr(data, "smiles", None))
-    mol = Chem.MolFromSmiles(str(raw_smiles)) if raw_smiles else None
-    if mol is None:
-        mol = _pyg_graph_to_rdkit(data)
-
-    raw_name = _python_scalar(getattr(data, "name", None), f"QM9[{index}]")
-    raw_dataset_idx = _python_scalar(getattr(data, "idx", None), index)
-    try:
-        raw_dataset_idx = int(raw_dataset_idx)
-    except Exception:
-        raw_dataset_idx = index
-
-    return mol, MoleculeInfo(
-        source=f"PyG QM9 root={root}",
-        name=str(raw_name),
-        smiles=_safe_smiles(mol),
         dataset_index=index,
-        raw_index=raw_dataset_idx,
+        source_index=_prepared_source_index(graph),
+        index_label=index_label,
     )
-
-
-def _load_from_qm9_raw_root(root: Path, index: int, index_space: str) -> Tuple[Any, MoleculeInfo]:
-    from rdkit import Chem
-
-    sdf_path = _find_qm9_raw_file(root, "gdb9.sdf")
-    if sdf_path is None:
-        raise FileNotFoundError(f"Could not find gdb9.sdf under {root}")
-
-    if index_space == "raw":
-        raw_index = index
-    elif index_space == "pyg":
-        supplier = Chem.SDMolSupplier(str(sdf_path), removeHs=False, sanitize=False)
-        raw_count = len(supplier)
-        excluded = _read_uncharacterized_indices(_find_qm9_raw_file(root, "uncharacterized.txt"))
-        raw_index = _pyg_index_to_raw_index(index, raw_count, excluded)
-    else:
-        raise ValueError(f"Unknown index space: {index_space}")
-
-    return _load_from_sdf(
-        sdf_path,
-        raw_index,
-        dataset_index=index,
-        source_label=f"QM9 raw SDF={sdf_path}",
-    )
-
-
-def _load_from_qm9_root(root: Path, index: int, loader: str, index_space: str) -> Tuple[Any, MoleculeInfo]:
-    if loader == "raw":
-        return _load_from_qm9_raw_root(root, index, index_space)
-    if loader == "pyg":
-        return _load_from_pyg_qm9(root, index)
-    if loader != "auto":
-        raise ValueError(f"Unknown loader: {loader}")
-
-    processed_path = root / "processed" / "data_v3.pt"
-    raw_sdf = _find_qm9_raw_file(root, "gdb9.sdf")
-
-    if processed_path.is_file():
-        try:
-            return _load_from_pyg_qm9(root, index)
-        except Exception as exc:
-            if raw_sdf is None:
-                raise
-            print(
-                f"Warning: processed PyG loading failed ({exc}); falling back to direct raw-SDF access.",
-                file=sys.stderr,
-            )
-
-    if raw_sdf is not None:
-        return _load_from_qm9_raw_root(root, index, index_space)
-
-    return _load_from_pyg_qm9(root, index)
 
 
 def _prepare_molecule(mol: Any, show_hydrogens: bool, atom_indices: bool, bond_labels: bool) -> Any:
@@ -499,6 +481,179 @@ def _wrap_text(text: str, width: int) -> list[str]:
     return lines
 
 
+def _draw_source_index_badge(
+    draw: Any,
+    info: MoleculeInfo,
+    panel_width: int,
+    panel_height: int,
+    font: Any,
+) -> None:
+    if info.source_index is None:
+        return
+    source_text = f"source {info.source_index}"
+    bbox = draw.textbbox((0, 0), source_text, font=font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    x1 = panel_width - text_width - 18
+    y1 = panel_height - text_height - 12
+    draw.rounded_rectangle(
+        (x1 - 8, y1 - 4, x1 + text_width + 8, y1 + text_height + 4),
+        radius=8,
+        fill="#F3F4F6",
+        outline="#D1D5DB",
+    )
+    draw.text((x1, y1), source_text, fill="#374151", font=font)
+
+
+def _generic_node_category(data: Mapping[str, Any]) -> str | None:
+    value = _first_attribute(
+        data,
+        ("community", "block", "node_label", "label", "type", "group"),
+    )
+    if value is None:
+        return None
+    scalar = _python_scalar(value)
+    return str(scalar)
+
+
+def _render_generic_graph_panel(
+    graph: nx.Graph,
+    info: MoleculeInfo,
+    panel_width: int,
+    panel_height: int,
+    show_title: bool,
+    layout_seed: int,
+) -> Any:
+    """Render a generic NetworkX graph without importing RDKit."""
+
+    from PIL import Image, ImageDraw
+
+    bg = Image.new("RGB", (panel_width, panel_height), "white")
+    draw = ImageDraw.Draw(bg)
+    draw.rounded_rectangle(
+        (2, 2, panel_width - 3, panel_height - 3),
+        radius=12,
+        outline="#D0D7DE",
+        width=2,
+    )
+    title_font = _load_font(18, bold=True)
+    body_font = _load_font(14)
+    small_font = _load_font(11)
+    index_label = info.index_label or f"graph {info.dataset_index}"
+    top_pad = 14
+    title_height = 26 if show_title else 0
+    caption_height = 52
+
+    if show_title:
+        draw.text((14, top_pad), index_label, fill="#111827", font=title_font)
+
+    nodes = list(graph.nodes())
+    if not nodes:
+        message = "Empty graph"
+        bbox = draw.textbbox((0, 0), message, font=body_font)
+        draw.text(
+            (
+                (panel_width - (bbox[2] - bbox[0])) / 2,
+                (panel_height - caption_height) / 2,
+            ),
+            message,
+            fill="#6B7280",
+            font=body_font,
+        )
+    else:
+        if len(nodes) == 1:
+            positions = {nodes[0]: (0.0, 0.0)}
+        elif len(nodes) <= 200:
+            positions = nx.spring_layout(graph, seed=int(layout_seed), iterations=50)
+        else:
+            positions = nx.circular_layout(graph)
+
+        left = 26.0
+        right = float(panel_width - 26)
+        top = float(top_pad + title_height + 10)
+        bottom = float(panel_height - caption_height - 10)
+        x_values = [float(positions[node][0]) for node in nodes]
+        y_values = [float(positions[node][1]) for node in nodes]
+        min_x, max_x = min(x_values), max(x_values)
+        min_y, max_y = min(y_values), max(y_values)
+
+        def scale(
+            value: float,
+            low: float,
+            high: float,
+            start: float,
+            end: float,
+        ) -> float:
+            if abs(high - low) <= 1.0e-12:
+                return (start + end) / 2.0
+            return start + (value - low) * (end - start) / (high - low)
+
+        points = {
+            node: (
+                scale(float(positions[node][0]), min_x, max_x, left, right),
+                scale(float(positions[node][1]), min_y, max_y, bottom, top),
+            )
+            for node in nodes
+        }
+        for u, v in graph.edges():
+            x1, y1 = points[u]
+            x2, y2 = points[v]
+            if u == v:
+                draw.ellipse(
+                    (x1 - 9, y1 - 15, x1 + 9, y1 + 3),
+                    outline="#64748B",
+                    width=2,
+                )
+            else:
+                draw.line((x1, y1, x2, y2), fill="#94A3B8", width=2)
+
+        categories = {
+            node: _generic_node_category(graph.nodes[node]) for node in nodes
+        }
+        category_values = sorted(
+            {value for value in categories.values() if value is not None}
+        )
+        category_colours = {
+            value: GENERIC_NODE_COLOURS[index % len(GENERIC_NODE_COLOURS)]
+            for index, value in enumerate(category_values)
+        }
+        radius = max(4, min(10, int(32 / math.sqrt(max(len(nodes), 1)))))
+        show_node_labels = len(nodes) <= 30
+        for node in nodes:
+            x, y = points[node]
+            colour = category_colours.get(categories[node], GENERIC_NODE_COLOURS[0])
+            draw.ellipse(
+                (x - radius, y - radius, x + radius, y + radius),
+                fill=colour,
+                outline="#1E293B",
+                width=1,
+            )
+            if show_node_labels:
+                label = str(node)
+                bbox = draw.textbbox((0, 0), label, font=small_font)
+                draw.text(
+                    (
+                        x - (bbox[2] - bbox[0]) / 2,
+                        y - (bbox[3] - bbox[1]) / 2,
+                    ),
+                    label,
+                    fill="white",
+                    font=small_font,
+                )
+
+    caption_y = panel_height - caption_height
+    draw.text((14, caption_y), info.name, fill="#111827", font=body_font)
+    for line_index, line in enumerate(_wrap_text(info.smiles, 44)):
+        draw.text(
+            (14, caption_y + 18 + 15 * line_index),
+            line,
+            fill="#4B5563",
+            font=small_font,
+        )
+    _draw_source_index_badge(draw, info, panel_width, panel_height, small_font)
+    return bg
+
+
 def _render_molecule_panel(
     loaded: LoadedItem,
     panel_width: int,
@@ -506,7 +661,6 @@ def _render_molecule_panel(
     show_title: bool,
 ) -> Any:
     from PIL import Image, ImageDraw
-    from rdkit.Chem.Draw import rdMolDraw2D
 
     bg = Image.new("RGB", (panel_width, panel_height), "white")
     draw = ImageDraw.Draw(bg)
@@ -521,18 +675,23 @@ def _render_molecule_panel(
     title_h = 26 if show_title else 0
     molecule_h = panel_height - title_h - caption_h - 20
     molecule_h = max(molecule_h, 120)
+    index_label = (
+        loaded.info.index_label or f"QM9 index {loaded.info.dataset_index}"
+    )
 
     if loaded.error or loaded.mol is None:
         y = 20
-        draw.text((16, y), f"QM9 index {loaded.info.dataset_index}", fill="#B42318", font=title_font)
+        draw.text((16, y), index_label, fill="#B42318", font=title_font)
         y += 34
         for line in _wrap_text(loaded.error or "Unknown loading error", 42):
             draw.text((16, y), line, fill="#5F2120", font=body_font)
             y += 20
         return bg
 
+    from rdkit.Chem.Draw import rdMolDraw2D
+
     if show_title:
-        draw.text((14, top_pad), f"QM9 index {loaded.info.dataset_index}", fill="#111827", font=title_font)
+        draw.text((14, top_pad), index_label, fill="#111827", font=title_font)
 
     atoms, atom_colours, atom_radii, bonds, bond_colours = _highlight_maps(loaded.mol)
     drawer = rdMolDraw2D.MolDraw2DCairo(panel_width - 20, molecule_h)
@@ -558,15 +717,13 @@ def _render_molecule_panel(
     for i, line in enumerate(_wrap_text(caption, 38)):
         draw.text((14, caption_y + 18 + 16 * i), line, fill="#4B5563", font=small_font)
 
-    if loaded.info.raw_index is not None and loaded.info.raw_index != loaded.info.dataset_index:
-        raw_text = f"raw {loaded.info.raw_index}"
-        bbox = draw.textbbox((0, 0), raw_text, font=small_font)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        x1 = panel_width - tw - 18
-        y1 = panel_height - th - 12
-        draw.rounded_rectangle((x1 - 8, y1 - 4, x1 + tw + 8, y1 + th + 4), radius=8, fill="#F3F4F6", outline="#D1D5DB")
-        draw.text((x1, y1), raw_text, fill="#374151", font=small_font)
+    _draw_source_index_badge(
+        draw,
+        loaded.info,
+        panel_width,
+        panel_height,
+        small_font,
+    )
 
     return bg
 
@@ -601,6 +758,37 @@ def _draw_page_legend(canvas: Any, y0: int, page_width: int, show_hydrogens: boo
         x += 86
 
 
+def _draw_generic_page_legend(
+    canvas: Any,
+    y0: int,
+    page_width: int,
+    *,
+    mixed: bool = False,
+) -> None:
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(canvas)
+    title_font = _load_font(15, bold=True)
+    body_font = _load_font(13)
+    draw.line((20, y0, page_width - 20, y0), fill="#E5E7EB", width=2)
+    y = y0 + 12
+    title = "Mixed molecular and generic graphs" if mixed else "Generic graphs"
+    draw.text((20, y), title, fill="#111827", font=title_font)
+    x = 245 if mixed else 145
+    draw.line((x, y + 7, x + 34, y + 7), fill="#94A3B8", width=2)
+    draw.ellipse(
+        (x + 10, y - 1, x + 26, y + 15),
+        fill=GENERIC_NODE_COLOURS[0],
+        outline="#1E293B",
+    )
+    draw.text(
+        (x + 46, y - 2),
+        "deterministic node-link layout",
+        fill="#111827",
+        font=body_font,
+    )
+
+
 def _compose_page(
     items: list[LoadedItem],
     row: int,
@@ -609,9 +797,10 @@ def _compose_page(
     panel_height: int,
     page_index: int,
     total_pages: int,
-    index_from: int,
-    index_to: int,
-    qm9_root: Path,
+    count: int,
+    seed: int,
+    dataset_label: str,
+    dataset_path: Path,
     show_hydrogens: bool,
 ) -> Any:
     from PIL import Image, ImageDraw
@@ -629,11 +818,16 @@ def _compose_page(
     title_font = _load_font(22, bold=True)
     body_font = _load_font(13)
 
-    title = f"QM9 molecules {index_from} to {index_to}"
+    title = f"{dataset_label} random sample: n={count}, seed={seed}"
     if total_pages > 1:
         title += f"  |  page {page_index + 1}/{total_pages}"
     draw.text((outer_pad, outer_pad), title, fill="#111827", font=title_font)
-    draw.text((outer_pad, outer_pad + 28), f"Dataset: {qm9_root}", fill="#6B7280", font=body_font)
+    draw.text(
+        (outer_pad, outer_pad + 28),
+        f"Dataset: {dataset_path}",
+        fill="#6B7280",
+        font=body_font,
+    )
 
     start_y = outer_pad + header_h
     for i, item in enumerate(items):
@@ -641,10 +835,36 @@ def _compose_page(
         c = i % col
         x = outer_pad + c * (panel_width + gap)
         y = start_y + r * (panel_height + gap)
-        panel = _render_molecule_panel(item, panel_width, panel_height, show_title=True)
+        if item.error is not None or item.render_mode == "molecule":
+            panel = _render_molecule_panel(
+                item,
+                panel_width,
+                panel_height,
+                show_title=True,
+            )
+        elif item.graph is not None:
+            panel = _render_generic_graph_panel(
+                item.graph,
+                item.info,
+                panel_width,
+                panel_height,
+                show_title=True,
+                layout_seed=(seed + int(item.info.dataset_index or 0)) % (2**32),
+            )
+        else:
+            raise ValueError("Generic render item is missing its NetworkX graph.")
         canvas.paste(panel, (x, y))
 
-    _draw_page_legend(canvas, page_height - legend_h, page_width, show_hydrogens)
+    render_modes = {item.render_mode for item in items if item.error is None}
+    if render_modes == {"molecule"}:
+        _draw_page_legend(canvas, page_height - legend_h, page_width, show_hydrogens)
+    else:
+        _draw_generic_page_legend(
+            canvas,
+            page_height - legend_h,
+            page_width,
+            mixed=len(render_modes) > 1,
+        )
     return canvas
 
 
@@ -654,86 +874,176 @@ def _page_output_path(output: Path, page_index: int, total_pages: int) -> Path:
     return output.with_name(f"{output.stem}_page_{page_index + 1:03d}{output.suffix}")
 
 
-def _default_output(index_from: int, index_to: int) -> Path:
-    if index_from == index_to:
-        return Path(f"outputs/qm9_{index_from:06d}.png")
-    return Path(f"outputs/qm9_{index_from:06d}_{index_to:06d}.png")
+def _default_output(count: int, seed: int, prefix: str) -> Path:
+    return Path(f"outputs/{prefix}_sample_n{count}_seed{seed}.png")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Draw a range of QM9 molecules with coloured node and edge types.",
+        description=(
+            "Draw a random sample of molecular or generic graphs from a named "
+            "prepared dataset."
+        ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--index", type=int, help="Backwards-compatible alias for drawing a single molecule.")
-    parser.add_argument("--index-from", type=int, default=0, help="First QM9 index to draw (inclusive).")
-    parser.add_argument("--index-to", type=int, help="Last QM9 index to draw (inclusive).")
-    parser.add_argument("--row", type=int, default=2, help="Number of molecule rows per figure.")
-    parser.add_argument("--col", type=int, default=4, help="Number of molecule columns per figure.")
-    parser.add_argument("--panel-width", type=int, default=360, help="Width of each molecule panel in pixels.")
-    parser.add_argument("--panel-height", type=int, default=300, help="Height of each molecule panel in pixels.")
-    parser.add_argument("--output", type=Path, help="Output PNG path. If multiple pages are needed, numbered files are created.")
-    parser.add_argument("--loader", choices=("auto", "raw", "pyg"), default="auto")
     parser.add_argument(
-        "--index-space",
-        choices=("pyg", "raw"),
-        default="pyg",
-        help="Interpret indices in filtered PyG space or literal raw SDF space when using raw loading.",
+        "--dataset",
+        required=True,
+        help=(
+            "Prepared dataset name or configs/datasets/<name>.yaml stem, for "
+            "example qm9_attributed."
+        ),
     )
-    parser.add_argument("--show-hydrogens", action="store_true", help="Draw explicit hydrogens.")
-    parser.add_argument("--atom-indices", action="store_true", help="Append RDKit atom indices to atom labels.")
-    parser.add_argument("--bond-labels", action="store_true", help="Annotate bonds with single/double/triple/aromatic.")
+    parser.add_argument(
+        "--root",
+        "--dataset-root",
+        dest="root",
+        default="outputs/datasets",
+        help="Root containing <dataset>/{train,val,test}.pkl.",
+    )
+    parser.add_argument(
+        "--split",
+        choices=("train", "val", "test"),
+        default="test",
+        help="Prepared dataset split to sample.",
+    )
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=1,
+        help="Number of distinct graphs to sample without replacement.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed used to select graphs.",
+    )
+    parser.add_argument(
+        "--row", type=int, default=2, help="Number of graph rows per figure."
+    )
+    parser.add_argument(
+        "--col", type=int, default=4, help="Number of graph columns per figure."
+    )
+    parser.add_argument(
+        "--panel-width",
+        type=int,
+        default=360,
+        help="Width of each graph panel in pixels.",
+    )
+    parser.add_argument(
+        "--panel-height",
+        type=int,
+        default=300,
+        help="Height of each graph panel in pixels.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help=(
+            "Output PNG path. If multiple pages are needed, numbered files "
+            "are created."
+        ),
+    )
+    parser.add_argument(
+        "--show-hydrogens",
+        action="store_true",
+        help="Draw explicit hydrogens in molecular panels; ignored for generic graphs.",
+    )
+    parser.add_argument(
+        "--atom-indices",
+        action="store_true",
+        help="Append RDKit atom indices in molecular panels.",
+    )
+    parser.add_argument(
+        "--bond-labels",
+        action="store_true",
+        help="Annotate molecular bonds with single/double/triple/aromatic.",
+    )
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
 
-    if args.index is not None:
-        index_from = args.index
-        index_to = args.index
-    else:
-        index_from = args.index_from
-        index_to = args.index_from if args.index_to is None else args.index_to
-
-    if index_from < 0 or index_to < 0:
-        raise ValueError("indices must be non-negative")
-    if index_from > index_to:
-        raise ValueError("--index-from must be <= --index-to")
     if args.row <= 0 or args.col <= 0:
         raise ValueError("--row and --col must be positive")
+    if args.count <= 0:
+        raise ValueError("--count must be positive")
     if args.panel_width < 180 or args.panel_height < 180:
         raise ValueError("--panel-width and --panel-height should be at least 180")
 
-    qm9_root = _detect_qm9_root()
-    print(f"Using QM9 dataset: {qm9_root}")
+    print(
+        f"Resolving prepared dataset {args.dataset!r} under {args.root}...",
+        flush=True,
+    )
+    prepared_graphs, dataset_path, dataset_name = _load_prepared_dataset_split(
+        args.dataset,
+        args.root,
+        args.split,
+    )
+    indices = _sample_graph_indices(len(prepared_graphs), args.count, args.seed)
+    dataset_label = f"{dataset_name}/{args.split}"
+    output_prefix = f"{dataset_name}_{args.split}"
+    print(
+        f"Using prepared dataset: {dataset_name} split={args.split} "
+        f"graphs={len(prepared_graphs)} path={dataset_path}",
+        flush=True,
+    )
+    print(f"Selected split-local indices: {indices}", flush=True)
 
-    output = (args.output or _default_output(index_from, index_to)).expanduser().resolve()
+    output = (
+        args.output or _default_output(args.count, args.seed, output_prefix)
+    ).expanduser().resolve()
     if output.suffix.lower() != ".png":
-        raise ValueError("This grid script currently writes PNG output only; please use a .png output path.")
+        raise ValueError(
+            "This grid script currently writes PNG output only; please use a "
+            ".png output path."
+        )
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    indices = list(range(index_from, index_to + 1))
     loaded_items: list[LoadedItem] = []
     for index in indices:
         try:
-            mol, info = _load_from_qm9_root(qm9_root, index, args.loader, args.index_space)
-            mol = _prepare_molecule(
-                mol,
-                show_hydrogens=args.show_hydrogens,
-                atom_indices=args.atom_indices,
-                bond_labels=args.bond_labels,
-            )
-            loaded_items.append(LoadedItem(info=info, mol=mol))
+            graph = prepared_graphs[index]
+            if _is_molecular_graph(graph):
+                mol, info = _load_from_prepared_graph(
+                    graph,
+                    index,
+                    dataset_name,
+                    args.split,
+                )
+                mol = _prepare_molecule(
+                    mol,
+                    show_hydrogens=args.show_hydrogens,
+                    atom_indices=args.atom_indices,
+                    bond_labels=args.bond_labels,
+                )
+                loaded_items.append(
+                    LoadedItem(info=info, mol=mol, render_mode="molecule")
+                )
+            else:
+                info = _generic_graph_info(
+                    graph,
+                    index,
+                    dataset_name,
+                    args.split,
+                )
+                loaded_items.append(
+                    LoadedItem(info=info, graph=graph, render_mode="generic")
+                )
         except Exception as exc:
+            index_label = f"{dataset_name}/{args.split}[{index}]"
+            print(f"Warning: failed to load {index_label}: {exc}", file=sys.stderr)
             loaded_items.append(
                 LoadedItem(
                     info=MoleculeInfo(
-                        source=f"QM9 root={qm9_root}",
-                        name=f"QM9[{index}]",
+                        source=str(dataset_path),
+                        name=index_label,
                         smiles="<unavailable>",
                         dataset_index=index,
-                        raw_index=None,
+                        source_index=None,
+                        index_label=index_label,
                     ),
                     mol=None,
                     error=str(exc),
@@ -742,7 +1052,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     per_page = args.row * args.col
     total_pages = math.ceil(len(loaded_items) / per_page)
-    saved_paths: list[Path] = []
     for page_index in range(total_pages):
         start = page_index * per_page
         end = min(start + per_page, len(loaded_items))
@@ -755,21 +1064,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             panel_height=args.panel_height,
             page_index=page_index,
             total_pages=total_pages,
-            index_from=index_from,
-            index_to=index_to,
-            qm9_root=qm9_root,
+            count=args.count,
+            seed=args.seed,
+            dataset_label=dataset_label,
+            dataset_path=dataset_path,
             show_hydrogens=args.show_hydrogens,
         )
         page_output = _page_output_path(output, page_index, total_pages)
         canvas.save(page_output)
-        saved_paths.append(page_output)
         print(f"Saved: {page_output}")
 
     ok_count = sum(1 for item in loaded_items if item.error is None)
     fail_count = len(loaded_items) - ok_count
-    print(f"Requested molecules: {len(loaded_items)}")
-    print(f"Loaded successfully: {ok_count}")
-    print(f"Failed to load: {fail_count}")
+    molecular_count = sum(
+        1
+        for item in loaded_items
+        if item.error is None and item.render_mode == "molecule"
+    )
+    generic_count = sum(
+        1
+        for item in loaded_items
+        if item.error is None and item.render_mode == "generic"
+    )
+    print(f"Requested graphs: {len(loaded_items)}")
+    print(f"Rendered molecular graphs: {molecular_count}")
+    print(f"Rendered generic graphs: {generic_count}")
+    print(f"Rendered successfully: {ok_count}")
+    print(f"Failed to render: {fail_count}")
     return 0
 
 

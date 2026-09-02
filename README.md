@@ -542,6 +542,28 @@ PYTHONPATH=src python scripts/prepare_qm9_dataset.py \
   --uncharacterized-file data/qm9/uncharacterized.txt \
   --root outputs/datasets
 
+# Draw a reproducible random sample from the prepared attributed dataset.
+PYTHONPATH=src python scripts/draw_qm9_molecule.py \
+  --dataset qm9_attributed \
+  --dataset-root outputs/datasets \
+  --split test \
+  --count 16 \
+  --seed 42 \
+  --row 3 \
+  --col 4 \
+  --output outputs/qm9_test_random_16.png
+
+# The same command automatically uses a node-link view for generic graphs.
+PYTHONPATH=src python scripts/draw_qm9_molecule.py \
+  --dataset community_small \
+  --dataset-root outputs/datasets \
+  --split test \
+  --count 8 \
+  --seed 42 \
+  --row 2 \
+  --col 4 \
+  --output outputs/community_small_test_random_8.png
+
 PYTHONPATH=src python scripts/prepare_zinc_dataset.py \
   --config configs/datasets/zinc.yaml \
   --smiles-file data/zinc250k.csv \
@@ -555,4 +577,3 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --dataset community_small \
   --num-samples 1024 \
   --seed-id 42
-

@@ -162,50 +162,14 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
     outputs/baselines/defog/qm9/seed_42/generations/seed_42_n_1024/evaluation_corrected_fcd \
   --fcd-use-corrected \
   --require-fcd
-
-
-Molecular evaluation
-  validity: 1.0
-  validity_with_correction: 1.0
-  validity_without_correction: 0.998046875
-  fcd: 0.4031882559643165
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 1022
-  num_invalid_generated_molecules: 2
-  num_valid_generated_molecules_with_correction: 1024
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 2
-  correction_success_rate_on_raw_invalid: 1.0
-  uniqueness_rate: 0.9980430528375733
-  unique_valid_count: 1020
-  novelty_rate: 0.2950980392156863
-  novel_unique_valid_count: 301
-  nspdk_mmd: 1.6335990359385983e-05
-  nspdk_mmd_valid_only: 1.6488629021953792e-05
-  fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
-
-
-PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs \
-    outputs/baselines/defog/qm9/seed_42/generations/seed_42_n_1024/base_graphs.pkl \
-  --dataset-root outputs/datasets \
-  --dataset qm9_attributed \
-  --reference-split test \
-  --train-split train \
-  --output-dir \
-    outputs/baselines/defog/qm9/seed_42/generations/seed_42_n_1024/evaluation_hogdiff \
-  --fcd-use-corrected \
-  --require-fcd \
-  --hogdiff-compatible-metrics
+   --hogdiff-compatible-metrics
 
 
 Molecular evaluation
   validity: 0.998046875
   validity_with_correction: 1.0
   validity_without_correction: 0.998046875
-  fcd: 0.403188255962867
+  fcd: 0.40319552824583127
   num_generated_graphs: 1024
   num_valid_generated_molecules: 1022
   num_invalid_generated_molecules: 2
@@ -213,19 +177,21 @@ Molecular evaluation
   num_invalid_generated_molecules_after_correction: 0
   num_molecules_corrected_to_valid: 2
   correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
-  uniqueness_rate: 0.998046875
-  unique_valid_count: 1022
-  novelty_rate: 0.2964774951076321
-  novel_unique_valid_count: 303
-  nspdk_mmd: 0.001410469017110073
-  nspdk_mmd_valid_only: 0.001410469017110073
-  nspdk_proxy_mmd_all_generated: 1.6335990359383547e-05
-  nspdk_proxy_mmd_metric_source: 2.602617856086431e-05
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9980430528375733
+  unique_valid_count: 1020
+  novelty_rate: 0.2950980392156863
+  novel_unique_valid_count: 301
+  nspdk_mmd: 0.0009917596562961264
+  nspdk_mmd_valid_only: 0.0009917596562961264
+  nspdk_proxy_mmd_all_generated: 1.6335990359385668e-05
+  nspdk_proxy_mmd_metric_source: 1.6488629021953298e-05
   fcd_num_reference_molecules: 12997
   fcd_num_valid_generated_molecules: 1024
   fcd_generated_smiles_source: valid_with_correction
+
+
 
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
@@ -247,14 +213,14 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --output-dir \
     outputs/baselines/defog/qm9/seed_43/generations/seed_43_n_1024/evaluation_corrected_fcd \
   --fcd-use-corrected \
-  --require-fcd
-
+  --require-fcd \
+ --hogdiff-compatible-metrics
 
 Molecular evaluation
-  validity: 1.0
+  validity: 0.9892578125
   validity_with_correction: 1.0
   validity_without_correction: 0.9892578125
-  fcd: 0.5553955576492378
+  fcd: 0.5553791342021164
   num_generated_graphs: 1024
   num_valid_generated_molecules: 1013
   num_invalid_generated_molecules: 11
@@ -262,12 +228,16 @@ Molecular evaluation
   num_invalid_generated_molecules_after_correction: 0
   num_molecules_corrected_to_valid: 11
   correction_success_rate_on_raw_invalid: 1.0
-  uniqueness_rate: 0.9940769990128332
-  unique_valid_count: 1007
-  novelty_rate: 0.26216484607745777
-  novel_unique_valid_count: 264
-  nspdk_mmd: 2.4560797766632867e-05
-  nspdk_mmd_valid_only: 2.594164801854979e-05
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.994140625
+  unique_valid_count: 1018
+  novelty_rate: 0.27013752455795675
+  novel_unique_valid_count: 275
+  nspdk_mmd: 0.0016661199696893856
+  nspdk_mmd_valid_only: 0.0016661199696893856
+  nspdk_proxy_mmd_all_generated: 2.456079776661987e-05
+  nspdk_proxy_mmd_metric_source: 3.630559176637885e-05
   fcd_num_reference_molecules: 12997
   fcd_num_valid_generated_molecules: 1024
   fcd_generated_smiles_source: valid_with_correction
@@ -293,7 +263,8 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --output-dir \
     outputs/baselines/defog/qm9/seed_44/generations/seed_44_n_1024/evaluation_corrected_fcd \
   --fcd-use-corrected \
-  --require-fcd
+  --require-fcd \
+ --hogdiff-compatible-metrics
 
 
 Molecular evaluation
@@ -338,14 +309,14 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --output-dir "$GEN_DIR/evaluation" \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --fcd-use-corrected \
-  --require-fcd
-
+  --require-fcd \
+   --hogdiff-compatible-metrics
 
 Molecular evaluation
-  validity: 1.0
+  validity: 0.9541015625
   validity_with_correction: 1.0
   validity_without_correction: 0.9541015625
-  fcd: 5.549331723153955
+  fcd: 5.685046958416905
   num_generated_graphs: 1024
   num_valid_generated_molecules: 977
   num_invalid_generated_molecules: 47
@@ -353,13 +324,17 @@ Molecular evaluation
   num_invalid_generated_molecules_after_correction: 0
   num_molecules_corrected_to_valid: 47
   correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
   uniqueness_rate: 1.0
-  unique_valid_count: 977
+  unique_valid_count: 1024
   novelty_rate: 1.0
-  novel_unique_valid_count: 977
-  nspdk_mmd: 0.0006518988235404931
-  nspdk_mmd_valid_only: 0.0006612800736168689
-  fcd_num_reference_molecules: 915
+  novel_unique_valid_count: 1024
+  nspdk_mmd: 0.07871783198463919
+  nspdk_mmd_valid_only: 0.07871783198463919
+  nspdk_proxy_mmd_all_generated: 4.5523096063289875e-05
+  nspdk_proxy_mmd_metric_source: 0.0006378263261031195
+  fcd_num_reference_molecules: 1000
   fcd_num_valid_generated_molecules: 1024
   fcd_generated_smiles_source: valid_with_correction
 
@@ -386,13 +361,14 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --output-dir "$GEN_DIR/evaluation" \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --fcd-use-corrected \
-  --require-fcd
+  --require-fcd \
+   --hogdiff-compatible-metrics
 
 Molecular evaluation
-  validity: 1.0
+  validity: 0.9501953125
   validity_with_correction: 1.0
   validity_without_correction: 0.9501953125
-  fcd: 5.690067574965511
+  fcd: 5.542722391707194
   num_generated_graphs: 1024
   num_valid_generated_molecules: 973
   num_invalid_generated_molecules: 51
@@ -400,13 +376,17 @@ Molecular evaluation
   num_invalid_generated_molecules_after_correction: 0
   num_molecules_corrected_to_valid: 51
   correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
   uniqueness_rate: 1.0
-  unique_valid_count: 973
+  unique_valid_count: 1024
   novelty_rate: 1.0
-  novel_unique_valid_count: 973
-  nspdk_mmd: 0.0006427853972682684
-  nspdk_mmd_valid_only: 0.0006451268839738862
-  fcd_num_reference_molecules: 915
+  novel_unique_valid_count: 1024
+  nspdk_mmd: 0.07129218292194929
+  nspdk_mmd_valid_only: 0.07129218292194929
+  nspdk_proxy_mmd_all_generated: 2.324059404606424e-05
+  nspdk_proxy_mmd_metric_source: 0.0005912130095828949
+  fcd_num_reference_molecules: 1000
   fcd_num_valid_generated_molecules: 1024
   fcd_generated_smiles_source: valid_with_correction
 
@@ -432,54 +412,34 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --output-dir "$GEN_DIR/evaluation" \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --fcd-use-corrected \
-  --require-fcd
-
+ --require-fcd \
+   --hogdiff-compatible-metrics
 
 Molecular evaluation
-  validity: 1.0
+  validity: 0.9501953125
   validity_with_correction: 1.0
-  validity_without_correction: 0.9541015625
-  fcd: 5.275953145153196
+  validity_without_correction: 0.9501953125
+  fcd: 5.542722391707194
   num_generated_graphs: 1024
-  num_valid_generated_molecules: 977
-  num_invalid_generated_molecules: 47
+  num_valid_generated_molecules: 973
+  num_invalid_generated_molecules: 51
   num_valid_generated_molecules_with_correction: 1024
   num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 47
+  num_molecules_corrected_to_valid: 51
   correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
   uniqueness_rate: 1.0
-  unique_valid_count: 977
+  unique_valid_count: 1024
   novelty_rate: 1.0
-  novel_unique_valid_count: 977
-  nspdk_mmd: 0.0006045195876225834
-  nspdk_mmd_valid_only: 0.0006105182788791385
-  fcd_num_reference_molecules: 915
+  novel_unique_valid_count: 1024
+  nspdk_mmd: 0.07098284397706747
+  nspdk_mmd_valid_only: 0.07098284397706747
+  nspdk_proxy_mmd_all_generated: 2.324059404606482e-05
+  nspdk_proxy_mmd_metric_source: 0.0005912130095829598
+  fcd_num_reference_molecules: 1000
   fcd_num_valid_generated_molecules: 1024
   fcd_generated_smiles_source: valid_with_correction
 
 
-export DEFOG=/home/quang/DeFoG
-export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-
-  PYTHONPATH=src python scripts/run_defog_baseline.py   \
-  --dataset community_small   \
-  --num-samples 1024   \
-  --seed-id 42   \
-  --run-id seed_42_e1m   \
-  --n-epochs 1000000   \
-  --epoch-progress-interval 10000   \
-  --device gp
-
-
-DEFOG_GENERATION_DIR="outputs/baselines/defog/community_small/seed_42_e1m/generations/seed_42_n_1024"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/community_small_defog_corrector.yaml \
-  --generated-dir "$DEFOG_GENERATION_DIR" \
-  --generated-stage defog_seed_42_n_1024 \
-  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_42_n_1024"
-
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-defog_seed_42_n_1024_to_test        0.010739          0.046336      0.012637

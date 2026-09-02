@@ -1,0 +1,46 @@
+digress:
+  # GraphES-facing benchmark dataset.
+  native_dataset: zinc
+
+  # This must correspond to the custom ZINC molecular experiment created by
+  # the GraphES DiGress wrapper. Upstream DiGress does not ship a native
+  # ZINC250k experiment in the current integration.
+  experiment: zinc_no_h
+
+  # Match the molecular training setup used for QM9 in the current wrapper.
+  n_epochs: 1000
+
+  # ZINC molecules are larger than QM9 (up to 38 heavy atoms), so use a
+  # substantially smaller training batch than the QM9 value of 1024.
+  batch_size: 256
+
+  num_workers: 8
+
+  check_val_every_n_epochs: 5
+  save_every_n_epochs: 100
+
+  # Keep sampling memory bounded for n <= 38 dense molecular graphs.
+  generation_batch_size: 128
+
+  # Recompute the empirical node-count, atom-type, edge-type and valency
+  # statistics from the exact GraphES ZINC training split.
+  training_estimates:
+    enabled: true
+
+    # This is an auxiliary generated/source pool used by the wrapper rather
+    # than the number of molecules used for model training.
+    num_graphs: 1024
+
+    batch_size: 128
+
+  runtime:
+    gpus: 1
+    cuda_visible_devices: "0"
+    device: auto
+
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+      epoch_interval: 10
+      generation_batch_interval: 1
