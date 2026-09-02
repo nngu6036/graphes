@@ -351,45 +351,10 @@ hh_source_to_test                   0.047347          0.277226      0.227409
 topology_final_to_test              0.047347          0.073253      0.053025
 
 
-PYTHONPATH=src python scripts/train_topology_grapher.py  \
---config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010.yaml\
---output-dir outputs/topology_grapher/community_small_spectral_graphlet_v2_hogdiff_ou_sigma010/seed_42   \
---seed 42  \
- --device gpu
 
 
-PYTHONPATH=src python scripts/run_topology_grapher.py  \
---config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010.yaml  \
---output-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010/seed_42   \
---num-generate 256  \
---seed 42   \
---device gpu 
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010.yaml \
-  --generated-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010/seed_42 \
-  --output-dir outputs/topology_grapher/community_small_topology_spectral_graphlet_v2_hogdiff_ou_sigma010/seed_42/evaluation
-
-
-
-
-
-PYTHONPATH=src python scripts/train_topology_grapher.py \
-  --config configs/experiments/grapher/community_small_topology_flow_graphlet.yaml \
-  --output-dir outputs/topology_grapher/community_small_flow_graphlet/seed_42 \
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_graphlet_v2_enriched_source.yaml \
+  --output-dir outputs/attributed_grapher/qm9_spectral_graphlet_v2_enriched_source/seed_42 \
   --seed 42 \
   --device gpu
-
-PYTHONPATH=src python scripts/run_topology_grapher.py  \
---config configs/experiments/grapher/community_small_topology_flow_graphlet.yaml  \
---output-dir outputs/topology_generation/community_small_topology_flow_graphlet/seed_42   \
---num-generate 128  \
---seed 42   \
---device gpu 
-
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/community_small_topology_flow_graphlet.yaml \
-  --generated-dir outputs/topology_generation/community_small_topology_flow_graphlet/seed_42 \
-  --output-dir outputs/topology_grapher/community_small_topology_flow_graphlet/seed_42/evaluation
-

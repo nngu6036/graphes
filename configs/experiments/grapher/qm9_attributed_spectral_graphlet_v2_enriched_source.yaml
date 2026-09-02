@@ -84,12 +84,14 @@ training_sources:
     max_restarts: 64
     max_backtracks: 100000
     candidate_ranking: uniform
-    max_ordinary_degree: 4
-    max_weighted_valence:
-      6: 4.0
-      7: 4.0
-      8: 3.0
-      9: 1.0
+    # Training endpoints are observed canonical QM9 categorical states.
+    # Do not apply generation-time degree/valence admission masks here:
+    # the prepared dataset intentionally uses sanitize_sdf=false and can
+    # contain characterized projected states outside that generated envelope.
+    # The exact typed constructor still enforces the observed typed invariant,
+    # simplicity and connectedness. Generation keeps its stricter masks below.
+    max_ordinary_degree: null
+    max_weighted_valence: null
 attributed_predictor:
   type: attributed_spectral_graphlet_transformer
   checkpoint_path: outputs/attributed_grapher/qm9_spectral_graphlet_v2_enriched_source/seed_42/checkpoint.pt
