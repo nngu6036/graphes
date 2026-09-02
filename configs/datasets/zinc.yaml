@@ -110,7 +110,8 @@ native_reference:
     atom_channels: 9
     atom_numbers: [6, 7, 8, 9, 15, 16, 17, 35, 53]
     bond_categories: [1, 2, 3]
-    empirical_priors: computed from the exact converted GraphER ZINC training split
+    empirical_categorical_priors: computed from the exact converted GraphER ZINC training split
+    node_count_prior: computed from converted GraphER ZINC training and validation splits
     external_checkout_modified: false
   graphrnn:
     availability: no native molecular ZINC configuration

@@ -222,7 +222,10 @@ def _default_generation_batch_size(native: str) -> int:
 
 
 def _dataset_profile(benchmark: str, native: str) -> dict[str, str]:
-    if native in SUPPORTED_MOLECULAR_DATASETS:
+    if native == "zinc":
+        representation = "heavy_atom_kekulized_categorical"
+        domain = "molecular"
+    elif native in SUPPORTED_MOLECULAR_DATASETS:
         representation = "heavy_atom_categorical"
         domain = "molecular"
     else:
@@ -632,14 +635,20 @@ class DiGressWrapper(BaseGeneratorWrapper):
         dataset_config = (
             root / "configs" / "dataset" / f"{template_dataset}.yaml"
         )
+        required_source_paths = [experiment_config, dataset_config]
+        if native in SUPPORTED_MOLECULAR_DATASETS:
+            required_source_paths.append(
+                root / "src" / "datasets" / "qm9_dataset.py"
+            )
         missing = [
             str(path)
-            for path in (experiment_config, dataset_config)
+            for path in required_source_paths
             if not path.is_file()
         ]
         if missing:
             raise FileNotFoundError(
-                f"The attached DiGress source lacks requested configs: {missing}."
+                "The attached DiGress source lacks required config/loader "
+                f"templates: {missing}."
             )
 
         layout = request.run.layout
@@ -713,6 +722,52 @@ class DiGressWrapper(BaseGeneratorWrapper):
             conversion = _read_json(
                 conversion_manifest_path, label="DiGress conversion manifest"
             )
+            expected_conversion_format = (
+                "grapher_to_digress_molecular_dataset_v1"
+                if native in SUPPORTED_MOLECULAR_DATASETS
+                else "grapher_to_digress_generic_dataset_v1"
+            )
+            if conversion.get("format") != expected_conversion_format:
+                raise RuntimeError(
+                    "Unsupported DiGress conversion manifest format: "
+                    f"{conversion.get('format')!r}."
+                )
+            if str(conversion.get("dataset", "")).lower() != native:
+                raise RuntimeError(
+                    "DiGress conversion dataset mismatch: "
+                    f"expected {native!r}, got {conversion.get('dataset')!r}."
+                )
+            if conversion.get("split_order_preserved") is not True or int(
+                conversion.get("graphs_dropped", -1)
+            ) != 0:
+                raise RuntimeError(
+                    "DiGress conversion did not preserve every ordered graph."
+                )
+            if native in SUPPORTED_MOLECULAR_DATASETS:
+                from grapher.models.digress.codec import (
+                    MOLECULAR_ATOMIC_NUMBERS,
+                    MOLECULAR_BOND_TYPES,
+                )
+
+                vocabulary = conversion.get("vocabulary")
+                if not isinstance(vocabulary, Mapping):
+                    raise RuntimeError(
+                        "DiGress molecular conversion has no vocabulary record."
+                    )
+                observed_atoms = tuple(
+                    int(value)
+                    for value in vocabulary.get("atom_class_to_atomic_number", ())
+                )
+                observed_bonds = frozenset(
+                    int(value)
+                    for value in vocabulary.get("present_edge_classes", ())
+                )
+                if observed_atoms != MOLECULAR_ATOMIC_NUMBERS[native] or (
+                    observed_bonds != MOLECULAR_BOND_TYPES[native]
+                ):
+                    raise RuntimeError(
+                        f"DiGress {native.upper()} conversion vocabulary mismatch."
+                    )
             split_records = conversion.get("splits")
             if not isinstance(split_records, Mapping):
                 raise RuntimeError("DiGress conversion manifest has no split records.")
@@ -799,6 +854,16 @@ class DiGressWrapper(BaseGeneratorWrapper):
             worker_manifest = _read_json(
                 worker_manifest_path, label="DiGress training-worker manifest"
             )
+            if (
+                worker_manifest.get("format")
+                != "grapher_digress_training_worker_v1"
+                or worker_manifest.get("status") != "complete"
+            ):
+                raise RuntimeError("DiGress training worker did not complete cleanly.")
+            if str(worker_manifest.get("dataset", "")).lower() != native:
+                raise RuntimeError("DiGress training worker dataset mismatch.")
+            if str(worker_manifest.get("experiment", "")).lower() != experiment:
+                raise RuntimeError("DiGress training worker experiment mismatch.")
             source_checkpoint = Path(str(worker_manifest.get("checkpoint", "")))
             source_config = Path(str(worker_manifest.get("resolved_config", "")))
             if not source_checkpoint.is_file() or not source_config.is_file():
@@ -994,14 +1059,14 @@ class DiGressWrapper(BaseGeneratorWrapper):
                 "started_at": started_at,
                 "finished_at": _utc_now(),
                 "duration_seconds": time.monotonic() - started,
-                    "upstream": {
-                        **source_identity,
-                        "experiment": experiment,
-                        "config_template": {
-                            "dataset": template_dataset,
-                            "experiment": template_experiment,
-                        },
-                        "python_environment": python_identity,
+                "upstream": {
+                    **source_identity,
+                    "experiment": experiment,
+                    "config_template": {
+                        "dataset": template_dataset,
+                        "experiment": template_experiment,
+                    },
+                    "python_environment": python_identity,
                 },
                 "training": {
                     "configured_n_epochs": worker_manifest.get(
@@ -1202,6 +1267,11 @@ class DiGressWrapper(BaseGeneratorWrapper):
             from grapher.models.digress.backend import generate_digress_graphs
 
             stats_path = layout.train_dir / "molecular_statistics.json"
+            if native in SUPPORTED_MOLECULAR_DATASETS and not stats_path.is_file():
+                raise RuntimeError(
+                    f"Managed DiGress {native.upper()} generation is missing "
+                    "its training-time molecular statistics."
+                )
             result = generate_digress_graphs(
                 digress_root=root,
                 python_executable=python,

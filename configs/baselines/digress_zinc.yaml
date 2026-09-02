@@ -23,8 +23,9 @@ digress:
   # Keep sampling memory bounded for n <= 38 dense molecular graphs.
   generation_batch_size: 128
 
-  # Recompute the empirical node-count, atom-type, edge-type and valency
-  # statistics from the exact GraphES ZINC training split.
+  # Recompute atom-type, edge-type and valency statistics from the exact
+  # GraphER ZINC training split. Node counts include validation graph sizes so
+  # validation-time likelihoods have complete support.
   training_estimates:
     enabled: true
 

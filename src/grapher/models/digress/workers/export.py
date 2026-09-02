@@ -24,6 +24,20 @@ from common import (
 
 FORMAT = "grapher_digress_export_v1"
 ARRAY_FORMAT = "digress_graph_batch_v1"
+NODE_CLASS_COUNTS = {
+    "comm20": 1,
+    "planar": 1,
+    "sbm": 1,
+    "qm9": 4,
+    "zinc": 9,
+}
+EDGE_CLASS_COUNTS = {
+    "comm20": 2,
+    "planar": 2,
+    "sbm": 2,
+    "qm9": 5,
+    "zinc": 4,
+}
 
 
 def _positive_int(raw: str) -> int:
@@ -121,10 +135,30 @@ def _load_state(model: Any, checkpoint: Path, device: Any) -> None:
         )
 
 
-def _pack_samples(samples: Sequence[Any]) -> Tuple[Any, Any, Any, Any, Any]:
+def _integer_tensor(value: Any, *, label: str) -> Any:
+    import torch
+
+    tensor = torch.as_tensor(value).detach().cpu()
+    if tensor.is_complex():
+        raise ValueError(f"{label} contains complex categorical labels.")
+    if not bool(torch.isfinite(tensor).all()):
+        raise ValueError(f"{label} contains non-finite categorical labels.")
+    if tensor.is_floating_point() and not bool(torch.equal(tensor, torch.round(tensor))):
+        raise ValueError(f"{label} contains non-integral categorical labels.")
+    return tensor.to(dtype=torch.long)
+
+
+def _pack_samples(
+    samples: Sequence[Any], *, dataset: str
+) -> Tuple[Any, Any, Any, Any, Any]:
     import numpy as np
     import torch
 
+    dataset_name = str(dataset).lower()
+    if dataset_name not in NODE_CLASS_COUNTS:
+        raise ValueError(f"Unsupported DiGress export dataset {dataset!r}.")
+    node_class_count = NODE_CLASS_COUNTS[dataset_name]
+    edge_class_count = EDGE_CLASS_COUNTS[dataset_name]
     node_offsets: List[int] = [0]
     node_types: List[int] = []
     edge_offsets: List[int] = [0]
@@ -136,8 +170,12 @@ def _pack_samples(samples: Sequence[Any]) -> Tuple[Any, Any, Any, Any, Any]:
             raise TypeError(
                 "DiGress sample %d is not [node_types, edge_types]." % graph_index
             )
-        x = torch.as_tensor(sample[0]).detach().cpu().long()
-        e = torch.as_tensor(sample[1]).detach().cpu().long()
+        x = _integer_tensor(
+            sample[0], label="DiGress sample %d node tensor" % graph_index
+        )
+        e = _integer_tensor(
+            sample[1], label="DiGress sample %d edge tensor" % graph_index
+        )
         if x.ndim != 1:
             raise ValueError(
                 "DiGress sample %d node tensor has shape %s." % (
@@ -155,6 +193,16 @@ def _pack_samples(samples: Sequence[Any]) -> Tuple[Any, Any, Any, Any, Any]:
             raise ValueError("DiGress sample %d is not undirected." % graph_index)
         if torch.any(torch.diag(e) != 0):
             raise ValueError("DiGress sample %d contains a self-loop." % graph_index)
+        if torch.any(x < 0) or torch.any(x >= node_class_count):
+            raise ValueError(
+                "DiGress sample %d has a node class outside [0, %d)."
+                % (graph_index, node_class_count)
+            )
+        if torch.any(e < 0) or torch.any(e >= edge_class_count):
+            raise ValueError(
+                "DiGress sample %d has an edge class outside [0, %d)."
+                % (graph_index, edge_class_count)
+            )
 
         node_types.extend(int(value) for value in x.tolist())
         node_offsets.append(len(node_types))
@@ -296,7 +344,7 @@ def main() -> None:
             % (args.num_graphs, len(samples))
         )
 
-    packed = _pack_samples(samples)
+    packed = _pack_samples(samples, dataset=args.dataset)
     _atomic_npz(
         output,
         node_offsets=packed[0],

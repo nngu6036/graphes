@@ -43,6 +43,10 @@ def test_backend_runs_shell_free_and_decodes_export(monkeypatch, tmp_path: Path)
             json.dumps(
                 {
                     "format": "grapher_digress_export_v1",
+                    "array_format": "digress_graph_batch_v1",
+                    "status": "complete",
+                    "dataset": "comm20",
+                    "num_requested": 1,
                     "num_generated": 1,
                     "output": {"sha256": _sha256(output)},
                 }

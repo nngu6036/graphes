@@ -16,12 +16,31 @@ import numpy as np
 
 DIGRESS_EXPORT_FORMAT: Final[str] = "digress_graph_batch_v1"
 SUPPORTED_DATASETS: Final[frozenset[str]] = frozenset(
-    {"comm20", "planar", "sbm", "qm9"}
+    {"comm20", "planar", "sbm", "qm9", "zinc"}
 )
 GENERIC_DATASETS: Final[frozenset[str]] = frozenset(
     {"comm20", "planar", "sbm"}
 )
 QM9_ATOMIC_NUMBERS: Final[tuple[int, ...]] = (6, 7, 8, 9)
+ZINC_ATOMIC_NUMBERS: Final[tuple[int, ...]] = (
+    6,
+    7,
+    8,
+    9,
+    15,
+    16,
+    17,
+    35,
+    53,
+)
+MOLECULAR_ATOMIC_NUMBERS: Final[dict[str, tuple[int, ...]]] = {
+    "qm9": QM9_ATOMIC_NUMBERS,
+    "zinc": ZINC_ATOMIC_NUMBERS,
+}
+MOLECULAR_BOND_TYPES: Final[dict[str, frozenset[int]]] = {
+    "qm9": frozenset({1, 2, 3, 4}),
+    "zinc": frozenset({1, 2, 3}),
+}
 BOND_ORDERS: Final[dict[int, float]] = {1: 1.0, 2: 2.0, 3: 3.0, 4: 1.5}
 
 
@@ -120,14 +139,16 @@ def load_digress_export(path: str | Path, *, dataset: str) -> list[nx.Graph]:
                 )
             graph.add_nodes_from(range(n))
         else:
+            atomic_numbers = MOLECULAR_ATOMIC_NUMBERS[dataset_name]
             if np.any(local_node_types < 0) or np.any(
-                local_node_types >= len(QM9_ATOMIC_NUMBERS)
+                local_node_types >= len(atomic_numbers)
             ):
                 raise ValueError(
-                    f"QM9 DiGress graph {graph_index} contains an invalid atom class."
+                    f"{dataset_name.upper()} DiGress graph {graph_index} "
+                    "contains an invalid atom class."
                 )
             for node, atom_class in enumerate(local_node_types.tolist()):
-                atomic_number = QM9_ATOMIC_NUMBERS[int(atom_class)]
+                atomic_number = atomic_numbers[int(atom_class)]
                 graph.add_node(
                     node,
                     atomic_num=atomic_number,
@@ -162,9 +183,10 @@ def load_digress_export(path: str | Path, *, dataset: str) -> list[nx.Graph]:
                     )
                 graph.add_edge(source, target)
             else:
-                if semantic_edge_type not in BOND_ORDERS:
+                if semantic_edge_type not in MOLECULAR_BOND_TYPES[dataset_name]:
                     raise ValueError(
-                        f"QM9 DiGress graph {graph_index} has bond class "
+                        f"{dataset_name.upper()} DiGress graph {graph_index} "
+                        "has bond class "
                         f"{semantic_edge_type}."
                     )
                 graph.add_edge(
@@ -180,9 +202,15 @@ def load_digress_export(path: str | Path, *, dataset: str) -> list[nx.Graph]:
             {
                 "generator": "digress",
                 "digress_sample_index": graph_index,
-                "molecular_dataset": "qm9" if dataset_name == "qm9" else None,
+                "molecular_dataset": (
+                    dataset_name
+                    if dataset_name in MOLECULAR_ATOMIC_NUMBERS
+                    else None
+                ),
                 "molecular_representation": (
-                    "heavy_atom_graph" if dataset_name == "qm9" else None
+                    "heavy_atom_graph"
+                    if dataset_name in MOLECULAR_ATOMIC_NUMBERS
+                    else None
                 ),
             }
         )

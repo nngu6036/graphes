@@ -17,8 +17,8 @@ export PYTHONPATH=src
 
 The DiGress environment must contain the dependencies required by the attached
 source tree, including PyTorch, PyTorch Lightning, Hydra/OmegaConf,
-PyTorch-Geometric, NetworkX, and the model-specific scientific packages. QM9
-additionally requires RDKit.
+PyTorch-Geometric, NetworkX, and the model-specific scientific packages.
+Molecular datasets additionally require RDKit.
 
 The wrapper does not require the DiGress and GraphER environments to use the
 same package versions. All upstream imports occur in the isolated interpreter.
@@ -37,9 +37,11 @@ The stock DiGress checkout has no ZINC dataset or experiment configuration.
 GraphER therefore composes the upstream `qm9` dataset and `qm9_no_h` experiment
 only as a Hydra and molecular-loader architecture template. It then supplies
 the converted ZINC splits, the nine-category atom vocabulary, the three bond
-categories (single, double, and triple), and empirical priors computed from
-the exact converted training split. This compatibility layer does not treat
-ZINC as QM9 and does not modify the external DiGress checkout.
+categories (single, double, and triple), and empirical categorical priors
+computed from the exact converted training split. Node-count probabilities
+also include validation graph sizes so validation log-likelihood has complete
+support. This compatibility layer does not treat ZINC as QM9 and does not
+modify the external DiGress checkout.
 
 Ego-small and Grid use the attached source's data-driven generic loader with a
 declared architecture profile. The wrapper still trains exclusively on the
@@ -94,10 +96,12 @@ The wrapper also addresses these source-specific issues:
 - Expensive validation-time graph sampling, visualization, and final
   `trainer.test()` generation are disabled during managed training. The
   validation likelihood loop remains available at the configured cadence.
-- Molecular node-count, atom-type, edge-type, and valency priors are recomputed
-  from the exact converted GraphER training split rather than copied from
-  bundled DiGress data. ZINC uses nine atom categories and three present-edge
-  bond categories; the no-edge category remains internal to DiGress.
+- Molecular atom-type, edge-type, and valency priors are recomputed from the
+  exact converted GraphER training split rather than copied from bundled
+  DiGress data. Node-count probabilities use the converted training and
+  validation graph sizes to cover validation-time likelihoods. ZINC uses nine
+  atom categories and three present-edge bond categories; the no-edge category
+  remains internal to DiGress.
 - ZINC uses the upstream QM9 Hydra configuration and dataset loader only as an
   architecture template. The wrapper overlays the GraphER-managed ZINC
   categorical information in memory, leaving the external checkout unchanged.

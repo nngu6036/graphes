@@ -13,7 +13,7 @@ from typing import Any, Mapping
 
 import networkx as nx
 
-from grapher.models.digress.codec import load_digress_export
+from grapher.models.digress.codec import DIGRESS_EXPORT_FORMAT, load_digress_export
 from grapher.utils.subprocess_progress import SubprocessLogReporter
 
 
@@ -218,6 +218,21 @@ def generate_digress_graphs(
     manifest = _read_json(manifest_path)
     if manifest.get("format") != "grapher_digress_export_v1":
         raise RuntimeError("Unsupported DiGress export manifest format.")
+    if manifest.get("status") != "complete":
+        raise RuntimeError("DiGress export manifest is not complete.")
+    if manifest.get("array_format") != DIGRESS_EXPORT_FORMAT:
+        raise RuntimeError("Unsupported DiGress neutral-array format.")
+    normalized_dataset = str(dataset).lower()
+    if str(manifest.get("dataset", "")).lower() != normalized_dataset:
+        raise RuntimeError(
+            "DiGress export dataset mismatch: "
+            f"manifest={manifest.get('dataset')!r}, requested={normalized_dataset!r}."
+        )
+    if int(manifest.get("num_requested", -1)) != int(num_graphs):
+        raise RuntimeError(
+            "DiGress requested-count mismatch: "
+            f"manifest={manifest.get('num_requested')}, requested={num_graphs}."
+        )
     if int(manifest.get("num_generated", -1)) != int(num_graphs):
         raise RuntimeError(
             "DiGress export count mismatch: "

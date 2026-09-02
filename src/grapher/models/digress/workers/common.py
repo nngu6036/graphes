@@ -11,6 +11,7 @@ import json
 import os
 import random
 import sys
+import time
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
 
@@ -27,11 +28,11 @@ MOLECULAR_PROFILES: dict[str, dict[str, Any]] = {
     },
     "zinc": {
         "atom_decoder": ("C", "N", "O", "F", "P", "S", "Cl", "Br", "I"),
-        "valencies": (4, 3, 2, 1, 3, 2, 1, 1, 1),
-        "atom_weights": (12.0, 14.0, 16.0, 19.0, 31.0, 32.0, 35.5, 80.0, 127.0),
+        "valencies": (4, 3, 2, 1, 5, 6, 1, 1, 1),
+        "atom_weights": (12.0, 14.0, 16.0, 19.0, 30.0, 32.0, 35.5, 78.0, 127.0),
         # GraphER's ZINC benchmark follows the kekulized HOG-Diff/GDSS state.
         "edge_orders": (0.0, 1.0, 2.0, 3.0),
-        "max_weight": None,
+        "max_weight": 500.0,
     },
 }
 
@@ -406,6 +407,19 @@ def _safe_override(value: str) -> str:
     return text
 
 
+def upstream_config_templates(dataset: str, experiment: str) -> tuple[str, str]:
+    """Map a logical GraphER dataset to configs present in stock DiGress."""
+
+    dataset_name = str(dataset).lower()
+    experiment_name = str(experiment).lower()
+    if dataset_name == "zinc":
+        return (
+            "qm9",
+            "qm9_no_h" if experiment_name == "zinc_no_h" else experiment_name,
+        )
+    return dataset_name, experiment_name
+
+
 def compose_config(
     *,
     digress_root: Path,
@@ -435,10 +449,23 @@ def compose_config(
     config_dir = (Path(digress_root) / "configs").resolve()
     if not (config_dir / "config.yaml").is_file():
         raise FileNotFoundError(f"Missing DiGress config root: {config_dir}")
+    template_dataset, template_experiment = upstream_config_templates(
+        dataset_name, experiment
+    )
+    required_configs = (
+        config_dir / "dataset" / f"{template_dataset}.yaml",
+        config_dir / "experiment" / f"{template_experiment}.yaml",
+    )
+    missing_configs = [str(path) for path in required_configs if not path.is_file()]
+    if missing_configs:
+        raise FileNotFoundError(
+            f"Missing DiGress config templates for {dataset_name}: "
+            f"{missing_configs}."
+        )
 
     overrides = [
-        f"+experiment={_safe_override(experiment)}",
-        f"dataset={dataset_name}",
+        f"+experiment={_safe_override(template_experiment)}",
+        f"dataset={template_dataset}",
         f"dataset.datadir={str(Path(dataset_datadir).resolve())}",
         f"general.name={_safe_override(run_name)}",
         "general.wandb=disabled",
@@ -461,8 +488,8 @@ def compose_config(
         overrides.append(f"train.batch_size={int(batch_size)}")
     if num_workers is not None:
         overrides.append(f"train.num_workers={int(num_workers)}")
-        # QM9's experiment also places num_workers under dataset.
-        if dataset_name == "qm9":
+        # Molecular experiments also place num_workers under the dataset.
+        if dataset_name in SUPPORTED_MOLECULAR_DATASETS:
             overrides.append(f"dataset.num_workers={int(num_workers)}")
     if check_val_every_n_epochs is not None:
         overrides.append(
@@ -472,6 +499,9 @@ def compose_config(
 
     with initialize_config_dir(version_base="1.3", config_dir=str(config_dir)):
         cfg = compose(config_name="config", overrides=overrides)
+    # Restore the logical dataset after composing the stock compatibility
+    # template so component construction cannot accidentally use QM9 semantics.
+    cfg.dataset.name = dataset_name
     OmegaConf.resolve(cfg)
     return cfg
 
@@ -491,19 +521,279 @@ class NullSamplingMetrics:
         return {}
 
 
+class GraphERMolecularDatasetInfos:
+    """Dataset information for a GraphER-owned molecular categorical state.
+
+    Stock DiGress has no ZINC ``DatasetInfos`` class.  This dependency-light
+    implementation mirrors the small interface used by the discrete model and
+    stays importable as ``common.GraphERMolecularDatasetInfos`` when Lightning
+    serializes checkpoint hyperparameters.
+    """
+
+    def __init__(self, dataset: str) -> None:
+        dataset_name = str(dataset).lower()
+        profile = MOLECULAR_PROFILES[dataset_name]
+        atom_decoder = list(profile["atom_decoder"])
+        self.name = dataset_name
+        self.remove_h = True
+        self.aromatic = len(profile["edge_orders"]) == 5
+        self.need_to_strip = False
+        self.compute_fcd = False
+        self.atom_decoder = atom_decoder
+        self.atom_encoder = {
+            atom: index for index, atom in enumerate(atom_decoder)
+        }
+        self.num_atom_types = len(atom_decoder)
+        self.valencies = list(profile["valencies"])
+        self.atom_weights = {
+            index: float(weight)
+            for index, weight in enumerate(profile["atom_weights"])
+        }
+        self.max_n_nodes = 38 if dataset_name == "zinc" else 9
+        self.max_weight = float(profile["max_weight"])
+        self.input_dims = None
+        self.output_dims = None
+
+    def complete_infos(self, n_nodes: Any, node_types: Any) -> None:
+        from src.diffusion.distributions import DistributionNodes
+
+        self.input_dims = None
+        self.output_dims = None
+        self.num_classes = len(node_types)
+        self.max_n_nodes = len(n_nodes) - 1
+        self.nodes_dist = DistributionNodes(n_nodes)
+
+    def compute_input_output_dims(
+        self,
+        datamodule: Any,
+        extra_features: Any,
+        domain_features: Any,
+    ) -> None:
+        from src import utils
+
+        example_batch = next(iter(datamodule.train_dataloader()))
+        dense, node_mask = utils.to_dense(
+            example_batch.x,
+            example_batch.edge_index,
+            example_batch.edge_attr,
+            example_batch.batch,
+        )
+        noisy_data = {
+            "X_t": dense.X,
+            "E_t": dense.E,
+            "y_t": example_batch["y"],
+            "node_mask": node_mask,
+        }
+        extra = extra_features(noisy_data)
+        domain = domain_features(noisy_data)
+        self.input_dims = {
+            "X": example_batch["x"].size(1)
+            + extra.X.size(-1)
+            + domain.X.size(-1),
+            "E": example_batch["edge_attr"].size(1)
+            + extra.E.size(-1)
+            + domain.E.size(-1),
+            "y": example_batch["y"].size(1)
+            + 1
+            + extra.y.size(-1)
+            + domain.y.size(-1),
+        }
+        self.output_dims = {
+            "X": example_batch["x"].size(1),
+            "E": example_batch["edge_attr"].size(1),
+            "y": 0,
+        }
+
+
+class GraphERMolecularFeatures:
+    """Molecular features with a dataset-specific bond vocabulary."""
+
+    def __init__(self, dataset_infos: Any, *, dataset: str) -> None:
+        profile = MOLECULAR_PROFILES[str(dataset).lower()]
+        self.edge_orders = tuple(float(value) for value in profile["edge_orders"])
+        self.valencies = tuple(float(value) for value in dataset_infos.valencies)
+        self.atom_weights = tuple(
+            float(dataset_infos.atom_weights[index])
+            for index in range(len(dataset_infos.atom_weights))
+        )
+        self.max_weight = float(dataset_infos.max_weight)
+
+    def __call__(self, noisy_data: Mapping[str, Any]) -> Any:
+        import torch
+        from src import utils
+
+        X = noisy_data["X_t"]
+        E = noisy_data["E_t"]
+        if X.shape[-1] != len(self.valencies):
+            raise ValueError(
+                "Molecular node-state width does not match its valency profile."
+            )
+        if E.shape[-1] != len(self.edge_orders):
+            raise ValueError(
+                "Molecular edge-state width does not match its bond profile."
+            )
+        edge_orders = E.new_tensor(self.edge_orders).reshape(1, 1, 1, -1)
+        current_valencies = (E * edge_orders).sum(dim=-1).sum(dim=-1)
+        normal_valencies = (
+            X * X.new_tensor(self.valencies).reshape(1, 1, -1)
+        ).sum(dim=-1)
+        charge = (normal_valencies - current_valencies).unsqueeze(-1)
+        valency = current_valencies.unsqueeze(-1)
+        atom_classes = torch.argmax(X, dim=-1)
+        atom_weights = X.new_tensor(self.atom_weights)
+        node_mask = noisy_data["node_mask"].type_as(X)
+        weight = (
+            atom_weights[atom_classes] * node_mask
+        ).sum(dim=-1, keepdim=True)
+        weight = weight / self.max_weight
+        empty_edges = E.new_zeros((*E.shape[:-1], 0))
+        return utils.PlaceHolder(
+            X=torch.cat((charge, valency), dim=-1),
+            E=empty_edges,
+            y=weight,
+        )
+
+
 def _tensor_list(value: Any) -> list[float]:
     return [float(item) for item in value.detach().cpu().tolist()]
 
 
-def compute_qm9_statistics(datamodule: Any) -> dict[str, list[float]]:
-    """Compute priors from the exact GraphER-prepared QM9 splits."""
+def _empirical_molecular_distributions(
+    datamodule: Any, *, dataset: str
+) -> tuple[Any, Any, Any, Any]:
+    """Collect categorical priors from train and safe node support from val."""
 
-    n_nodes = datamodule.node_counts()
-    node_types = datamodule.node_types()
-    edge_types = datamodule.edge_counts()
+    import torch
+
+    profile = MOLECULAR_PROFILES[dataset]
+    atom_classes = len(profile["atom_decoder"])
+    edge_orders = tuple(float(value) for value in profile["edge_orders"])
+    edge_classes = len(edge_orders)
+    node_counts = torch.zeros(300, dtype=torch.float64)
+    node_types = torch.zeros(atom_classes, dtype=torch.float64)
+    edge_types = torch.zeros(edge_classes, dtype=torch.float64)
+    valencies = torch.zeros(3 * 300 - 2, dtype=torch.float64)
+    multipliers = torch.tensor(edge_orders, dtype=torch.float64)
+    loader = datamodule.train_dataloader()
+    total_batches = len(loader)
+    report_every = max(total_batches // 20, 1)
+    started = time.monotonic()
+    for batch_index, data in enumerate(loader, start=1):
+        if data.x.shape[-1] != atom_classes:
+            raise ValueError(
+                f"{dataset.upper()} node-state width is {data.x.shape[-1]}; "
+                f"expected {atom_classes}."
+            )
+        if data.edge_attr.shape[-1] != edge_classes:
+            raise ValueError(
+                f"{dataset.upper()} edge-state width is {data.edge_attr.shape[-1]}; "
+                f"expected {edge_classes}."
+            )
+        _, counts = torch.unique(data.batch.detach().cpu(), return_counts=True)
+        for count in counts.tolist():
+            if int(count) >= len(node_counts):
+                raise ValueError(f"Molecular graph has {count} nodes; maximum is 299.")
+            node_counts[int(count)] += 1
+        local_x = data.x.detach().cpu().to(dtype=torch.float64)
+        local_edges = data.edge_attr.detach().cpu().to(dtype=torch.float64)
+        node_types += local_x.sum(dim=0)
+        all_pairs = sum(int(count) * (int(count) - 1) for count in counts.tolist())
+        present_edges = int(data.edge_index.shape[1])
+        non_edges = all_pairs - present_edges
+        if non_edges < 0:
+            raise ValueError("Molecular batch contains more edges than node pairs.")
+        edge_types[0] += non_edges
+        edge_types[1:] += local_edges.sum(dim=0)[1:]
+
+        directed_orders = (local_edges * multipliers).sum(dim=-1)
+        atom_valencies = torch.zeros(local_x.shape[0], dtype=torch.float64)
+        atom_valencies.scatter_add_(
+            0,
+            data.edge_index[0].detach().cpu().long(),
+            directed_orders,
+        )
+        rounded_valencies = torch.round(atom_valencies)
+        if not bool(torch.allclose(atom_valencies, rounded_valencies)):
+            raise ValueError("Molecular training data contains non-integral valency.")
+        integer_valencies = rounded_valencies.long()
+        if bool((integer_valencies < 0).any()) or bool(
+            (integer_valencies >= len(valencies)).any()
+        ):
+            raise ValueError("Molecular training data contains an invalid valency.")
+        valencies += torch.bincount(
+            integer_valencies, minlength=len(valencies)
+        ).to(dtype=torch.float64)
+        if (
+            batch_index == 1
+            or batch_index == total_batches
+            or batch_index % report_every == 0
+        ):
+            status(
+                "Molecular-prior scan: "
+                f"dataset={dataset}, batch={batch_index}/{total_batches}, "
+                f"graphs={int(node_counts.sum().item())}, "
+                f"elapsed_seconds={time.monotonic() - started:.1f}."
+            )
+
+    # DiGress evaluates log p(N) during validation. Match its native contract
+    # by including validation graph sizes in the node-count support, otherwise
+    # a validation-only larger molecule would index beyond DistributionNodes.
+    validation_loader_factory = getattr(datamodule, "val_dataloader", None)
+    if callable(validation_loader_factory):
+        validation_loader = validation_loader_factory()
+        for data in validation_loader:
+            if data.x.shape[-1] != atom_classes:
+                raise ValueError(
+                    f"{dataset.upper()} validation node-state width is "
+                    f"{data.x.shape[-1]}; expected {atom_classes}."
+                )
+            _, counts = torch.unique(
+                data.batch.detach().cpu(), return_counts=True
+            )
+            for count in counts.tolist():
+                if int(count) >= len(node_counts):
+                    raise ValueError(
+                        f"Molecular validation graph has {count} nodes; "
+                        "maximum is 299."
+                    )
+                node_counts[int(count)] += 1
+
+    nonzero_node_counts = torch.nonzero(node_counts, as_tuple=False)
+    if nonzero_node_counts.numel() == 0:
+        raise ValueError("Cannot compute molecular priors from an empty split.")
+    max_n_nodes = int(nonzero_node_counts.max().item())
+    node_counts = node_counts[: max_n_nodes + 1]
+    valencies = valencies[: 3 * max_n_nodes - 2]
+    distributions = (node_counts, node_types, edge_types, valencies)
+    if any(values.sum() <= 0 for values in distributions):
+        raise ValueError("A molecular empirical distribution has zero mass.")
+    return tuple(
+        (values / values.sum()).to(dtype=torch.float) for values in distributions
+    )  # type: ignore[return-value]
+
+
+def compute_molecular_statistics(
+    datamodule: Any, *, dataset: str
+) -> dict[str, Any]:
+    """Compute categorical priors and safe node support from GraphER splits."""
+
+    dataset_name = str(dataset).lower()
+    profile = MOLECULAR_PROFILES[dataset_name]
+    n_nodes, node_types, edge_types, valencies = (
+        _empirical_molecular_distributions(datamodule, dataset=dataset_name)
+    )
     max_n_nodes = int(len(n_nodes) - 1)
-    valencies = datamodule.valency_count(max_n_nodes)
+    if dataset_name == "zinc" and max_n_nodes > 38:
+        raise ValueError(
+            f"GraphER ZINC contains {max_n_nodes} nodes; the protocol maximum is 38."
+        )
     return {
+        "format": "grapher_digress_molecular_statistics_v1",
+        "dataset": dataset_name,
+        "atom_decoder": list(profile["atom_decoder"]),
+        "edge_orders": list(profile["edge_orders"]),
+        "node_count_source": "train_and_validation",
+        "categorical_source": "train",
         "n_nodes": _tensor_list(n_nodes),
         "node_types": _tensor_list(node_types),
         "edge_types": _tensor_list(edge_types),
@@ -511,9 +801,39 @@ def compute_qm9_statistics(datamodule: Any) -> dict[str, list[float]]:
     }
 
 
-def apply_qm9_statistics(dataset_infos: Any, statistics: Mapping[str, Any]) -> None:
+def apply_molecular_statistics(
+    dataset_infos: Any,
+    statistics: Mapping[str, Any],
+    *,
+    dataset: str,
+) -> None:
     import torch
 
+    dataset_name = str(dataset).lower()
+    profile = MOLECULAR_PROFILES[dataset_name]
+    recorded_format = statistics.get("format")
+    if recorded_format is not None and (
+        recorded_format != "grapher_digress_molecular_statistics_v1"
+    ):
+        raise ValueError(
+            f"Unsupported molecular statistics format {recorded_format!r}."
+        )
+    recorded_dataset = statistics.get("dataset")
+    if recorded_dataset is not None and str(recorded_dataset).lower() != dataset_name:
+        raise ValueError(
+            "Molecular statistics dataset mismatch: "
+            f"expected {dataset_name}, got {recorded_dataset}."
+        )
+    recorded_atoms = statistics.get("atom_decoder")
+    if recorded_atoms is not None and tuple(recorded_atoms) != tuple(
+        profile["atom_decoder"]
+    ):
+        raise ValueError(f"{dataset_name.upper()} atom vocabulary mismatch.")
+    recorded_edges = statistics.get("edge_orders")
+    if recorded_edges is not None and tuple(
+        float(value) for value in recorded_edges
+    ) != tuple(float(value) for value in profile["edge_orders"]):
+        raise ValueError(f"{dataset_name.upper()} bond vocabulary mismatch.")
     required = (
         "n_nodes",
         "node_types",
@@ -522,19 +842,45 @@ def apply_qm9_statistics(dataset_infos: Any, statistics: Mapping[str, Any]) -> N
     )
     missing = [name for name in required if name not in statistics]
     if missing:
-        raise ValueError(f"QM9 statistics are missing fields: {missing}")
+        raise ValueError(
+            f"{dataset_name.upper()} statistics are missing fields: {missing}"
+        )
     n_nodes = torch.tensor(statistics["n_nodes"], dtype=torch.float)
     node_types = torch.tensor(statistics["node_types"], dtype=torch.float)
     edge_types = torch.tensor(statistics["edge_types"], dtype=torch.float)
     valencies = torch.tensor(
         statistics["valency_distribution"], dtype=torch.float
     )
-    if n_nodes.ndim != 1 or not torch.isfinite(n_nodes).all() or n_nodes.sum() <= 0:
-        raise ValueError("Invalid QM9 node-count distribution.")
-    if node_types.shape != (4,) or node_types.sum() <= 0:
-        raise ValueError("Invalid QM9 atom-type distribution.")
-    if edge_types.shape != (5,) or edge_types.sum() <= 0:
-        raise ValueError("Invalid QM9 edge-type distribution.")
+    distributions = {
+        "node-count": n_nodes,
+        "atom-type": node_types,
+        "edge-type": edge_types,
+        "valency": valencies,
+    }
+    for label, values in distributions.items():
+        if (
+            values.ndim != 1
+            or not bool(torch.isfinite(values).all())
+            or bool((values < 0).any())
+            or values.sum() <= 0
+        ):
+            raise ValueError(
+                f"Invalid {dataset_name.upper()} {label} distribution."
+            )
+    expected_atoms = len(profile["atom_decoder"])
+    expected_edges = len(profile["edge_orders"])
+    if node_types.shape != (expected_atoms,):
+        raise ValueError(
+            f"Invalid {dataset_name.upper()} atom-type distribution; expected "
+            f"{expected_atoms} classes."
+        )
+    if edge_types.shape != (expected_edges,):
+        raise ValueError(
+            f"Invalid {dataset_name.upper()} edge-type distribution; expected "
+            f"{expected_edges} classes."
+        )
+    if dataset_name == "zinc" and len(n_nodes) - 1 > 38:
+        raise ValueError("GraphER ZINC node-count support exceeds 38 nodes.")
 
     n_nodes = n_nodes / n_nodes.sum()
     node_types = node_types / node_types.sum()
@@ -547,6 +893,18 @@ def apply_qm9_statistics(dataset_infos: Any, statistics: Mapping[str, Any]) -> N
     dataset_infos.edge_types = edge_types
     dataset_infos.valency_distribution = valencies
     dataset_infos.complete_infos(n_nodes=n_nodes, node_types=node_types)
+
+
+def compute_qm9_statistics(datamodule: Any) -> dict[str, Any]:
+    """Backward-compatible QM9 statistics entry point."""
+
+    return compute_molecular_statistics(datamodule, dataset="qm9")
+
+
+def apply_qm9_statistics(dataset_infos: Any, statistics: Mapping[str, Any]) -> None:
+    """Backward-compatible QM9 statistics entry point."""
+
+    apply_molecular_statistics(dataset_infos, statistics, dataset="qm9")
 
 
 def build_components(
@@ -593,25 +951,36 @@ def build_components(
         }
         return datamodule, model_kwargs, None
 
-    if dataset == "qm9":
+    if dataset in SUPPORTED_MOLECULAR_DATASETS:
         from datasets import qm9_dataset
         from diffusion.extra_features import DummyExtraFeatures, ExtraFeatures
-        from diffusion.extra_features_molecular import ExtraMolecularFeatures
-        from metrics.molecular_metrics_discrete import TrainMolecularMetricsDiscrete
+        from metrics.abstract_metrics import TrainAbstractMetricsDiscrete
 
         datamodule = qm9_dataset.QM9DataModule(cfg)
-        dataset_infos = qm9_dataset.QM9infos(datamodule=datamodule, cfg=cfg)
+        if dataset == "qm9":
+            from diffusion.extra_features_molecular import ExtraMolecularFeatures
+            from metrics.molecular_metrics_discrete import (
+                TrainMolecularMetricsDiscrete,
+            )
+
+            dataset_infos = qm9_dataset.QM9infos(datamodule=datamodule, cfg=cfg)
+        else:
+            dataset_infos = GraphERMolecularDatasetInfos(dataset)
         statistics = (
             dict(molecular_statistics)
             if molecular_statistics is not None
-            else compute_qm9_statistics(datamodule)
+            else compute_molecular_statistics(datamodule, dataset=dataset)
         )
-        apply_qm9_statistics(dataset_infos, statistics)
+        apply_molecular_statistics(dataset_infos, statistics, dataset=dataset)
         if cfg.model.type == "discrete" and cfg.model.extra_features is not None:
             extra_features = ExtraFeatures(
                 cfg.model.extra_features, dataset_info=dataset_infos
             )
-            domain_features = ExtraMolecularFeatures(dataset_infos=dataset_infos)
+            domain_features = (
+                ExtraMolecularFeatures(dataset_infos=dataset_infos)
+                if dataset == "qm9"
+                else GraphERMolecularFeatures(dataset_infos, dataset=dataset)
+            )
         else:
             extra_features = DummyExtraFeatures()
             domain_features = DummyExtraFeatures()
@@ -622,7 +991,11 @@ def build_components(
         )
         model_kwargs = {
             "dataset_infos": dataset_infos,
-            "train_metrics": TrainMolecularMetricsDiscrete(dataset_infos),
+            "train_metrics": (
+                TrainMolecularMetricsDiscrete(dataset_infos)
+                if dataset == "qm9"
+                else TrainAbstractMetricsDiscrete()
+            ),
             "sampling_metrics": NullSamplingMetrics(),
             "visualization_tools": None,
             "extra_features": extra_features,
