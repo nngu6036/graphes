@@ -33,6 +33,7 @@ DATASET_PROFILES: dict[str, DatasetProfile] = {
     "ego_small": DatasetProfile("ego_small", "comm20", "comm20"),
     "grid": DatasetProfile("grid", "planar", "planar"),
     "qm9": DatasetProfile("qm9_attributed", "qm9", "qm9_no_h"),
+    "zinc": DatasetProfile("zinc", "zinc", "zinc_no_h"),
 }
 
 

@@ -70,6 +70,89 @@ def test_qm9_codec_restores_atom_and_bond_attributes(tmp_path: Path) -> None:
     assert graph.graph["molecular_dataset"] == "qm9"
 
 
+def test_qm9_codec_retains_aromatic_bond_class(tmp_path: Path) -> None:
+    path = tmp_path / "qm9_aromatic.npz"
+    _write_export(
+        path,
+        node_offsets=[0, 2],
+        node_types=[0, 0],
+        edge_offsets=[0, 1],
+        endpoints=[(0, 1)],
+        edge_types=[4],
+    )
+
+    graph = load_digress_export(path, dataset="qm9")[0]
+
+    assert graph.edges[0, 1]["bond_type"] == 4
+    assert graph.edges[0, 1]["bond_order"] == 1.5
+
+
+def test_zinc_codec_restores_all_atom_and_bond_classes(tmp_path: Path) -> None:
+    path = tmp_path / "zinc.npz"
+    _write_export(
+        path,
+        node_offsets=[0, 9],
+        node_types=list(range(9)),
+        edge_offsets=[0, 3],
+        endpoints=[(0, 1), (1, 2), (2, 3)],
+        edge_types=[1, 2, 3],
+    )
+
+    graph = load_digress_export(path, dataset="zinc")[0]
+
+    atomic_numbers = [6, 7, 8, 9, 15, 16, 17, 35, 53]
+    assert [graph.nodes[i]["atomic_num"] for i in range(9)] == atomic_numbers
+    assert [graph.nodes[i]["atom_type"] for i in range(9)] == atomic_numbers
+    assert {
+        edge: graph.edges[edge]["bond_type"] for edge in graph.edges
+    } == {(0, 1): 1, (1, 2): 2, (2, 3): 3}
+    assert {
+        edge: graph.edges[edge]["bond_order"] for edge in graph.edges
+    } == {(0, 1): 1.0, (1, 2): 2.0, (2, 3): 3.0}
+    assert graph.graph["molecular_dataset"] == "zinc"
+    assert graph.graph["molecular_representation"] == "heavy_atom_graph"
+    assert graph.graph["digress_sample_index"] == 0
+    assert set(range(4, 9)) <= set(graph.nodes)
+
+
+@pytest.mark.parametrize("atom_class", [-1, 9])
+def test_codec_rejects_invalid_zinc_atom_class(
+    tmp_path: Path,
+    atom_class: int,
+) -> None:
+    path = tmp_path / f"bad_zinc_atom_{atom_class}.npz"
+    _write_export(
+        path,
+        node_offsets=[0, 1],
+        node_types=[atom_class],
+        edge_offsets=[0, 0],
+        endpoints=[],
+        edge_types=[],
+    )
+
+    with pytest.raises(ValueError, match="invalid atom class"):
+        load_digress_export(path, dataset="zinc")
+
+
+@pytest.mark.parametrize("bond_class", [4, 5])
+def test_codec_rejects_unsupported_zinc_bond_class(
+    tmp_path: Path,
+    bond_class: int,
+) -> None:
+    path = tmp_path / f"bad_zinc_bond_{bond_class}.npz"
+    _write_export(
+        path,
+        node_offsets=[0, 2],
+        node_types=[0, 0],
+        edge_offsets=[0, 1],
+        endpoints=[(0, 1)],
+        edge_types=[bond_class],
+    )
+
+    with pytest.raises(ValueError, match="bond class"):
+        load_digress_export(path, dataset="zinc")
+
+
 def test_codec_rejects_mismatched_offsets(tmp_path: Path) -> None:
     path = tmp_path / "bad.npz"
     _write_export(

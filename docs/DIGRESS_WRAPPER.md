@@ -31,10 +31,15 @@ same package versions. All upstream imports occur in the isolated interpreter.
 | `ego_small` | `outputs/datasets/ego_small` | `comm20` compatibility architecture | Generic topology |
 | `grid` | `outputs/datasets/grid` | `planar` compatibility architecture | Generic topology |
 | `qm9` | `outputs/datasets/qm9_attributed` | dataset `qm9`, experiment `qm9_no_h` | Heavy-atom attributed molecules |
+| `zinc` | `outputs/datasets/zinc` | GraphER-managed `zinc` profile using the upstream QM9 architecture template | Heavy-atom attributed molecules |
 
-The attached DiGress snapshot has no ZINC dataset or experiment configuration,
-so `DiGressWrapper` deliberately rejects ZINC instead of silently substituting
-another molecular benchmark.
+The stock DiGress checkout has no ZINC dataset or experiment configuration.
+GraphER therefore composes the upstream `qm9` dataset and `qm9_no_h` experiment
+only as a Hydra and molecular-loader architecture template. It then supplies
+the converted ZINC splits, the nine-category atom vocabulary, the three bond
+categories (single, double, and triple), and empirical priors computed from
+the exact converted training split. This compatibility layer does not treat
+ZINC as QM9 and does not modify the external DiGress checkout.
 
 Ego-small and Grid use the attached source's data-driven generic loader with a
 declared architecture profile. The wrapper still trains exclusively on the
@@ -89,9 +94,13 @@ The wrapper also addresses these source-specific issues:
 - Expensive validation-time graph sampling, visualization, and final
   `trainer.test()` generation are disabled during managed training. The
   validation likelihood loop remains available at the configured cadence.
-- QM9 node-count, atom-type, edge-type, and valency priors are recomputed from
-  the exact converted GraphER splits rather than copied from bundled DiGress
-  data.
+- Molecular node-count, atom-type, edge-type, and valency priors are recomputed
+  from the exact converted GraphER training split rather than copied from
+  bundled DiGress data. ZINC uses nine atom categories and three present-edge
+  bond categories; the no-edge category remains internal to DiGress.
+- ZINC uses the upstream QM9 Hydra configuration and dataset loader only as an
+  architecture template. The wrapper overlays the GraphER-managed ZINC
+  categorical information in memory, leaving the external checkout unchanged.
 - Generation calls the upstream model's `sample_batch()` method, exports only
   numeric arrays, then decodes and validates them in GraphER.
 - Generated samples are not filtered, repaired, or silently replaced. Invalid
@@ -107,6 +116,7 @@ digress_community_small.yaml
 digress_ego_small.yaml
 digress_grid.yaml
 digress_qm9.yaml
+digress_zinc.yaml
 ```
 
 A wrapper configuration has a top-level `digress` section. For example:
@@ -195,6 +205,17 @@ PYTHONPATH=src python scripts/run_digress_baseline.py \
   --wrapper-config configs/baselines/digress_qm9.yaml
 ```
 
+### ZINC
+
+```bash
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_e1000 \
+  --wrapper-config configs/baselines/digress_zinc.yaml
+```
+
 The runner prints human-readable progress to stderr and one final JSON artifact
 summary to stdout. Useful CLI overrides include:
 
@@ -253,6 +274,25 @@ This reports RDKit validity, uniqueness, novelty, NSPDK, and FCD when its
 optional dependency is available. Add `--skip-fcd` when the environment lacks
 a compatible FCD package.
 
+### ZINC
+
+```bash
+GEN_DIR="outputs/baselines/digress/zinc/seed_42_e1000/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+  --fcd-device auto
+```
+
+The ZINC evaluation consumes the same validated GraphER molecular graph
+representation used for training. Add `--skip-fcd` when the environment lacks
+a compatible FCD package.
+
 ## Artifact layout
 
 ```text
@@ -262,14 +302,14 @@ outputs/baselines/digress/<benchmark>/<run_id>/
 │   ├── checkpoints/model.ckpt
 │   ├── dataset_conversion.json
 │   ├── manifest.json
-│   ├── molecular_statistics.json       # QM9 only
+│   ├── molecular_statistics.json       # molecular datasets only
 │   ├── native_dataset/
 │   ├── resolved_config.yaml
 │   ├── train.log
 │   └── training_estimates/
 │       ├── estimated_graphs.pkl
 │       ├── ground_truth_graphs.pkl
-│       ├── ground_truth_model_view.pkl  # QM9 only
+│       ├── ground_truth_model_view.pkl  # molecular datasets only
 │       ├── manifest.json
 │       └── native/
 ├── failures/                            # created only after failed attempts
@@ -309,8 +349,9 @@ edges, and self-loops before constructing the ordered `base_graphs.pkl` batch.
 
 - Only the attached discrete DiGress model is wrapped; the continuous model is
   outside this integration.
-- ZINC, MOSES, GuacaMol, and explicit-hydrogen QM9 are not exposed by the
-  current GraphER runner.
+- MOSES, GuacaMol, and explicit-hydrogen QM9 are not exposed by the current
+  GraphER runner. ZINC support is the GraphER-managed compatibility path
+  described above, not a native profile shipped by upstream DiGress.
 - Grid and Ego-small use declared compatibility architectures because this
   source snapshot has no native profiles for those benchmark names.
 - A complete GPU train-and-generate run still depends on a working external

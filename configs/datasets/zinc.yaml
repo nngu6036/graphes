@@ -101,6 +101,16 @@ native_reference:
     aromatic: false
     max_nodes: 38
   digress:
-    availability: no shipped ZINC dataset configuration in the attached repository
+    dataset_name: zinc
+    native_configuration: not shipped by upstream DiGress
+    architecture_template:
+      dataset: qm9
+      experiment: qm9_no_h
+      scope: Hydra composition and molecular dataset-loader architecture only
+    atom_channels: 9
+    atom_numbers: [6, 7, 8, 9, 15, 16, 17, 35, 53]
+    bond_categories: [1, 2, 3]
+    empirical_priors: computed from the exact converted GraphER ZINC training split
+    external_checkout_modified: false
   graphrnn:
     availability: no native molecular ZINC configuration

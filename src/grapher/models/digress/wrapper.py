@@ -42,7 +42,7 @@ TRAINING_MANIFEST_FORMAT = "grapher_digress_training_v1"
 TRAINING_ESTIMATES_MANIFEST_FORMAT = "grapher_digress_training_estimates_v1"
 GENERATION_MANIFEST_FORMAT = "grapher_digress_generation_v1"
 SUPPORTED_GENERIC_DATASETS = frozenset({"comm20", "planar", "sbm"})
-SUPPORTED_MOLECULAR_DATASETS = frozenset({"qm9"})
+SUPPORTED_MOLECULAR_DATASETS = frozenset({"qm9", "zinc"})
 SUPPORTED_NATIVE_DATASETS = SUPPORTED_GENERIC_DATASETS | SUPPORTED_MOLECULAR_DATASETS
 _NATIVE_BY_BENCHMARK = {
     "community_small": "comm20",
@@ -53,12 +53,15 @@ _NATIVE_BY_BENCHMARK = {
     "sbm": "sbm",
     "qm9": "qm9",
     "qm9_attributed": "qm9",
+    "zinc": "zinc",
+    "zinc_attributed": "zinc",
 }
 _EXPERIMENT_BY_NATIVE = {
     "comm20": "comm20",
     "planar": "planar",
     "sbm": "sbm",
     "qm9": "qm9_no_h",
+    "zinc": "zinc_no_h",
 }
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]+$")
 _PROTECTED_HYDRA_KEYS = frozenset(
@@ -180,12 +183,6 @@ def _native_dataset(benchmark: str, explicit: Any = None) -> str:
     requested = str(explicit or benchmark).lower()
     native = _NATIVE_BY_BENCHMARK.get(requested, requested)
     if native not in SUPPORTED_NATIVE_DATASETS:
-        if requested in {"zinc", "zinc_attributed"}:
-            raise ValueError(
-                "The attached DiGress snapshot has no ZINC dataset or experiment "
-                "configuration. DiGressWrapper currently supports Community-small, "
-                "Ego-small, Grid/SPECTRE-compatible generic graphs, and QM9."
-            )
         raise ValueError(
             f"DiGressWrapper supports native datasets "
             f"{sorted(SUPPORTED_NATIVE_DATASETS)}; benchmark {benchmark!r} has "
@@ -198,8 +195,34 @@ def _default_experiment(native: str) -> str:
     return _EXPERIMENT_BY_NATIVE[native]
 
 
-def _dataset_profile(benchmark: str, native: str) -> dict[str, str]:
+def _upstream_config_templates(native: str, experiment: str) -> tuple[str, str]:
+    """Resolve stock DiGress Hydra configs used as adapter templates.
+
+    The attached DiGress checkout has no native ZINC config.  GraphER supplies
+    the ZINC data module semantics and empirical categorical priors inside its
+    isolated worker, while reusing the stock heavy-atom QM9 config solely for
+    loader and model hyperparameter defaults.  The external source tree is
+    never modified.
+    """
+
+    if native == "zinc":
+        template_experiment = (
+            "qm9_no_h" if experiment == "zinc_no_h" else experiment
+        )
+        return "qm9", template_experiment
+    return native, experiment
+
+
+def _default_generation_batch_size(native: str) -> int:
     if native == "qm9":
+        return 256
+    if native == "zinc":
+        return 128
+    return 64
+
+
+def _dataset_profile(benchmark: str, native: str) -> dict[str, str]:
+    if native in SUPPORTED_MOLECULAR_DATASETS:
         representation = "heavy_atom_categorical"
         domain = "molecular"
     else:
@@ -486,8 +509,8 @@ class DiGressWrapper(BaseGeneratorWrapper):
         status="ready",
     )
     implementation_note = (
-        "Supports generic SPECTRE-compatible graph datasets and heavy-atom QM9. "
-        "The attached DiGress source has no ZINC configuration."
+        "Supports generic SPECTRE-compatible graph datasets and heavy-atom "
+        "QM9/ZINC through isolated categorical adapters."
     )
 
     def _run_external(
@@ -600,8 +623,15 @@ class DiGressWrapper(BaseGeneratorWrapper):
         ):
             raise ValueError("runtime.cuda_visible_devices is invalid.")
 
-        experiment_config = root / "configs" / "experiment" / f"{experiment}.yaml"
-        dataset_config = root / "configs" / "dataset" / f"{native}.yaml"
+        template_dataset, template_experiment = _upstream_config_templates(
+            native, experiment
+        )
+        experiment_config = (
+            root / "configs" / "experiment" / f"{template_experiment}.yaml"
+        )
+        dataset_config = (
+            root / "configs" / "dataset" / f"{template_dataset}.yaml"
+        )
         missing = [
             str(path)
             for path in (experiment_config, dataset_config)
@@ -843,7 +873,7 @@ class DiGressWrapper(BaseGeneratorWrapper):
                         "batch_size",
                         options.get(
                             "generation_batch_size",
-                            256 if native == "qm9" else 64,
+                            _default_generation_batch_size(native),
                         ),
                     )
                 )
@@ -884,13 +914,14 @@ class DiGressWrapper(BaseGeneratorWrapper):
                 train_graphs = _load_pickle_graphs(split_paths["train"])
                 ground_truth_path = estimates_dir / "ground_truth_graphs.pkl"
                 _atomic_pickle(ground_truth_path, train_graphs[:estimate_count])
-                if native == "qm9":
+                if native in SUPPORTED_MOLECULAR_DATASETS:
                     source_model_view = (
                         persisted_native / "model_view" / "train.pkl"
                     )
                     if not source_model_view.is_file():
                         raise RuntimeError(
-                            "QM9 conversion did not persist its model-view train split."
+                            f"{native.upper()} conversion did not persist its "
+                            "model-view train split."
                         )
                     model_view_graphs = _load_pickle_graphs(source_model_view)
                     model_view_path = estimates_dir / "ground_truth_model_view.pkl"
@@ -963,10 +994,14 @@ class DiGressWrapper(BaseGeneratorWrapper):
                 "started_at": started_at,
                 "finished_at": _utc_now(),
                 "duration_seconds": time.monotonic() - started,
-                "upstream": {
-                    **source_identity,
-                    "experiment": experiment,
-                    "python_environment": python_identity,
+                    "upstream": {
+                        **source_identity,
+                        "experiment": experiment,
+                        "config_template": {
+                            "dataset": template_dataset,
+                            "experiment": template_experiment,
+                        },
+                        "python_environment": python_identity,
                 },
                 "training": {
                     "configured_n_epochs": worker_manifest.get(
@@ -1047,7 +1082,7 @@ class DiGressWrapper(BaseGeneratorWrapper):
                 ),
                 ground_truth_model_view_graphs_path=(
                     layout.ground_truth_model_view_graphs_path
-                    if estimates_enabled and native == "qm9"
+                    if estimates_enabled and native in SUPPORTED_MOLECULAR_DATASETS
                     else None
                 ),
                 training_estimates_manifest_path=(
@@ -1140,7 +1175,7 @@ class DiGressWrapper(BaseGeneratorWrapper):
         cuda_visible_devices = None if cuda_value is None else str(cuda_value)
         batch_size = int(
             options.get(
-                "generation_batch_size", 256 if native == "qm9" else 64
+                "generation_batch_size", _default_generation_batch_size(native)
             )
         )
         if batch_size <= 0:

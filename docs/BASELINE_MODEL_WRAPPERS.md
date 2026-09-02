@@ -230,13 +230,18 @@ generic graphs and attributed QM9/ZINC molecular graphs using the existing
 project-owned trainer, invariant samplers, and constructors. The DeFoG wrapper
 implements isolated training, post-training estimate export, and generation
 for the same domains. DiGress is also complete for Community-small, Ego-small,
-Grid, and heavy-atom QM9. GraphRNN is complete for Community-small, Ego-small,
-and Grid through a current-PyTorch compatibility worker that imports the
-attached upstream GRU/MLP modules while preserving GraphRNN's BFS adjacency
-encoding and autoregressive sampler. All completed external wrappers export
-neutral numeric NPZ batches and validate dataset-specific schemas before
-publishing GraphER-facing NetworkX graphs. CatFlow, HOG-Diff, and FLAGG remain
-explicit placeholders.
+Grid, heavy-atom QM9, and heavy-atom ZINC. Because stock DiGress does not ship
+ZINC Hydra configurations, the GraphER-managed ZINC path uses the upstream QM9
+dataset/experiment only as a loader and architecture template. It supplies its
+own nine-category atom vocabulary, three-category bond vocabulary, and
+split-derived empirical priors in memory; the external checkout is not
+modified. GraphRNN is complete for Community-small, Ego-small, and Grid through
+a current-PyTorch compatibility worker that imports the attached upstream
+GRU/MLP modules while preserving GraphRNN's BFS adjacency encoding and
+autoregressive sampler. All completed external wrappers export neutral numeric
+NPZ batches and validate dataset-specific schemas before publishing
+GraphER-facing NetworkX graphs. CatFlow, HOG-Diff, and FLAGG remain explicit
+placeholders.
 Unimplemented methods raise `BaselineNotImplementedError` before creating any
 directories; an incomplete adapter must not leave a partial run that looks
 like evidence.

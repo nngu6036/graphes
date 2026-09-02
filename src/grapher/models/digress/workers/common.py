@@ -15,8 +15,25 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
 
 SUPPORTED_GENERIC_DATASETS = frozenset({"comm20", "planar", "sbm"})
-SUPPORTED_MOLECULAR_DATASETS = frozenset({"qm9"})
+SUPPORTED_MOLECULAR_DATASETS = frozenset({"qm9", "zinc"})
 SUPPORTED_DATASETS = SUPPORTED_GENERIC_DATASETS | SUPPORTED_MOLECULAR_DATASETS
+MOLECULAR_PROFILES: dict[str, dict[str, Any]] = {
+    "qm9": {
+        "atom_decoder": ("C", "N", "O", "F"),
+        "valencies": (4, 3, 2, 1),
+        "atom_weights": (12.0, 14.0, 16.0, 19.0),
+        "edge_orders": (0.0, 1.0, 2.0, 3.0, 1.5),
+        "max_weight": 150.0,
+    },
+    "zinc": {
+        "atom_decoder": ("C", "N", "O", "F", "P", "S", "Cl", "Br", "I"),
+        "valencies": (4, 3, 2, 1, 3, 2, 1, 1, 1),
+        "atom_weights": (12.0, 14.0, 16.0, 19.0, 31.0, 32.0, 35.5, 80.0, 127.0),
+        # GraphER's ZINC benchmark follows the kekulized HOG-Diff/GDSS state.
+        "edge_orders": (0.0, 1.0, 2.0, 3.0),
+        "max_weight": None,
+    },
+}
 
 
 def status(message: str) -> None:

@@ -5,7 +5,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from grapher.models import GenerationArtifacts, TrainingArtifacts
-from scripts.run_digress_baseline import DATASET_PROFILES, run_pipeline
+from scripts.run_digress_baseline import (
+    DATASET_PROFILES,
+    build_parser,
+    run_pipeline,
+)
 
 
 class WrapperStub:
@@ -49,6 +53,90 @@ class WrapperStub:
             graphs_sha256="abc",
             log_path=log,
         )
+
+
+def test_parser_accepts_zinc_dataset_profile() -> None:
+    args = build_parser().parse_args(
+        [
+            "--dataset",
+            "zinc",
+            "--num-samples",
+            "7",
+            "--seed",
+            "13",
+        ]
+    )
+
+    profile = DATASET_PROFILES[args.dataset]
+    assert args.dataset == "zinc"
+    assert args.num_samples == 7
+    assert args.seed_id == 13
+    assert profile.serialized_id == "zinc"
+    assert profile.native_id == "zinc"
+    assert profile.experiment == "zinc_no_h"
+
+
+def test_zinc_cli_constructs_training_and_generation_requests(
+    tmp_path: Path,
+) -> None:
+    dataset_root = tmp_path / "datasets"
+    prepared = dataset_root / "zinc"
+    prepared.mkdir(parents=True)
+    for split in ("train", "val", "test"):
+        (prepared / f"{split}.pkl").write_bytes(b"prepared")
+    wrapper_config = tmp_path / "digress_zinc.yaml"
+    wrapper_config.write_text("digress:\n  native_dataset: zinc\n")
+    output_root = tmp_path / "baselines"
+    args = build_parser().parse_args(
+        [
+            "--dataset",
+            "zinc",
+            "--num-samples",
+            "7",
+            "--seed",
+            "13",
+            "--dataset-root",
+            str(dataset_root),
+            "--output-root",
+            str(output_root),
+            "--wrapper-config",
+            str(wrapper_config),
+            "--device",
+            "cpu",
+            "--quiet",
+        ]
+    )
+    stub = WrapperStub()
+
+    with patch(
+        "scripts.run_digress_baseline.create_baseline", return_value=stub
+    ):
+        summary = run_pipeline(args)
+
+    training = stub.training_request
+    assert training.run.model_id == "digress"
+    assert training.run.dataset_id == "zinc"
+    assert training.run.train_seed == 13
+    assert training.dataset.benchmark_id == "zinc"
+    assert training.dataset.serialized_id == "zinc"
+    assert training.dataset.native_id == "zinc"
+    assert training.dataset.dataset_dir == prepared
+    assert training.config_path == wrapper_config
+    assert training.options["experiment"] == "zinc_no_h"
+    assert training.options["runtime"]["device"] == "cpu"
+    assert training.options["runtime"]["gpus"] == 0
+
+    generation = stub.generation_request
+    assert generation.run is training.run
+    assert generation.checkpoint_path.name == "model.ckpt"
+    assert generation.num_graphs == 7
+    assert generation.generation_seed == 13
+    assert generation.options["runtime"]["device"] == "cpu"
+    assert summary["dataset"] == "zinc"
+    assert summary["serialized_dataset"] == "zinc"
+    assert summary["native_dataset"] == "zinc"
+    assert summary["experiment"] == "zinc_no_h"
+    assert summary["generation_id"] == "seed_13_n_7"
 
 
 def test_runner_forwards_training_and_progress_options(tmp_path: Path) -> None:

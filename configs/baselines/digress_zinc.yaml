@@ -1,10 +1,11 @@
 digress:
-  # GraphES-facing benchmark dataset.
+  # GraphER-facing benchmark dataset.
   native_dataset: zinc
 
-  # This must correspond to the custom ZINC molecular experiment created by
-  # the GraphES DiGress wrapper. Upstream DiGress does not ship a native
-  # ZINC250k experiment in the current integration.
+  # GraphER-facing logical experiment name. Stock DiGress has no ZINC Hydra
+  # configuration, so the wrapper composes qm9/qm9_no_h only as a loader and
+  # architecture template, then supplies ZINC categorical info and priors in
+  # memory. The external DiGress checkout is not modified.
   experiment: zinc_no_h
 
   # Match the molecular training setup used for QM9 in the current wrapper.

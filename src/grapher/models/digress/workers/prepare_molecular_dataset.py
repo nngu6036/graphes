@@ -1,5 +1,11 @@
 #!/usr/bin/env python
-"""Convert trusted GraphER QM9 splits into DiGress processed artifacts."""
+"""Convert trusted GraphER molecular splits into DiGress PyG artifacts.
+
+The attached DiGress checkout ships only a QM9 molecular loader.  Its loader
+is data-driven once the processed PyG files exist, so GraphER uses that loader
+as an isolated compatibility boundary for both QM9 and ZINC while supplying
+the exact categorical vocabulary and priors in ``workers/common.py``.
+"""
 
 from __future__ import annotations
 
@@ -13,10 +19,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-FORMAT = "grapher_to_digress_qm9_dataset_v1"
+FORMAT = "grapher_to_digress_molecular_dataset_v1"
 SPLITS = ("train", "val", "test")
-ATOM_VOCABULARY = (6, 7, 8, 9)
-EDGE_VOCABULARY = (1, 2, 3, 4)
+ATOM_VOCABULARIES = {
+    "qm9": (6, 7, 8, 9),
+    "zinc": (6, 7, 8, 9, 15, 16, 17, 35, 53),
+}
+EDGE_VOCABULARIES = {
+    "qm9": (1, 2, 3, 4),
+    # GraphER's HOG-Diff/GDSS-aligned ZINC preparation is kekulized.
+    "zinc": (1, 2, 3),
+}
 BOND_ORDERS = {1: 1.0, 2: 2.0, 3: 3.0, 4: 1.5}
 PROCESSED_FILES = {
     "train": "proc_tr_no_h.pt",
@@ -24,6 +37,8 @@ PROCESSED_FILES = {
     "test": "proc_test_no_h.pt",
 }
 RAW_PLACEHOLDERS = ("gdb9.sdf", "gdb9.sdf.csv", "uncharacterized.txt")
+_UNSUPPORTED_NODE_ATTRIBUTES = ("chiral_tag", "chirality", "is_aromatic", "stereo")
+_UNSUPPORTED_EDGE_ATTRIBUTES = ("bond_stereo", "stereo", "stereo_atoms")
 
 
 def _sha256(path: Path) -> str:
@@ -66,7 +81,24 @@ def _load_graphs(path: Path, *, split: str) -> list[Any]:
     return list(value)
 
 
-def _atomic_number(data: Mapping[str, Any], *, label: str) -> int:
+def _validate_supported_node_state(
+    data: Mapping[str, Any], *, label: str
+) -> None:
+    if "formal_charge" in data and int(data["formal_charge"]) != 0:
+        raise ValueError(
+            f"{label} has non-zero formal_charge, which the DiGress "
+            "categorical atom state does not represent."
+        )
+    for name in _UNSUPPORTED_NODE_ATTRIBUTES:
+        value = data.get(name)
+        if value not in (None, False, 0, "", "none", "unspecified"):
+            raise ValueError(f"{label} has unsupported attribute {name}={value!r}.")
+
+
+def _atomic_number(
+    data: Mapping[str, Any], *, label: str, dataset: str
+) -> int:
+    vocabulary = ATOM_VOCABULARIES[dataset]
     value = data.get("atomic_num", data.get("atom_type"))
     if value is None:
         raise ValueError(f"{label} contains a node without atomic_num/atom_type.")
@@ -74,15 +106,19 @@ def _atomic_number(data: Mapping[str, Any], *, label: str) -> int:
     if "atomic_num" in data and "atom_type" in data:
         if int(data["atomic_num"]) != int(data["atom_type"]):
             raise ValueError(f"{label} has inconsistent atom attributes.")
-    if atomic_number not in ATOM_VOCABULARY:
+    if atomic_number not in vocabulary:
         raise ValueError(
             f"{label} atomic number {atomic_number} is outside "
-            f"{ATOM_VOCABULARY}."
+            f"the DiGress {dataset} vocabulary {vocabulary}."
         )
+    _validate_supported_node_state(data, label=label)
     return atomic_number
 
 
-def _bond_type(data: Mapping[str, Any], *, label: str) -> int:
+def _bond_type(
+    data: Mapping[str, Any], *, label: str, dataset: str
+) -> int:
+    vocabulary = EDGE_VOCABULARIES[dataset]
     value = data.get("bond_type")
     if value is None:
         raw_order = data.get("bond_order")
@@ -91,14 +127,19 @@ def _bond_type(data: Mapping[str, Any], *, label: str) -> int:
         order = float(raw_order)
         value = 4 if abs(order - 1.5) < 1e-6 else int(round(order))
     bond_type = int(value)
-    if bond_type not in EDGE_VOCABULARY:
+    if bond_type not in vocabulary:
         raise ValueError(
-            f"{label} bond type {bond_type} is outside {EDGE_VOCABULARY}."
+            f"{label} bond type {bond_type} is outside the DiGress {dataset} "
+            f"vocabulary {vocabulary}."
         )
     if "bond_order" in data:
         expected = BOND_ORDERS[bond_type]
         if abs(float(data["bond_order"]) - expected) > 1e-6:
             raise ValueError(f"{label} has inconsistent bond_type/bond_order.")
+    for name in _UNSUPPORTED_EDGE_ATTRIBUTES:
+        state = data.get(name)
+        if state not in (None, False, 0, "", "none", "unspecified"):
+            raise ValueError(f"{label} has unsupported attribute {name}={state!r}.")
     return bond_type
 
 
@@ -106,6 +147,7 @@ def _convert_split(
     source: Path,
     destination: Path,
     *,
+    dataset: str,
     model_view_destination: Path,
     split: str,
 ) -> dict[str, Any]:
@@ -115,6 +157,8 @@ def _convert_split(
     from torch_geometric.data import Data, InMemoryDataset
 
     graphs = _load_graphs(source, split=split)
+    atom_vocabulary = ATOM_VOCABULARIES[dataset]
+    edge_vocabulary = EDGE_VOCABULARIES[dataset]
     data_list: list[Any] = []
     model_view_graphs: list[Any] = []
     node_counts: list[int] = []
@@ -138,9 +182,10 @@ def _convert_split(
         nodes = list(graph.nodes())
         positions = {node: position for position, node in enumerate(nodes)}
         atomic_numbers = [
-            _atomic_number(graph.nodes[node], label=label) for node in nodes
+            _atomic_number(graph.nodes[node], label=label, dataset=dataset)
+            for node in nodes
         ]
-        atom_classes = [ATOM_VOCABULARY.index(value) for value in atomic_numbers]
+        atom_classes = [atom_vocabulary.index(value) for value in atomic_numbers]
 
         row: list[int] = []
         col: list[int] = []
@@ -151,7 +196,7 @@ def _convert_split(
             target_index = positions[target_node]
             if source_index == target_index:
                 raise ValueError(f"{label} contains a self-loop.")
-            bond_type = _bond_type(data, label=label)
+            bond_type = _bond_type(data, label=label, dataset=dataset)
             row.extend((source_index, target_index))
             col.extend((target_index, source_index))
             edge_classes.extend((bond_type, bond_type))
@@ -170,13 +215,18 @@ def _convert_split(
             edge_labels = torch.tensor(
                 [edge_classes[item] for item in order], dtype=torch.long
             )
-            edge_attr = F.one_hot(edge_labels, num_classes=5).to(torch.float)
+            edge_attr = F.one_hot(
+                edge_labels, num_classes=len(edge_vocabulary) + 1
+            ).to(torch.float)
         else:
             edge_index = torch.empty((2, 0), dtype=torch.long)
-            edge_attr = torch.empty((0, 5), dtype=torch.float)
+            edge_attr = torch.empty(
+                (0, len(edge_vocabulary) + 1), dtype=torch.float
+            )
 
         x = F.one_hot(
-            torch.tensor(atom_classes, dtype=torch.long), num_classes=4
+            torch.tensor(atom_classes, dtype=torch.long),
+            num_classes=len(atom_vocabulary),
         ).to(torch.float)
         data_list.append(
             Data(
@@ -205,7 +255,7 @@ def _convert_split(
         model_view.graph.update(
             {
                 "source_graph_index": index,
-                "molecular_dataset": "qm9",
+                "molecular_dataset": dataset,
                 "molecular_representation": "digress_model",
                 "qm9_source_state_projection_policy": graph.graph.get(
                     "qm9_source_state_projection_policy"
@@ -266,12 +316,14 @@ def _convert_split(
     }
 
 
-def _raw_placeholders(output_root: Path) -> list[dict[str, str]]:
+def _raw_placeholders(
+    output_root: Path, *, dataset: str
+) -> list[dict[str, str]]:
     raw = output_root / "raw"
     raw.mkdir(parents=True, exist_ok=True)
     notice = (
         "GraphER-managed DiGress placeholder. Valid processed PyG artifacts "
-        "already exist; this is not the original QM9 source file.\n"
+        f"already exist; this is not an original {dataset.upper()} source file.\n"
     )
     records: list[dict[str, str]] = []
     for name in RAW_PLACEHOLDERS:
@@ -283,9 +335,11 @@ def _raw_placeholders(output_root: Path) -> list[dict[str, str]]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Prepare GraphER QM9 splits for isolated DiGress training."
+        description="Prepare GraphER QM9/ZINC splits for isolated DiGress training."
     )
-    parser.add_argument("--dataset", choices=("qm9",), required=True)
+    parser.add_argument(
+        "--dataset", choices=tuple(ATOM_VOCABULARIES), required=True
+    )
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     for split in SPLITS:
@@ -306,11 +360,12 @@ def main() -> None:
         records[split] = _convert_split(
             source,
             output_root / "processed" / PROCESSED_FILES[split],
+            dataset=args.dataset,
             model_view_destination=output_root / "model_view" / f"{split}.pkl",
             split=split,
         )
 
-    placeholders = _raw_placeholders(output_root)
+    placeholders = _raw_placeholders(output_root, dataset=args.dataset)
     import networkx as nx
     import torch
     import torch_geometric
@@ -320,15 +375,19 @@ def main() -> None:
         args.manifest.expanduser().resolve(),
         {
             "format": FORMAT,
-            "dataset": "qm9",
+            "dataset": args.dataset,
             "representation": "heavy_atom_categorical",
             "split_order_preserved": True,
             "graphs_dropped": 0,
             "splits": records,
             "vocabulary": {
-                "atom_class_to_atomic_number": list(ATOM_VOCABULARY),
+                "atom_class_to_atomic_number": list(
+                    ATOM_VOCABULARIES[args.dataset]
+                ),
                 "edge_class_zero": "no_edge",
-                "present_edge_classes": list(EDGE_VOCABULARY),
+                "present_edge_classes": list(
+                    EDGE_VOCABULARIES[args.dataset]
+                ),
             },
             "raw_placeholders": placeholders,
             "started_at": started.isoformat(),
