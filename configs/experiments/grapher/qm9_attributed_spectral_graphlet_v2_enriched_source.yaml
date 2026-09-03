@@ -37,7 +37,7 @@ categorical_state:
 graphlet_prediction:
   graphlet_history: true
   graphlet_k_min: 3
-  graphlet_k_max: 4
+  graphlet_k_max: 5
   graphlet_connected_only: true
   attributed: true
   attributed_backend: python
@@ -110,7 +110,7 @@ attributed_predictor:
   min_gap: 1.0e-06
   input_normalization: mean_degree
   batch_size: 128
-  epochs: 30
+  epochs: 60
   learning_rate: 0.00015
   weight_decay: 5.0e-05
   progress_interval: 1

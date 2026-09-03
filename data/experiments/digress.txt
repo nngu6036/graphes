@@ -308,18 +308,70 @@ export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
 
 
 PYTHONPATH=src python scripts/run_digress_baseline.py \
-  --dataset qm9 \
+  --dataset zinc \
   --num-samples 1024 \
   --seed-id 42 \
   --run-id seed_42_e1000 \
-  --wrapper-config configs/baselines/digress_qm9.yaml
+  --wrapper-config configs/baselines/digress_zinc.yaml
 
-GEN_DIR="outputs/baselines/digress/qm9/seed_42_e1000/generations/seed_42_n_1024"
+GEN_DIR="outputs/baselines/digress/zinc/seed_42_e1000/generations/seed_42_n_1024"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --dataset-root outputs/datasets \
-  --dataset qm9_attributed \
+  --dataset zinc_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+    --require-fcd \
+ --hogdiff-compatible-metrics
+
+
+ 
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 43 \
+  --run-id seed_43_e1000 \
+  --wrapper-config configs/baselines/digress_zinc.yaml
+
+GEN_DIR="outputs/baselines/digress/zinc/seed_43_e1000/generations/seed_43_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset zinc_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+    --require-fcd \
+ --hogdiff-compatible-metrics
+
+
+
+
+ 
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --run-id seed_44_e1000 \
+  --wrapper-config configs/baselines/digress_zinc.yaml
+
+GEN_DIR="outputs/baselines/digress/zinc/seed_44_e1000/generations/seed_44_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset zinc_attributed \
   --reference-split test \
   --train-split train \
   --output-dir "$GEN_DIR/evaluation" \
