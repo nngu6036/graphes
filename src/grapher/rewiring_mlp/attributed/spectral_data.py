@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
+import hashlib
 import pickle
 import sqlite3
-from typing import Any, Sequence
 import zlib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Sequence
 
 import networkx as nx
 import numpy as np
@@ -585,6 +586,119 @@ def _endpoint_cache_db_path(
     return path / f"attributed_endpoints_{namespace}.sqlite"
 
 
+_ENDPOINT_CACHE_FORMAT = "attributed_spectral_endpoint_v2"
+
+
+def _graph_cache_identity(graph: nx.Graph) -> tuple[Any, ...]:
+    """Return the endpoint-relevant graph data in a stable order."""
+
+    nodes = tuple(
+        sorted(
+            (
+                repr(node),
+                tuple(sorted((str(key), repr(value)) for key, value in attributes.items())),
+            )
+            for node, attributes in graph.nodes(data=True)
+        )
+    )
+    edges = []
+    for left, right, attributes in graph.edges(data=True):
+        endpoints = tuple(sorted((repr(left), repr(right))))
+        edges.append(
+            (
+                endpoints,
+                tuple(sorted((str(key), repr(value)) for key, value in attributes.items())),
+            )
+        )
+    return nodes, tuple(sorted(edges))
+
+
+def _training_item_cache_identity(
+    item: nx.Graph | AttributedTrainingPair,
+) -> tuple[Any, ...]:
+    if isinstance(item, AttributedTrainingPair):
+        return (
+            "pair",
+            _graph_cache_identity(item.source_graph),
+            _graph_cache_identity(item.target_graph),
+            item.base_generator,
+            int(item.source_index),
+            int(item.target_index),
+            float(item.matching_cost),
+        )
+    return "graph", _graph_cache_identity(item)
+
+
+def _endpoint_cache_context_signature(
+    *,
+    vocabulary: GraphCategoryVocabulary,
+    graphlet_basis: GraphletBasis,
+    source_config: dict[str, Any],
+    spectral_config: dict[str, Any],
+    graphlet_logit_epsilon: float,
+) -> str:
+    payload = (
+        _ENDPOINT_CACHE_FORMAT,
+        vocabulary.to_dict(),
+        graphlet_basis.to_dict(),
+        source_config,
+        spectral_config,
+        float(graphlet_logit_epsilon),
+    )
+    return hashlib.sha256(
+        pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+    ).hexdigest()
+
+
+def _endpoint_cache_signature(
+    item: nx.Graph | AttributedTrainingPair,
+    *,
+    context_signature: str,
+    endpoint_seed: int,
+) -> str:
+    payload = (
+        _ENDPOINT_CACHE_FORMAT,
+        context_signature,
+        int(endpoint_seed),
+        _training_item_cache_identity(item),
+    )
+    return hashlib.sha256(
+        pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+    ).hexdigest()
+
+
+def _valid_cached_endpoint(
+    value: Any,
+    *,
+    signature: str,
+    graphlet_basis: GraphletBasis,
+) -> AttributedSpectralExample | None:
+    if not isinstance(value, dict):
+        # Version-one cache rows contained a bare example and had no basis or
+        # input identity. Treat them as stale instead of risking silent reuse.
+        return None
+    if value.get("format") != _ENDPOINT_CACHE_FORMAT:
+        return None
+    if value.get("signature") != signature:
+        return None
+    template = value.get("template")
+    if not isinstance(template, AttributedSpectralExample):
+        return None
+    expected_width = graphlet_basis.simplex_width
+    graphlet_values = (
+        template.current_graphlet_probabilities,
+        template.source_graphlet_probabilities,
+        template.clean_graphlet_probabilities_target,
+        template.current_graphlet_logits,
+        template.source_graphlet_logits,
+        template.clean_graphlet_logits_target,
+        template.graphlet_coordinate_mask,
+    )
+    if any(np.asarray(array).size != expected_width for array in graphlet_values):
+        return None
+    return template
+
+
 class AttributedSpectralDiffusionIterableDataset(torch.utils.data.IterableDataset):
     def __init__(
         self,
@@ -620,6 +734,14 @@ class AttributedSpectralDiffusionIterableDataset(torch.utils.data.IterableDatase
             self.endpoint_cache_path = _endpoint_cache_db_path(
                 "outputs/cache/attributed_spectral_endpoints", self.cache_namespace
             )
+        self._endpoint_cache_context_signature = _endpoint_cache_context_signature(
+            vocabulary=self.vocabulary,
+            graphlet_basis=self.graphlet_basis,
+            source_config=self.source_config,
+            spectral_config=self.spectral_config,
+            graphlet_logit_epsilon=self.graphlet_logit_epsilon,
+        )
+        self._endpoint_cache_signatures: dict[int, str] = {}
         self.epoch = 0
         self.last_diagnostics: list[dict[str, Any]] = []
 
@@ -678,12 +800,35 @@ class AttributedSpectralDiffusionIterableDataset(torch.utils.data.IterableDatase
                         seed=sample_seed,
                     )
                 else:
+                    endpoint_seed = self.seed + 10_007 * graph_index_int
+                    cache_signature = self._endpoint_cache_signatures.get(graph_index_int)
+                    if cache_signature is None:
+                        cache_signature = _endpoint_cache_signature(
+                            self.graphs[graph_index_int],
+                            context_signature=self._endpoint_cache_context_signature,
+                            endpoint_seed=endpoint_seed,
+                        )
+                        self._endpoint_cache_signatures[graph_index_int] = cache_signature
                     row = connection.execute(
                         "SELECT payload FROM endpoints WHERE graph_index = ?",
                         (graph_index_int,),
                     ).fetchone()
-                    cache_hit = row is not None
-                    if row is None:
+                    template = None
+                    cache_status = "miss"
+                    if row is not None:
+                        try:
+                            cached_value = pickle.loads(zlib.decompress(bytes(row[0])))
+                        except Exception:
+                            cache_status = "invalid"
+                        else:
+                            template = _valid_cached_endpoint(
+                                cached_value,
+                                signature=cache_signature,
+                                graphlet_basis=self.graphlet_basis,
+                            )
+                            cache_status = "hit" if template is not None else "stale"
+                    cache_hit = template is not None
+                    if template is None:
                         # Endpoint construction uses a graph-specific seed that
                         # is independent of epoch.  Subsequent epochs reuse the
                         # same typed source/clean summaries but still draw fresh
@@ -699,13 +844,20 @@ class AttributedSpectralDiffusionIterableDataset(torch.utils.data.IterableDatase
                             source_config=self.source_config,
                             spectral_config=self.spectral_config,
                             graphlet_logit_epsilon=self.graphlet_logit_epsilon,
-                            seed=self.seed + 10_007 * graph_index_int,
+                            seed=endpoint_seed,
                         )
                         if not built:
                             raise RuntimeError("Endpoint cache construction produced no example.")
                         template = built[0]
                         payload = zlib.compress(
-                            pickle.dumps(template, protocol=pickle.HIGHEST_PROTOCOL),
+                            pickle.dumps(
+                                {
+                                    "format": _ENDPOINT_CACHE_FORMAT,
+                                    "signature": cache_signature,
+                                    "template": template,
+                                },
+                                protocol=pickle.HIGHEST_PROTOCOL,
+                            ),
                             level=3,
                         )
                         connection.execute(
@@ -713,8 +865,6 @@ class AttributedSpectralDiffusionIterableDataset(torch.utils.data.IterableDatase
                             (graph_index_int, sqlite3.Binary(payload)),
                         )
                         connection.commit()
-                    else:
-                        template = pickle.loads(zlib.decompress(bytes(row[0])))
                     examples = _sample_from_endpoint_template(
                         template,
                         vocabulary=self.vocabulary,
@@ -728,6 +878,7 @@ class AttributedSpectralDiffusionIterableDataset(torch.utils.data.IterableDatase
                     diagnostics = {
                         "storage": "streaming_cached",
                         "endpoint_cache_hit": bool(cache_hit),
+                        "endpoint_cache_status": cache_status,
                         "num_examples": len(examples),
                     }
                 if worker is None:

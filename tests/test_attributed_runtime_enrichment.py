@@ -167,6 +167,61 @@ def test_streaming_endpoint_sqlite_cache_hits_second_epoch(tmp_path: Path) -> No
     assert ds.last_diagnostics[0]["endpoint_cache_hit"] is True
 
 
+def test_streaming_endpoint_sqlite_cache_rebuilds_for_changed_basis(
+    tmp_path: Path,
+) -> None:
+    source = _graph()
+    target = _graph()
+    vocab, basis = _vocab_basis([source, target])
+    cache_path = str(tmp_path / "endpoint.sqlite")
+    common = {
+        "vocabulary": vocab,
+        "diffusion_config": {
+            "samples_per_graph": 1,
+            "paths_per_graph": 1,
+            "cache_endpoints": True,
+            "endpoint_cache_path": cache_path,
+        },
+        "spectral_config": {"normalization": "mean_degree"},
+        "seed": 11,
+        "shuffle_graphs": False,
+        "cache_namespace": "train",
+    }
+    first = AttributedSpectralDiffusionIterableDataset(
+        [AttributedTrainingPair(source, target)],
+        graphlet_basis=basis,
+        **common,
+    )
+    assert len(list(first)) == 1
+
+    changed_keys = dict(basis.keys_by_k)
+    changed_keys["3"] = (*changed_keys["3"], "synthetic-new-class")
+    changed_basis = GraphletBasis(
+        keys_by_k=changed_keys,
+        connected_only=basis.connected_only,
+        attributed=basis.attributed,
+        node_attribute=basis.node_attribute,
+        edge_attribute=basis.edge_attribute,
+        overflow_key=basis.overflow_key,
+        attributed_backend=basis.attributed_backend,
+    )
+    second = AttributedSpectralDiffusionIterableDataset(
+        [AttributedTrainingPair(source, target)],
+        graphlet_basis=changed_basis,
+        **common,
+    )
+    examples = list(second)
+    assert len(examples) == 1
+    assert examples[0].source_graphlet_logits.size == changed_basis.simplex_width
+    assert second.last_diagnostics[0]["endpoint_cache_hit"] is False
+    assert second.last_diagnostics[0]["endpoint_cache_status"] == "stale"
+
+    second.set_epoch(1)
+    assert len(list(second)) == 1
+    assert second.last_diagnostics[0]["endpoint_cache_hit"] is True
+    assert second.last_diagnostics[0]["endpoint_cache_status"] == "hit"
+
+
 def test_invariant_summary_auxiliary_loss_backpropagates() -> None:
     source = _graph()
     target = _graph()
