@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Draw random molecular or generic graphs from a prepared dataset by name.
+"""Draw molecular or generic graphs from a prepared dataset by name.
 
 The input is a prepared molecular dataset under
 ``outputs/datasets/<dataset>``. Pass its name with ``--dataset``; the script
 then resolves the directory using the same convention as the training and
-evaluation commands and reads only the requested split. ``--count`` molecules
-are sampled without replacement; ``--seed`` makes the selection reproducible.
+evaluation commands. ``--count`` graphs are sampled without replacement;
+``--seed`` makes the selection reproducible. Use ``--all`` to draw every graph
+in the selected split, or combine it with ``--split all`` for the full dataset.
 
 Main features
 -------------
 - resolve a prepared molecular dataset by name
 - select its train, validation, or test split explicitly
+- optionally combine all three prepared splits
 - draw a random sample without replacement
+- draw every graph with ``--all``
 - arrange molecules in a row x col grid
 - if the range is larger than row * col, continue on the next figure/page
 - automatically use molecular rendering when atom/bond attributes are present
@@ -21,7 +24,7 @@ Examples
 --------
 Draw one random molecule::
 
-    PYTHONPATH=src python scripts/draw_qm9_molecule.py \
+    PYTHONPATH=src python scripts/draw_dataset.py \
       --dataset qm9_attributed --split test \
       --count 1 --seed 42 \
       --row 1 --col 1 \
@@ -29,7 +32,7 @@ Draw one random molecule::
 
 Draw 16 random molecules, 4 per row and 3 rows per page::
 
-    PYTHONPATH=src python scripts/draw_qm9_molecule.py \
+    PYTHONPATH=src python scripts/draw_dataset.py \
       --dataset qm9_attributed --split test \
       --count 16 --seed 42 \
       --row 3 --col 4 \
@@ -42,17 +45,31 @@ multiple files such as:
 
 Draw eight generic community graphs::
 
-    PYTHONPATH=src python scripts/draw_qm9_molecule.py \
+    PYTHONPATH=src python scripts/draw_dataset.py \
       --dataset community_small --split test \
       --count 8 --seed 42 \
       --row 2 --col 4 \
       --output outputs/community_small_random_8.png
+
+Draw the complete Community-small dataset across all prepared splits::
+
+    PYTHONPATH=src python scripts/draw_dataset.py \
+      --dataset community_small --split all --all \
+      --row 4 --col 5 \
+      --k-min 3 --k-max 5 \
+      --output outputs/community_small_all.png
+
+When both ``--k-min`` and ``--k-max`` are supplied, the script also writes a
+descending histogram of induced simple-cycle graphlets. For example, the
+command above creates ``outputs/community_small_all_graphlet_histogram.png``
+and a JSON sidecar containing the raw counts and normalization details.
 """
 
 from __future__ import annotations
 
 import argparse
 import io
+import itertools
 import math
 import random
 import sys
@@ -64,7 +81,7 @@ import networkx as nx
 
 from grapher.data.statistics import resolve_prepared_dataset
 from grapher.rewiring_mlp.molecular.graph_io import nx_to_rdkit_mol
-from grapher.utils.io import load_pickle
+from grapher.utils.io import load_pickle, save_json
 
 
 ATOM_COLOURS_HEX: Mapping[str, str] = {
@@ -128,6 +145,15 @@ class LoadedItem:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class CycleGraphletFrequency:
+    order: int
+    count: int
+    possible_subsets: int
+    frequency: float
+    subset_rate: float
+
+
 def _hex_to_rgb255(value: str) -> Tuple[int, int, int]:
     value = value.lstrip("#")
     if len(value) != 6:
@@ -184,6 +210,40 @@ def _load_prepared_dataset_split(
     return list(payload), split_path, resolved.serialized_name
 
 
+def _load_prepared_dataset_selection(
+    dataset: str,
+    root: str | Path,
+    split: str,
+) -> tuple[list[Any], Path, str, list[tuple[str, int]]]:
+    """Load one split or the complete disjoint train/val/test dataset."""
+
+    if split != "all":
+        graphs, split_path, dataset_name = _load_prepared_dataset_split(
+            dataset, root, split
+        )
+        locations = [(split, index) for index in range(len(graphs))]
+        return graphs, split_path, dataset_name, locations
+
+    all_graphs: list[Any] = []
+    locations: list[tuple[str, int]] = []
+    dataset_name: str | None = None
+    dataset_directory: Path | None = None
+    for selected_split in ("train", "val", "test"):
+        graphs, split_path, resolved_name = _load_prepared_dataset_split(
+            dataset, root, selected_split
+        )
+        if dataset_name is not None and resolved_name != dataset_name:
+            raise RuntimeError("Prepared dataset name changed while loading splits.")
+        dataset_name = resolved_name
+        dataset_directory = split_path.parent
+        all_graphs.extend(graphs)
+        locations.extend(
+            (selected_split, index) for index in range(len(graphs))
+        )
+    assert dataset_name is not None and dataset_directory is not None
+    return all_graphs, dataset_directory, dataset_name, locations
+
+
 def _sample_graph_indices(dataset_size: int, count: int, seed: int) -> list[int]:
     """Sample distinct split-local graph indices reproducibly."""
 
@@ -194,6 +254,18 @@ def _sample_graph_indices(dataset_size: int, count: int, seed: int) -> list[int]
             f"--count {count} exceeds the selected split size {dataset_size}"
         )
     return random.Random(seed).sample(range(dataset_size), count)
+
+
+def _select_graph_indices(
+    dataset_size: int,
+    *,
+    count: int,
+    seed: int,
+    draw_all: bool,
+) -> list[int]:
+    if draw_all:
+        return list(range(dataset_size))
+    return _sample_graph_indices(dataset_size, count, seed)
 
 
 def _first_attribute(data: Mapping[str, Any], names: Sequence[str]) -> Any | None:
@@ -789,6 +861,189 @@ def _draw_generic_page_legend(
     )
 
 
+def _is_induced_cycle(graph: nx.Graph, nodes: Sequence[Any]) -> bool:
+    """Return whether the selected nodes induce exactly one simple cycle."""
+
+    if len(nodes) < 3:
+        return False
+    simple_graph = nx.Graph(graph)
+    adjacency = {node: set(simple_graph.neighbors(node)) for node in nodes}
+    return _is_induced_cycle_from_adjacency(adjacency, nodes)
+
+
+def _is_induced_cycle_from_adjacency(
+    adjacency: Mapping[Any, set[Any]],
+    nodes: Sequence[Any],
+) -> bool:
+    """Fast exact-cycle check used inside the subset enumeration loop."""
+
+    if len(nodes) < 3:
+        return False
+    selected = set(nodes)
+    for node in nodes:
+        neighbours = adjacency[node]
+        if node in neighbours or len(neighbours & selected) != 2:
+            return False
+
+    start = nodes[0]
+    visited = {start}
+    frontier = [start]
+    while frontier:
+        current = frontier.pop()
+        for neighbour in adjacency[current] & selected:
+            if neighbour not in visited:
+                visited.add(neighbour)
+                frontier.append(neighbour)
+    return len(visited) == len(nodes)
+
+
+def _cycle_graphlet_histogram(
+    graphs: Sequence[nx.Graph],
+    *,
+    k_min: int,
+    k_max: int,
+) -> list[CycleGraphletFrequency]:
+    """Count induced cycle graphlets and sort their frequencies descending."""
+
+    if k_min < 3:
+        raise ValueError("Cycle graphlets require --graphlet-k-min >= 3.")
+    if k_max < k_min:
+        raise ValueError("--graphlet-k-max must be >= --graphlet-k-min.")
+    if not all(isinstance(graph, nx.Graph) for graph in graphs):
+        raise TypeError("Graphlet histograms require NetworkX graphs.")
+
+    counts = {order: 0 for order in range(k_min, k_max + 1)}
+    possible = {order: 0 for order in range(k_min, k_max + 1)}
+    for graph in graphs:
+        simple_graph = nx.Graph(graph)
+        nodes = tuple(simple_graph.nodes())
+        adjacency = {
+            node: set(simple_graph.neighbors(node)) for node in nodes
+        }
+        for order in counts:
+            if len(nodes) < order:
+                continue
+            possible[order] += math.comb(len(nodes), order)
+            counts[order] += sum(
+                1
+                for subset in itertools.combinations(nodes, order)
+                if _is_induced_cycle_from_adjacency(adjacency, subset)
+            )
+
+    total_cycles = sum(counts.values())
+    rows = [
+        CycleGraphletFrequency(
+            order=order,
+            count=counts[order],
+            possible_subsets=possible[order],
+            frequency=(counts[order] / total_cycles if total_cycles else 0.0),
+            subset_rate=(
+                counts[order] / possible[order] if possible[order] else 0.0
+            ),
+        )
+        for order in counts
+    ]
+    return sorted(rows, key=lambda row: (-row.frequency, row.order))
+
+
+def _render_cycle_graphlet_histogram(
+    rows: Sequence[CycleGraphletFrequency],
+    *,
+    dataset_label: str,
+    graph_count: int,
+) -> Any:
+    """Render a descending horizontal histogram of induced cycle graphlets."""
+
+    from PIL import Image, ImageDraw
+
+    width = 1100
+    row_height = 58
+    top = 112
+    bottom = 68
+    height = max(320, top + bottom + row_height * max(len(rows), 1))
+    canvas = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(canvas)
+    title_font = _load_font(24, bold=True)
+    body_font = _load_font(15)
+    label_font = _load_font(16, bold=True)
+    small_font = _load_font(13)
+
+    draw.text(
+        (28, 22),
+        f"{dataset_label}: induced cycle graphlet histogram",
+        fill="#111827",
+        font=title_font,
+    )
+    draw.text(
+        (28, 58),
+        (
+            f"graphs={graph_count} | only chordless induced subgraphs Ck | "
+            "bars sorted by cycle-share frequency"
+        ),
+        fill="#4B5563",
+        font=body_font,
+    )
+
+    label_x = 34
+    bar_x = 118
+    bar_width = 580
+    value_x = bar_x + bar_width + 18
+    maximum = max((row.frequency for row in rows), default=0.0)
+    scale = maximum if maximum > 0.0 else 1.0
+    colours = ("#2563EB", "#0891B2", "#16A34A", "#9333EA", "#EA580C")
+
+    for index, row in enumerate(rows):
+        y = top + index * row_height
+        draw.text((label_x, y + 8), f"C{row.order}", fill="#111827", font=label_font)
+        draw.rounded_rectangle(
+            (bar_x, y + 6, bar_x + bar_width, y + 34),
+            radius=8,
+            fill="#EEF2F7",
+        )
+        filled = int(round(bar_width * row.frequency / scale))
+        if filled > 0:
+            draw.rounded_rectangle(
+                (bar_x, y + 6, bar_x + max(filled, 3), y + 34),
+                radius=8,
+                fill=colours[index % len(colours)],
+            )
+        draw.text(
+            (value_x, y + 1),
+            f"frequency={row.frequency:.6f}  count={row.count:,}",
+            fill="#111827",
+            font=body_font,
+        )
+        draw.text(
+            (value_x, y + 25),
+            (
+                f"induced-subset rate={row.subset_rate:.6g}  "
+                f"eligible subsets={row.possible_subsets:,}"
+            ),
+            fill="#6B7280",
+            font=small_font,
+        )
+
+    if not rows:
+        draw.text((28, top), "No graphlet orders requested.", fill="#6B7280", font=body_font)
+    draw.line((28, height - 44, width - 28, height - 44), fill="#D1D5DB", width=2)
+    draw.text(
+        (28, height - 32),
+        "frequency = Ck count / total induced-cycle count over all requested k",
+        fill="#6B7280",
+        font=small_font,
+    )
+    return canvas
+
+
+def _graphlet_histogram_output_path(
+    graph_output: Path,
+    configured: Path | None,
+) -> Path:
+    if configured is not None:
+        return configured.expanduser().resolve()
+    return graph_output.with_name(f"{graph_output.stem}_graphlet_histogram.png")
+
+
 def _compose_page(
     items: list[LoadedItem],
     row: int,
@@ -879,10 +1134,14 @@ def _default_output(count: int, seed: int, prefix: str) -> Path:
     return Path(f"outputs/{prefix}_sample_n{count}_seed{seed}.png")
 
 
+def _default_all_output(prefix: str) -> Path:
+    return Path(f"outputs/{prefix}_all.png")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Draw a random sample of molecular or generic graphs from a named "
+            "Draw a sample or every molecular/generic graph from a named "
             "prepared dataset."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -904,15 +1163,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--split",
-        choices=("train", "val", "test"),
+        choices=("train", "val", "test", "all"),
         default="test",
-        help="Prepared dataset split to sample.",
+        help="Prepared dataset split to draw, or all for train+val+test.",
     )
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
         "--count",
         type=int,
         default=1,
         help="Number of distinct graphs to sample without replacement.",
+    )
+    selection.add_argument(
+        "--all",
+        action="store_true",
+        help="Draw every graph in the selected split or splits.",
     )
     parser.add_argument(
         "--seed",
@@ -947,6 +1212,34 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--k-min",
+        "--graphlet-k-min",
+        dest="k_min",
+        type=int,
+        help=(
+            "Minimum induced cycle-graphlet order. Must be provided together "
+            "with --k-max and be at least 3."
+        ),
+    )
+    parser.add_argument(
+        "--k-max",
+        "--graphlet-k-max",
+        dest="k_max",
+        type=int,
+        help=(
+            "Maximum induced cycle-graphlet order. Must be provided together "
+            "with --k-min."
+        ),
+    )
+    parser.add_argument(
+        "--graphlet-output",
+        type=Path,
+        help=(
+            "Optional PNG path for the induced-cycle histogram. By default, "
+            "_graphlet_histogram is appended to the --output stem."
+        ),
+    )
+    parser.add_argument(
         "--show-hydrogens",
         action="store_true",
         help="Draw explicit hydrogens in molecular panels; ignored for generic graphs.",
@@ -973,17 +1266,34 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raise ValueError("--count must be positive")
     if args.panel_width < 180 or args.panel_height < 180:
         raise ValueError("--panel-width and --panel-height should be at least 180")
+    graphlet_requested = args.k_min is not None or args.k_max is not None
+    if graphlet_requested and (args.k_min is None or args.k_max is None):
+        raise ValueError("--k-min and --k-max must be provided together")
+    if args.graphlet_output is not None and not graphlet_requested:
+        raise ValueError("--graphlet-output requires --k-min and --k-max")
+    if graphlet_requested:
+        if args.k_min < 3:
+            raise ValueError("Cycle graphlets require --k-min >= 3")
+        if args.k_max < args.k_min:
+            raise ValueError("--k-max must be >= --k-min")
 
     print(
         f"Resolving prepared dataset {args.dataset!r} under {args.root}...",
         flush=True,
     )
-    prepared_graphs, dataset_path, dataset_name = _load_prepared_dataset_split(
-        args.dataset,
-        args.root,
-        args.split,
+    prepared_graphs, dataset_path, dataset_name, graph_locations = (
+        _load_prepared_dataset_selection(
+            args.dataset,
+            args.root,
+            args.split,
+        )
     )
-    indices = _sample_graph_indices(len(prepared_graphs), args.count, args.seed)
+    indices = _select_graph_indices(
+        len(prepared_graphs),
+        count=args.count,
+        seed=args.seed,
+        draw_all=args.all,
+    )
     dataset_label = f"{dataset_name}/{args.split}"
     output_prefix = f"{dataset_name}_{args.split}"
     print(
@@ -991,10 +1301,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"graphs={len(prepared_graphs)} path={dataset_path}",
         flush=True,
     )
-    print(f"Selected split-local indices: {indices}", flush=True)
+    if args.all:
+        print(f"Selected every graph: {len(indices)}", flush=True)
+    else:
+        selected_labels = [
+            f"{graph_locations[index][0]}[{graph_locations[index][1]}]"
+            for index in indices
+        ]
+        print(f"Selected graph indices: {selected_labels}", flush=True)
 
     output = (
-        args.output or _default_output(args.count, args.seed, output_prefix)
+        args.output
+        or (
+            _default_all_output(output_prefix)
+            if args.all
+            else _default_output(args.count, args.seed, output_prefix)
+        )
     ).expanduser().resolve()
     if output.suffix.lower() != ".png":
         raise ValueError(
@@ -1005,14 +1327,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     loaded_items: list[LoadedItem] = []
     for index in indices:
+        selected_split, split_index = graph_locations[index]
         try:
             graph = prepared_graphs[index]
             if _is_molecular_graph(graph):
                 mol, info = _load_from_prepared_graph(
                     graph,
-                    index,
+                    split_index,
                     dataset_name,
-                    args.split,
+                    selected_split,
                 )
                 mol = _prepare_molecule(
                     mol,
@@ -1026,15 +1349,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             else:
                 info = _generic_graph_info(
                     graph,
-                    index,
+                    split_index,
                     dataset_name,
-                    args.split,
+                    selected_split,
                 )
                 loaded_items.append(
                     LoadedItem(info=info, graph=graph, render_mode="generic")
                 )
         except Exception as exc:
-            index_label = f"{dataset_name}/{args.split}[{index}]"
+            index_label = f"{dataset_name}/{selected_split}[{split_index}]"
             print(f"Warning: failed to load {index_label}: {exc}", file=sys.stderr)
             loaded_items.append(
                 LoadedItem(
@@ -1065,15 +1388,86 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             panel_height=args.panel_height,
             page_index=page_index,
             total_pages=total_pages,
-            count=args.count,
+            count=len(indices),
             seed=args.seed,
             dataset_label=dataset_label,
             dataset_path=dataset_path,
             show_hydrogens=args.show_hydrogens,
+            page_title=(
+                f"{dataset_label}: all graphs (n={len(indices)})"
+                if args.all
+                else None
+            ),
         )
         page_output = _page_output_path(output, page_index, total_pages)
         canvas.save(page_output)
         print(f"Saved: {page_output}")
+
+    if graphlet_requested:
+        selected_graphs = [prepared_graphs[index] for index in indices]
+        eligible_subsets = sum(
+            math.comb(graph.number_of_nodes(), order)
+            for graph in selected_graphs
+            for order in range(args.k_min, args.k_max + 1)
+            if isinstance(graph, nx.Graph)
+            and graph.number_of_nodes() >= order
+        )
+        print(
+            "Counting exact induced cycle graphlets "
+            f"C{args.k_min}..C{args.k_max} over "
+            f"{eligible_subsets:,} eligible node subsets...",
+            flush=True,
+        )
+        histogram_rows = _cycle_graphlet_histogram(
+            selected_graphs,
+            k_min=args.k_min,
+            k_max=args.k_max,
+        )
+        histogram_output = _graphlet_histogram_output_path(
+            output,
+            args.graphlet_output,
+        )
+        if histogram_output.suffix.lower() != ".png":
+            raise ValueError("--graphlet-output must use a .png extension")
+        histogram_output.parent.mkdir(parents=True, exist_ok=True)
+        histogram = _render_cycle_graphlet_histogram(
+            histogram_rows,
+            dataset_label=dataset_label,
+            graph_count=len(selected_graphs),
+        )
+        histogram.save(histogram_output)
+        histogram_report = histogram_output.with_suffix(".json")
+        total_cycle_graphlets = sum(row.count for row in histogram_rows)
+        save_json(
+            {
+                "dataset": dataset_name,
+                "split": args.split,
+                "selected_graphs": len(selected_graphs),
+                "definition": "induced_simple_cycle_Ck",
+                "normalization": (
+                    "count / total induced-cycle count over all requested k"
+                ),
+                "sort": "frequency_descending_then_k_ascending",
+                "k_min": args.k_min,
+                "k_max": args.k_max,
+                "total_eligible_node_subsets": eligible_subsets,
+                "total_cycle_graphlets": total_cycle_graphlets,
+                "graphlets": [
+                    {
+                        "graphlet": f"C{row.order}",
+                        "k": row.order,
+                        "count": row.count,
+                        "frequency": row.frequency,
+                        "eligible_node_subsets": row.possible_subsets,
+                        "induced_subset_rate": row.subset_rate,
+                    }
+                    for row in histogram_rows
+                ],
+            },
+            histogram_report,
+        )
+        print(f"Saved graphlet histogram: {histogram_output}")
+        print(f"Saved graphlet counts: {histogram_report}")
 
     ok_count = sum(1 for item in loaded_items if item.error is None)
     fail_count = len(loaded_items) - ok_count

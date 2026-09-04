@@ -1,0 +1,20 @@
+# HOG-Diff baseline on GraphER's frozen ZINC subset.
+hog_diff:
+  source_env: HOGDIFF
+  python_env: HOGDIFF_PYTHON
+  upstream_config: zinc250k.yaml
+  native_dataset: zinc250k
+  num_workers: 0
+  generation_batch_size: 128
+  training_estimates:
+    enabled: false
+  runtime:
+    device: auto
+    cuda_visible_devices: "0"
+    timeout_seconds: null
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+      iteration_interval: 100
+      generation_batch_interval: 1

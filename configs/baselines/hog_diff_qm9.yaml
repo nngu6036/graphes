@@ -1,0 +1,22 @@
+# HOG-Diff baseline on GraphER's implicit-hydrogen QM9 attributed split.
+hog_diff:
+  source_env: HOGDIFF
+  python_env: HOGDIFF_PYTHON
+  upstream_config: qm9.yaml
+  native_dataset: qm9
+  num_workers: 0
+  # Smaller than the upstream evaluation batch to avoid requiring a single
+  # 10k-sample GPU allocation; workers iterate batches and return exact counts.
+  generation_batch_size: 256
+  training_estimates:
+    enabled: false
+  runtime:
+    device: auto
+    cuda_visible_devices: "0"
+    timeout_seconds: null
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+      iteration_interval: 200
+      generation_batch_interval: 1

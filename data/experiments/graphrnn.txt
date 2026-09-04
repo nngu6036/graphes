@@ -283,3 +283,7 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/baselines/graphrnn_ego_small.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
+
+  Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.012987          0.027056      0.008995
+graphrnn_to_test                    0.322721          0.149660      0.837584

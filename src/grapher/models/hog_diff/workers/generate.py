@@ -1,0 +1,273 @@
+#!/usr/bin/env python
+"""Isolated exact-count HOG-Diff two-stage generation worker."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import sys
+from fractions import Fraction
+from pathlib import Path
+from typing import Any
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _atomic_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--hogdiff-root", type=Path, required=True)
+    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--domain", choices=("generic", "attributed"), required=True)
+    parser.add_argument("--num-graphs", type=int, required=True)
+    parser.add_argument("--batch-size", type=int, required=True)
+    parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--progress-every-batches", type=int, default=1)
+    parser.add_argument("--require-cuda", action="store_true")
+    return parser
+
+
+def _load_mode_config(path: Path, *, mode: str):
+    import yaml
+    from easydict import EasyDict as edict
+
+    raw = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.FullLoader)
+    if not isinstance(raw, dict):
+        raise TypeError(f"HOG-Diff resolved config must be a mapping: {path}")
+    if mode == "higher-order":
+        selected = {key: value for key, value in raw.items() if not str(key).startswith("OU")}
+    else:
+        selected = dict(raw)
+        selected.update(
+            {
+                str(key)[2:]: value
+                for key, value in raw.items()
+                if str(key).startswith("OU")
+            }
+        )
+    config = edict(selected)
+    edge_th = config.model.get("edge_th")
+    if isinstance(edge_th, str):
+        config.model.edge_th = float(Fraction(edge_th))
+    if int(config.sampling.n_steps) <= 0:
+        config.sampling.corrector = "None"
+    return config
+
+
+def _pack_generic(adjacency, *, max_nodes: int):
+    import numpy as np
+
+    raw = adjacency.detach().cpu().numpy()
+    binary = (raw >= 0.5).astype(np.int8)
+    outputs = np.zeros((binary.shape[0], max_nodes, max_nodes), dtype=np.int8)
+    sizes = np.ones((binary.shape[0],), dtype=np.int64)
+    for index, matrix in enumerate(binary):
+        matrix = np.maximum(matrix, matrix.T)
+        np.fill_diagonal(matrix, 0)
+        active = np.flatnonzero(matrix.sum(axis=0) + matrix.sum(axis=1))
+        if active.size == 0:
+            sizes[index] = 1
+            continue
+        packed = matrix[np.ix_(active, active)]
+        n = int(packed.shape[0])
+        outputs[index, :n, :n] = packed
+        sizes[index] = n
+    return outputs, sizes
+
+
+def _pack_molecular(atoms, bonds, sample_nodes, *, max_nodes: int):
+    import numpy as np
+
+    atom_channel = atoms.detach().cpu().numpy().argmax(axis=2).astype(np.int16)
+    raw_bonds = bonds.detach().cpu().numpy() * 3.0
+    quantized = np.zeros_like(raw_bonds, dtype=np.int8)
+    quantized[(raw_bonds >= 0.5) & (raw_bonds < 1.5)] = 1
+    quantized[(raw_bonds >= 1.5) & (raw_bonds < 2.5)] = 2
+    quantized[raw_bonds >= 2.5] = 3
+    sizes = sample_nodes.detach().cpu().numpy().astype(np.int64)
+    out_bonds = np.zeros((quantized.shape[0], max_nodes, max_nodes), dtype=np.int8)
+    out_atoms = np.full((quantized.shape[0], max_nodes), -1, dtype=np.int16)
+    for index, n_value in enumerate(sizes):
+        n = int(n_value)
+        if n < 1 or n > max_nodes:
+            raise ValueError(f"HOG-Diff returned invalid molecular node count {n}.")
+        out_atoms[index, :n] = atom_channel[index, :n]
+        # HOG-Diff's construct_mol reads the lower triangle.  Mirror exactly
+        # that triangle into a symmetric GraphER adjacency representation.
+        for u in range(n):
+            for v in range(u + 1, n):
+                category = int(quantized[index, v, u])
+                out_bonds[index, u, v] = out_bonds[index, v, u] = category
+    return out_atoms, out_bonds, sizes
+
+
+def main() -> int:
+    args = _parser().parse_args()
+    if args.num_graphs <= 0 or args.batch_size <= 0:
+        raise ValueError("--num-graphs and --batch-size must be positive.")
+    if args.progress_every_batches <= 0:
+        raise ValueError("--progress-every-batches must be positive.")
+    root = args.hogdiff_root.expanduser().resolve()
+    config_path = args.config.expanduser().resolve()
+    checkpoint = args.checkpoint.expanduser().resolve()
+    output = args.output.expanduser().resolve()
+    manifest = args.manifest.expanduser().resolve()
+    for required in (root / "sampler.py", config_path, checkpoint):
+        if not required.is_file():
+            raise FileNotFoundError(required)
+
+    sys.path.insert(0, str(root))
+    os.environ.setdefault("WANDB_MODE", "disabled")
+    os.environ.setdefault("WANDB_SILENT", "true")
+
+    import numpy as np
+    import torch
+    from sampler import Sampler
+    from utils import loader
+    from utils.logger import Logger
+
+    if args.require_cuda and not torch.cuda.is_available():
+        raise RuntimeError("HOG-Diff worker was configured for GPU but CUDA is unavailable.")
+
+    hconfig = _load_mode_config(config_path, mode="higher-order")
+    ouconfig = _load_mode_config(config_path, mode="OU")
+    batch_size = min(int(args.batch_size), int(args.num_graphs))
+    for config in (hconfig, ouconfig):
+        config.ckpt = str(checkpoint)
+        config.eval.batch_size = batch_size
+        config.eval.num_samples = batch_size
+        config.eval.seed = int(args.seed)
+        config.exp.plot = False
+        config.data.num_workers = 0
+    loader.init_exp(ouconfig)
+    device = loader.load_device(force=True)
+
+    # Load both trained score networks and the OU training tensor exactly once.
+    sample_logger = Logger(ouconfig, is_train=False, show_exc=True)
+    hsampler = Sampler(hconfig, sample_logger, mode="higher-order", device=device)
+    ousampler = Sampler(ouconfig, sample_logger, mode="OU", device=device)
+
+    generic_batches: list[np.ndarray] = []
+    generic_sizes: list[np.ndarray] = []
+    molecule_atoms: list[np.ndarray] = []
+    molecule_bonds: list[np.ndarray] = []
+    molecule_sizes: list[np.ndarray] = []
+    rounds = int(math.ceil(float(args.num_graphs) / float(batch_size)))
+
+    for round_index in range(rounds):
+        round_seed = int(args.seed) + round_index
+        hsampler.config.eval.seed = round_seed
+        ousampler.config.eval.seed = round_seed
+        mu, _ = hsampler.sample()
+        if len(mu) != 1:
+            raise RuntimeError(
+                f"Expected one HOG-Diff higher-order batch, received {len(mu)}."
+            )
+
+        captured: dict[str, Any] = {}
+        if args.domain == "generic":
+            def capture_generic(all_bonds):
+                captured["bonds"] = torch.concat(all_bonds, dim=0).detach().cpu()
+                return {}
+            ousampler._generic_eval_fn = capture_generic
+        else:
+            def capture_molecular(all_atoms, all_bonds, all_sample_nodes):
+                captured["atoms"] = torch.concat(all_atoms, dim=0).detach().cpu()
+                captured["bonds"] = torch.concat(all_bonds, dim=0).detach().cpu()
+                captured["sample_nodes"] = torch.concat(all_sample_nodes, dim=0).detach().cpu()
+                return {}
+            ousampler._mol_eval_fn = capture_molecular
+
+        ousampler.sample(mu_list=mu)
+        if "bonds" not in captured:
+            raise RuntimeError("HOG-Diff phase-2 sampler did not expose generated tensors.")
+        max_nodes = int(ouconfig.data.max_node)
+        if args.domain == "generic":
+            adjacency, sizes = _pack_generic(captured["bonds"], max_nodes=max_nodes)
+            generic_batches.append(adjacency)
+            generic_sizes.append(sizes)
+        else:
+            atoms, adjacency, sizes = _pack_molecular(
+                captured["atoms"],
+                captured["bonds"],
+                captured["sample_nodes"],
+                max_nodes=max_nodes,
+            )
+            molecule_atoms.append(atoms)
+            molecule_bonds.append(adjacency)
+            molecule_sizes.append(sizes)
+
+        if (round_index + 1) % int(args.progress_every_batches) == 0 or round_index + 1 == rounds:
+            print(
+                f"[GraphER/HOG-Diff] generation batch {round_index + 1}/{rounds}",
+                flush=True,
+            )
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if args.domain == "generic":
+        adjacency = np.concatenate(generic_batches, axis=0)[: args.num_graphs]
+        sizes = np.concatenate(generic_sizes, axis=0)[: args.num_graphs]
+        np.savez_compressed(
+            output,
+            adjacency=adjacency,
+            num_nodes=sizes,
+            sample_index=np.arange(args.num_graphs, dtype=np.int64),
+        )
+    else:
+        atoms = np.concatenate(molecule_atoms, axis=0)[: args.num_graphs]
+        adjacency = np.concatenate(molecule_bonds, axis=0)[: args.num_graphs]
+        sizes = np.concatenate(molecule_sizes, axis=0)[: args.num_graphs]
+        np.savez_compressed(
+            output,
+            adjacency=adjacency,
+            node_types=atoms,
+            num_nodes=sizes,
+            sample_index=np.arange(args.num_graphs, dtype=np.int64),
+        )
+    if not output.is_file():
+        raise RuntimeError(f"HOG-Diff worker did not write {output}.")
+    _atomic_json(
+        manifest,
+        {
+            "format": "grapher_hogdiff_export_v1",
+            "native_dataset": str(ouconfig.data.name),
+            "domain": args.domain,
+            "num_requested": int(args.num_graphs),
+            "num_generated": int(args.num_graphs),
+            "batch_size": batch_size,
+            "sampling_rounds": rounds,
+            "seed": int(args.seed),
+            "device": str(device),
+            "phase_1": "higher-order VPSDE score sampler",
+            "phase_2": "OU-bridge conditional score sampler",
+            "postprocessing": (
+                "upstream generic 0.5 threshold + isolate removal"
+                if args.domain == "generic"
+                else "raw atom argmax + upstream bond quantization; no MoFlow/RDKit correction"
+            ),
+            "output": {"path": str(output), "sha256": _sha256(output)},
+        },
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -7,7 +8,7 @@ import networkx as nx
 import pytest
 
 from grapher.utils.io import save_pickle
-from scripts import draw_qm9_molecule as draw
+from scripts import draw_dataset as draw
 
 
 def _write_split_files(
@@ -63,6 +64,55 @@ def test_parser_requires_dataset_and_has_sampling_defaults() -> None:
     assert args.split == "test"
     assert args.count == 1
     assert args.seed == 42
+    assert args.all is False
+
+
+def test_parser_supports_all_graphs_across_all_splits() -> None:
+    args = draw.build_parser().parse_args(
+        ["--dataset", "community_small", "--split", "all", "--all"]
+    )
+
+    assert args.split == "all"
+    assert args.all is True
+
+    with pytest.raises(SystemExit, match="2"):
+        draw.build_parser().parse_args(
+            ["--dataset", "community_small", "--count", "4", "--all"]
+        )
+
+
+def test_parser_supports_induced_cycle_graphlet_range_and_output() -> None:
+    args = draw.build_parser().parse_args(
+        [
+            "--dataset",
+            "community_small",
+            "--k-min",
+            "3",
+            "--graphlet-k-max",
+            "6",
+            "--graphlet-output",
+            "outputs/cycles.png",
+        ]
+    )
+
+    assert args.k_min == 3
+    assert args.k_max == 6
+    assert args.graphlet_output == Path("outputs/cycles.png")
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--k-min", "3"],
+        ["--k-max", "5"],
+        ["--k-min", "2", "--k-max", "5"],
+        ["--k-min", "5", "--k-max", "4"],
+        ["--graphlet-output", "cycles.png"],
+    ],
+)
+def test_cli_validates_cycle_graphlet_arguments(options: list[str]) -> None:
+    with pytest.raises(ValueError):
+        draw.main(["--dataset", "community_small", *options])
 
 
 @pytest.mark.parametrize("option", ["--index", "--index-from", "--index-to"])
@@ -89,6 +139,39 @@ def test_sample_graph_indices_is_deterministic_and_without_replacement() -> None
     assert len(first) == 8
     assert len(set(first)) == 8
     assert all(0 <= index < 20 for index in first)
+
+
+def test_select_graph_indices_returns_every_graph_in_dataset_order() -> None:
+    assert draw._select_graph_indices(
+        5,
+        count=1,
+        seed=42,
+        draw_all=True,
+    ) == [0, 1, 2, 3, 4]
+
+
+def test_load_all_splits_preserves_split_local_locations(tmp_path: Path) -> None:
+    root = tmp_path / "datasets"
+    directory = root / "generic"
+    directory.mkdir(parents=True)
+    save_pickle([nx.path_graph(2), nx.path_graph(3)], directory / "train.pkl")
+    save_pickle([nx.path_graph(4)], directory / "val.pkl")
+    save_pickle([nx.path_graph(5), nx.path_graph(6)], directory / "test.pkl")
+
+    graphs, dataset_path, dataset_name, locations = (
+        draw._load_prepared_dataset_selection("generic", root, "all")
+    )
+
+    assert dataset_path == directory
+    assert dataset_name == "generic"
+    assert [graph.number_of_nodes() for graph in graphs] == [2, 3, 4, 5, 6]
+    assert locations == [
+        ("train", 0),
+        ("train", 1),
+        ("val", 0),
+        ("test", 0),
+        ("test", 1),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -308,6 +391,47 @@ def test_generic_renderer_layout_is_deterministic_for_a_fixed_seed() -> None:
     assert first.tobytes() == repeated.tobytes()
 
 
+def test_induced_cycle_requires_the_subgraph_to_be_exactly_a_cycle() -> None:
+    triangle = nx.cycle_graph(3)
+    square = nx.cycle_graph(4)
+    square_with_chord = square.copy()
+    square_with_chord.add_edge(0, 2)
+
+    assert draw._is_induced_cycle(triangle, tuple(triangle.nodes())) is True
+    assert draw._is_induced_cycle(square, tuple(square.nodes())) is True
+    assert (
+        draw._is_induced_cycle(
+            square_with_chord,
+            tuple(square_with_chord.nodes()),
+        )
+        is False
+    )
+    assert draw._is_induced_cycle(nx.path_graph(4), (0, 1, 2, 3)) is False
+
+
+def test_cycle_graphlet_histogram_counts_normalizes_and_sorts() -> None:
+    graphs = [nx.cycle_graph(3), nx.cycle_graph(3), nx.cycle_graph(4)]
+
+    rows = draw._cycle_graphlet_histogram(graphs, k_min=3, k_max=4)
+
+    assert [(row.order, row.count) for row in rows] == [(3, 2), (4, 1)]
+    assert [row.frequency for row in rows] == pytest.approx([2 / 3, 1 / 3])
+    assert rows[0].possible_subsets == 6
+    assert rows[0].subset_rate == pytest.approx(2 / 6)
+    assert rows[1].possible_subsets == 1
+    assert rows[1].subset_rate == pytest.approx(1.0)
+
+
+def test_chorded_cycle_is_not_counted_as_a_cycle_graphlet() -> None:
+    complete = nx.complete_graph(4)
+
+    rows = draw._cycle_graphlet_histogram([complete], k_min=3, k_max=4)
+    by_order = {row.order: row for row in rows}
+
+    assert by_order[3].count == 4
+    assert by_order[4].count == 0
+
+
 class _FakeCanvas:
     def __init__(self) -> None:
         self.saved: list[Path] = []
@@ -328,7 +452,12 @@ def test_cli_samples_and_propagates_actual_split_local_indices(
 
     def fake_load(dataset: str, root: str | Path, split: str):
         loaded_call.update(dataset=dataset, root=Path(root), split=split)
-        return graphs, Path(root) / "qm9_attributed" / f"{split}.pkl", "qm9_attributed"
+        return (
+            graphs,
+            Path(root) / "qm9_attributed" / f"{split}.pkl",
+            "qm9_attributed",
+            [(split, index) for index in range(len(graphs))],
+        )
 
     def fake_convert(graph: Any, index: int, dataset_name: str, split: str):
         converted.append((graph, index, dataset_name, split))
@@ -340,7 +469,7 @@ def test_cli_samples_and_propagates_actual_split_local_indices(
             source_index=100 + index,
         )
 
-    monkeypatch.setattr(draw, "_load_prepared_dataset_split", fake_load)
+    monkeypatch.setattr(draw, "_load_prepared_dataset_selection", fake_load)
     monkeypatch.setattr(draw, "_load_from_prepared_graph", fake_convert)
     monkeypatch.setattr(draw, "_prepare_molecule", lambda molecule, **_kwargs: molecule)
 
@@ -404,11 +533,12 @@ def test_cli_dispatches_generic_graphs_without_rdkit_conversion(
 
     monkeypatch.setattr(
         draw,
-        "_load_prepared_dataset_split",
+        "_load_prepared_dataset_selection",
         lambda dataset, root, split: (
             graphs,
             Path(root) / dataset / f"{split}.pkl",
             dataset,
+            [(split, index) for index in range(len(graphs))],
         ),
     )
     monkeypatch.setattr(
@@ -511,6 +641,61 @@ def test_cli_draws_empty_singleton_and_disconnected_generic_graphs_end_to_end(
     assert output.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
     captured = capsys.readouterr()
     assert "failed to load" not in captured.err.lower()
+
+
+def test_cli_draws_all_generic_graphs_across_all_splits(tmp_path: Path) -> None:
+    pytest.importorskip("PIL")
+    root = tmp_path / "datasets"
+    directory = root / "generic"
+    directory.mkdir(parents=True)
+    save_pickle([nx.path_graph(2), nx.path_graph(3)], directory / "train.pkl")
+    save_pickle([nx.path_graph(4)], directory / "val.pkl")
+    save_pickle([nx.path_graph(5), nx.path_graph(6)], directory / "test.pkl")
+    output = tmp_path / "all.png"
+
+    result = draw.main(
+        [
+            "--dataset",
+            "generic",
+            "--dataset-root",
+            str(root),
+            "--split",
+            "all",
+            "--all",
+            "--row",
+            "1",
+            "--col",
+            "2",
+            "--panel-width",
+            "220",
+            "--panel-height",
+            "220",
+            "--k-min",
+            "3",
+            "--k-max",
+            "4",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert result == 0
+    pages = sorted(tmp_path.glob("all_page_*.png"))
+    assert [path.name for path in pages] == [
+        "all_page_001.png",
+        "all_page_002.png",
+        "all_page_003.png",
+    ]
+    assert all(path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n") for path in pages)
+    histogram = tmp_path / "all_graphlet_histogram.png"
+    report = tmp_path / "all_graphlet_histogram.json"
+    assert histogram.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["definition"] == "induced_simple_cycle_Ck"
+    assert payload["k_min"] == 3
+    assert payload["k_max"] == 4
+    assert payload["total_cycle_graphlets"] == 0
+    assert [row["graphlet"] for row in payload["graphlets"]] == ["C3", "C4"]
 
 
 def test_cli_draws_a_prepared_molecule_end_to_end(tmp_path: Path) -> None:

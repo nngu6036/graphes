@@ -379,6 +379,31 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
 
 
 
+Molecular evaluation
+  validity: 0.970703125
+  validity_with_correction: 1.0
+  validity_without_correction: 0.970703125
+  fcd: 6.779601882576401
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 994
+  num_invalid_generated_molecules: 30
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 30
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 1.0
+  unique_valid_count: 1024
+  novelty_rate: 1.0
+  novel_unique_valid_count: 1024
+  nspdk_mmd: 0.06059966123888085
+  nspdk_mmd_valid_only: 0.06059966123888085
+  nspdk_proxy_mmd_all_generated: 2.4870572529390116e-05
+  nspdk_proxy_mmd_metric_source: 0.0005077150556336053
+  fcd_num_reference_molecules: 1000
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
 
  
 export DIGRESS=/home/quang/DiGress
@@ -397,7 +422,20 @@ GEN_DIR="outputs/baselines/digress/zinc/seed_44_e1000/generations/seed_44_n_1024
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --dataset-root outputs/datasets \
-  --dataset zinc_attributed \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+    --require-fcd \
+ --hogdiff-compatible-metrics
+
+
+ GEN_DIR="outputs/baselines/digress/zinc/seed_44_e1000/generations/seed_44_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
   --reference-split test \
   --train-split train \
   --output-dir "$GEN_DIR/evaluation" \

@@ -183,9 +183,10 @@ Supported or scaffolded integrations include:
 | DH-VAE + Havel–Hakimi | Project-owned base generator | Ready |
 | DiGress | External diffusion baseline | Ready |
 | DeFoG | External discrete-flow baseline | Ready |
+| GDSS | External score/SDE baseline | Ready |
 | GraphRNN | External autoregressive baseline | Ready |
 | CatFlow | External baseline | Integration scaffold |
-| HOG-Diff | External baseline | Integration scaffold |
+| HOG-Diff | External higher-order / bridge diffusion baseline | Ready |
 | FLAGG | External baseline | Integration scaffold |
 
 ---
@@ -295,6 +296,7 @@ configs/
 docs/
     TOPOLOGY_GENERATOR.md
     ATTRIBUTED_SPECTRAL_GRAPHLET_DIFFUSION.md
+    HOG_DIFF_WRAPPER.md
     DESIGN_CONTRACT.md
     IMPLEMENTATION_AUDIT.md
 
@@ -306,6 +308,7 @@ scripts/
     run_digress_baseline.py
     run_graphrnn_baseline.py
     run_defog_baseline.py
+    run_hog_diff_baseline.py
     evaluate_graph_generation_report.py
     evaluate_generated_molecules.py
 
@@ -543,7 +546,7 @@ PYTHONPATH=src python scripts/prepare_qm9_dataset.py \
   --root outputs/datasets
 
 # Draw a reproducible random sample from the prepared attributed dataset.
-PYTHONPATH=src python scripts/draw_qm9_molecule.py \
+PYTHONPATH=src python scripts/draw_dataset.py \
   --dataset qm9_attributed \
   --dataset-root outputs/datasets \
   --split test \
@@ -569,7 +572,7 @@ PYTHONHASHSEED=0 PYTHONPATH=src python scripts/draw_generated_qm9_outliers.py \
   --output outputs/qm9_generated_outliers.png
 
 # The same command automatically uses a node-link view for generic graphs.
-PYTHONPATH=src python scripts/draw_qm9_molecule.py \
+PYTHONPATH=src python scripts/draw_dataset.py \
   --dataset community_small \
   --dataset-root outputs/datasets \
   --split test \
@@ -578,6 +581,38 @@ PYTHONPATH=src python scripts/draw_qm9_molecule.py \
   --row 2 \
   --col 4 \
   --output outputs/community_small_test_random_8.png
+
+# Draw every Community-small graph (train, validation, and test) over pages.
+PYTHONPATH=src python scripts/draw_dataset.py \
+  --dataset community_small \
+  --dataset-root outputs/datasets \
+  --split all \
+  --all \
+  --row 4 \
+  --col 5 \
+  --k-min 3 \
+  --k-max 5 \
+  --output outputs/community_small_all.png
+
+# Draw every Ego-small graph in the same way.
+PYTHONPATH=src python scripts/draw_dataset.py \
+  --dataset ego_small \
+  --dataset-root outputs/datasets \
+  --split all \
+  --all \
+  --row 4 \
+  --col 5 \
+  --k-min 3 \
+  --k-max 5 \
+  --output outputs/ego_small_all.png
+
+# Supplying both --k-min and --k-max also creates an induced-cycle graphlet
+# histogram (C3 through C5 here), sorted from highest to lowest frequency.
+# The commands above respectively write:
+#   outputs/community_small_all_graphlet_histogram.{png,json}
+#   outputs/ego_small_all_graphlet_histogram.{png,json}
+# Only node-induced subgraphs that are exactly a simple cycle are counted;
+# chorded cycles and subgraphs with branches or disconnected nodes are omitted.
 
 PYTHONPATH=src python scripts/prepare_zinc_dataset.py \
   --config configs/datasets/zinc.yaml \

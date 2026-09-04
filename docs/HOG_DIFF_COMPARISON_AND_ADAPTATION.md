@@ -425,3 +425,12 @@ Tests:
 - `tests/test_attributed_spectral_graphlet_diffusion.py`
 
 Ablation configs are listed in Section 6.
+
+
+## External baseline wrapper status (2026-09-04)
+
+The external HOG-Diff baseline is now implemented under
+`src/grapher/models/hog_diff/`. It uses isolated two-stage training/sampling,
+GraphER split projection, raw pre-correction molecular export, immutable
+checkpoint/source validation, and the common baseline artifact contract. See
+`docs/HOG_DIFF_WRAPPER.md` for setup and commands.

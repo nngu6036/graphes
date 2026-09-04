@@ -46,9 +46,9 @@ from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import load_pickle, save_json
 
 if __package__:
-    from scripts import draw_qm9_molecule as draw
+    from scripts import draw_dataset as draw
 else:
-    import draw_qm9_molecule as draw
+    import draw_dataset as draw
 
 
 @dataclass(frozen=True)

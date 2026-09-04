@@ -1,0 +1,21 @@
+# GDSS baseline on GraphER's implicit-hydrogen QM9 attributed split.
+gdss:
+  source_env: GDSS
+  python_env: GDSS_PYTHON
+  upstream_config: qm9.yaml
+  sampling_config: sample_qm9.yaml
+  native_dataset: QM9
+  num_workers: 0
+  generation_batch_size: 256
+  training_estimates:
+    enabled: false
+  runtime:
+    device: auto
+    cuda_visible_devices: "0"
+    timeout_seconds: null
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+      epoch_interval: 50
+      generation_batch_interval: 1

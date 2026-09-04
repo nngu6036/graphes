@@ -73,7 +73,23 @@ src/grapher/models/
 │       ├── prepare_dataset.py
 │       ├── prepare_molecular_dataset.py
 │       └── molecular_runtime.py
-├── hog_diff.py
+├── gdss/
+│   ├── __init__.py
+│   ├── wrapper.py
+│   ├── codec.py
+│   ├── runtime.py
+│   └── workers/
+│       ├── train.py
+│       └── generate.py
+├── hog_diff/
+│   ├── __init__.py
+│   ├── wrapper.py
+│   ├── codec.py
+│   ├── runtime.py
+│   └── workers/
+│       ├── data.py
+│       ├── train.py
+│       └── generate.py
 └── flagg.py
 ```
 
@@ -107,6 +123,7 @@ The canonical registry identifiers are:
 - `graphrnn`
 - `catflow`
 - `defog`
+- `gdss`
 - `hog_diff`
 - `flagg`
 
@@ -238,19 +255,24 @@ split-derived empirical priors in memory; the external checkout is not
 modified. GraphRNN is complete for Community-small, Ego-small, and Grid through
 a current-PyTorch compatibility worker that imports the attached upstream
 GRU/MLP modules while preserving GraphRNN's BFS adjacency encoding and
-autoregressive sampler. All completed external wrappers export neutral numeric
-NPZ batches and validate dataset-specific schemas before publishing
-GraphER-facing NetworkX graphs. CatFlow, HOG-Diff, and FLAGG remain explicit
-placeholders.
+autoregressive sampler. GDSS is complete for Community-small, Ego-small, Grid, heavy-atom QM9, and heavy-atom ZINC. Its wrapper keeps the released joint x/adj score-model objective and solver, replaces only the native data-loading boundary with GraphER train/validation tensors, keeps the test split frozen during training, and exports molecular categorical states before GDSS valence correction or largest-component rewriting. HOG-Diff is complete for Community-small, Ego-small, heavy-atom QM9, and
+heavy-atom ZINC. Its wrapper retains the upstream two-stage higher-order VPSDE
+then conditional OU-bridge training lifecycle, projects GraphER's immutable
+splits into the upstream data format without validation/test optimization
+leakage, and exports raw generated tensors before HOG-Diff's molecular validity
+correction. All completed external wrappers export neutral numeric NPZ batches
+and validate dataset-specific schemas before publishing GraphER-facing NetworkX
+graphs. CatFlow and FLAGG remain explicit placeholders.
 Unimplemented methods raise `BaselineNotImplementedError` before creating any
 directories; an incomplete adapter must not leave a partial run that looks
 like evidence.
 
 `scripts/run_dhvae_hh_baseline.py`, `scripts/run_defog_baseline.py`,
-`scripts/run_digress_baseline.py`, and `scripts/run_graphrnn_baseline.py`
-provide thin train-then-generate commands over the common wrappers. Internal
+`scripts/run_digress_baseline.py`, `scripts/run_graphrnn_baseline.py`,
+`scripts/run_gdss_baseline.py`, and `scripts/run_hog_diff_baseline.py` provide thin train-then-generate commands over the common wrappers. Internal
 isolated workers live under their corresponding
 `grapher.models.<model>.workers` package. GraphRNN-specific setup and commands
 are documented in `docs/GRAPHRNN_WRAPPER.md`; DiGress-specific setup is in
-`docs/DIGRESS_WRAPPER.md`. DeFoG molecular preparation records the exact source
+`docs/DIGRESS_WRAPPER.md`, GDSS setup/protocol details are in `docs/GDSS_WRAPPER.md`, and HOG-Diff setup/protocol details are in
+`docs/HOG_DIFF_WRAPPER.md`. DeFoG molecular preparation records the exact source
 representation and, for ZINC, the verified Kekule model view.

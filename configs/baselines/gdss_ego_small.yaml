@@ -1,0 +1,20 @@
+# GDSS baseline on GraphER's frozen Ego-small split.
+gdss:
+  source_env: GDSS
+  python_env: GDSS_PYTHON
+  upstream_config: ego_small.yaml
+  native_dataset: ego_small
+  num_workers: 0
+  generation_batch_size: 128
+  training_estimates:
+    enabled: false
+  runtime:
+    device: auto
+    cuda_visible_devices: "0"
+    timeout_seconds: null
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+      epoch_interval: 1000
+      generation_batch_interval: 1

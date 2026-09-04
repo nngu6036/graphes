@@ -23,6 +23,7 @@ EXPECTED_BASELINES = (
     "graphrnn",
     "catflow",
     "defog",
+    "gdss",
     "hog_diff",
     "flagg",
 )
@@ -34,6 +35,7 @@ class BaselineRegistryTests(unittest.TestCase):
         self.assertEqual(normalize_baseline_id("DH-VAE+HH"), "dhvae_hh")
         self.assertEqual(normalize_baseline_id("HOG-Diff"), "hog_diff")
         self.assertEqual(normalize_baseline_id("DeFoG"), "defog")
+        self.assertEqual(normalize_baseline_id("GDSS"), "gdss")
         self.assertEqual(normalize_baseline_id("Graph-RNN"), "graphrnn")
 
     def test_wrapper_statuses(self) -> None:
@@ -44,6 +46,8 @@ class BaselineRegistryTests(unittest.TestCase):
                 "digress": "ready",
                 "graphrnn": "ready",
                 "defog": "ready",
+                "gdss": "ready",
+                "hog_diff": "ready",
             }
         )
         for model_id, status in expected.items():

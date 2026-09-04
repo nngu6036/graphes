@@ -13,6 +13,7 @@ _WRAPPER_PATHS: Final[dict[str, str]] = {
     "graphrnn": "grapher.models.graphrnn.wrapper:GraphRNNWrapper",
     "catflow": "grapher.models.catflow:CatFlowWrapper",
     "defog": "grapher.models.defog.wrapper:DeFoGWrapper",
+    "gdss": "grapher.models.gdss:GDSSWrapper",
     "hog_diff": "grapher.models.hog_diff:HOGDiffWrapper",
     "flagg": "grapher.models.flagg:FLAGGWrapper",
 }
@@ -25,6 +26,7 @@ _ALIASES: Final[dict[str, str]] = {
     "graph-rnn": "graphrnn",
     "cat-flow": "catflow",
     "de-fog": "defog",
+    "gd-ss": "gdss",
     "hog-diff": "hog_diff",
 }
 
