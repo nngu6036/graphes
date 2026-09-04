@@ -1,0 +1,10 @@
+export GDSS=/home/quang/GDSS
+export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
+
+PYTHONPATH=src:. python scripts/run_gdss_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42 \
+  --wrapper-config configs/baselines/gdss_community_small.yaml \
+  --device gpu

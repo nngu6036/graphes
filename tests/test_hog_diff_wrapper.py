@@ -38,6 +38,24 @@ class HOGDiffWrapperConfigTests(unittest.TestCase):
                 "snapshot_sampling": True,
                 "log_freq": 60,
             },
+            "optim": {
+                "optimizer": "Adam",
+                "lr": "2e-4",
+                "beta1": 0.9,
+                "eps": "1e-8",
+                "weight_decay": 0,
+                "warmup": 0,
+                "grad_clip": 1.0,
+            },
+            "OUoptim": {
+                "optimizer": "Adam",
+                "lr": "1e-4",
+                "beta1": 0.9,
+                "eps": "1e-8",
+                "weight_decay": 0,
+                "warmup": 0,
+                "grad_clip": 1.0,
+            },
             "eval": {"seed": 3, "batch_size": 4, "save_graph": True},
             "exp": {"plot": True},
         }
@@ -82,6 +100,12 @@ class HOGDiffWrapperConfigTests(unittest.TestCase):
             self.assertFalse(resolved["OUtraining"]["snapshot_sampling"])
             self.assertEqual(resolved["training"]["log_freq"], 17)
             self.assertEqual(resolved["OUtraining"]["log_freq"], 17)
+            self.assertIsInstance(resolved["optim"]["eps"], float)
+            self.assertEqual(resolved["optim"]["eps"], 1.0e-8)
+            self.assertIsInstance(resolved["optim"]["lr"], float)
+            self.assertEqual(resolved["optim"]["lr"], 2.0e-4)
+            self.assertIsInstance(resolved["OUoptim"]["eps"], float)
+            self.assertEqual(resolved["OUoptim"]["eps"], 1.0e-8)
             self.assertFalse(resolved["eval"]["save_graph"])
             self.assertFalse(resolved["exp"]["plot"])
 

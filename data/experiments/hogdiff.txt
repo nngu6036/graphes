@@ -1,0 +1,17 @@
+export HOGDIFF=/home/quang/HOG-Diff
+export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
+
+PYTHONPATH=src:. python scripts/run_hog_diff_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --wrapper-config configs/baselines/hog_diff_community_small.yaml \
+  --skip-training-estimates
+
+
+DEFOG_GENERATION_DIR="outputs/baselines/hog_diff/community_small/seed_42/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --generated-dir "$DEFOG_GENERATION_DIR" \
+  --generated-stage defog_seed_42_n_1024 \
+  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_42_n_1024"

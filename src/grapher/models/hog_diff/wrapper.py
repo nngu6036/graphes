@@ -157,6 +157,36 @@ def _deep_update(base: dict[str, Any], update: Mapping[str, Any]) -> dict[str, A
     return base
 
 
+def _normalize_optimizer_numbers(config: dict[str, Any]) -> None:
+    """Materialize YAML numeric strings before HOG-Diff calls PyTorch.
+
+    PyYAML follows YAML 1.1 scalar resolution, where scientific notation such
+    as ``1e-8`` (without a decimal point) is loaded as a string. HOG-Diff's
+    published configs use that spelling for Adam epsilon and pass the value
+    directly to ``torch.optim``, which requires real numbers.
+    """
+
+    numeric_keys = ("lr", "beta1", "eps", "weight_decay", "warmup", "grad_clip")
+    for section_name in ("optim", "OUoptim"):
+        if section_name not in config:
+            continue
+        section = _mapping(
+            config[section_name],
+            name=f"HOG-Diff {section_name} config",
+        )
+        for key in numeric_keys:
+            if key not in section:
+                continue
+            try:
+                section[key] = float(section[key])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"HOG-Diff {section_name}.{key} must be numeric; "
+                    f"got {section[key]!r}."
+                ) from exc
+        config[section_name] = section
+
+
 def _load_options(request: TrainRequest) -> dict[str, Any]:
     options: dict[str, Any] = {}
     if request.config_path is not None:
@@ -339,6 +369,7 @@ def _resolved_hog_config(
         raise TypeError(f"HOG-Diff source config must contain a mapping: {source_path}")
     config = dict(raw)
     config = _deep_update(config, _mapping(options.get("config_overrides"), name="config_overrides"))
+    _normalize_optimizer_numbers(config)
     data = _mapping(config.get("data"), name="HOG-Diff data config")
     data["name"] = profile.native_id
     configured_max = int(data.get("max_node", profile.max_nodes))
