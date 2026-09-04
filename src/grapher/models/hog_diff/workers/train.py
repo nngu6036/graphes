@@ -12,6 +12,11 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+try:
+    from ._compat import install_torch_functional_alias
+except ImportError:  # Direct worker execution uses this file's directory.
+    from _compat import install_torch_functional_alias
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -100,7 +105,14 @@ def main() -> int:
     os.environ.setdefault("WANDB_SILENT", "true")
 
     import torch
+    import torch.nn.functional as torch_functional
     import wandb
+    from models import layers as hog_layers
+
+    functional_alias_installed = install_torch_functional_alias(
+        hog_layers,
+        torch_functional,
+    )
     from utils import file_utils, loader
     from utils.logger import Logger
     from trainer import Trainer
@@ -171,7 +183,14 @@ def main() -> int:
                 "sha256": _sha256(checkpoint),
             },
             "molecular_tensor": None if materialized is None else str(materialized),
-            "compatibility_shim": "workers/data.py when upstream data.py is absent",
+            "compatibility_shim": {
+                "missing_data_module": (
+                    "workers/data.py when upstream data.py is absent"
+                ),
+                "models_layers_functional_alias_installed": (
+                    functional_alias_installed
+                ),
+            },
         },
     )
     print(

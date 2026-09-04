@@ -13,6 +13,11 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+try:
+    from ._compat import install_torch_functional_alias
+except ImportError:  # Direct worker execution uses this file's directory.
+    from _compat import install_torch_functional_alias
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -140,6 +145,10 @@ def main() -> int:
 
     import numpy as np
     import torch
+    import torch.nn.functional as torch_functional
+    from models import layers as hog_layers
+
+    install_torch_functional_alias(hog_layers, torch_functional)
     from sampler import Sampler
     from utils import loader
     from utils.logger import Logger
