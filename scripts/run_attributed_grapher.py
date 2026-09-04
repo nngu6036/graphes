@@ -235,6 +235,22 @@ def _sample_invariant(
             ),
             {"reference_split": "train", "reference_index": reference_index},
         )
+    if source_mode == "test_empirical":
+        if not test_graphs:
+            raise ValueError(
+                "generation.invariant_source=test_empirical requires a non-empty test split."
+            )
+        reference_index = int(rng.integers(0, len(test_graphs)))
+        graph = test_graphs[reference_index]
+        return (
+            extract_typed_invariant(
+                graph,
+                edge_types=edge_types,
+                node_attribute=node_attribute,
+                edge_attribute=edge_attribute,
+            ),
+            {"reference_split": "test", "reference_index": reference_index},
+        )
     if source_mode in {"learned", "typed_vae", "degree_vae"}:
         if typed_sampler is None:
             raise ValueError("Learned typed-invariant generation requires degree_generator checkpoint_path.")
@@ -390,10 +406,19 @@ def main() -> None:
     elif invariant_source not in {
         "empirical",
         "train_empirical",
+        "test_empirical",
         "oracle",
         "test_oracle",
     }:
         raise ValueError(f"Unknown generation.invariant_source: {invariant_source!r}")
+
+    if invariant_source in {"test_empirical", "oracle", "test_oracle"}:
+        print(
+            "[GraphER/AttributedSpectralGraphlet] held-out typed-invariant diagnostic enabled "
+            f"source={invariant_source}; this uses test-set invariant information and must not "
+            "be reported as unconditional generation.",
+            flush=True,
+        )
 
     constructor_cfg = dict(config.get("constructor", {}) or {})
     constructor_type = str(constructor_cfg.get("type", "typed_backtracking")).lower()

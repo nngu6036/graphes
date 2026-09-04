@@ -802,6 +802,7 @@ def _compose_page(
     dataset_label: str,
     dataset_path: Path,
     show_hydrogens: bool,
+    page_title: str | None = None,
 ) -> Any:
     from PIL import Image, ImageDraw
 
@@ -818,7 +819,7 @@ def _compose_page(
     title_font = _load_font(22, bold=True)
     body_font = _load_font(13)
 
-    title = f"{dataset_label} random sample: n={count}, seed={seed}"
+    title = page_title or f"{dataset_label} random sample: n={count}, seed={seed}"
     if total_pages > 1:
         title += f"  |  page {page_index + 1}/{total_pages}"
     draw.text((outer_pad, outer_pad), title, fill="#111827", font=title_font)

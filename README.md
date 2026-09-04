@@ -553,6 +553,21 @@ PYTHONPATH=src python scripts/draw_qm9_molecule.py \
   --col 4 \
   --output outputs/qm9_test_random_16.png
 
+# Draw valid generated molecules that are farthest from the training set in
+# both ChemNet (FCD mean term) and NSPDK feature space. Higher panel scores
+# mean farther; the adjacent JSON file records full-precision scores.
+PYTHONHASHSEED=0 PYTHONPATH=src python scripts/draw_generated_qm9_outliers.py \
+  --generated-dir outputs/attributed_grapher/<run>/seed_42 \
+  --dataset qm9_attributed \
+  --dataset-root outputs/datasets \
+  --split train \
+  --ranking joint \
+  --count 16 \
+  --row 4 \
+  --col 4 \
+  --fcd-device gpu \
+  --output outputs/qm9_generated_outliers.png
+
 # The same command automatically uses a node-link view for generic graphs.
 PYTHONPATH=src python scripts/draw_qm9_molecule.py \
   --dataset community_small \

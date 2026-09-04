@@ -178,3 +178,67 @@ def eden_nspdk_mmd(
         )
     delta = ref_mean - gen_mean
     return float(delta.multiply(delta).sum())
+
+
+def eden_nspdk_singleton_mmd(
+    reference_graphs: list[nx.Graph],
+    generated_graphs: list[nx.Graph],
+    *,
+    complexity: int = 4,
+    cache_dir: str | Path | None = None,
+    bond_label_mode: str = "hogdiff",
+) -> np.ndarray:
+    """Return one linear-kernel NSPDK MMD distance per generated graph.
+
+    Each value is the squared distance between one generated graph's EDeN
+    feature vector and the mean feature vector of the reference set.  It is
+    therefore exactly the NSPDK MMD obtained when that graph is treated as a
+    singleton generated set.  Larger values indicate a stronger outlier.
+    """
+
+    reference_graphs = [g for g in reference_graphs if g.number_of_nodes() > 0]
+    if not reference_graphs:
+        raise ValueError("NSPDK outlier scoring requires a non-empty reference set.")
+    if any(graph.number_of_nodes() == 0 for graph in generated_graphs):
+        raise ValueError("NSPDK outlier scoring does not accept empty generated graphs.")
+    if not generated_graphs:
+        return np.empty(0, dtype=np.float64)
+
+    ref_mean = _load_or_compute_reference_mean(
+        reference_graphs,
+        complexity=int(complexity),
+        cache_dir=cache_dir,
+        bond_label_mode=bond_label_mode,
+    )
+    generated_features = vectorize(
+        [
+            to_eden_molecular_graph(graph, bond_label_mode=bond_label_mode)
+            for graph in generated_graphs
+        ],
+        complexity=int(complexity),
+        discrete=True,
+    ).tocsr()
+
+    width = max(ref_mean.shape[1], generated_features.shape[1])
+    if ref_mean.shape[1] < width:
+        ref_mean = sparse.hstack(
+            [ref_mean, sparse.csr_matrix((1, width - ref_mean.shape[1]))],
+            format="csr",
+        )
+    if generated_features.shape[1] < width:
+        generated_features = sparse.hstack(
+            [
+                generated_features,
+                sparse.csr_matrix(
+                    (generated_features.shape[0], width - generated_features.shape[1])
+                ),
+            ],
+            format="csr",
+        )
+
+    generated_norm = np.asarray(
+        generated_features.multiply(generated_features).sum(axis=1)
+    ).reshape(-1)
+    reference_norm = float(ref_mean.multiply(ref_mean).sum())
+    cross_term = (generated_features @ ref_mean.T).toarray().reshape(-1)
+    return np.maximum(generated_norm - 2.0 * cross_term + reference_norm, 0.0)
