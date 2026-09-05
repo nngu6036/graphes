@@ -1057,6 +1057,8 @@ class HOGDiffWrapper(BaseGeneratorWrapper):
                         "max_numerical_retries_per_batch",
                         "numerical_retry_count",
                         "numerical_retries",
+                        "singleton_fallback_count",
+                        "singleton_fallbacks",
                     )
                 },
                 "log": "generate.log",

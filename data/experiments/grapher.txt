@@ -597,3 +597,43 @@ Molecular evaluation
   fcd_num_reference_molecules: 12997
   fcd_num_valid_generated_molecules: 256
   fcd_generated_smiles_source: valid_with_correction
+
+  ## Graphlet ring perserve
+
+PYTHONPATH=src   python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/qm9_typed.yaml
+
+
+ PYTHONPATH=src  python scripts/train_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet.yaml \
+  --output-dir outputs/attributed_grapher/qm9_spectral_cycle_graphlet/seed_42 \
+  --seed 42 \
+  --device gpu
+
+ PYTHONPATH=src  python scripts/run_attributed_grapher.py \
+  --config configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet.yaml \
+  --checkpoint outputs/attributed_grapher/qm9_spectral_cycle_graphlet/seed_42/checkpoint.pt \
+  --output-dir outputs/attributed_generation/qm9_spectral_cycle_graphlet/seed_42 \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
+
+
+  PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir outputs/attributed_generation/qm9_spectral_cycle_graphlet/seed_42 \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --nspdk-backend eden \
+  --graphlet-mmd \
+  --graphlet-k-min 3 \
+  --graphlet-k-max 6 \
+  --graphlet-topology-filter simple_cycle \
+  --graphlet-node-attribute atomic_num \
+  --graphlet-edge-attribute bond_type \
+  --graphlet-attributed-backend python \
+  --fcd-device auto \
+  --require-fcd \
+  --output-dir outputs/attributed_generation/qm9_spectral_cycle_graphlet/seed_42/evaluation

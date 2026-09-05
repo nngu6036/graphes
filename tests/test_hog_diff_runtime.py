@@ -10,6 +10,7 @@ from grapher.models.hog_diff.workers._compat import install_torch_functional_ali
 from grapher.models.hog_diff.workers.generate import (
     _is_predictor_nan_error,
     _numerical_retry_seed,
+    _singleton_retry_seed,
 )
 
 
@@ -52,3 +53,4 @@ def test_generation_numerical_retry_detection_and_seeds_are_narrow_and_determini
     assert not _is_predictor_nan_error(RuntimeError("NaNs in predictor output"))
     assert _numerical_retry_seed(42, 0, 0) == 42
     assert _numerical_retry_seed(42, 2, 1) == 1_000_047
+    assert _singleton_retry_seed(42, 2, 3, 1) == 1_002_030_173

@@ -39,6 +39,22 @@ def _numerical_retry_seed(seed: int, round_index: int, attempt: int) -> int:
     return int(seed) + int(round_index) + int(attempt) * 1_000_003
 
 
+def _singleton_retry_seed(
+    seed: int,
+    round_index: int,
+    sample_index: int,
+    attempt: int,
+) -> int:
+    """Return a deterministic seed for an isolated fallback trajectory."""
+    return (
+        int(seed)
+        + 1_000_000_007
+        + int(round_index) * 1_000_003
+        + int(sample_index) * 10_007
+        + int(attempt) * 97
+    )
+
+
 def _is_predictor_nan_error(exc: BaseException) -> bool:
     return isinstance(exc, ValueError) and "NaNs in predictor output" in str(exc)
 
@@ -192,47 +208,87 @@ def main() -> int:
     molecule_bonds: list[np.ndarray] = []
     molecule_sizes: list[np.ndarray] = []
     numerical_retries: list[dict[str, int]] = []
+    singleton_fallbacks: list[dict[str, int]] = []
     rounds = int(math.ceil(float(args.num_graphs) / float(batch_size)))
+
+    def capture_once(active_hsampler, active_ousampler, *, sample_seed: int):
+        active_hsampler.config.eval.seed = sample_seed
+        active_ousampler.config.eval.seed = sample_seed
+        captured: dict[str, Any] = {}
+        if args.domain == "generic":
+            def capture_generic(all_bonds):
+                captured["bonds"] = torch.concat(all_bonds, dim=0).detach().cpu()
+                return {}
+            active_ousampler._generic_eval_fn = capture_generic
+        else:
+            def capture_molecular(all_atoms, all_bonds, all_sample_nodes):
+                captured["atoms"] = torch.concat(all_atoms, dim=0).detach().cpu()
+                captured["bonds"] = torch.concat(all_bonds, dim=0).detach().cpu()
+                captured["sample_nodes"] = torch.concat(all_sample_nodes, dim=0).detach().cpu()
+                return {}
+            active_ousampler._mol_eval_fn = capture_molecular
+
+        mu, _ = active_hsampler.sample()
+        if len(mu) != 1:
+            raise RuntimeError(
+                f"Expected one HOG-Diff higher-order batch, received {len(mu)}."
+            )
+        active_ousampler.sample(mu_list=mu)
+        if "bonds" not in captured:
+            raise RuntimeError("HOG-Diff phase-2 sampler did not expose generated tensors.")
+        return captured
+
+    singleton_samplers = None
+
+    def get_singleton_samplers():
+        nonlocal singleton_samplers
+        if singleton_samplers is not None:
+            return singleton_samplers
+        singleton_hconfig = _load_mode_config(config_path, mode="higher-order")
+        singleton_ouconfig = _load_mode_config(config_path, mode="OU")
+        for config in (singleton_hconfig, singleton_ouconfig):
+            config.ckpt = str(checkpoint)
+            config.eval.batch_size = 1
+            config.eval.num_samples = 1
+            config.eval.seed = int(args.seed)
+            config.exp.plot = False
+            config.data.num_workers = 0
+        singleton_samplers = (
+            Sampler(singleton_hconfig, sample_logger, mode="higher-order", device=device),
+            Sampler(singleton_ouconfig, sample_logger, mode="OU", device=device),
+        )
+        return singleton_samplers
 
     for round_index in range(rounds):
         captured: dict[str, Any] = {}
+        use_singleton_fallback = False
         for attempt in range(args.max_numerical_retries + 1):
             round_seed = _numerical_retry_seed(args.seed, round_index, attempt)
-            hsampler.config.eval.seed = round_seed
-            ousampler.config.eval.seed = round_seed
-            captured = {}
-            if args.domain == "generic":
-                def capture_generic(all_bonds):
-                    captured["bonds"] = torch.concat(all_bonds, dim=0).detach().cpu()
-                    return {}
-                ousampler._generic_eval_fn = capture_generic
-            else:
-                def capture_molecular(all_atoms, all_bonds, all_sample_nodes):
-                    captured["atoms"] = torch.concat(all_atoms, dim=0).detach().cpu()
-                    captured["bonds"] = torch.concat(all_bonds, dim=0).detach().cpu()
-                    captured["sample_nodes"] = torch.concat(all_sample_nodes, dim=0).detach().cpu()
-                    return {}
-                ousampler._mol_eval_fn = capture_molecular
-
             try:
-                mu, _ = hsampler.sample()
-                if len(mu) != 1:
-                    raise RuntimeError(
-                        "Expected one HOG-Diff higher-order batch, "
-                        f"received {len(mu)}."
-                    )
-                ousampler.sample(mu_list=mu)
+                captured = capture_once(hsampler, ousampler, sample_seed=round_seed)
             except ValueError as exc:
                 numerical_failure = _is_predictor_nan_error(exc)
-                if not numerical_failure or attempt >= args.max_numerical_retries:
-                    if numerical_failure:
+                if not numerical_failure:
+                    raise
+                if attempt >= args.max_numerical_retries:
+                    if batch_size == 1:
                         raise RuntimeError(
-                            "HOG-Diff produced NaNs for generation batch "
+                            "HOG-Diff produced NaNs for isolated generation batch "
                             f"{round_index + 1} after {attempt + 1} attempts. "
                             "The finite checkpoint is numerically unstable "
                             "under the configured OU sampler."
                         ) from exc
-                    raise
+                    use_singleton_fallback = True
+                    singleton_fallbacks.append(
+                        {"batch": round_index + 1, "failed_batch_attempts": attempt + 1}
+                    )
+                    print(
+                        "[GraphER/HOG-Diff] vectorized generation batch "
+                        f"{round_index + 1} remained non-finite after {attempt + 1} "
+                        "attempts; isolating its trajectories at batch size 1",
+                        flush=True,
+                    )
+                    break
                 retry_seed = _numerical_retry_seed(args.seed, round_index, attempt + 1)
                 numerical_retries.append(
                     {
@@ -252,8 +308,57 @@ def main() -> int:
                 continue
             break
 
-        if "bonds" not in captured:
-            raise RuntimeError("HOG-Diff phase-2 sampler did not expose generated tensors.")
+        if use_singleton_fallback:
+            singleton_hsampler, singleton_ousampler = get_singleton_samplers()
+            singleton_outputs: list[dict[str, Any]] = []
+            for sample_index in range(batch_size):
+                for attempt in range(args.max_numerical_retries + 1):
+                    sample_seed = _singleton_retry_seed(
+                        args.seed, round_index, sample_index, attempt
+                    )
+                    try:
+                        sample = capture_once(
+                            singleton_hsampler,
+                            singleton_ousampler,
+                            sample_seed=sample_seed,
+                        )
+                    except ValueError as exc:
+                        if not _is_predictor_nan_error(exc):
+                            raise
+                        if attempt >= args.max_numerical_retries:
+                            raise RuntimeError(
+                                "HOG-Diff produced NaNs for isolated trajectory "
+                                f"{sample_index + 1} in generation batch "
+                                f"{round_index + 1} after {attempt + 1} attempts. "
+                                "The checkpoint requires retraining or a modified sampler."
+                            ) from exc
+                        retry_seed = _singleton_retry_seed(
+                            args.seed, round_index, sample_index, attempt + 1
+                        )
+                        numerical_retries.append(
+                            {
+                                "batch": round_index + 1,
+                                "fallback_sample": sample_index + 1,
+                                "failed_attempt": attempt + 1,
+                                "failed_seed": sample_seed,
+                                "retry_seed": retry_seed,
+                            }
+                        )
+                        print(
+                            "[GraphER/HOG-Diff] rejected isolated non-finite "
+                            f"trajectory {sample_index + 1}/{batch_size} for generation "
+                            f"batch {round_index + 1}; retrying with deterministic seed "
+                            f"{retry_seed} ({attempt + 1}/{args.max_numerical_retries})",
+                            flush=True,
+                        )
+                        continue
+                    singleton_outputs.append(sample)
+                    break
+            captured = {
+                key: torch.concat([sample[key] for sample in singleton_outputs], dim=0)
+                for key in singleton_outputs[0]
+            }
+
         max_nodes = int(ouconfig.data.max_node)
         if args.domain == "generic":
             adjacency, sizes = _pack_generic(captured["bonds"], max_nodes=max_nodes)
@@ -314,6 +419,8 @@ def main() -> int:
             "max_numerical_retries_per_batch": int(args.max_numerical_retries),
             "numerical_retry_count": len(numerical_retries),
             "numerical_retries": numerical_retries,
+            "singleton_fallback_count": len(singleton_fallbacks),
+            "singleton_fallbacks": singleton_fallbacks,
             "phase_1": "higher-order VPSDE score sampler",
             "phase_2": "OU-bridge conditional score sampler",
             "postprocessing": (

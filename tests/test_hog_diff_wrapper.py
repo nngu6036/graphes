@@ -282,6 +282,8 @@ def test_wrapper_train_and_generate_transaction_with_isolated_worker_contract(
                         "max_numerical_retries_per_batch": 8,
                         "numerical_retry_count": 0,
                         "numerical_retries": [],
+                        "singleton_fallback_count": 0,
+                        "singleton_fallbacks": [],
                         "output": {"path": str(output), "sha256": digest},
                     }
                 ),
@@ -336,3 +338,4 @@ def test_wrapper_train_and_generate_transaction_with_isolated_worker_contract(
     assert all(graph.number_of_edges() == 1 for graph in graphs)
     generated_manifest = json.loads(generation.manifest_path.read_text(encoding="utf-8"))
     assert generated_manifest["native_diagnostics"]["numerical_retry_count"] == 0
+    assert generated_manifest["native_diagnostics"]["singleton_fallback_count"] == 0
