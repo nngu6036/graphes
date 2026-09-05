@@ -39,6 +39,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir "$HOGDIFF_GENERATION_DIR/evaluation_report_seed_43_n_1024"
 
 
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+hog_diff_to_test                    0.017073          0.011761      0.016147
 
 
   export HOGDIFF=/home/quang/HOG-Diff

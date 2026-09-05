@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import networkx as nx
 import numpy as np
+import pytest
 
 from grapher.rewiring_mlp.evaluation.metrics import (
     descriptor_matrix,
+    gaussian_emd_kernel,
     mmd_gaussian_emd,
     mmd_orbit_graphrnn,
 )
@@ -42,3 +44,23 @@ def test_distance_scaling_matches_histogram_bin_coordinate_scaling() -> None:
     unscaled = mmd_gaussian_emd(left, right, sigma=1.0, distance_scaling=1.0)
     scaled = mmd_gaussian_emd(left, right, sigma=1.0, distance_scaling=10.0)
     assert scaled < unscaled
+
+
+def test_blockwise_gaussian_emd_mmd_matches_dense_protocol() -> None:
+    rng = np.random.default_rng(17)
+    left = rng.dirichlet(np.ones(7), size=9)
+    right = rng.dirichlet(np.ones(7), size=6)
+    combined = np.vstack([left, right])
+    pairwise_emd = np.sum(
+        np.abs(np.cumsum(combined[:, None, :] - combined[None, :, :], axis=-1)),
+        axis=-1,
+    )
+    positive = pairwise_emd[np.triu_indices(combined.shape[0], k=1)]
+    sigma = float(np.median(positive[positive > 0.0]))
+    expected = (
+        gaussian_emd_kernel(left, left, sigma).mean()
+        + gaussian_emd_kernel(right, right, sigma).mean()
+        - 2.0 * gaussian_emd_kernel(left, right, sigma).mean()
+    )
+
+    assert mmd_gaussian_emd(left, right) == pytest.approx(expected, abs=1.0e-12)

@@ -124,3 +124,146 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-stage gdss \
   --dataset-mismatch-policy warn \
   --output-dir "$GDSS_GENERATION_DIR/evaluation_report_seed_43_n_1024"
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.012987          0.027056      0.008995
+gdss_to_test                        0.018278          0.037864      0.011178
+
+
+
+export GDSS=/home/quang/GDSS
+export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
+
+PYTHONPATH=src:. python scripts/run_gdss_baseline.py \
+  --dataset ego_small \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --run-id seed_44 \
+  --wrapper-config configs/baselines/gdss_ego_small.yaml \
+  --device gpu
+
+
+
+GDSS_GENERATION_DIR="outputs/baselines/gdss/ego_small/seed_44/generations/seed_44_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/ego_small_topology_spectral_graphlet_v2.yaml \
+  --generated-dir "$GDSS_GENERATION_DIR" \
+  --generated-stage gdss \
+  --dataset-mismatch-policy warn \
+  --output-dir "$GDSS_GENERATION_DIR/evaluation_report_seed_44_n_1024"
+
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.012987          0.027056      0.008995
+gdss_to_test                        0.013682          0.038398      0.003356
+
+
+
+
+  
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_e1000 \
+  --wrapper-config configs/baselines/gdss_zinc.yaml
+
+GEN_DIR="outputs/baselines/gdss/zinc/seed_42_e1000/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+    --require-fcd \
+ --hogdiff-compatible-metrics
+
+
+ Molecular evaluation
+  validity: 0.763671875
+  validity_with_correction: 1.0
+  validity_without_correction: 0.763671875
+  fcd: 31.168086243482026
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 782
+  num_invalid_generated_molecules: 242
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 242
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 1.0
+  unique_valid_count: 1024
+  novelty_rate: 1.0
+  novel_unique_valid_count: 1024
+  nspdk_mmd: 0.08612952930771871
+  nspdk_mmd_valid_only: 0.08612952930771871
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  nspdk_proxy_mmd_all_generated: 0.002179061485061646
+  nspdk_proxy_mmd_metric_source: 0.002205969224968697
+  fcd_num_reference_molecules: 1000
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+
+
+
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 43 \
+  --run-id seed_43_e1000 \
+  --wrapper-config configs/baselines/gdss_zinc.yaml
+
+GEN_DIR="outputs/baselines/gdss/zinc/seed_43_e1000/generations/seed_43_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+    --require-fcd \
+ --hogdiff-compatible-metrics
+
+
+
+
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --run-id seed_44_e1000 \
+  --wrapper-config configs/baselines/gdss_zinc.yaml
+
+GEN_DIR="outputs/baselines/gdss/zinc/seed_44_e1000/generations/seed_44_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+    --require-fcd \
+ --hogdiff-compatible-metrics

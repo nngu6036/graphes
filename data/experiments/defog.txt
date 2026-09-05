@@ -15,6 +15,7 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/grapher/community_small_defog_corrector.yaml \
   --generated-dir "$DEFOG_GENERATION_DIR" \
   --generated-stage defog_seed_42_n_1024 \
+  --dataset-mismatch-policy warn \
   --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_42_n_1024"
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
@@ -38,6 +39,7 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/grapher/community_small_defog_corrector.yaml \
   --generated-dir "$DEFOG_GENERATION_DIR" \
   --generated-stage defog_seed_43_n_1024 \
+  
   --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_43_n_1024"
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD

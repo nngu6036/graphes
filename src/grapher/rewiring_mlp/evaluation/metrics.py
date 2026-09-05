@@ -6,6 +6,11 @@ from typing import Callable, Sequence
 import networkx as nx
 import numpy as np
 
+try:
+    from scipy.spatial.distance import cdist as _scipy_cdist
+except ImportError:  # Keep the core metric usable without the optional SciPy stack.
+    _scipy_cdist = None
+
 from grapher.properties.summary import (
     SummaryConfig,
     clustering_histogram,
@@ -21,6 +26,9 @@ from grapher.utils.motifs import (
     normalize_count_dict,
     topology_graphlet_keys_by_size,
 )
+
+_EMD_BLOCK_SIZE = 512
+_EMD_MEDIAN_MAX_PAIRS = 100_000
 
 
 def descriptor_matrix(
@@ -86,6 +94,101 @@ def gaussian_emd_kernel(
     return np.exp(-(emd * emd) / (2.0 * float(sigma) * float(sigma)))
 
 
+def _padded_cdfs(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    width = max(x.shape[1], y.shape[1])
+    xp = np.zeros((x.shape[0], width), dtype=np.float64)
+    yp = np.zeros((y.shape[0], width), dtype=np.float64)
+    xp[:, : x.shape[1]] = x
+    yp[:, : y.shape[1]] = y
+    return np.cumsum(xp, axis=1), np.cumsum(yp, axis=1)
+
+
+def _paired_emd_distances(
+    cdfs: np.ndarray,
+    left: np.ndarray,
+    right: np.ndarray,
+    *,
+    distance_scaling: float,
+    chunk_size: int = 4096,
+) -> np.ndarray:
+    values = np.empty(left.size, dtype=np.float64)
+    scaling = max(float(distance_scaling), 1.0e-12)
+    for start in range(0, left.size, int(chunk_size)):
+        stop = min(start + int(chunk_size), left.size)
+        values[start:stop] = np.sum(
+            np.abs(cdfs[left[start:stop]] - cdfs[right[start:stop]]),
+            axis=1,
+        ) / scaling
+    return values
+
+
+def _median_emd_bandwidth(
+    cdfs: np.ndarray,
+    *,
+    distance_scaling: float,
+    max_pairs: int = _EMD_MEDIAN_MAX_PAIRS,
+) -> float:
+    """Median positive EMD, using deterministic pair sampling at large scale."""
+
+    count = int(cdfs.shape[0])
+    if count < 2:
+        return 1.0
+    pair_count = count * (count - 1) // 2
+    if pair_count <= int(max_pairs):
+        left, right = np.triu_indices(count, k=1)
+    else:
+        rng = np.random.default_rng(0)
+        left = rng.integers(0, count, size=int(max_pairs), dtype=np.int64)
+        right = rng.integers(0, count, size=int(max_pairs), dtype=np.int64)
+        equal = left == right
+        while np.any(equal):
+            right[equal] = rng.integers(
+                0, count, size=int(np.count_nonzero(equal)), dtype=np.int64
+            )
+            equal = left == right
+    values = _paired_emd_distances(
+        cdfs,
+        left,
+        right,
+        distance_scaling=distance_scaling,
+    )
+    values = values[values > 0.0]
+    return float(np.median(values)) if values.size else 1.0
+
+
+def _gaussian_emd_kernel_mean_from_cdfs(
+    x_cdf: np.ndarray,
+    y_cdf: np.ndarray,
+    *,
+    sigma: float,
+    distance_scaling: float,
+    symmetric: bool,
+    block_size: int = _EMD_BLOCK_SIZE,
+) -> float:
+    """Compute a kernel mean without materializing an N x M x D tensor."""
+
+    if _scipy_cdist is None:
+        # The NumPy fallback creates a B x B x D difference workspace.
+        block_size = min(int(block_size), 128)
+    gamma = 1.0 / (2.0 * float(sigma) * float(sigma))
+    scaling = max(float(distance_scaling), 1.0e-12)
+    total = 0.0
+    for i_start in range(0, x_cdf.shape[0], int(block_size)):
+        x_block = x_cdf[i_start : i_start + int(block_size)]
+        j_first = i_start if symmetric else 0
+        for j_start in range(j_first, y_cdf.shape[0], int(block_size)):
+            y_block = y_cdf[j_start : j_start + int(block_size)]
+            if _scipy_cdist is not None:
+                distances = _scipy_cdist(x_block, y_block, metric="cityblock") / scaling
+            else:
+                difference = x_block[:, None, :] - y_block[None, :, :]
+                np.abs(difference, out=difference)
+                distances = np.sum(difference, axis=-1) / scaling
+            block_sum = float(np.exp(-gamma * distances * distances).sum())
+            total += block_sum if not symmetric or i_start == j_start else 2.0 * block_sum
+    return total / float(x_cdf.shape[0] * y_cdf.shape[0])
+
+
 def mmd_gaussian_emd(
     x: np.ndarray,
     y: np.ndarray,
@@ -93,7 +196,11 @@ def mmd_gaussian_emd(
     *,
     distance_scaling: float = 1.0,
 ) -> float:
-    """Biased MMD with one common Gaussian Earth-Mover kernel protocol."""
+    """Biased Gaussian-EMD MMD with bounded-memory exact kernel means.
+
+    The median bandwidth is exact for at most ``_EMD_MEDIAN_MAX_PAIRS`` pairs
+    and uses a fixed-seed pair sample above that threshold.
+    """
 
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
@@ -103,34 +210,35 @@ def mmd_gaussian_emd(
         x = x.reshape(1, -1)
     if y.ndim == 1:
         y = y.reshape(1, -1)
-    width = max(x.shape[1], y.shape[1])
-    if x.shape[1] != width:
-        padded = np.zeros((x.shape[0], width), dtype=np.float64)
-        padded[:, : x.shape[1]] = x
-        x = padded
-    if y.shape[1] != width:
-        padded = np.zeros((y.shape[0], width), dtype=np.float64)
-        padded[:, : y.shape[1]] = y
-        y = padded
+    x_cdf, y_cdf = _padded_cdfs(x, y)
     if sigma is None:
-        combined = np.vstack([x, y])
-        pairwise = np.sum(
-            np.abs(
-                np.cumsum(
-                    combined[:, None, :] - combined[None, :, :],
-                    axis=-1,
-                )
-            ),
-            axis=-1,
-        ) / max(float(distance_scaling), 1.0e-12)
-        values = pairwise[np.triu_indices(combined.shape[0], k=1)]
-        values = values[values > 0.0]
-        sigma = float(np.median(values)) if values.size else 1.0
+        sigma = _median_emd_bandwidth(
+            np.vstack([x_cdf, y_cdf]),
+            distance_scaling=distance_scaling,
+        )
     sigma = max(float(sigma), 1.0e-12)
-    k_xx = gaussian_emd_kernel(x, x, sigma, distance_scaling=distance_scaling)
-    k_yy = gaussian_emd_kernel(y, y, sigma, distance_scaling=distance_scaling)
-    k_xy = gaussian_emd_kernel(x, y, sigma, distance_scaling=distance_scaling)
-    return float(k_xx.mean() + k_yy.mean() - 2.0 * k_xy.mean())
+    mean_xx = _gaussian_emd_kernel_mean_from_cdfs(
+        x_cdf,
+        x_cdf,
+        sigma=sigma,
+        distance_scaling=distance_scaling,
+        symmetric=True,
+    )
+    mean_yy = _gaussian_emd_kernel_mean_from_cdfs(
+        y_cdf,
+        y_cdf,
+        sigma=sigma,
+        distance_scaling=distance_scaling,
+        symmetric=True,
+    )
+    mean_xy = _gaussian_emd_kernel_mean_from_cdfs(
+        x_cdf,
+        y_cdf,
+        sigma=sigma,
+        distance_scaling=distance_scaling,
+        symmetric=False,
+    )
+    return float(mean_xx + mean_yy - 2.0 * mean_xy)
 
 
 def mmd_orbit_graphrnn(
@@ -167,10 +275,7 @@ def mmd_orbit(
     h_gen = orbit_histogram_matrix(generated)
     if h_ref.size == 0 or h_gen.size == 0:
         return float("nan")
-    k_xx = gaussian_emd_kernel(h_ref, h_ref, sigma)
-    k_yy = gaussian_emd_kernel(h_gen, h_gen, sigma)
-    k_xy = gaussian_emd_kernel(h_ref, h_gen, sigma)
-    return float(k_xx.mean() + k_yy.mean() - 2.0 * k_xy.mean())
+    return mmd_gaussian_emd(h_ref, h_gen, sigma=float(sigma))
 
 
 def mmd_graphlet_statistics(

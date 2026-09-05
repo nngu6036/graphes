@@ -935,6 +935,11 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                     "fraction of induced k-node subsets matching the selected "
                     "topology filter; for simple_cycle this is induced ring mass"
                 ),
+                "mmd_kernel": "biased Gaussian Earth-Mover kernel MMD",
+                "mmd_computation": (
+                    "exact blockwise kernel means; median bandwidth uses all "
+                    "pairs up to 100000 and a fixed-seed 100000-pair sample above it"
+                ),
             },
             "fcd": {
                 **fcd_info,

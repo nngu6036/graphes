@@ -319,7 +319,7 @@ GEN_DIR="outputs/baselines/digress/zinc/seed_42_e1000/generations/seed_42_n_1024
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --dataset-root outputs/datasets \
-  --dataset zinc_attributed \
+  --dataset zinc \
   --reference-split test \
   --train-split train \
   --output-dir "$GEN_DIR/evaluation" \
