@@ -110,6 +110,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-workers", type=_nonnegative_int, default=None)
     parser.add_argument("--generation-batch-size", type=_positive_int, default=None)
     parser.add_argument(
+        "--generation-max-retries",
+        type=_nonnegative_int,
+        default=None,
+        help="Retry an upstream generation batch that produces NaNs (default: 8).",
+    )
+    parser.add_argument(
+        "--generation-only",
+        action="store_true",
+        help="Reuse this run's completed managed checkpoint and skip both training stages.",
+    )
+    parser.add_argument(
         "--device",
         choices=("auto", "cpu", "gpu", "cuda", "cuda:0", "cuda:1", "cuda:2", "cuda:3"),
         default=None,
@@ -164,6 +175,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
         options["num_workers"] = args.num_workers
     if args.generation_batch_size is not None:
         options["generation_batch_size"] = args.generation_batch_size
+    if args.generation_max_retries is not None:
+        options["generation_max_retries"] = args.generation_max_retries
     higher_order: dict[str, object] = {}
     if args.ho_iters is not None:
         higher_order["n_iters"] = args.ho_iters
@@ -197,35 +210,50 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
         f"native={profile.native_id}, run_id={run.run_id}, seed={args.seed_id}",
         enabled=progress_enabled,
     )
-    dataset.require_prepared()
     wrapper = create_baseline("hog_diff")
-    _status(
-        "prepared dataset found; starting higher-order then OU HOG-Diff training. "
-        f"Durable log: {run.layout.training_log_path.resolve()}",
-        enabled=progress_enabled,
-    )
-    training = wrapper.train(
-        TrainRequest(
-            run=run,
-            dataset=dataset,
-            config_path=args.wrapper_config,
-            options=options,
-            resume_from=args.resume_from,
-            overwrite=args.overwrite,
+    if args.generation_only:
+        checkpoint_path = run.layout.checkpoints_dir / "hog_diff.pth"
+        if not checkpoint_path.is_file() or not run.layout.training_manifest_path.is_file():
+            raise RuntimeError(
+                "--generation-only requires an existing completed managed HOG-Diff run at "
+                f"{run.layout.run_dir.resolve()}."
+            )
+        _status(
+            f"reusing completed managed checkpoint: {checkpoint_path.resolve()}",
+            enabled=progress_enabled,
         )
-    )
-    _status(
-        f"training completed: checkpoint={training.checkpoint_path.resolve()}",
-        enabled=progress_enabled,
-    )
+    else:
+        dataset.require_prepared()
+        _status(
+            "prepared dataset found; starting higher-order then OU HOG-Diff training. "
+            f"Durable log: {run.layout.training_log_path.resolve()}",
+            enabled=progress_enabled,
+        )
+        training = wrapper.train(
+            TrainRequest(
+                run=run,
+                dataset=dataset,
+                config_path=args.wrapper_config,
+                options=options,
+                resume_from=args.resume_from,
+                overwrite=args.overwrite,
+            )
+        )
+        checkpoint_path = training.checkpoint_path
+        _status(
+            f"training completed: checkpoint={checkpoint_path.resolve()}",
+            enabled=progress_enabled,
+        )
 
     generation_options: dict[str, object] = {"runtime": runtime}
     if args.generation_batch_size is not None:
         generation_options["generation_batch_size"] = args.generation_batch_size
+    if args.generation_max_retries is not None:
+        generation_options["generation_max_retries"] = args.generation_max_retries
     generation = wrapper.generate(
         GenerateRequest(
             run=run,
-            checkpoint_path=training.checkpoint_path,
+            checkpoint_path=checkpoint_path,
             num_graphs=args.num_samples,
             generation_seed=args.seed_id,
             generation_id=args.generation_id,
@@ -251,17 +279,18 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
         "run_id": run.run_id,
         "generation_id": generation.generation_dir.name,
         "num_samples": generation.num_generated,
-        "run_dir": str(training.run_dir.resolve()),
-        "checkpoint": str(training.checkpoint_path.resolve()),
-        "training_manifest": str(training.manifest_path.resolve()),
+        "training_reused": bool(args.generation_only),
+        "run_dir": str(run.layout.run_dir.resolve()),
+        "checkpoint": str(checkpoint_path.resolve()),
+        "training_manifest": str(run.layout.training_manifest_path.resolve()),
         "training_estimated_graphs": (
-            str(training.estimated_graphs_path.resolve())
-            if training.estimated_graphs_path is not None
+            str(run.layout.estimated_training_graphs_path.resolve())
+            if run.layout.estimated_training_graphs_path.is_file()
             else None
         ),
         "training_ground_truth_graphs": (
-            str(training.ground_truth_graphs_path.resolve())
-            if training.ground_truth_graphs_path is not None
+            str(run.layout.ground_truth_training_graphs_path.resolve())
+            if run.layout.ground_truth_training_graphs_path.is_file()
             else None
         ),
         "generated_graphs": str(generation.graphs_path.resolve()),

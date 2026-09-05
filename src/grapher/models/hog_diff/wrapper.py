@@ -62,6 +62,7 @@ _WRAPPER_OPTION_KEYS = frozenset(
         "higher_order",
         "ou",
         "generation_batch_size",
+        "generation_max_retries",
         "num_workers",
         "training_estimates",
         "runtime",
@@ -552,6 +553,7 @@ class HOGDiffWrapper(BaseGeneratorWrapper):
         num_graphs: int,
         seed: int,
         batch_size: int,
+        max_numerical_retries: int,
         runtime: Mapping[str, Any],
         progress: Mapping[str, Any],
         timeout_seconds: float | None,
@@ -592,6 +594,8 @@ class HOGDiffWrapper(BaseGeneratorWrapper):
             str(int(seed)),
             "--progress-every-batches",
             str(int(progress["generation_batch_interval"])),
+            "--max-numerical-retries",
+            str(int(max_numerical_retries)),
         ]
         if require_cuda:
             command.append("--require-cuda")
@@ -773,6 +777,9 @@ class HOGDiffWrapper(BaseGeneratorWrapper):
                 batch_size = int(options.get("generation_batch_size", resolved_config["eval"]["batch_size"]))
                 if batch_size <= 0:
                     raise ValueError("generation_batch_size must be positive.")
+                max_numerical_retries = int(options.get("generation_max_retries", 8))
+                if max_numerical_retries < 0:
+                    raise ValueError("generation_max_retries must be non-negative.")
                 estimates_dir = stage_train / "training_estimates"
                 native_estimates = estimates_dir / "native"
                 _emit(progress, f"generating {estimate_count} unpaired post-training HOG-Diff estimates")
@@ -787,6 +794,7 @@ class HOGDiffWrapper(BaseGeneratorWrapper):
                     num_graphs=estimate_count,
                     seed=estimate_seed,
                     batch_size=batch_size,
+                    max_numerical_retries=max_numerical_retries,
                     runtime=runtime,
                     progress=progress,
                     timeout_seconds=timeout_seconds,
@@ -931,10 +939,13 @@ class HOGDiffWrapper(BaseGeneratorWrapper):
         if not isinstance(training_options, Mapping):
             training_options = {}
         generation_options = dict(request.options)
-        unknown_generation = set(generation_options).difference({"runtime", "generation_batch_size"})
+        unknown_generation = set(generation_options).difference(
+            {"runtime", "generation_batch_size", "generation_max_retries"}
+        )
         if unknown_generation:
             raise ValueError(
-                "HOG-Diff generation may override only runtime and generation_batch_size; got "
+                "HOG-Diff generation may override only runtime, generation_batch_size, and "
+                "generation_max_retries; got "
                 f"{sorted(unknown_generation)}. Sampling/model settings are frozen in the managed training config."
             )
         options = _deep_update(dict(training_options), generation_options)
@@ -963,6 +974,9 @@ class HOGDiffWrapper(BaseGeneratorWrapper):
         batch_size = int(options.get("generation_batch_size", (resolved.get("eval") or {}).get("batch_size", 1)))
         if batch_size <= 0:
             raise ValueError("generation_batch_size must be positive.")
+        max_numerical_retries = int(options.get("generation_max_retries", 8))
+        if max_numerical_retries < 0:
+            raise ValueError("generation_max_retries must be non-negative.")
 
         generation_id = request.resolved_generation_id
         target = layout.generation_dir(generation_id)
@@ -988,6 +1002,7 @@ class HOGDiffWrapper(BaseGeneratorWrapper):
                 num_graphs=request.num_graphs,
                 seed=request.generation_seed,
                 batch_size=batch_size,
+                max_numerical_retries=max_numerical_retries,
                 runtime=runtime,
                 progress=progress,
                 timeout_seconds=timeout_seconds,
@@ -1034,7 +1049,15 @@ class HOGDiffWrapper(BaseGeneratorWrapper):
                 },
                 "native_diagnostics": {
                     key: export_manifest.get(key)
-                    for key in ("batch_size", "sampling_rounds", "device", "postprocessing")
+                    for key in (
+                        "batch_size",
+                        "sampling_rounds",
+                        "device",
+                        "postprocessing",
+                        "max_numerical_retries_per_batch",
+                        "numerical_retry_count",
+                        "numerical_retries",
+                    )
                 },
                 "log": "generate.log",
             }

@@ -15,7 +15,7 @@ protocol:
   final_split: test
 
 dataset:
-  name: ego
+  name: ego_small
   benchmark: ego_small
   config_path: configs/datasets/ego_small.yaml
   root: outputs/datasets

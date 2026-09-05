@@ -69,6 +69,8 @@ def test_runner_forwards_two_stage_overrides_and_dataset_aliases(tmp_path: Path)
         ou_batch_size=16,
         num_workers=0,
         generation_batch_size=11,
+        generation_max_retries=5,
+        generation_only=False,
         device="cpu",
         cuda_visible_devices="1",
         timeout_seconds=120.0,
@@ -89,9 +91,62 @@ def test_runner_forwards_two_stage_overrides_and_dataset_aliases(tmp_path: Path)
     assert request.options["higher_order"] == {"n_iters": 123, "batch_size": 8}
     assert request.options["ou"] == {"n_iters": 456, "batch_size": 16}
     assert request.options["generation_batch_size"] == 11
+    assert request.options["generation_max_retries"] == 5
     assert request.options["training_estimates"] == {"enabled": True, "num_graphs": 4}
     assert request.options["runtime"]["device"] == "cpu"
     assert request.options["runtime"]["progress"]["iteration_interval"] == 7
     assert stub.generation_request.options["generation_batch_size"] == 11
+    assert stub.generation_request.options["generation_max_retries"] == 5
     assert summary["model"] == "hog_diff"
     assert summary["native_dataset"] == "qm9"
+
+
+def test_runner_generation_only_reuses_managed_checkpoint(tmp_path: Path) -> None:
+    output_root = tmp_path / "baselines"
+    run_dir = output_root / "hog_diff" / "community_small" / "seed_7"
+    checkpoint = run_dir / "train" / "checkpoints" / "hog_diff.pth"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
+    manifest = run_dir / "train" / "manifest.json"
+    manifest.write_text("{}\n", encoding="utf-8")
+    stub = WrapperStub()
+    args = argparse.Namespace(
+        dataset="community_small",
+        num_samples=9,
+        seed_id=7,
+        dataset_root=tmp_path / "missing-datasets",
+        output_root=output_root,
+        run_id=None,
+        generation_id=None,
+        wrapper_config=None,
+        resume_from=None,
+        hogdiff_root=None,
+        hogdiff_python=None,
+        overwrite=False,
+        ho_iters=None,
+        ou_iters=None,
+        ho_batch_size=None,
+        ou_batch_size=None,
+        num_workers=None,
+        generation_batch_size=4,
+        generation_max_retries=6,
+        generation_only=True,
+        device="cpu",
+        cuda_visible_devices=None,
+        timeout_seconds=None,
+        skip_training_estimates=True,
+        training_estimate_count=None,
+        progress_interval_seconds=3.0,
+        iteration_progress_interval=None,
+        generation_progress_every_batches=1,
+        no_stream_subprocess_output=False,
+        quiet=True,
+    )
+    with patch("scripts.run_hog_diff_baseline.create_baseline", return_value=stub):
+        summary = run_pipeline(args)
+
+    assert stub.training_request is None
+    assert stub.generation_request.checkpoint_path == checkpoint
+    assert stub.generation_request.options["generation_batch_size"] == 4
+    assert stub.generation_request.options["generation_max_retries"] == 6
+    assert summary["training_reused"] is True

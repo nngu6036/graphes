@@ -255,6 +255,7 @@ def test_wrapper_train_and_generate_transaction_with_isolated_worker_contract(
             )
             return
         if command[1].endswith("generate.py"):
+            assert command[command.index("--max-numerical-retries") + 1] == "8"
             output = Path(command[command.index("--output") + 1])
             manifest = Path(command[command.index("--manifest") + 1])
             count = int(command[command.index("--num-graphs") + 1])
@@ -278,6 +279,9 @@ def test_wrapper_train_and_generate_transaction_with_isolated_worker_contract(
                         "sampling_rounds": 1,
                         "device": "cpu",
                         "postprocessing": "test",
+                        "max_numerical_retries_per_batch": 8,
+                        "numerical_retry_count": 0,
+                        "numerical_retries": [],
                         "output": {"path": str(output), "sha256": digest},
                     }
                 ),
@@ -330,3 +334,5 @@ def test_wrapper_train_and_generate_transaction_with_isolated_worker_contract(
         graphs = pickle.load(handle)
     assert len(graphs) == 3
     assert all(graph.number_of_edges() == 1 for graph in graphs)
+    generated_manifest = json.loads(generation.manifest_path.read_text(encoding="utf-8"))
+    assert generated_manifest["native_diagnostics"]["numerical_retry_count"] == 0

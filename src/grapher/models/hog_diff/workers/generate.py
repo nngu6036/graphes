@@ -34,6 +34,15 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _numerical_retry_seed(seed: int, round_index: int, attempt: int) -> int:
+    """Return a reproducible, non-overlapping seed for one batch attempt."""
+    return int(seed) + int(round_index) + int(attempt) * 1_000_003
+
+
+def _is_predictor_nan_error(exc: BaseException) -> bool:
+    return isinstance(exc, ValueError) and "NaNs in predictor output" in str(exc)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--hogdiff-root", type=Path, required=True)
@@ -46,6 +55,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--progress-every-batches", type=int, default=1)
+    parser.add_argument("--max-numerical-retries", type=int, default=8)
     parser.add_argument("--require-cuda", action="store_true")
     return parser
 
@@ -130,6 +140,8 @@ def main() -> int:
         raise ValueError("--num-graphs and --batch-size must be positive.")
     if args.progress_every_batches <= 0:
         raise ValueError("--progress-every-batches must be positive.")
+    if args.max_numerical_retries < 0:
+        raise ValueError("--max-numerical-retries must be non-negative.")
     root = args.hogdiff_root.expanduser().resolve()
     config_path = args.config.expanduser().resolve()
     checkpoint = args.checkpoint.expanduser().resolve()
@@ -179,33 +191,67 @@ def main() -> int:
     molecule_atoms: list[np.ndarray] = []
     molecule_bonds: list[np.ndarray] = []
     molecule_sizes: list[np.ndarray] = []
+    numerical_retries: list[dict[str, int]] = []
     rounds = int(math.ceil(float(args.num_graphs) / float(batch_size)))
 
     for round_index in range(rounds):
-        round_seed = int(args.seed) + round_index
-        hsampler.config.eval.seed = round_seed
-        ousampler.config.eval.seed = round_seed
-        mu, _ = hsampler.sample()
-        if len(mu) != 1:
-            raise RuntimeError(
-                f"Expected one HOG-Diff higher-order batch, received {len(mu)}."
-            )
-
         captured: dict[str, Any] = {}
-        if args.domain == "generic":
-            def capture_generic(all_bonds):
-                captured["bonds"] = torch.concat(all_bonds, dim=0).detach().cpu()
-                return {}
-            ousampler._generic_eval_fn = capture_generic
-        else:
-            def capture_molecular(all_atoms, all_bonds, all_sample_nodes):
-                captured["atoms"] = torch.concat(all_atoms, dim=0).detach().cpu()
-                captured["bonds"] = torch.concat(all_bonds, dim=0).detach().cpu()
-                captured["sample_nodes"] = torch.concat(all_sample_nodes, dim=0).detach().cpu()
-                return {}
-            ousampler._mol_eval_fn = capture_molecular
+        for attempt in range(args.max_numerical_retries + 1):
+            round_seed = _numerical_retry_seed(args.seed, round_index, attempt)
+            hsampler.config.eval.seed = round_seed
+            ousampler.config.eval.seed = round_seed
+            captured = {}
+            if args.domain == "generic":
+                def capture_generic(all_bonds):
+                    captured["bonds"] = torch.concat(all_bonds, dim=0).detach().cpu()
+                    return {}
+                ousampler._generic_eval_fn = capture_generic
+            else:
+                def capture_molecular(all_atoms, all_bonds, all_sample_nodes):
+                    captured["atoms"] = torch.concat(all_atoms, dim=0).detach().cpu()
+                    captured["bonds"] = torch.concat(all_bonds, dim=0).detach().cpu()
+                    captured["sample_nodes"] = torch.concat(all_sample_nodes, dim=0).detach().cpu()
+                    return {}
+                ousampler._mol_eval_fn = capture_molecular
 
-        ousampler.sample(mu_list=mu)
+            try:
+                mu, _ = hsampler.sample()
+                if len(mu) != 1:
+                    raise RuntimeError(
+                        "Expected one HOG-Diff higher-order batch, "
+                        f"received {len(mu)}."
+                    )
+                ousampler.sample(mu_list=mu)
+            except ValueError as exc:
+                numerical_failure = _is_predictor_nan_error(exc)
+                if not numerical_failure or attempt >= args.max_numerical_retries:
+                    if numerical_failure:
+                        raise RuntimeError(
+                            "HOG-Diff produced NaNs for generation batch "
+                            f"{round_index + 1} after {attempt + 1} attempts. "
+                            "The finite checkpoint is numerically unstable "
+                            "under the configured OU sampler."
+                        ) from exc
+                    raise
+                retry_seed = _numerical_retry_seed(args.seed, round_index, attempt + 1)
+                numerical_retries.append(
+                    {
+                        "batch": round_index + 1,
+                        "failed_attempt": attempt + 1,
+                        "failed_seed": round_seed,
+                        "retry_seed": retry_seed,
+                    }
+                )
+                print(
+                    "[GraphER/HOG-Diff] rejected non-finite trajectory for "
+                    f"generation batch {round_index + 1}; retrying with "
+                    f"deterministic seed {retry_seed} "
+                    f"({attempt + 1}/{args.max_numerical_retries})",
+                    flush=True,
+                )
+                continue
+            break
+
         if "bonds" not in captured:
             raise RuntimeError("HOG-Diff phase-2 sampler did not expose generated tensors.")
         max_nodes = int(ouconfig.data.max_node)
@@ -265,6 +311,9 @@ def main() -> int:
             "sampling_rounds": rounds,
             "seed": int(args.seed),
             "device": str(device),
+            "max_numerical_retries_per_batch": int(args.max_numerical_retries),
+            "numerical_retry_count": len(numerical_retries),
+            "numerical_retries": numerical_retries,
             "phase_1": "higher-order VPSDE score sampler",
             "phase_2": "OU-bridge conditional score sampler",
             "postprocessing": (
