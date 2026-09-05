@@ -264,3 +264,9 @@ using a separate checkpoint and cache path:
 
 A checkpoint trained with one topology filter must not be reused with another,
 because the graphlet vocabulary and output dimensions differ.
+
+## Post-run validity/fidelity tuning
+
+For the revised raw-validity-aligned objective, explicit selected-ring-mass
+loss, chemistry-drift anchors, and conservative QM9 configurations, see
+`docs/CYCLE_ONLY_GRAPHLET_V2_TUNING.md`.

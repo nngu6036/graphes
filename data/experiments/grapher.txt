@@ -637,3 +637,32 @@ PYTHONPATH=src   python scripts/train_degree_generator.py \
   --fcd-device auto \
   --require-fcd \
   --output-dir outputs/attributed_generation/qm9_spectral_cycle_graphlet/seed_42/evaluation
+
+
+  Molecular evaluation
+  validity: 0.8935546875
+  validity_with_correction: 1.0
+  validity_without_correction: 0.8935546875
+  fcd: 2.2795456548775945
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 915
+  num_invalid_generated_molecules: 109
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 109
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.966120218579235
+  unique_valid_count: 884
+  novelty_rate: 0.75
+  novel_unique_valid_count: 663
+  nspdk_mmd: 0.005277148366315038
+  nspdk_mmd_valid_only: 0.005277148366315038
+  graphlet_histogram_mmd: 0.024237377141362648
+  graphlet_selected_mass_mmd: 0.018293397468303718
+  nspdk_proxy_mmd_all_generated: 0.00011525075211485246
+  nspdk_proxy_mmd_metric_source: 0.00018162649506612893
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 915
+  fcd_generated_smiles_source: raw_valid

@@ -1,0 +1,3045 @@
+diff --git a/configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2.yaml b/configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2.yaml
+new file mode 100644
+index 0000000..7abf946
+--- /dev/null
++++ b/configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2.yaml
+@@ -0,0 +1,370 @@
++experiment: qm9_attributed_spectral_cycle_graphlet_v2
++benchmark: qm9_heavy_atom
++seed: 42
++pipeline:
++  stage: attributed
++  factorization: typed_source_then_invariant_summary_enrichment_then_dual_spectral_attributed_graphlet_diffusion_rewiring
++protocol:
++  evaluation_seeds:
++  - 42
++  - 43
++  - 44
++  report_mean_and_std: true
++  generated_graphs_per_seed: 1024
++  tune_on_split: val
++  final_split: test
++dataset:
++  name: qm9_attributed
++  config_path: configs/datasets/qm9.yaml
++  root: outputs/datasets
++  build_if_missing: false
++  max_train_graphs: null
++  max_val_graphs: 2000
++  max_generation_train_graphs: null
++categorical_state:
++  node_attribute: atomic_num
++  node_categories:
++  - 6
++  - 7
++  - 8
++  - 9
++  edge_attribute: bond_type
++  edge_categories:
++  - 1
++  - 2
++  - 3
++  require_exact_observed_support: true
++graphlet_prediction:
++  graphlet_history: true
++  graphlet_k_min: 3
++  graphlet_k_max: 6
++  graphlet_connected_only: true
++  graphlet_topology_filter: simple_cycle
++  attributed: true
++  attributed_backend: python
++  graphlet_num_samples: null
++  max_basis_graphs: 20000
++  clustering_summary: false
++  spectral_summary: false
++  motif_proxy: false
++  orbit_count: false
++graphlet_diffusion:
++  representation: clr_logits
++  logit_epsilon: 0.0005
++summary_diffusion:
++  storage: streaming
++  bridge: brownian_endpoint_conditioned
++  schedule: cosine
++  power: 2.0
++  spectral_sigma: 0.18
++  graphlet_sigma: 0.2
++  preserve_spectral_trace: true
++  fix_spectral_lambda1: true
++  samples_per_graph: 1
++  paths_per_graph: 1
++  time_sampling: stratified
++  cache_endpoints: true
++  endpoint_cache_path: outputs/cache/qm9_attributed_spectral_cycle_graphlet_v2/seed_42/endpoints.sqlite
++spectral_prediction:
++  normalization: mean_degree
++  distance: rmse
++  channel_weights:
++    topology: 1.0
++    bond_weighted: 1.25
++  low_frequency_weight: 1.5
++  low_frequency_cutoff: 4
++training_sources:
++  mode: target_typed_degree_constructor
++  ensure_connected_source: true
++  max_repair_trials: 50000
++  shared_relabel_augmentation: true
++  typed_constructor:
++    type: typed_backtracking
++    ensure_connected: true
++    randomize_assignment: false
++    max_restarts: 64
++    max_backtracks: 100000
++    candidate_ranking: uniform
++    max_ordinary_degree: null
++    max_weighted_valence: null
++attributed_predictor:
++  type: attributed_spectral_graphlet_transformer
++  checkpoint_path: outputs/attributed_grapher/qm9_spectral_cycle_graphlet_v2/seed_42/checkpoint.pt
++  device: auto
++  hidden_dim: 256
++  edge_dim: 128
++  graph_dim: 256
++  num_layers: 6
++  spectral_dim: 256
++  spectral_layers: 6
++  spectral_heads: 8
++  spectral_ff_dim: 1024
++  graphlet_dim: 512
++  dropout: 0.05
++  graphlet_dropout: 0.05
++  min_gap: 1.0e-06
++  input_normalization: mean_degree
++  batch_size: 128
++  epochs: 75
++  learning_rate: 0.00012
++  weight_decay: 5.0e-05
++  progress_interval: 1
++  batch_progress_interval: 10
++  progress_interval_seconds: 30
++  loss_weights:
++    spectrum: 1.0
++    topology_spectrum: 1.0
++    bond_spectrum: 1.25
++    moment2: 0.2
++    low_frequency: 0.75
++    low_frequency_k: 4
++    graphlet_logit: 1.0
++    graphlet_probability: 1.25
++    invariant_summary: 0.25
++    graphlet_selected_mass: 1.0
++generation:
++  invariant_source: learned
++  num_generate: 1024
++  max_attempts_per_graph: 128
++  checkpoint_every: 25
++  store_traces: true
++  require_rdkit_source_validity: true
++  require_rdkit_final_validity: true
++degree_generator:
++  enabled: true
++  type: typed_degree_histogram_vae
++  checkpoint_path: outputs/degree_generators/qm9_typed/seed_42/checkpoint.pt
++  device: auto
++  deterministic: false
++  sample_num_nodes: empirical
++  max_resample: 2000
++  fallback: error
++constructor:
++  type: typed_backtracking
++  ensure_connected: true
++  randomize_assignment: true
++  max_restarts: 256
++  max_backtracks: 100000
++  candidate_ranking: uniform
++  max_ordinary_degree: 4
++  max_weighted_valence:
++    6: 4.0
++    7: 4.0
++    8: 3.0
++    9: 1.0
++attributed_refiner:
++  mode: attributed_spectral_graphlet
++  steps: 40
++  proposal_budget: 384
++  valid_candidate_budget: 96
++  preserve_connectivity: true
++  reject_revisited_states: true
++  return_best_state: false
++  selection: greedy
++  temperature: 0.1
++  min_improvement: 1.0e-09
++  min_relative_improvement: 2.0e-05
++  relative_improvement_epsilon: 1.0e-12
++  spectral_guidance:
++    distance: rmse
++    normalization: mean_degree
++    channel_weights:
++      topology: 1.0
++      bond_weighted: 1.25
++    low_frequency_weight: 1.5
++    low_frequency_cutoff: 4
++    schedule: cosine
++    min_clean_mix: 0.1
++    max_clean_mix: 1.0
++    power: 2.0
++  graphlet_guidance:
++    distance: clr_rmse
++    logit_epsilon: 0.0005
++    size_weights:
++      '3': 1.0
++      '4': 1.0
++      '5': 1.0
++      '6': 1.0
++    schedule: cosine
++    min_clean_mix: 0.1
++    max_clean_mix: 1.0
++    power: 2.0
++    logit_weight: 0.25
++    probability_weight: 1.0
++    selected_mass_weight: 1.5
++    probability_distance: rmse
++  expand_on_plateau: true
++  plateau_expand_factor: 1.25
++  max_plateau_expansions: 4
++  global_to_local:
++    schedule: cosine
++    spectral_initial: 1.0
++    graphlet_initial: 0.15
++    spectral_final: 0.5
++    graphlet_final: 1.25
++    power: 1.5
++  prediction_horizon:
++    mode: annealed
++    initial_k: 4
++    final_k: 1
++    schedule: cosine
++    refresh_on_plateau: true
++  molecular:
++    require_same_edge_type_pair: false
++    preserve_removed_edge_type: false
++    preserve_global_edge_type_counts: true
++    enumerate_edge_type_permutations: true
++    preserve_node_types: true
++    preserve_ordinary_degree: true
++    preserve_typed_degree: false
++    preserve_weighted_valence: false
++    enforce_molecular_valence: true
++    allowed_bond_types:
++    - 1
++    - 2
++    - 3
++    max_valence:
++      6: 4.0
++      7: 4.0
++      8: 3.0
++      9: 1.0
++    rdkit_candidate_check: true
++    rdkit_infer_projected_formal_charges: false
++    rdkit_shortlist: 48
++    require_rdkit_source_validity: true
++    typed_degree_drift_weight: 0.75
++    weighted_valence_drift_weight: 1.5
++    rdkit_validation_mode: raw
++  debug:
++    enabled: false
++    print_every: 1
++    top_candidates: 5
++  candidate_search:
++    adaptive: true
++    initial_proposal_budget: 192
++    initial_valid_candidate_budget: 48
++    final_proposal_budget: 384
++    final_valid_candidate_budget: 96
++    schedule: cosine
++    spectrum_backend: auto
++    spectrum_batch_size: 128
++evaluation:
++  generated_graphs: molecular_graphs.pkl
++  validity: true
++  validity_with_correction: true
++  validity_without_correction: true
++  uniqueness: true
++  novelty: true
++  nspdk: true
++  fcd: true
++  graphlet_mmd: true
++  graphlet_k_min: 3
++  graphlet_k_max: 6
++  graphlet_topology_filter: simple_cycle
++  graphlet_node_attribute: atomic_num
++  graphlet_edge_attribute: bond_type
++  graphlet_attributed_backend: python
++source_enrichment:
++  enabled: true
++  summary_estimator:
++    enabled: true
++    hidden_dim: 256
++    layers: 2
++    dropout: 0.05
++    conditioning: atom_type_ordinary_degree_global_bond_counts
++  rewiring:
++    mode: attributed_spectral_graphlet
++    steps: 4
++    proposal_budget: 192
++    valid_candidate_budget: 48
++    preserve_connectivity: true
++    reject_revisited_states: true
++    return_best_state: true
++    selection: greedy
++    temperature: 0.1
++    min_improvement: 1.0e-09
++    min_relative_improvement: 2.0e-05
++    relative_improvement_epsilon: 1.0e-12
++    candidate_search:
++      adaptive: true
++      initial_proposal_budget: 96
++      initial_valid_candidate_budget: 24
++      final_proposal_budget: 192
++      final_valid_candidate_budget: 48
++      schedule: cosine
++      spectrum_backend: auto
++      spectrum_batch_size: 64
++    spectral_guidance:
++      distance: rmse
++      normalization: mean_degree
++      channel_weights:
++        topology: 1.0
++        bond_weighted: 1.25
++      low_frequency_weight: 1.5
++      low_frequency_cutoff: 4
++      schedule: cosine
++      min_clean_mix: 1.0
++      max_clean_mix: 1.0
++      power: 1.0
++    graphlet_guidance:
++      distance: clr_rmse
++      logit_epsilon: 0.0005
++      size_weights:
++        '3': 1.0
++        '4': 1.0
++        '5': 1.0
++        '6': 1.0
++      schedule: cosine
++      min_clean_mix: 1.0
++      max_clean_mix: 1.0
++      power: 1.0
++      logit_weight: 0.25
++      probability_weight: 1.0
++      selected_mass_weight: 1.5
++      probability_distance: rmse
++    expand_on_plateau: false
++    plateau_expand_factor: 1.25
++    max_plateau_expansions: 0
++    global_to_local:
++      schedule: linear
++      spectral_initial: 1.0
++      spectral_final: 1.0
++      graphlet_initial: 0.75
++      graphlet_final: 0.75
++      power: 1.0
++    prediction_horizon:
++      mode: fixed
++      initial_k: 1
++      final_k: 1
++      schedule: linear
++      refresh_on_plateau: false
++    molecular:
++      require_same_edge_type_pair: false
++      preserve_removed_edge_type: false
++      preserve_global_edge_type_counts: true
++      enumerate_edge_type_permutations: true
++      preserve_node_types: true
++      preserve_ordinary_degree: true
++      preserve_typed_degree: false
++      preserve_weighted_valence: false
++      enforce_molecular_valence: true
++      allowed_bond_types:
++      - 1
++      - 2
++      - 3
++      max_valence:
++        6: 4.0
++        7: 4.0
++        8: 3.0
++        9: 1.0
++      rdkit_candidate_check: true
++      rdkit_infer_projected_formal_charges: false
++      rdkit_shortlist: 32
++      require_rdkit_source_validity: true
++      typed_degree_drift_weight: 1.0
++      weighted_valence_drift_weight: 2.0
++      rdkit_validation_mode: raw
++    debug:
++      enabled: false
++      print_every: 1
++      top_candidates: 5
+diff --git a/configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2_reuse_checkpoint.yaml b/configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2_reuse_checkpoint.yaml
+new file mode 100644
+index 0000000..252e40a
+--- /dev/null
++++ b/configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2_reuse_checkpoint.yaml
+@@ -0,0 +1,369 @@
++experiment: qm9_attributed_spectral_cycle_graphlet_v2_reuse_checkpoint
++benchmark: qm9_heavy_atom
++seed: 42
++pipeline:
++  stage: attributed
++  factorization: typed_source_then_invariant_summary_enrichment_then_dual_spectral_attributed_graphlet_diffusion_rewiring
++protocol:
++  evaluation_seeds:
++  - 42
++  - 43
++  - 44
++  report_mean_and_std: true
++  generated_graphs_per_seed: 1024
++  tune_on_split: val
++  final_split: test
++dataset:
++  name: qm9_attributed
++  config_path: configs/datasets/qm9.yaml
++  root: outputs/datasets
++  build_if_missing: false
++  max_train_graphs: null
++  max_val_graphs: 2000
++  max_generation_train_graphs: null
++categorical_state:
++  node_attribute: atomic_num
++  node_categories:
++  - 6
++  - 7
++  - 8
++  - 9
++  edge_attribute: bond_type
++  edge_categories:
++  - 1
++  - 2
++  - 3
++  require_exact_observed_support: true
++graphlet_prediction:
++  graphlet_history: true
++  graphlet_k_min: 3
++  graphlet_k_max: 6
++  graphlet_connected_only: true
++  graphlet_topology_filter: simple_cycle
++  attributed: true
++  attributed_backend: python
++  graphlet_num_samples: null
++  max_basis_graphs: 20000
++  clustering_summary: false
++  spectral_summary: false
++  motif_proxy: false
++  orbit_count: false
++graphlet_diffusion:
++  representation: clr_logits
++  logit_epsilon: 0.0001
++summary_diffusion:
++  storage: streaming
++  bridge: brownian_endpoint_conditioned
++  schedule: cosine
++  power: 2.0
++  spectral_sigma: 0.18
++  graphlet_sigma: 0.3
++  preserve_spectral_trace: true
++  fix_spectral_lambda1: true
++  samples_per_graph: 1
++  paths_per_graph: 1
++  time_sampling: stratified
++  cache_endpoints: true
++  endpoint_cache_path: outputs/cache/qm9_attributed_spectral_cycle_graphlet/seed_42/endpoints.sqlite
++spectral_prediction:
++  normalization: mean_degree
++  distance: rmse
++  channel_weights:
++    topology: 1.0
++    bond_weighted: 1.25
++  low_frequency_weight: 1.5
++  low_frequency_cutoff: 4
++training_sources:
++  mode: target_typed_degree_constructor
++  ensure_connected_source: true
++  max_repair_trials: 50000
++  shared_relabel_augmentation: true
++  typed_constructor:
++    type: typed_backtracking
++    ensure_connected: true
++    randomize_assignment: false
++    max_restarts: 64
++    max_backtracks: 100000
++    candidate_ranking: uniform
++    max_ordinary_degree: null
++    max_weighted_valence: null
++attributed_predictor:
++  type: attributed_spectral_graphlet_transformer
++  checkpoint_path: outputs/attributed_grapher/qm9_spectral_cycle_graphlet/seed_42/checkpoint.pt
++  device: auto
++  hidden_dim: 256
++  edge_dim: 128
++  graph_dim: 256
++  num_layers: 6
++  spectral_dim: 256
++  spectral_layers: 6
++  spectral_heads: 8
++  spectral_ff_dim: 1024
++  graphlet_dim: 512
++  dropout: 0.05
++  graphlet_dropout: 0.05
++  min_gap: 1.0e-06
++  input_normalization: mean_degree
++  batch_size: 128
++  epochs: 60
++  learning_rate: 0.00015
++  weight_decay: 5.0e-05
++  progress_interval: 1
++  batch_progress_interval: 10
++  progress_interval_seconds: 30
++  loss_weights:
++    spectrum: 1.0
++    topology_spectrum: 1.0
++    bond_spectrum: 1.25
++    moment2: 0.2
++    low_frequency: 0.75
++    low_frequency_k: 4
++    graphlet_logit: 2.0
++    graphlet_probability: 0.75
++    invariant_summary: 0.35
++generation:
++  invariant_source: learned
++  num_generate: 1024
++  max_attempts_per_graph: 128
++  checkpoint_every: 25
++  store_traces: true
++  require_rdkit_source_validity: true
++  require_rdkit_final_validity: true
++degree_generator:
++  enabled: true
++  type: typed_degree_histogram_vae
++  checkpoint_path: outputs/degree_generators/qm9_typed/seed_42/checkpoint.pt
++  device: auto
++  deterministic: false
++  sample_num_nodes: empirical
++  max_resample: 2000
++  fallback: error
++constructor:
++  type: typed_backtracking
++  ensure_connected: true
++  randomize_assignment: true
++  max_restarts: 256
++  max_backtracks: 100000
++  candidate_ranking: uniform
++  max_ordinary_degree: 4
++  max_weighted_valence:
++    6: 4.0
++    7: 4.0
++    8: 3.0
++    9: 1.0
++attributed_refiner:
++  mode: attributed_spectral_graphlet
++  steps: 40
++  proposal_budget: 384
++  valid_candidate_budget: 96
++  preserve_connectivity: true
++  reject_revisited_states: true
++  return_best_state: false
++  selection: greedy
++  temperature: 0.1
++  min_improvement: 1.0e-09
++  min_relative_improvement: 2.0e-05
++  relative_improvement_epsilon: 1.0e-12
++  spectral_guidance:
++    distance: rmse
++    normalization: mean_degree
++    channel_weights:
++      topology: 1.0
++      bond_weighted: 1.25
++    low_frequency_weight: 1.5
++    low_frequency_cutoff: 4
++    schedule: cosine
++    min_clean_mix: 0.1
++    max_clean_mix: 1.0
++    power: 2.0
++  graphlet_guidance:
++    distance: clr_rmse
++    logit_epsilon: 0.0001
++    size_weights:
++      '3': 1.0
++      '4': 1.0
++      '5': 1.0
++      '6': 1.0
++    schedule: cosine
++    min_clean_mix: 0.1
++    max_clean_mix: 1.0
++    power: 2.0
++    logit_weight: 0.25
++    probability_weight: 1.0
++    selected_mass_weight: 1.5
++    probability_distance: rmse
++  expand_on_plateau: true
++  plateau_expand_factor: 1.25
++  max_plateau_expansions: 4
++  global_to_local:
++    schedule: cosine
++    spectral_initial: 1.0
++    graphlet_initial: 0.15
++    spectral_final: 0.5
++    graphlet_final: 1.25
++    power: 1.5
++  prediction_horizon:
++    mode: annealed
++    initial_k: 4
++    final_k: 1
++    schedule: cosine
++    refresh_on_plateau: true
++  molecular:
++    require_same_edge_type_pair: false
++    preserve_removed_edge_type: false
++    preserve_global_edge_type_counts: true
++    enumerate_edge_type_permutations: true
++    preserve_node_types: true
++    preserve_ordinary_degree: true
++    preserve_typed_degree: false
++    preserve_weighted_valence: false
++    enforce_molecular_valence: true
++    allowed_bond_types:
++    - 1
++    - 2
++    - 3
++    max_valence:
++      6: 4.0
++      7: 4.0
++      8: 3.0
++      9: 1.0
++    rdkit_candidate_check: true
++    rdkit_infer_projected_formal_charges: false
++    rdkit_shortlist: 48
++    require_rdkit_source_validity: true
++    typed_degree_drift_weight: 0.75
++    weighted_valence_drift_weight: 1.5
++    rdkit_validation_mode: raw
++  debug:
++    enabled: false
++    print_every: 1
++    top_candidates: 5
++  candidate_search:
++    adaptive: true
++    initial_proposal_budget: 192
++    initial_valid_candidate_budget: 48
++    final_proposal_budget: 384
++    final_valid_candidate_budget: 96
++    schedule: cosine
++    spectrum_backend: auto
++    spectrum_batch_size: 128
++evaluation:
++  generated_graphs: molecular_graphs.pkl
++  validity: true
++  validity_with_correction: true
++  validity_without_correction: true
++  uniqueness: true
++  novelty: true
++  nspdk: true
++  fcd: true
++  graphlet_mmd: true
++  graphlet_k_min: 3
++  graphlet_k_max: 6
++  graphlet_topology_filter: simple_cycle
++  graphlet_node_attribute: atomic_num
++  graphlet_edge_attribute: bond_type
++  graphlet_attributed_backend: python
++source_enrichment:
++  enabled: true
++  summary_estimator:
++    enabled: true
++    hidden_dim: 256
++    layers: 2
++    dropout: 0.05
++    conditioning: atom_type_ordinary_degree_global_bond_counts
++  rewiring:
++    mode: attributed_spectral_graphlet
++    steps: 4
++    proposal_budget: 192
++    valid_candidate_budget: 48
++    preserve_connectivity: true
++    reject_revisited_states: true
++    return_best_state: true
++    selection: greedy
++    temperature: 0.1
++    min_improvement: 1.0e-09
++    min_relative_improvement: 2.0e-05
++    relative_improvement_epsilon: 1.0e-12
++    candidate_search:
++      adaptive: true
++      initial_proposal_budget: 96
++      initial_valid_candidate_budget: 24
++      final_proposal_budget: 192
++      final_valid_candidate_budget: 48
++      schedule: cosine
++      spectrum_backend: auto
++      spectrum_batch_size: 64
++    spectral_guidance:
++      distance: rmse
++      normalization: mean_degree
++      channel_weights:
++        topology: 1.0
++        bond_weighted: 1.25
++      low_frequency_weight: 1.5
++      low_frequency_cutoff: 4
++      schedule: cosine
++      min_clean_mix: 1.0
++      max_clean_mix: 1.0
++      power: 1.0
++    graphlet_guidance:
++      distance: clr_rmse
++      logit_epsilon: 0.0001
++      size_weights:
++        '3': 1.0
++        '4': 1.0
++        '5': 1.0
++        '6': 1.0
++      schedule: cosine
++      min_clean_mix: 1.0
++      max_clean_mix: 1.0
++      power: 1.0
++      logit_weight: 0.25
++      probability_weight: 1.0
++      selected_mass_weight: 1.5
++      probability_distance: rmse
++    expand_on_plateau: false
++    plateau_expand_factor: 1.25
++    max_plateau_expansions: 0
++    global_to_local:
++      schedule: linear
++      spectral_initial: 1.0
++      spectral_final: 1.0
++      graphlet_initial: 0.75
++      graphlet_final: 0.75
++      power: 1.0
++    prediction_horizon:
++      mode: fixed
++      initial_k: 1
++      final_k: 1
++      schedule: linear
++      refresh_on_plateau: false
++    molecular:
++      require_same_edge_type_pair: false
++      preserve_removed_edge_type: false
++      preserve_global_edge_type_counts: true
++      enumerate_edge_type_permutations: true
++      preserve_node_types: true
++      preserve_ordinary_degree: true
++      preserve_typed_degree: false
++      preserve_weighted_valence: false
++      enforce_molecular_valence: true
++      allowed_bond_types:
++      - 1
++      - 2
++      - 3
++      max_valence:
++        6: 4.0
++        7: 4.0
++        8: 3.0
++        9: 1.0
++      rdkit_candidate_check: true
++      rdkit_infer_projected_formal_charges: false
++      rdkit_shortlist: 32
++      require_rdkit_source_validity: true
++      typed_degree_drift_weight: 1.0
++      weighted_valence_drift_weight: 2.0
++      rdkit_validation_mode: raw
++    debug:
++      enabled: false
++      print_every: 1
++      top_candidates: 5
+diff --git a/configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2_strict_same_bond.yaml b/configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2_strict_same_bond.yaml
+new file mode 100644
+index 0000000..54ee6af
+--- /dev/null
++++ b/configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2_strict_same_bond.yaml
+@@ -0,0 +1,369 @@
++experiment: qm9_attributed_spectral_cycle_graphlet_v2_strict_same_bond
++benchmark: qm9_heavy_atom
++seed: 42
++pipeline:
++  stage: attributed
++  factorization: typed_source_then_invariant_summary_enrichment_then_dual_spectral_attributed_graphlet_diffusion_rewiring
++protocol:
++  evaluation_seeds:
++  - 42
++  - 43
++  - 44
++  report_mean_and_std: true
++  generated_graphs_per_seed: 1024
++  tune_on_split: val
++  final_split: test
++dataset:
++  name: qm9_attributed
++  config_path: configs/datasets/qm9.yaml
++  root: outputs/datasets
++  build_if_missing: false
++  max_train_graphs: null
++  max_val_graphs: 2000
++  max_generation_train_graphs: null
++categorical_state:
++  node_attribute: atomic_num
++  node_categories:
++  - 6
++  - 7
++  - 8
++  - 9
++  edge_attribute: bond_type
++  edge_categories:
++  - 1
++  - 2
++  - 3
++  require_exact_observed_support: true
++graphlet_prediction:
++  graphlet_history: true
++  graphlet_k_min: 3
++  graphlet_k_max: 6
++  graphlet_connected_only: true
++  graphlet_topology_filter: simple_cycle
++  attributed: true
++  attributed_backend: python
++  graphlet_num_samples: null
++  max_basis_graphs: 20000
++  clustering_summary: false
++  spectral_summary: false
++  motif_proxy: false
++  orbit_count: false
++graphlet_diffusion:
++  representation: clr_logits
++  logit_epsilon: 0.0001
++summary_diffusion:
++  storage: streaming
++  bridge: brownian_endpoint_conditioned
++  schedule: cosine
++  power: 2.0
++  spectral_sigma: 0.18
++  graphlet_sigma: 0.3
++  preserve_spectral_trace: true
++  fix_spectral_lambda1: true
++  samples_per_graph: 1
++  paths_per_graph: 1
++  time_sampling: stratified
++  cache_endpoints: true
++  endpoint_cache_path: outputs/cache/qm9_attributed_spectral_cycle_graphlet/seed_42/endpoints.sqlite
++spectral_prediction:
++  normalization: mean_degree
++  distance: rmse
++  channel_weights:
++    topology: 1.0
++    bond_weighted: 1.25
++  low_frequency_weight: 1.5
++  low_frequency_cutoff: 4
++training_sources:
++  mode: target_typed_degree_constructor
++  ensure_connected_source: true
++  max_repair_trials: 50000
++  shared_relabel_augmentation: true
++  typed_constructor:
++    type: typed_backtracking
++    ensure_connected: true
++    randomize_assignment: false
++    max_restarts: 64
++    max_backtracks: 100000
++    candidate_ranking: uniform
++    max_ordinary_degree: null
++    max_weighted_valence: null
++attributed_predictor:
++  type: attributed_spectral_graphlet_transformer
++  checkpoint_path: outputs/attributed_grapher/qm9_spectral_cycle_graphlet/seed_42/checkpoint.pt
++  device: auto
++  hidden_dim: 256
++  edge_dim: 128
++  graph_dim: 256
++  num_layers: 6
++  spectral_dim: 256
++  spectral_layers: 6
++  spectral_heads: 8
++  spectral_ff_dim: 1024
++  graphlet_dim: 512
++  dropout: 0.05
++  graphlet_dropout: 0.05
++  min_gap: 1.0e-06
++  input_normalization: mean_degree
++  batch_size: 128
++  epochs: 60
++  learning_rate: 0.00015
++  weight_decay: 5.0e-05
++  progress_interval: 1
++  batch_progress_interval: 10
++  progress_interval_seconds: 30
++  loss_weights:
++    spectrum: 1.0
++    topology_spectrum: 1.0
++    bond_spectrum: 1.25
++    moment2: 0.2
++    low_frequency: 0.75
++    low_frequency_k: 4
++    graphlet_logit: 2.0
++    graphlet_probability: 0.75
++    invariant_summary: 0.35
++generation:
++  invariant_source: learned
++  num_generate: 1024
++  max_attempts_per_graph: 128
++  checkpoint_every: 25
++  store_traces: true
++  require_rdkit_source_validity: true
++  require_rdkit_final_validity: true
++degree_generator:
++  enabled: true
++  type: typed_degree_histogram_vae
++  checkpoint_path: outputs/degree_generators/qm9_typed/seed_42/checkpoint.pt
++  device: auto
++  deterministic: false
++  sample_num_nodes: empirical
++  max_resample: 2000
++  fallback: error
++constructor:
++  type: typed_backtracking
++  ensure_connected: true
++  randomize_assignment: true
++  max_restarts: 256
++  max_backtracks: 100000
++  candidate_ranking: uniform
++  max_ordinary_degree: 4
++  max_weighted_valence:
++    6: 4.0
++    7: 4.0
++    8: 3.0
++    9: 1.0
++attributed_refiner:
++  mode: attributed_spectral_graphlet
++  steps: 40
++  proposal_budget: 384
++  valid_candidate_budget: 96
++  preserve_connectivity: true
++  reject_revisited_states: true
++  return_best_state: false
++  selection: greedy
++  temperature: 0.1
++  min_improvement: 1.0e-09
++  min_relative_improvement: 2.0e-05
++  relative_improvement_epsilon: 1.0e-12
++  spectral_guidance:
++    distance: rmse
++    normalization: mean_degree
++    channel_weights:
++      topology: 1.0
++      bond_weighted: 1.25
++    low_frequency_weight: 1.5
++    low_frequency_cutoff: 4
++    schedule: cosine
++    min_clean_mix: 0.1
++    max_clean_mix: 1.0
++    power: 2.0
++  graphlet_guidance:
++    distance: clr_rmse
++    logit_epsilon: 0.0001
++    size_weights:
++      '3': 1.0
++      '4': 1.0
++      '5': 1.0
++      '6': 1.0
++    schedule: cosine
++    min_clean_mix: 0.1
++    max_clean_mix: 1.0
++    power: 2.0
++    logit_weight: 0.25
++    probability_weight: 1.0
++    selected_mass_weight: 1.5
++    probability_distance: rmse
++  expand_on_plateau: true
++  plateau_expand_factor: 1.25
++  max_plateau_expansions: 4
++  global_to_local:
++    schedule: cosine
++    spectral_initial: 1.0
++    graphlet_initial: 0.15
++    spectral_final: 0.5
++    graphlet_final: 1.25
++    power: 1.5
++  prediction_horizon:
++    mode: annealed
++    initial_k: 4
++    final_k: 1
++    schedule: cosine
++    refresh_on_plateau: true
++  molecular:
++    require_same_edge_type_pair: true
++    preserve_removed_edge_type: true
++    preserve_global_edge_type_counts: true
++    enumerate_edge_type_permutations: false
++    preserve_node_types: true
++    preserve_ordinary_degree: true
++    preserve_typed_degree: true
++    preserve_weighted_valence: true
++    enforce_molecular_valence: true
++    allowed_bond_types:
++    - 1
++    - 2
++    - 3
++    max_valence:
++      6: 4.0
++      7: 4.0
++      8: 3.0
++      9: 1.0
++    rdkit_candidate_check: true
++    rdkit_infer_projected_formal_charges: false
++    rdkit_shortlist: 48
++    require_rdkit_source_validity: true
++    typed_degree_drift_weight: 0.0
++    weighted_valence_drift_weight: 0.0
++    rdkit_validation_mode: raw
++  debug:
++    enabled: false
++    print_every: 1
++    top_candidates: 5
++  candidate_search:
++    adaptive: true
++    initial_proposal_budget: 192
++    initial_valid_candidate_budget: 48
++    final_proposal_budget: 384
++    final_valid_candidate_budget: 96
++    schedule: cosine
++    spectrum_backend: auto
++    spectrum_batch_size: 128
++evaluation:
++  generated_graphs: molecular_graphs.pkl
++  validity: true
++  validity_with_correction: true
++  validity_without_correction: true
++  uniqueness: true
++  novelty: true
++  nspdk: true
++  fcd: true
++  graphlet_mmd: true
++  graphlet_k_min: 3
++  graphlet_k_max: 6
++  graphlet_topology_filter: simple_cycle
++  graphlet_node_attribute: atomic_num
++  graphlet_edge_attribute: bond_type
++  graphlet_attributed_backend: python
++source_enrichment:
++  enabled: true
++  summary_estimator:
++    enabled: true
++    hidden_dim: 256
++    layers: 2
++    dropout: 0.05
++    conditioning: atom_type_ordinary_degree_global_bond_counts
++  rewiring:
++    mode: attributed_spectral_graphlet
++    steps: 4
++    proposal_budget: 192
++    valid_candidate_budget: 48
++    preserve_connectivity: true
++    reject_revisited_states: true
++    return_best_state: true
++    selection: greedy
++    temperature: 0.1
++    min_improvement: 1.0e-09
++    min_relative_improvement: 2.0e-05
++    relative_improvement_epsilon: 1.0e-12
++    candidate_search:
++      adaptive: true
++      initial_proposal_budget: 96
++      initial_valid_candidate_budget: 24
++      final_proposal_budget: 192
++      final_valid_candidate_budget: 48
++      schedule: cosine
++      spectrum_backend: auto
++      spectrum_batch_size: 64
++    spectral_guidance:
++      distance: rmse
++      normalization: mean_degree
++      channel_weights:
++        topology: 1.0
++        bond_weighted: 1.25
++      low_frequency_weight: 1.5
++      low_frequency_cutoff: 4
++      schedule: cosine
++      min_clean_mix: 1.0
++      max_clean_mix: 1.0
++      power: 1.0
++    graphlet_guidance:
++      distance: clr_rmse
++      logit_epsilon: 0.0001
++      size_weights:
++        '3': 1.0
++        '4': 1.0
++        '5': 1.0
++        '6': 1.0
++      schedule: cosine
++      min_clean_mix: 1.0
++      max_clean_mix: 1.0
++      power: 1.0
++      logit_weight: 0.25
++      probability_weight: 1.0
++      selected_mass_weight: 1.5
++      probability_distance: rmse
++    expand_on_plateau: false
++    plateau_expand_factor: 1.25
++    max_plateau_expansions: 0
++    global_to_local:
++      schedule: linear
++      spectral_initial: 1.0
++      spectral_final: 1.0
++      graphlet_initial: 0.75
++      graphlet_final: 0.75
++      power: 1.0
++    prediction_horizon:
++      mode: fixed
++      initial_k: 1
++      final_k: 1
++      schedule: linear
++      refresh_on_plateau: false
++    molecular:
++      require_same_edge_type_pair: true
++      preserve_removed_edge_type: true
++      preserve_global_edge_type_counts: true
++      enumerate_edge_type_permutations: false
++      preserve_node_types: true
++      preserve_ordinary_degree: true
++      preserve_typed_degree: true
++      preserve_weighted_valence: true
++      enforce_molecular_valence: true
++      allowed_bond_types:
++      - 1
++      - 2
++      - 3
++      max_valence:
++        6: 4.0
++        7: 4.0
++        8: 3.0
++        9: 1.0
++      rdkit_candidate_check: true
++      rdkit_infer_projected_formal_charges: false
++      rdkit_shortlist: 32
++      require_rdkit_source_validity: true
++      typed_degree_drift_weight: 0.0
++      weighted_valence_drift_weight: 0.0
++      rdkit_validation_mode: raw
++    debug:
++      enabled: false
++      print_every: 1
++      top_candidates: 5
+diff --git a/docs/CYCLE_ONLY_GRAPHLET_GUIDANCE.md b/docs/CYCLE_ONLY_GRAPHLET_GUIDANCE.md
+index 25b33d1..ebc94d8 100644
+--- a/docs/CYCLE_ONLY_GRAPHLET_GUIDANCE.md
++++ b/docs/CYCLE_ONLY_GRAPHLET_GUIDANCE.md
+@@ -264,3 +264,9 @@ using a separate checkpoint and cache path:
+ 
+ A checkpoint trained with one topology filter must not be reused with another,
+ because the graphlet vocabulary and output dimensions differ.
++
++## Post-run validity/fidelity tuning
++
++For the revised raw-validity-aligned objective, explicit selected-ring-mass
++loss, chemistry-drift anchors, and conservative QM9 configurations, see
++`docs/CYCLE_ONLY_GRAPHLET_V2_TUNING.md`.
+diff --git a/docs/CYCLE_ONLY_GRAPHLET_V2_TUNING.md b/docs/CYCLE_ONLY_GRAPHLET_V2_TUNING.md
+new file mode 100644
+index 0000000..991d8de
+--- /dev/null
++++ b/docs/CYCLE_ONLY_GRAPHLET_V2_TUNING.md
+@@ -0,0 +1,365 @@
++# Cycle-only graphlet guidance v2: validity and distribution tuning
++
++## Why the first cycle-only run degraded
++
++The first QM9 cycle-only run returned:
++
++| Metric | Value |
++|---|---:|
++| Raw validity | 0.8935546875 (915/1024) |
++| Corrected validity | 1.0 |
++| FCD | 2.2795456549 |
++| NSPDK MMD | 0.0052771484 |
++| Cycle-composition MMD | 0.0242373771 |
++| Cycle selected-mass MMD | 0.0182933975 |
++| Uniqueness | 0.9661202186 |
++| Novelty | 0.75 |
++
++The high uniqueness and novelty indicate that the generator is not collapsing.
++The main failure is instead an overly permissive refinement trajectory:
++
++1. the old generation configuration accepted candidates using projected formal
++   charges, while the evaluator's headline validity sanitizes the serialized
++   graph without projected-charge inference;
++2. cross-bond-type rewiring preserved ordinary degrees and global bond counts,
++   but could move bond-order incidences between atoms, changing per-node typed
++   degree and weighted valence;
++3. up to 12 source-enrichment swaps plus 64 reverse-refinement swaps allowed
++   substantial drift from the typed source;
++4. the candidate energy used sparse CLR coordinates only, although the
++   reported cycle diagnostics separate attributed ring composition from the
++   total selected-ring mass.
++
++The v2 update keeps cycle-only counting and the cross-type action space, but
++makes the projection conservative and aligned with the evaluator.
++
++## Revised cycle objective
++
++For graphlet order `k`, every simplex block ends with a background coordinate.
++In `simple_cycle` mode,
++
++```text
++selected_ring_mass_k = 1 - p(background_k).
++```
++
++Candidate ranking now uses
++
++```text
++D_cycle =
++    w_clr  * D_clr
++  + w_prob * D_probability
++  + w_mass * D_selected_ring_mass.
++```
++
++The default v2 QM9 weights are:
++
++```yaml
++graphlet_guidance:
++  logit_weight: 0.25
++  probability_weight: 1.0
++  selected_mass_weight: 1.5
++  probability_distance: rmse
++```
++
++The CLR component still distinguishes attributed ring classes, but it no
++longer dominates because of rare or zero-probability coordinates. The explicit
++mass term directly targets `graphlet_selected_mass_mmd`.
++
++Training also adds:
++
++```yaml
++attributed_predictor:
++  loss_weights:
++    graphlet_selected_mass: 1.0
++```
++
++This is an L1 loss between predicted and target selected-ring mass, averaged
++over available graphlet orders. Existing checkpoints remain loadable because
++the model architecture is unchanged and the new loss weight defaults to zero.
++
++## Chemistry-drift anchor
++
++Cross-type swaps remain available, but candidate energy now includes soft drift
++from the constructed typed source:
++
++```text
++E_chem =
++    lambda_typed   * normalized_L1(typed_degree, source_typed_degree)
++  + lambda_valence * normalized_L1(weighted_valence, source_weighted_valence).
++```
++
++Both distances are normalized to a nominal `[0, 1]` range under the preserved
++global bond-category counts. The recommended settings are:
++
++```yaml
++molecular:
++  typed_degree_drift_weight: 0.75
++  weighted_valence_drift_weight: 1.50
++```
++
++These are soft anchors, not new hard invariants. A cross-type move can still be
++selected when its spectral/ring gain compensates for its chemistry drift.
++
++## Exact raw-validity alignment
++
++The new setting is:
++
++```yaml
++molecular:
++  rdkit_validation_mode: raw
++  rdkit_candidate_check: true
++  require_rdkit_source_validity: true
++
++generation:
++  require_rdkit_source_validity: true
++  require_rdkit_final_validity: true
++```
++
++`raw` uses the same `nx_to_rdkit_mol(..., sanitize=True)` path as the evaluator,
++without projected formal-charge inference and without bond correction. A
++returned source is raw-valid, every accepted successor is raw-valid, and the
++final graph is checked once more before serialization. Consequently, the
++returned batch should have raw validity 1.0 unless the generation and
++evaluation environments differ.
++
++This guarantee is conditional on *returned samples*. Rejection can bias the
++sampled distribution, so `end_to_end_yield`, generation attempts, and rejection
++reasons remain part of the generation report.
++
++The evaluator now additionally reports:
++
++```text
++validity_with_projected_formal_charges
++num_raw_invalid_resolved_by_projected_formal_charges
++projected_formal_charge_success_rate_on_raw_invalid
++```
++
++This separates charge-representation completion from bond-order correction. If
++`validity_with_projected_formal_charges` is near 1.0 while raw validity is low,
++most failures are missing-charge representation issues. If it stays near the
++raw value, the failures require bond modification and are genuine topology or
++bond-order errors under the chosen representation.
++
++## Conservative search budget
++
++The v2 configuration reduces source enrichment from 12 to 4 accepted steps and
++main refinement from 64 to 40 accepted steps. It also raises the relative-gain
++threshold and reduces late graphlet dominance:
++
++```yaml
++attributed_refiner:
++  steps: 40
++  min_relative_improvement: 2.0e-5
++  global_to_local:
++    spectral_initial: 1.0
++    graphlet_initial: 0.15
++    spectral_final: 0.50
++    graphlet_final: 1.25
++```
++
++The cycle-only counter still supplies the main computational reduction. The
++slightly larger raw-RDKit shortlist is used only after cheap structural,
++connectivity, valence, and energy filters.
++
++## New diagnostics
++
++Generation reports now include:
++
++```text
++rdkit_validation_mode
++rdkit_valid_source_rate_raw
++rdkit_valid_final_rate_raw
++rdkit_valid_source_rate_configured
++rdkit_valid_final_rate_configured
++mean_accepted_graphlet_logit_gain
++mean_accepted_graphlet_probability_gain
++mean_accepted_graphlet_selected_mass_gain
++mean_accepted_chemistry_drift_gain
++mean_typed_degree_drift
++mean_weighted_valence_drift
++```
++
++Evaluation reports the aggregate cycle MMD and a one-pass per-order breakdown:
++
++```text
++graphlet_histogram_mmd_by_order
++graphlet_selected_mass_mmd_by_order
++```
++
++The per-order result is computed from the same graphlet-count pass; it does not
++repeat full C3--C6 counting four times.
++
++## Configurations
++
++### 1. Fast generation-only A/B test
++
++```text
++configs/experiments/grapher/
++qm9_attributed_spectral_cycle_graphlet_v2_reuse_checkpoint.yaml
++```
++
++This uses the existing checkpoint:
++
++```text
++outputs/attributed_grapher/qm9_spectral_cycle_graphlet/seed_42/checkpoint.pt
++```
++
++It changes only generation-time scoring, chemistry anchoring, RDKit policy, and
++search budget. Run this first to determine how much of the degradation came
++from projection rather than predictor training.
++
++### 2. Full v2 retraining
++
++```text
++configs/experiments/grapher/
++qm9_attributed_spectral_cycle_graphlet_v2.yaml
++```
++
++This uses lower graphlet diffusion noise, a less extreme CLR epsilon, the new
++ring-mass loss, and a separate endpoint cache/checkpoint.
++
++### 3. Validity-first same-bond ablation
++
++```text
++configs/experiments/grapher/
++qm9_attributed_spectral_cycle_graphlet_v2_strict_same_bond.yaml
++```
++
++This preserves per-node typed degree and weighted valence exactly. It is the
++best diagnostic for deciding whether cross-type reachability helps enough to
++justify its added search and distributional risk. It reuses the first
++cycle-only checkpoint by default.
++
++## Commands
++
++Run from the repository root:
++
++```bash
++export PYTHONPATH="$PWD/src:$PWD"
++```
++
++### Fast A/B generation without retraining
++
++```bash
++python scripts/run_attributed_grapher.py \
++  --config configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2_reuse_checkpoint.yaml \
++  --checkpoint outputs/attributed_grapher/qm9_spectral_cycle_graphlet/seed_42/checkpoint.pt \
++  --output-dir outputs/attributed_generation/qm9_spectral_cycle_graphlet_v2_reuse/seed_42 \
++  --num-generate 1024 \
++  --seed 42 \
++  --device gpu
++```
++
++Evaluate it:
++
++```bash
++python scripts/evaluate_generated_molecules.py \
++  --generated-dir outputs/attributed_generation/qm9_spectral_cycle_graphlet_v2_reuse/seed_42 \
++  --dataset-root outputs/datasets \
++  --dataset qm9_attributed \
++  --reference-split test \
++  --train-split train \
++  --metric-molecule-source raw_valid \
++  --nspdk-backend eden \
++  --graphlet-mmd \
++  --graphlet-k-min 3 \
++  --graphlet-k-max 6 \
++  --graphlet-topology-filter simple_cycle \
++  --graphlet-node-attribute atomic_num \
++  --graphlet-edge-attribute bond_type \
++  --graphlet-attributed-backend python \
++  --fcd-device auto \
++  --require-fcd \
++  --output-dir outputs/attributed_generation/qm9_spectral_cycle_graphlet_v2_reuse/seed_42/evaluation
++```
++
++### Full v2 training
++
++The typed-degree prior can be reused when this checkpoint already exists:
++
++```text
++outputs/degree_generators/qm9_typed/seed_42/checkpoint.pt
++```
++
++Otherwise train it with:
++
++```bash
++python scripts/train_degree_generator.py \
++  --config configs/experiments/dhvae/qm9_typed.yaml
++```
++
++Train the v2 predictor:
++
++```bash
++python scripts/train_attributed_grapher.py \
++  --config configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2.yaml \
++  --output-dir outputs/attributed_grapher/qm9_spectral_cycle_graphlet_v2/seed_42 \
++  --seed 42 \
++  --device gpu
++```
++
++Generate:
++
++```bash
++python scripts/run_attributed_grapher.py \
++  --config configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2.yaml \
++  --checkpoint outputs/attributed_grapher/qm9_spectral_cycle_graphlet_v2/seed_42/checkpoint.pt \
++  --output-dir outputs/attributed_generation/qm9_spectral_cycle_graphlet_v2/seed_42 \
++  --num-generate 1024 \
++  --seed 42 \
++  --device gpu
++```
++
++Evaluate:
++
++```bash
++python scripts/evaluate_generated_molecules.py \
++  --generated-dir outputs/attributed_generation/qm9_spectral_cycle_graphlet_v2/seed_42 \
++  --dataset-root outputs/datasets \
++  --dataset qm9_attributed \
++  --reference-split test \
++  --train-split train \
++  --metric-molecule-source raw_valid \
++  --nspdk-backend eden \
++  --graphlet-mmd \
++  --graphlet-k-min 3 \
++  --graphlet-k-max 6 \
++  --graphlet-topology-filter simple_cycle \
++  --graphlet-node-attribute atomic_num \
++  --graphlet-edge-attribute bond_type \
++  --graphlet-attributed-backend python \
++  --fcd-device auto \
++  --require-fcd \
++  --output-dir outputs/attributed_generation/qm9_spectral_cycle_graphlet_v2/seed_42/evaluation
++```
++
++### Same-bond validity-first ablation
++
++```bash
++python scripts/run_attributed_grapher.py \
++  --config configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2_strict_same_bond.yaml \
++  --checkpoint outputs/attributed_grapher/qm9_spectral_cycle_graphlet/seed_42/checkpoint.pt \
++  --output-dir outputs/attributed_generation/qm9_spectral_cycle_graphlet_v2_strict/seed_42 \
++  --num-generate 1024 \
++  --seed 42 \
++  --device gpu
++```
++
++Use the same evaluation command after replacing the generated directory.
++
++## Interpreting the rerun
++
++The first checks should be:
++
++1. `rdkit_valid_final_rate_raw == 1.0` in `report.json`;
++2. evaluator `validity == 1.0` and all 1024 molecules used by raw-valid FCD;
++3. `end_to_end_yield` and rejection reasons remain acceptable;
++4. `mean_typed_degree_drift` and `mean_weighted_valence_drift` are lower than
++   the first cycle-only run;
++5. the per-order ring-mass MMD identifies whether C3, C4, C5, or C6 needs a
++   larger size weight.
++
++FCD, NSPDK, and cycle MMD improvements cannot be guaranteed without rerunning
++the trained model. The v2 changes are designed to remove the known validity
++protocol mismatch, reduce local chemistry drift, and make the optimization
++objective match the two cycle metrics that are actually reported.
+diff --git a/scripts/evaluate_generated_molecules.py b/scripts/evaluate_generated_molecules.py
+index cbebcbe..76e5435 100644
+--- a/scripts/evaluate_generated_molecules.py
++++ b/scripts/evaluate_generated_molecules.py
+@@ -9,11 +9,13 @@ This script is intended for outputs from
+ 
+ Metrics:
+   - validity: direct RDKit sanitization success, without post-hoc correction
++  - validity_with_projected_formal_charges: charge-completion diagnostic only
+   - validity_with_correction: deterministic valency-correction diagnostic
+   - uniqueness_rate / novelty_rate on the configured valid-molecule source
+   - FCD: optional, with reusable reference-statistics caching when supported
+   - NSPDK MMD: HOG-Diff-compatible EDeN neighborhood-pair features by default
+-  - optional attributed graphlet-composition and selected-mass MMD
++  - optional attributed graphlet-composition and selected-mass MMD, including
++    a per-order breakdown computed from the same graphlet-count pass
+ 
+ The previous deterministic hashed neighborhood-pair proxy is retained as an
+ explicit fallback/diagnostic backend.
+@@ -56,10 +58,16 @@ def _canonicalize_smiles(smiles: str) -> str | None:
+ 
+ def _graph_to_canonical_smiles_and_error(
+     graph: nx.Graph,
++    *,
++    infer_projected_formal_charges: bool = False,
+ ) -> tuple[str | None, str | None]:
+     Chem = require_rdkit()
+     try:
+-        mol = nx_to_rdkit_mol(graph, sanitize=True)
++        mol = nx_to_rdkit_mol(
++            graph,
++            sanitize=True,
++            infer_projected_formal_charges=infer_projected_formal_charges,
++        )
+         smi = str(Chem.MolToSmiles(mol, canonical=True, isomericSmiles=False))
+         return smi, None
+     except Exception as exc:
+@@ -387,6 +395,62 @@ def _validity_with_correction(
+     }
+ 
+ 
++def _validity_with_projected_formal_charges(
++    graphs: list[nx.Graph],
++    *,
++    raw_smiles: list[str | None],
++) -> dict[str, Any]:
++    """Audit validity after charge completion but before bond correction.
++
++    The heavy-atom categorical state does not explicitly model formal charge.
++    This diagnostic assigns the projected positive charges supported by the
++    GraphER QM9 codec (tetravalent N and trivalent O) and performs no bond
++    deletion or bond-order reduction.  It therefore separates representation
++    completion from the more permissive valency-correction metric.
++    """
++
++    if len(graphs) != len(raw_smiles):
++        raise ValueError("graphs and raw_smiles must have identical lengths.")
++
++    all_smiles: list[str | None] = []
++    valid_smiles: list[str] = []
++    resolved_indices: list[int] = []
++    errors: Counter[str] = Counter()
++    for idx, (graph, raw_smi) in enumerate(zip(graphs, raw_smiles)):
++        if raw_smi is not None:
++            all_smiles.append(raw_smi)
++            valid_smiles.append(raw_smi)
++            continue
++        smi, err = _graph_to_canonical_smiles_and_error(
++            graph,
++            infer_projected_formal_charges=True,
++        )
++        all_smiles.append(smi)
++        if smi is None:
++            errors[str(err or "ProjectedChargeInvalid")] += 1
++            continue
++        valid_smiles.append(smi)
++        resolved_indices.append(idx)
++
++    num_graphs = len(graphs)
++    num_valid = len(valid_smiles)
++    raw_invalid_count = sum(smi is None for smi in raw_smiles)
++    return {
++        "all_smiles": all_smiles,
++        "valid_smiles": valid_smiles,
++        "num_valid": num_valid,
++        "num_invalid": num_graphs - num_valid,
++        "validity_with_projected_formal_charges": num_valid / max(num_graphs, 1),
++        "resolved_indices": resolved_indices,
++        "error_counts": dict(errors),
++        "success_rate_on_raw_invalid": (
++            len(resolved_indices) / raw_invalid_count
++            if raw_invalid_count > 0
++            else 1.0
++        ),
++    }
++
++
+ def _novelty(
+     unique_valid_smiles: Iterable[str], train_smiles: Iterable[str]
+ ) -> tuple[float | None, int]:
+@@ -687,6 +751,10 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
+         train_smiles = train_smiles[: int(args.max_train)]
+ 
+     valid_info = _validity_and_smiles(generated_graphs)
++    projected_charge_valid_info = _validity_with_projected_formal_charges(
++        generated_graphs,
++        raw_smiles=valid_info["all_smiles"],
++    )
+     corrected_valid_info = _validity_with_correction(
+         generated_graphs,
+         raw_smiles=valid_info["all_smiles"],
+@@ -765,27 +833,38 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
+     )
+     graphlet_histogram_mmd: float | None = None
+     graphlet_selected_mass_mmd: float | None = None
++    graphlet_histogram_mmd_by_order: dict[str, float | None] = {}
++    graphlet_selected_mass_mmd_by_order: dict[str, float | None] = {}
+     if graphlet_enabled:
+-        graphlet_histogram_mmd, graphlet_selected_mass_mmd = (
+-            mmd_graphlet_statistics(
+-                reference_graphs,
+-                metric_graphs,
+-                k_min=int(getattr(args, "graphlet_k_min", 3)),
+-                k_max=int(getattr(args, "graphlet_k_max", 6)),
+-                connected_only=True,
+-                topology_filter=graphlet_topology_filter,
+-                num_samples=getattr(args, "graphlet_num_samples", None),
+-                backend="sampled",
+-                node_label_attr=str(
+-                    getattr(args, "graphlet_node_attribute", "atomic_num")
+-                ),
+-                edge_label_attr=str(
+-                    getattr(args, "graphlet_edge_attribute", "bond_type")
+-                ),
+-                attributed_backend=str(
+-                    getattr(args, "graphlet_attributed_backend", "python")
+-                ),
+-            )
++        graphlet_k_min = int(getattr(args, "graphlet_k_min", 3))
++        graphlet_k_max = int(getattr(args, "graphlet_k_max", 6))
++        graphlet_common = {
++            "connected_only": True,
++            "topology_filter": graphlet_topology_filter,
++            "num_samples": getattr(args, "graphlet_num_samples", None),
++            "backend": "sampled",
++            "node_label_attr": str(
++                getattr(args, "graphlet_node_attribute", "atomic_num")
++            ),
++            "edge_label_attr": str(
++                getattr(args, "graphlet_edge_attribute", "bond_type")
++            ),
++            "attributed_backend": str(
++                getattr(args, "graphlet_attributed_backend", "python")
++            ),
++        }
++        (
++            graphlet_histogram_mmd,
++            graphlet_selected_mass_mmd,
++            graphlet_histogram_mmd_by_order,
++            graphlet_selected_mass_mmd_by_order,
++        ) = mmd_graphlet_statistics(
++            reference_graphs,
++            metric_graphs,
++            k_min=graphlet_k_min,
++            k_max=graphlet_k_max,
++            return_by_order=True,
++            **graphlet_common,
+         )
+ 
+     # HOG-Diff evaluates distributional metrics after its deterministic validity
+@@ -818,6 +897,11 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
+         "validity_with_correction": float(
+             corrected_valid_info["validity_with_correction"]
+         ),
++        "validity_with_projected_formal_charges": float(
++            projected_charge_valid_info[
++                "validity_with_projected_formal_charges"
++            ]
++        ),
+         # Primary implementation audit: validity before any repair/correction.
+         "validity_without_correction": float(
+             valid_info["validity_without_correction"]
+@@ -826,6 +910,18 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
+         "num_generated_graphs": int(len(generated_graphs)),
+         "num_valid_generated_molecules": int(valid_info["num_valid"]),
+         "num_invalid_generated_molecules": int(valid_info["num_invalid"]),
++        "num_valid_generated_molecules_with_projected_formal_charges": int(
++            projected_charge_valid_info["num_valid"]
++        ),
++        "num_invalid_generated_molecules_after_projected_formal_charges": int(
++            projected_charge_valid_info["num_invalid"]
++        ),
++        "num_raw_invalid_resolved_by_projected_formal_charges": int(
++            len(projected_charge_valid_info["resolved_indices"])
++        ),
++        "projected_formal_charge_success_rate_on_raw_invalid": float(
++            projected_charge_valid_info["success_rate_on_raw_invalid"]
++        ),
+         "num_valid_generated_molecules_with_correction": int(
+             corrected_valid_info["num_valid"]
+         ),
+@@ -856,6 +952,10 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
+             if graphlet_selected_mass_mmd is None
+             else float(graphlet_selected_mass_mmd)
+         ),
++        "graphlet_histogram_mmd_by_order": graphlet_histogram_mmd_by_order,
++        "graphlet_selected_mass_mmd_by_order": (
++            graphlet_selected_mass_mmd_by_order
++        ),
+         "nspdk_proxy_mmd_all_generated": (
+             None if nspdk_proxy_all is None else float(nspdk_proxy_all)
+         ),
+@@ -894,6 +994,11 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
+                 "highest-order bond incident to an atom-valence problem is lowered "
+                 "until sanitization succeeds or the correction budget is exhausted."
+             ),
++            "validity_with_projected_formal_charges": (
++                "Diagnostic charge completion for projected QM9 heavy-atom states: "
++                "assign +1 to neutral tetravalent nitrogen or trivalent oxygen, "
++                "then sanitize. No bond is deleted and no bond order is changed."
++            ),
+             "validity_without_correction": "RDKit Mol construction + Chem.SanitizeMol, no valency correction or edge resampling.",
+             "correction_max_steps": int(args.correction_max_steps),
+             "metric_molecule_source": metric_source,
+@@ -947,6 +1052,10 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
+         },
+         "conversion_error_counts": valid_info["conversion_error_counts"],
+         "invalid_indices": valid_info["invalid_indices"],
++        "projected_formal_charge_completion": {
++            "resolved_indices": projected_charge_valid_info["resolved_indices"],
++            "error_counts": projected_charge_valid_info["error_counts"],
++        },
+         "correction": {
+             "corrected_indices": corrected_valid_info["corrected_indices"],
+             "correction_steps_by_index": corrected_valid_info["correction_steps"],
+diff --git a/scripts/run_attributed_grapher.py b/scripts/run_attributed_grapher.py
+index 3b19455..0e46d00 100644
+--- a/scripts/run_attributed_grapher.py
++++ b/scripts/run_attributed_grapher.py
+@@ -447,9 +447,21 @@ def main() -> None:
+         f"proposal_budget={refiner_cfg.proposal_budget} "
+         f"valid_candidate_budget={refiner_cfg.valid_candidate_budget} "
+         f"rdkit_shortlist={refiner_cfg.rdkit_shortlist} "
++        f"rdkit_validation_mode={refiner_cfg.rdkit_validation_mode} "
+         f"rewiring_kernel={'same_edge_type' if refiner_cfg.require_same_edge_type_pair else 'bond_reassigning_cross_type'}",
+         flush=True,
+     )
++    print(
++        "[GraphER/AttributedSpectralGraphlet] "
++        "cycle_guidance_components="
++        f"(clr={refiner_cfg.graphlet_logit_distance_weight:.3f},"
++        f"probability={refiner_cfg.graphlet_probability_distance_weight:.3f},"
++        f"selected_mass={refiner_cfg.graphlet_selected_mass_weight:.3f}) "
++        "chemistry_drift_weights="
++        f"(typed_degree={refiner_cfg.typed_degree_drift_weight:.3f},"
++        f"weighted_valence={refiner_cfg.weighted_valence_drift_weight:.3f})",
++        flush=True,
++    )
+ 
+     if source_enrichment_enabled:
+         assert source_enrichment_refiner is not None
+@@ -527,6 +539,7 @@ def main() -> None:
+                         refiner_cfg.rdkit_infer_projected_formal_charges
+                     ),
+                 )
++                source_is_raw_valid = is_valid_molecular_graph(source)
+                 if require_source_validity and not source_is_valid:
+                     rejection_reasons["rdkit_invalid_source"] += 1
+                     continue
+@@ -605,6 +618,7 @@ def main() -> None:
+                         refiner_cfg.rdkit_infer_projected_formal_charges
+                     ),
+                 )
++                final_is_raw_valid = is_valid_molecular_graph(refined)
+                 if require_final_validity and not final_is_valid:
+                     rejection_reasons["rdkit_invalid_final"] += 1
+                     continue
+@@ -620,8 +634,11 @@ def main() -> None:
+                     {
+                         **constructor_record,
+                         "generation_attempt": attempt,
+-                        "source_rdkit_valid": source_is_valid,
+-                        "final_rdkit_valid": final_is_valid,
++                        "rdkit_validation_mode": refiner_cfg.rdkit_validation_mode,
++                        "source_rdkit_valid": source_is_raw_valid,
++                        "final_rdkit_valid": final_is_raw_valid,
++                        "source_rdkit_valid_configured": source_is_valid,
++                        "final_rdkit_valid_configured": final_is_valid,
+                     }
+                 )
+                 source_metadata.append(invariant_metadata)
+@@ -700,6 +717,24 @@ def main() -> None:
+     ]
+     source_validity = [is_valid_molecular_graph(graph) for graph in source_graphs]
+     final_validity = [is_valid_molecular_graph(graph) for graph in final_graphs]
++    configured_source_validity = [
++        is_valid_molecular_graph(
++            graph,
++            infer_projected_formal_charges=(
++                refiner_cfg.rdkit_infer_projected_formal_charges
++            ),
++        )
++        for graph in source_graphs
++    ]
++    configured_final_validity = [
++        is_valid_molecular_graph(
++            graph,
++            infer_projected_formal_charges=(
++                refiner_cfg.rdkit_infer_projected_formal_charges
++            ),
++        )
++        for graph in final_graphs
++    ]
+     rewiring_invariant_preservation = [
+         attributed_rewiring_invariant_matches_graph(
+             final,
+@@ -738,6 +773,22 @@ def main() -> None:
+         "guidance_mode": "dual_spectral_attributed_graphlet",
+         "invariant_source": invariant_source,
+         "source_enrichment_enabled": bool(source_enrichment_enabled),
++        "rdkit_validation_mode": refiner_cfg.rdkit_validation_mode,
++        "graphlet_logit_distance_weight": float(
++            refiner_cfg.graphlet_logit_distance_weight
++        ),
++        "graphlet_probability_distance_weight": float(
++            refiner_cfg.graphlet_probability_distance_weight
++        ),
++        "graphlet_selected_mass_weight": float(
++            refiner_cfg.graphlet_selected_mass_weight
++        ),
++        "typed_degree_drift_weight": float(
++            refiner_cfg.typed_degree_drift_weight
++        ),
++        "weighted_valence_drift_weight": float(
++            refiner_cfg.weighted_valence_drift_weight
++        ),
+         "num_generated": len(final_graphs),
+         "mean_source_enrichment_accepted_steps": float(
+             np.mean([sum(bool(row.get("accepted")) for row in trace) for trace in enrichment_traces])
+@@ -783,8 +834,17 @@ def main() -> None:
+                 ]
+             )
+         ),
++        # Raw/no-correction rates match evaluate_generated_molecules.py.
+         "rdkit_valid_source_rate": float(np.mean(source_validity)),
+         "rdkit_valid_final_rate": float(np.mean(final_validity)),
++        "rdkit_valid_source_rate_raw": float(np.mean(source_validity)),
++        "rdkit_valid_final_rate_raw": float(np.mean(final_validity)),
++        "rdkit_valid_source_rate_configured": float(
++            np.mean(configured_source_validity)
++        ),
++        "rdkit_valid_final_rate_configured": float(
++            np.mean(configured_final_validity)
++        ),
+         "mean_accepted_steps": float(np.mean(accepted_counts)),
+         "mean_prediction_calls": float(np.mean(prediction_counts)),
+         "mean_accepted_swaps_per_prediction_call": float(
+@@ -798,6 +858,24 @@ def main() -> None:
+             accepted_rows, "bond_spectral_gain"
+         ),
+         "mean_accepted_graphlet_gain": _mean(accepted_rows, "graphlet_gain"),
++        "mean_accepted_graphlet_logit_gain": _mean(
++            accepted_rows, "graphlet_logit_gain"
++        ),
++        "mean_accepted_graphlet_probability_gain": _mean(
++            accepted_rows, "graphlet_probability_gain"
++        ),
++        "mean_accepted_graphlet_selected_mass_gain": _mean(
++            accepted_rows, "graphlet_selected_mass_gain"
++        ),
++        "mean_accepted_chemistry_drift_gain": _mean(
++            accepted_rows, "chemistry_drift_gain"
++        ),
++        "mean_accepted_typed_degree_drift_gain": _mean(
++            accepted_rows, "typed_degree_drift_gain"
++        ),
++        "mean_accepted_weighted_valence_drift_gain": _mean(
++            accepted_rows, "weighted_valence_drift_gain"
++        ),
+         "mean_projection_residual": _mean(accepted_rows, "projection_residual"),
+         "mean_spectral_projection_residual": _mean(
+             accepted_rows, "spectral_projection_residual"
+@@ -811,6 +889,22 @@ def main() -> None:
+         "mean_graphlet_projection_residual": _mean(
+             accepted_rows, "graphlet_projection_residual"
+         ),
++        "mean_graphlet_logit_projection_residual": _mean(
++            accepted_rows, "graphlet_logit_projection_residual"
++        ),
++        "mean_graphlet_probability_projection_residual": _mean(
++            accepted_rows, "graphlet_probability_projection_residual"
++        ),
++        "mean_graphlet_selected_mass_projection_residual": _mean(
++            accepted_rows, "graphlet_selected_mass_projection_residual"
++        ),
++        "mean_chemistry_drift_penalty": _mean(
++            accepted_rows, "chemistry_drift_penalty"
++        ),
++        "mean_typed_degree_drift": _mean(accepted_rows, "typed_degree_drift"),
++        "mean_weighted_valence_drift": _mean(
++            accepted_rows, "weighted_valence_drift"
++        ),
+         "predictor_topology_spectral_nrmse": predictor_report.get(
+             "val_topology_spectral_nrmse",
+             predictor_report.get("topology_spectral_nrmse"),
+@@ -827,6 +921,10 @@ def main() -> None:
+             "val_graphlet_probability_mae",
+             predictor_report.get("graphlet_probability_mae"),
+         ),
++        "predictor_graphlet_selected_mass_mae": predictor_report.get(
++            "val_graphlet_selected_mass_mae",
++            predictor_report.get("graphlet_selected_mass_mae"),
++        ),
+         "mean_candidate_pass_rate": _mean(trace_rows, "candidate_pass_rate"),
+         "rdkit_candidates_checked": int(
+             sum(int(row.get("rdkit_checked", 0)) for row in trace_rows)
+diff --git a/scripts/train_attributed_grapher.py b/scripts/train_attributed_grapher.py
+index 3358876..24ee12d 100644
+--- a/scripts/train_attributed_grapher.py
++++ b/scripts/train_attributed_grapher.py
+@@ -756,7 +756,8 @@ def main() -> None:
+                 f"top_spec={val_metrics['topology_spectral_nrmse']:.5f} "
+                 f"bond_spec={val_metrics['bond_spectral_nrmse']:.5f} "
+                 f"glogit={val_metrics['graphlet_logit_rmse']:.5f} "
+-                f"gprob={val_metrics['graphlet_probability_mae']:.5f}",
++                f"gprob={val_metrics['graphlet_probability_mae']:.5f} "
++                f"gmass={val_metrics['graphlet_selected_mass_mae']:.5f}",
+                 flush=True,
+             )
+ 
+diff --git a/src/grapher/rewiring_mlp/attributed/spectral_graphlet_refiner.py b/src/grapher/rewiring_mlp/attributed/spectral_graphlet_refiner.py
+index fe15189..b070c7a 100644
+--- a/src/grapher/rewiring_mlp/attributed/spectral_graphlet_refiner.py
++++ b/src/grapher/rewiring_mlp/attributed/spectral_graphlet_refiner.py
+@@ -116,6 +116,13 @@ class AttributedSpectralGraphletRefinerConfig:
+     graphlet_distance: str = "clr_rmse"
+     graphlet_logit_epsilon: float = 1.0e-4
+     graphlet_size_weights: dict[str, float] = field(default_factory=dict)
++    # Cycle-only histograms are very sparse.  CLR distance remains useful for
++    # distinguishing attributed ring classes, but probability- and selected-
++    # mass terms keep rare coordinates from dominating candidate ranking.
++    graphlet_logit_distance_weight: float = 1.0
++    graphlet_probability_distance_weight: float = 0.0
++    graphlet_selected_mass_weight: float = 0.0
++    graphlet_probability_distance: str = "rmse"
+     graphlet_bridge_schedule: str = "cosine"
+     graphlet_min_clean_mix: float = 0.10
+     graphlet_max_clean_mix: float = 1.0
+@@ -154,7 +161,13 @@ class AttributedSpectralGraphletRefinerConfig:
+     enforce_molecular_valence: bool = True
+     molecular_allowed_bond_types: tuple[int, ...] = (1, 2, 3)
+     molecular_max_valence: dict[int, float] = field(default_factory=dict)
++    # Soft anchors for the revised cross-type kernel.  They do not turn typed
++    # degree or weighted valence into hard invariants; they merely discourage
++    # unnecessary local chemistry drift when structural gains are comparable.
++    typed_degree_drift_weight: float = 0.0
++    weighted_valence_drift_weight: float = 0.0
+     rdkit_candidate_check: bool = True
++    rdkit_validation_mode: str = "raw"
+     rdkit_infer_projected_formal_charges: bool = False
+     rdkit_shortlist: int = 8
+     require_rdkit_source_validity: bool = False
+@@ -279,6 +292,37 @@ class AttributedSpectralGraphletRefinerConfig:
+         size_weights = graphlet.get("size_weights", {}) or {}
+         if not isinstance(size_weights, Mapping):
+             raise ValueError("graphlet_guidance.size_weights must be a mapping.")
++        rdkit_mode_raw = molecular.get("rdkit_validation_mode")
++        if rdkit_mode_raw is None:
++            infer_projected_charges = bool(
++                molecular.get("rdkit_infer_projected_formal_charges", False)
++            )
++            rdkit_validation_mode = (
++                "projected_charge" if infer_projected_charges else "raw"
++            )
++        else:
++            rdkit_validation_mode = str(rdkit_mode_raw).strip().lower()
++            aliases = {
++                "strict": "raw",
++                "strict_raw": "raw",
++                "raw": "raw",
++                "projected": "projected_charge",
++                "projected_charge": "projected_charge",
++                "infer_projected_charge": "projected_charge",
++            }
++            if rdkit_validation_mode not in aliases:
++                raise ValueError(
++                    "molecular.rdkit_validation_mode must be raw or projected_charge."
++                )
++            rdkit_validation_mode = aliases[rdkit_validation_mode]
++            infer_projected_charges = rdkit_validation_mode == "projected_charge"
++            if "rdkit_infer_projected_formal_charges" in molecular:
++                legacy = bool(molecular["rdkit_infer_projected_formal_charges"])
++                if legacy != infer_projected_charges:
++                    raise ValueError(
++                        "molecular.rdkit_validation_mode conflicts with "
++                        "rdkit_infer_projected_formal_charges."
++                    )
+         cfg = cls(
+             steps=int(values.get("steps", 48)),
+             proposal_budget=int(values.get("proposal_budget", 256)),
+@@ -312,6 +356,16 @@ class AttributedSpectralGraphletRefinerConfig:
+             graphlet_distance=str(graphlet.get("distance", "clr_rmse")).lower(),
+             graphlet_logit_epsilon=float(graphlet.get("logit_epsilon", 1.0e-4)),
+             graphlet_size_weights={str(k): float(v) for k, v in size_weights.items()},
++            graphlet_logit_distance_weight=float(graphlet.get("logit_weight", 1.0)),
++            graphlet_probability_distance_weight=float(
++                graphlet.get("probability_weight", 0.0)
++            ),
++            graphlet_selected_mass_weight=float(
++                graphlet.get("selected_mass_weight", graphlet.get("mass_weight", 0.0))
++            ),
++            graphlet_probability_distance=str(
++                graphlet.get("probability_distance", "rmse")
++            ).lower(),
+             graphlet_bridge_schedule=str(graphlet.get("schedule", "cosine")).lower(),
+             graphlet_min_clean_mix=float(graphlet.get("min_clean_mix", 0.10)),
+             graphlet_max_clean_mix=float(graphlet.get("max_clean_mix", 1.0)),
+@@ -355,15 +409,20 @@ class AttributedSpectralGraphletRefinerConfig:
+                 int(key): float(value)
+                 for key, value in dict(molecular.get("max_valence", {}) or {}).items()
+             },
++            typed_degree_drift_weight=float(
++                molecular.get("typed_degree_drift_weight", 0.0)
++            ),
++            weighted_valence_drift_weight=float(
++                molecular.get("weighted_valence_drift_weight", 0.0)
++            ),
+             rdkit_candidate_check=bool(
+                 molecular.get(
+                     "rdkit_candidate_check",
+                     molecular.get("require_rdkit_candidate", True),
+                 )
+             ),
+-            rdkit_infer_projected_formal_charges=bool(
+-                molecular.get("rdkit_infer_projected_formal_charges", False)
+-            ),
++            rdkit_validation_mode=rdkit_validation_mode,
++            rdkit_infer_projected_formal_charges=infer_projected_charges,
+             rdkit_shortlist=max(
+                 int(
+                     molecular.get(
+@@ -386,6 +445,31 @@ class AttributedSpectralGraphletRefinerConfig:
+             raise ValueError("selection must be greedy or softmax/sample.")
+         if cfg.temperature <= 0:
+             raise ValueError("temperature must be positive.")
++        if cfg.graphlet_logit_epsilon <= 0.0:
++            raise ValueError("graphlet_guidance.logit_epsilon must be positive.")
++        graphlet_component_weights = (
++            cfg.graphlet_logit_distance_weight,
++            cfg.graphlet_probability_distance_weight,
++            cfg.graphlet_selected_mass_weight,
++        )
++        if any((not np.isfinite(value)) or value < 0.0 for value in graphlet_component_weights):
++            raise ValueError(
++                "Graphlet logit/probability/selected-mass weights must be finite and nonnegative."
++            )
++        if not any(value > 0.0 for value in graphlet_component_weights):
++            raise ValueError("At least one graphlet guidance component must have positive weight.")
++        if cfg.graphlet_probability_distance not in {"rmse", "mse", "mae", "l1", "l2"}:
++            raise ValueError(
++                "graphlet_guidance.probability_distance must be rmse, mse, or mae."
++            )
++        chemistry_weights = (
++            cfg.typed_degree_drift_weight,
++            cfg.weighted_valence_drift_weight,
++        )
++        if any((not np.isfinite(value)) or value < 0.0 for value in chemistry_weights):
++            raise ValueError(
++                "Molecular chemistry-drift weights must be finite and nonnegative."
++            )
+         if not cfg.preserve_global_edge_type_counts:
+             raise ValueError(
+                 "Attributed GraphER currently preserves the global edge-category histogram; "
+@@ -928,6 +1012,120 @@ def predict_attributed_invariant_summary(
+     )
+ 
+ 
++def _probability_metric(delta: np.ndarray, metric: str) -> float:
++    metric_name = str(metric).lower()
++    if metric_name in {"rmse", "l2"}:
++        return float(np.sqrt(np.mean(delta * delta)))
++    if metric_name == "mse":
++        return float(np.mean(delta * delta))
++    if metric_name in {"mae", "l1"}:
++        return float(np.mean(np.abs(delta)))
++    raise ValueError("Probability distance must be rmse, mse, or mae.")
++
++
++def _graphlet_probability_and_mass_distance(
++    left_probabilities: Sequence[float] | np.ndarray,
++    right_probabilities: Sequence[float] | np.ndarray,
++    *,
++    graphlet_basis: GraphletBasis,
++    coordinate_mask: Sequence[bool] | np.ndarray | None,
++    metric: str,
++    size_weights: Mapping[str, float] | None,
++) -> tuple[float, float]:
++    """Return per-order probability and selected-ring-mass discrepancies.
++
++    Every graphlet block ends with the background coordinate.  Therefore the
++    selected cycle mass is ``1 - p_background``.  Averaging per order avoids a
++    large attributed vocabulary at one order overwhelming the other orders.
++    """
++
++    left = np.asarray(left_probabilities, dtype=np.float64).reshape(-1)
++    right = np.asarray(right_probabilities, dtype=np.float64).reshape(-1)
++    if left.shape != right.shape or left.size != graphlet_basis.simplex_width:
++        raise ValueError("Graphlet probability distance received inconsistent widths.")
++    if coordinate_mask is None:
++        mask = np.ones(left.size, dtype=np.bool_)
++    else:
++        mask = np.asarray(coordinate_mask, dtype=np.bool_).reshape(-1)
++        if mask.shape != left.shape:
++            raise ValueError("Graphlet probability distance mask shape mismatch.")
++
++    probability_total = 0.0
++    mass_total = 0.0
++    normalizer = 0.0
++    configured_weights = dict(size_weights or {})
++    for size, (start, stop) in zip(
++        graphlet_basis.sizes, graphlet_basis.simplex_slices
++    ):
++        block_mask = mask[start:stop]
++        if not np.any(block_mask):
++            continue
++        weight = float(configured_weights.get(str(size), 1.0))
++        if weight <= 0.0:
++            continue
++        delta = left[start:stop][block_mask] - right[start:stop][block_mask]
++        probability_total += weight * _probability_metric(delta, metric)
++        # The last coordinate is background for every available block.
++        left_mass = 1.0 - float(left[stop - 1])
++        right_mass = 1.0 - float(right[stop - 1])
++        mass_total += weight * abs(left_mass - right_mass)
++        normalizer += weight
++    denominator = max(normalizer, 1.0e-12)
++    return float(probability_total / denominator), float(mass_total / denominator)
++
++
++def _typed_degree_matrix(
++    graph: nx.Graph,
++    *,
++    vocabulary: GraphCategoryVocabulary,
++) -> np.ndarray:
++    nodes = tuple(sorted(int(node) for node in graph.nodes()))
++    node_index = {node: index for index, node in enumerate(nodes)}
++    edge_index = {
++        value: index for index, value in enumerate(vocabulary.edge_values)
++    }
++    matrix = np.zeros((len(nodes), len(edge_index)), dtype=np.float64)
++    edge_attribute = str(vocabulary.edge_attribute)
++    for u, v, data in graph.edges(data=True):
++        value = data[edge_attribute]
++        if value not in edge_index:
++            raise KeyError(f"Unknown edge category {value!r} in chemistry-drift score.")
++        column = edge_index[value]
++        matrix[node_index[int(u)], column] += 1.0
++        matrix[node_index[int(v)], column] += 1.0
++    return matrix
++
++
++def _weighted_valence_vector(
++    graph: nx.Graph,
++    *,
++    vocabulary: GraphCategoryVocabulary,
++) -> np.ndarray:
++    nodes = tuple(sorted(int(node) for node in graph.nodes()))
++    values = np.zeros(len(nodes), dtype=np.float64)
++    node_index = {node: index for index, node in enumerate(nodes)}
++    edge_attribute = str(vocabulary.edge_attribute)
++    for u, v, data in graph.edges(data=True):
++        order = float(bond_order(int(data[edge_attribute])))
++        values[node_index[int(u)]] += order
++        values[node_index[int(v)]] += order
++    return values
++
++
++def _normalized_conserved_l1(
++    values: np.ndarray,
++    reference: np.ndarray,
++) -> float:
++    left = np.asarray(values, dtype=np.float64)
++    right = np.asarray(reference, dtype=np.float64)
++    if left.shape != right.shape:
++        raise ValueError("Chemistry-drift arrays must have identical shapes.")
++    # Global edge-type counts are preserved, so both arrays have equal total
++    # mass.  Dividing by twice that mass maps the L1 drift to [0, 1].
++    denominator = max(2.0 * float(np.abs(right).sum()), 1.0)
++    return float(np.abs(left - right).sum() / denominator)
++
++
+ def _prepare_candidate_states(
+     graph: nx.Graph,
+     candidates: Sequence[AttributedRewireAction],
+@@ -938,6 +1136,7 @@ def _prepare_candidate_states(
+     graphlet_basis: GraphletBasis,
+     config: AttributedSpectralGraphletRefinerConfig,
+     device: torch.device | str = "cpu",
++    chemistry_reference_graph: nx.Graph | None = None,
+ ) -> dict[str, Any]:
+     current_spectra = attributed_laplacian_spectra(
+         graph, edge_attribute=str(vocabulary.edge_attribute)
+@@ -958,6 +1157,31 @@ def _prepare_candidate_states(
+         epsilon=config.graphlet_logit_epsilon,
+         coordinate_mask=current_mask,
+     )
++    reference_graph = graph if chemistry_reference_graph is None else chemistry_reference_graph
++    reference_typed = (
++        _typed_degree_matrix(reference_graph, vocabulary=vocabulary)
++        if config.typed_degree_drift_weight > 0.0
++        else None
++    )
++    reference_valence = (
++        _weighted_valence_vector(reference_graph, vocabulary=vocabulary)
++        if config.weighted_valence_drift_weight > 0.0
++        else None
++    )
++    current_typed_drift = (
++        _normalized_conserved_l1(
++            _typed_degree_matrix(graph, vocabulary=vocabulary), reference_typed
++        )
++        if reference_typed is not None
++        else 0.0
++    )
++    current_valence_drift = (
++        _normalized_conserved_l1(
++            _weighted_valence_vector(graph, vocabulary=vocabulary), reference_valence
++        )
++        if reference_valence is not None
++        else 0.0
++    )
+     rows: list[dict[str, Any]] = []
+     materialized = [candidate_graphs[action] for action in candidates]
+     candidate_spectra_batch = batched_attributed_laplacian_spectra(
+@@ -987,6 +1211,22 @@ def _prepare_candidate_states(
+                 "candidate_graphlet_logits": candidate_logits,
+                 "candidate_graphlet_probabilities": candidate_prob,
+                 "candidate_graphlet_counts": candidate_counts,
++                "candidate_typed_degree_drift": (
++                    _normalized_conserved_l1(
++                        _typed_degree_matrix(candidate, vocabulary=vocabulary),
++                        reference_typed,
++                    )
++                    if reference_typed is not None
++                    else 0.0
++                ),
++                "candidate_weighted_valence_drift": (
++                    _normalized_conserved_l1(
++                        _weighted_valence_vector(candidate, vocabulary=vocabulary),
++                        reference_valence,
++                    )
++                    if reference_valence is not None
++                    else 0.0
++                ),
+                 "rdkit_valid": None,
+             }
+         )
+@@ -996,6 +1236,8 @@ def _prepare_candidate_states(
+         "current_graphlet_logits": current_logits,
+         "current_graphlet_probabilities": current_prob,
+         "current_graphlet_mask": current_mask,
++        "current_typed_degree_drift": current_typed_drift,
++        "current_weighted_valence_drift": current_valence_drift,
+         "rows": rows,
+     }
+ 
+@@ -1008,6 +1250,8 @@ def _score_prepared(
+     next_spectra: np.ndarray,
+     clean_graphlet_logits: np.ndarray,
+     next_graphlet_logits: np.ndarray,
++    clean_graphlet_probabilities: np.ndarray,
++    next_graphlet_probabilities: np.ndarray,
+     graphlet_mask: np.ndarray,
+     spectral_weight: float,
+     graphlet_weight: float,
+@@ -1015,6 +1259,9 @@ def _score_prepared(
+ ) -> list[dict[str, Any]]:
+     current_spectra = np.asarray(prepared["current_spectra"], dtype=np.float64)
+     current_logits = np.asarray(prepared["current_graphlet_logits"], dtype=np.float64)
++    current_probabilities = np.asarray(
++        prepared["current_graphlet_probabilities"], dtype=np.float64
++    )
+     scales = np.asarray(prepared["spectral_scales"], dtype=np.float64)
+     current_spec, current_spec_channels = attributed_spectral_distance(
+         current_spectra,
+@@ -1034,7 +1281,7 @@ def _score_prepared(
+         low_frequency_weight=config.low_frequency_weight,
+         low_frequency_cutoff=config.low_frequency_cutoff,
+     )
+-    current_graphlet = attributed_graphlet_logit_distance(
++    current_graphlet_logit = attributed_graphlet_logit_distance(
+         current_logits,
+         next_graphlet_logits,
+         graphlet_basis=graphlet_basis,
+@@ -1042,7 +1289,22 @@ def _score_prepared(
+         metric=config.graphlet_distance,
+         size_weights=config.graphlet_size_weights,
+     )
+-    current_clean_graphlet = attributed_graphlet_logit_distance(
++    current_graphlet_probability, current_graphlet_mass = (
++        _graphlet_probability_and_mass_distance(
++            current_probabilities,
++            next_graphlet_probabilities,
++            graphlet_basis=graphlet_basis,
++            coordinate_mask=graphlet_mask,
++            metric=config.graphlet_probability_distance,
++            size_weights=config.graphlet_size_weights,
++        )
++    )
++    current_graphlet = (
++        config.graphlet_logit_distance_weight * current_graphlet_logit
++        + config.graphlet_probability_distance_weight * current_graphlet_probability
++        + config.graphlet_selected_mass_weight * current_graphlet_mass
++    )
++    current_clean_graphlet_logit = attributed_graphlet_logit_distance(
+         current_logits,
+         clean_graphlet_logits,
+         graphlet_basis=graphlet_basis,
+@@ -1050,7 +1312,35 @@ def _score_prepared(
+         metric=config.graphlet_distance,
+         size_weights=config.graphlet_size_weights,
+     )
+-    current_energy = spectral_weight * current_spec + graphlet_weight * current_graphlet
++    current_clean_graphlet_probability, current_clean_graphlet_mass = (
++        _graphlet_probability_and_mass_distance(
++            current_probabilities,
++            clean_graphlet_probabilities,
++            graphlet_basis=graphlet_basis,
++            coordinate_mask=graphlet_mask,
++            metric=config.graphlet_probability_distance,
++            size_weights=config.graphlet_size_weights,
++        )
++    )
++    current_clean_graphlet = (
++        config.graphlet_logit_distance_weight * current_clean_graphlet_logit
++        + config.graphlet_probability_distance_weight
++        * current_clean_graphlet_probability
++        + config.graphlet_selected_mass_weight * current_clean_graphlet_mass
++    )
++    current_typed_drift = float(prepared.get("current_typed_degree_drift", 0.0))
++    current_valence_drift = float(
++        prepared.get("current_weighted_valence_drift", 0.0)
++    )
++    current_chemistry_drift = (
++        config.typed_degree_drift_weight * current_typed_drift
++        + config.weighted_valence_drift_weight * current_valence_drift
++    )
++    current_energy = (
++        spectral_weight * current_spec
++        + graphlet_weight * current_graphlet
++        + current_chemistry_drift
++    )
+     rows: list[dict[str, Any]] = []
+     for cached in prepared["rows"]:
+         candidate_spec, candidate_channels = attributed_spectral_distance(
+@@ -1071,7 +1361,7 @@ def _score_prepared(
+             low_frequency_weight=config.low_frequency_weight,
+             low_frequency_cutoff=config.low_frequency_cutoff,
+         )
+-        candidate_graphlet = attributed_graphlet_logit_distance(
++        candidate_graphlet_logit = attributed_graphlet_logit_distance(
+             cached["candidate_graphlet_logits"],
+             next_graphlet_logits,
+             graphlet_basis=graphlet_basis,
+@@ -1079,7 +1369,23 @@ def _score_prepared(
+             metric=config.graphlet_distance,
+             size_weights=config.graphlet_size_weights,
+         )
+-        candidate_clean_graphlet = attributed_graphlet_logit_distance(
++        candidate_graphlet_probability, candidate_graphlet_mass = (
++            _graphlet_probability_and_mass_distance(
++                cached["candidate_graphlet_probabilities"],
++                next_graphlet_probabilities,
++                graphlet_basis=graphlet_basis,
++                coordinate_mask=graphlet_mask,
++                metric=config.graphlet_probability_distance,
++                size_weights=config.graphlet_size_weights,
++            )
++        )
++        candidate_graphlet = (
++            config.graphlet_logit_distance_weight * candidate_graphlet_logit
++            + config.graphlet_probability_distance_weight
++            * candidate_graphlet_probability
++            + config.graphlet_selected_mass_weight * candidate_graphlet_mass
++        )
++        candidate_clean_graphlet_logit = attributed_graphlet_logit_distance(
+             cached["candidate_graphlet_logits"],
+             clean_graphlet_logits,
+             graphlet_basis=graphlet_basis,
+@@ -1087,7 +1393,35 @@ def _score_prepared(
+             metric=config.graphlet_distance,
+             size_weights=config.graphlet_size_weights,
+         )
+-        energy = spectral_weight * candidate_spec + graphlet_weight * candidate_graphlet
++        candidate_clean_graphlet_probability, candidate_clean_graphlet_mass = (
++            _graphlet_probability_and_mass_distance(
++                cached["candidate_graphlet_probabilities"],
++                clean_graphlet_probabilities,
++                graphlet_basis=graphlet_basis,
++                coordinate_mask=graphlet_mask,
++                metric=config.graphlet_probability_distance,
++                size_weights=config.graphlet_size_weights,
++            )
++        )
++        candidate_clean_graphlet = (
++            config.graphlet_logit_distance_weight * candidate_clean_graphlet_logit
++            + config.graphlet_probability_distance_weight
++            * candidate_clean_graphlet_probability
++            + config.graphlet_selected_mass_weight * candidate_clean_graphlet_mass
++        )
++        candidate_typed_drift = float(cached.get("candidate_typed_degree_drift", 0.0))
++        candidate_valence_drift = float(
++            cached.get("candidate_weighted_valence_drift", 0.0)
++        )
++        candidate_chemistry_drift = (
++            config.typed_degree_drift_weight * candidate_typed_drift
++            + config.weighted_valence_drift_weight * candidate_valence_drift
++        )
++        energy = (
++            spectral_weight * candidate_spec
++            + graphlet_weight * candidate_graphlet
++            + candidate_chemistry_drift
++        )
+         gain = float(current_energy - energy)
+         row = dict(cached)
+         # Keep a reference to the candidate-state cache. Plateau expansion
+@@ -1111,15 +1445,51 @@ def _score_prepared(
+                     current_spec_channels[1] - candidate_channels[1]
+                 ),
+                 "graphlet_gain": float(current_graphlet - candidate_graphlet),
++                "graphlet_logit_gain": float(
++                    current_graphlet_logit - candidate_graphlet_logit
++                ),
++                "graphlet_probability_gain": float(
++                    current_graphlet_probability - candidate_graphlet_probability
++                ),
++                "graphlet_selected_mass_gain": float(
++                    current_graphlet_mass - candidate_graphlet_mass
++                ),
++                "chemistry_drift_gain": float(
++                    current_chemistry_drift - candidate_chemistry_drift
++                ),
++                "typed_degree_drift_gain": float(
++                    current_typed_drift - candidate_typed_drift
++                ),
++                "weighted_valence_drift_gain": float(
++                    current_valence_drift - candidate_valence_drift
++                ),
+                 "clean_spectral_gain": float(current_clean_spec - candidate_clean_spec),
+                 "clean_graphlet_gain": float(current_clean_graphlet - candidate_clean_graphlet),
+                 "spectral_projection_residual": float(candidate_spec),
+                 "topology_spectral_projection_residual": float(candidate_channels[0]),
+                 "bond_spectral_projection_residual": float(candidate_channels[1]),
+                 "graphlet_projection_residual": float(candidate_graphlet),
++                "graphlet_logit_projection_residual": float(candidate_graphlet_logit),
++                "graphlet_probability_projection_residual": float(
++                    candidate_graphlet_probability
++                ),
++                "graphlet_selected_mass_projection_residual": float(
++                    candidate_graphlet_mass
++                ),
++                "chemistry_drift_penalty": float(candidate_chemistry_drift),
++                "typed_degree_drift": float(candidate_typed_drift),
++                "weighted_valence_drift": float(candidate_valence_drift),
+                 "projection_residual": float(energy),
+                 "current_topology_spectral_residual": float(current_spec_channels[0]),
+                 "current_bond_spectral_residual": float(current_spec_channels[1]),
++                "current_graphlet_logit_residual": float(current_graphlet_logit),
++                "current_graphlet_probability_residual": float(
++                    current_graphlet_probability
++                ),
++                "current_graphlet_selected_mass_residual": float(
++                    current_graphlet_mass
++                ),
++                "current_chemistry_drift_penalty": float(current_chemistry_drift),
+             }
+         )
+         rows.append(row)
+@@ -1254,7 +1624,7 @@ def enrich_attributed_graph_with_invariant_summary(
+         low_frequency_weight=cfg.low_frequency_weight,
+         low_frequency_cutoff=cfg.low_frequency_cutoff,
+     )
+-    initial_graphlet = attributed_graphlet_logit_distance(
++    initial_graphlet_logit = attributed_graphlet_logit_distance(
+         current_logits,
+         prediction.clean_graphlet_logits,
+         graphlet_basis=graphlet_basis,
+@@ -1262,6 +1632,21 @@ def enrich_attributed_graph_with_invariant_summary(
+         metric=cfg.graphlet_distance,
+         size_weights=cfg.graphlet_size_weights,
+     )
++    initial_graphlet_probability, initial_graphlet_mass = (
++        _graphlet_probability_and_mass_distance(
++            current_prob,
++            prediction.clean_graphlet_probabilities,
++            graphlet_basis=graphlet_basis,
++            coordinate_mask=current_mask,
++            metric=cfg.graphlet_probability_distance,
++            size_weights=cfg.graphlet_size_weights,
++        )
++    )
++    initial_graphlet = (
++        cfg.graphlet_logit_distance_weight * initial_graphlet_logit
++        + cfg.graphlet_probability_distance_weight * initial_graphlet_probability
++        + cfg.graphlet_selected_mass_weight * initial_graphlet_mass
++    )
+     best_energy = spectral_weight * initial_spec + graphlet_weight * initial_graphlet
+     best_graph = current.copy()
+     visited = {
+@@ -1305,6 +1690,7 @@ def enrich_attributed_graph_with_invariant_summary(
+             graphlet_basis=graphlet_basis,
+             config=cfg,
+             device=device,
++            chemistry_reference_graph=graph,
+         )
+         rows = _score_prepared(
+             prepared,
+@@ -1313,6 +1699,8 @@ def enrich_attributed_graph_with_invariant_summary(
+             next_spectra=prediction.clean_spectra,
+             clean_graphlet_logits=prediction.clean_graphlet_logits,
+             next_graphlet_logits=prediction.clean_graphlet_logits,
++            clean_graphlet_probabilities=prediction.clean_graphlet_probabilities,
++            next_graphlet_probabilities=prediction.clean_graphlet_probabilities,
+             graphlet_mask=current_mask,
+             spectral_weight=spectral_weight,
+             graphlet_weight=graphlet_weight,
+@@ -1557,6 +1945,7 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
+             graphlet_basis=graphlet_basis,
+             config=cfg,
+             device=device,
++            chemistry_reference_graph=context_graph,
+         )
+ 
+         expansion = 0
+@@ -1575,6 +1964,11 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
+             next_graphlet_logits = cfg.graphlet_bridge.target(
+                 current_logits, prediction.clean_graphlet_logits, graphlet_mix
+             )
++            next_graphlet_probabilities = attributed_graphlet_clr_to_simplex(
++                next_graphlet_logits,
++                graphlet_basis=graphlet_basis,
++                coordinate_mask=current_mask,
++            )
+             rows = _score_prepared(
+                 prepared,
+                 graphlet_basis=graphlet_basis,
+@@ -1582,6 +1976,8 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
+                 next_spectra=next_spectra,
+                 clean_graphlet_logits=prediction.clean_graphlet_logits,
+                 next_graphlet_logits=next_graphlet_logits,
++                clean_graphlet_probabilities=prediction.clean_graphlet_probabilities,
++                next_graphlet_probabilities=next_graphlet_probabilities,
+                 graphlet_mask=current_mask,
+                 spectral_weight=spectral_weight,
+                 graphlet_weight=graphlet_weight,
+@@ -1672,6 +2068,7 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
+             decision_step,
+             f"{prefix} ACCEPT accepted_step={accepted_steps}/{cfg.steps} gain={chosen['energy_improvement']:.6f} "
+             f"spec_gain={chosen['spectral_gain']:.6f} graphlet_gain={chosen['graphlet_gain']:.6f} "
++            f"chem_gain={chosen['chemistry_drift_gain']:.6f} "
+             f"residual={chosen['projection_residual']:.6f}",
+         )
+         if cfg.debug_enabled and cfg.debug_top_candidates:
+@@ -1683,7 +2080,8 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
+                     f"{prefix} candidate_rank={rank} gain={row['energy_improvement']:.6f} "
+                     f"top_spec={row['topology_spectral_projection_residual']:.6f} "
+                     f"bond_spec={row['bond_spectral_projection_residual']:.6f} "
+-                    f"graphlet={row['graphlet_projection_residual']:.6f}",
++                    f"graphlet={row['graphlet_projection_residual']:.6f} "
++                    f"chem={row['chemistry_drift_penalty']:.6f}",
+                 )
+         trace.append(
+             {
+@@ -1707,6 +2105,20 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
+                 "topology_spectral_gain": float(chosen["topology_spectral_gain"]),
+                 "bond_spectral_gain": float(chosen["bond_spectral_gain"]),
+                 "graphlet_gain": float(chosen["graphlet_gain"]),
++                "graphlet_logit_gain": float(chosen["graphlet_logit_gain"]),
++                "graphlet_probability_gain": float(
++                    chosen["graphlet_probability_gain"]
++                ),
++                "graphlet_selected_mass_gain": float(
++                    chosen["graphlet_selected_mass_gain"]
++                ),
++                "chemistry_drift_gain": float(chosen["chemistry_drift_gain"]),
++                "typed_degree_drift_gain": float(
++                    chosen["typed_degree_drift_gain"]
++                ),
++                "weighted_valence_drift_gain": float(
++                    chosen["weighted_valence_drift_gain"]
++                ),
+                 "clean_spectral_gain": float(chosen["clean_spectral_gain"]),
+                 "clean_graphlet_gain": float(chosen["clean_graphlet_gain"]),
+                 "projection_residual": float(chosen["projection_residual"]),
+@@ -1714,6 +2126,18 @@ def refine_attributed_graph_with_spectral_graphlet_diffusion(
+                 "topology_spectral_projection_residual": float(chosen["topology_spectral_projection_residual"]),
+                 "bond_spectral_projection_residual": float(chosen["bond_spectral_projection_residual"]),
+                 "graphlet_projection_residual": float(chosen["graphlet_projection_residual"]),
++                "graphlet_logit_projection_residual": float(
++                    chosen["graphlet_logit_projection_residual"]
++                ),
++                "graphlet_probability_projection_residual": float(
++                    chosen["graphlet_probability_projection_residual"]
++                ),
++                "graphlet_selected_mass_projection_residual": float(
++                    chosen["graphlet_selected_mass_projection_residual"]
++                ),
++                "chemistry_drift_penalty": float(chosen["chemistry_drift_penalty"]),
++                "typed_degree_drift": float(chosen["typed_degree_drift"]),
++                "weighted_valence_drift": float(chosen["weighted_valence_drift"]),
+                 **proposal_diag,
+                 **rdkit_diag,
+             }
+diff --git a/src/grapher/rewiring_mlp/attributed/spectral_model.py b/src/grapher/rewiring_mlp/attributed/spectral_model.py
+index 25f1f24..a56e27d 100644
+--- a/src/grapher/rewiring_mlp/attributed/spectral_model.py
++++ b/src/grapher/rewiring_mlp/attributed/spectral_model.py
+@@ -642,6 +642,8 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
+         ).sum() / coordinate_count
+         kl_terms: list[torch.Tensor] = []
+         probability_mae_terms: list[torch.Tensor] = []
++        selected_mass_loss_terms: list[torch.Tensor] = []
++        selected_mass_mae_terms: list[torch.Tensor] = []
+         for start, stop in self.graphlet_slices:
+             valid_rows = graphlet_mask[:, start:stop].any(dim=1)
+             if not torch.any(valid_rows):
+@@ -652,6 +654,19 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
+             truth_safe = truth.clamp_min(1.0e-12)
+             kl_terms.append((truth * (torch.log(truth_safe) - torch.log(pred))).sum(dim=-1).mean())
+             probability_mae_terms.append(torch.abs(pred - truth).mean())
++            # Every graphlet simplex block ends with the non-selected /
++            # background coordinate.  In cycle-only mode, one minus this
++            # coordinate is the induced-ring mass.  An explicit scalar loss
++            # prevents a large background probability from hiding an error in
++            # the much smaller selected-cycle mass.
++            pred_selected_mass = 1.0 - pred[:, -1]
++            truth_selected_mass = 1.0 - truth[:, -1]
++            selected_mass_loss_terms.append(
++                F.l1_loss(pred_selected_mass, truth_selected_mass)
++            )
++            selected_mass_mae_terms.append(
++                torch.abs(pred_selected_mass - truth_selected_mass).mean()
++            )
+         graphlet_probability_loss = (
+             torch.stack(kl_terms).mean() if kl_terms else predicted_logits.sum() * 0.0
+         )
+@@ -660,9 +675,21 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
+             if probability_mae_terms
+             else predicted_logits.sum() * 0.0
+         )
++        graphlet_selected_mass_loss = (
++            torch.stack(selected_mass_loss_terms).mean()
++            if selected_mass_loss_terms
++            else predicted_logits.sum() * 0.0
++        )
++        graphlet_selected_mass_mae = (
++            torch.stack(selected_mass_mae_terms).mean()
++            if selected_mass_mae_terms
++            else predicted_logits.sum() * 0.0
++        )
+         graphlet_total = (
+             float(weights.get("graphlet_logit", 1.0)) * graphlet_logit_loss
+             + float(weights.get("graphlet_probability", 0.25)) * graphlet_probability_loss
++            + float(weights.get("graphlet_selected_mass", 0.0))
++            * graphlet_selected_mass_loss
+         )
+         total = spectral_total + graphlet_total
+ 
+@@ -709,6 +736,8 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
+                 F.smooth_l1_loss(inv_logits, target_logits, reduction="none") * graphlet_weight
+             ).sum() / coordinate_count
+             inv_kl_terms: list[torch.Tensor] = []
++            inv_selected_mass_loss_terms: list[torch.Tensor] = []
++            inv_selected_mass_mae_terms: list[torch.Tensor] = []
+             for start, stop in self.graphlet_slices:
+                 valid_rows = graphlet_mask[:, start:stop].any(dim=1)
+                 if not torch.any(valid_rows):
+@@ -720,12 +749,32 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
+                 inv_kl_terms.append(
+                     (truth * (torch.log(truth_safe) - torch.log(pred))).sum(dim=-1).mean()
+                 )
++                pred_selected_mass = 1.0 - pred[:, -1]
++                truth_selected_mass = 1.0 - truth[:, -1]
++                inv_selected_mass_loss_terms.append(
++                    F.l1_loss(pred_selected_mass, truth_selected_mass)
++                )
++                inv_selected_mass_mae_terms.append(
++                    torch.abs(pred_selected_mass - truth_selected_mass).mean()
++                )
+             inv_probability_loss = (
+                 torch.stack(inv_kl_terms).mean() if inv_kl_terms else inv_logits.sum() * 0.0
+             )
++            inv_selected_mass_loss = (
++                torch.stack(inv_selected_mass_loss_terms).mean()
++                if inv_selected_mass_loss_terms
++                else inv_logits.sum() * 0.0
++            )
++            inv_selected_mass_mae = (
++                torch.stack(inv_selected_mass_mae_terms).mean()
++                if inv_selected_mass_mae_terms
++                else inv_logits.sum() * 0.0
++            )
+             inv_graphlet_total = (
+                 float(weights.get("graphlet_logit", 1.0)) * inv_logit_loss
+                 + float(weights.get("graphlet_probability", 0.25)) * inv_probability_loss
++                + float(weights.get("graphlet_selected_mass", 0.0))
++                * inv_selected_mass_loss
+             )
+             invariant_summary_total = inv_spectral_total + inv_graphlet_total
+             total = total + invariant_summary_weight * invariant_summary_total
+@@ -740,6 +789,12 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
+                 "invariant_summary_bond_nrmse": float(inv_channel_rmse[1].detach().cpu()),
+                 "invariant_summary_graphlet_logit_loss": float(inv_logit_loss.detach().cpu()),
+                 "invariant_summary_graphlet_probability_loss": float(inv_probability_loss.detach().cpu()),
++                "invariant_summary_graphlet_selected_mass_loss": float(
++                    inv_selected_mass_loss.detach().cpu()
++                ),
++                "invariant_summary_graphlet_selected_mass_mae": float(
++                    inv_selected_mass_mae.detach().cpu()
++                ),
+             }
+ 
+         with torch.no_grad():
+@@ -790,6 +845,12 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
+             "graphlet_logit_rmse": float(graphlet_rmse.detach().cpu()),
+             "graphlet_logit_mae": float(graphlet_mae.detach().cpu()),
+             "graphlet_probability_mae": float(probability_mae.detach().cpu()),
++            "graphlet_selected_mass_loss": float(
++                graphlet_selected_mass_loss.detach().cpu()
++            ),
++            "graphlet_selected_mass_mae": float(
++                graphlet_selected_mass_mae.detach().cpu()
++            ),
+         }
+         metrics.update(invariant_metrics)
+         return total, metrics
+diff --git a/src/grapher/rewiring_mlp/evaluation/metrics.py b/src/grapher/rewiring_mlp/evaluation/metrics.py
+index 393396e..a1fec8e 100644
+--- a/src/grapher/rewiring_mlp/evaluation/metrics.py
++++ b/src/grapher/rewiring_mlp/evaluation/metrics.py
+@@ -186,7 +186,11 @@ def mmd_graphlet_statistics(
+     node_label_attr: str | None = None,
+     edge_label_attr: str | None = None,
+     attributed_backend: str = "auto",
+-) -> tuple[float, float]:
++    return_by_order: bool = False,
++) -> (
++    tuple[float, float]
++    | tuple[float, float, dict[str, float], dict[str, float]]
++):
+     """MMD for selected graphlet composition and induced-subset mass."""
+ 
+     cfg = SummaryConfig(
+@@ -267,6 +271,12 @@ def mmd_graphlet_statistics(
+         flatten_graphlet_history(h, keys_by_k) for h in histories[len(reference) :]
+     ]
+     if not ref_rows or not gen_rows:
++        if return_by_order:
++            empty = {
++                str(k): float("nan")
++                for k in range(int(k_min), int(k_max) + 1)
++            }
++            return float("nan"), float("nan"), dict(empty), dict(empty)
+         return float("nan"), float("nan")
+     mass_keys = [str(k) for k in range(int(k_min), int(k_max) + 1)]
+     ref_mass = np.asarray(
+@@ -292,7 +302,41 @@ def mmd_graphlet_statistics(
+             np.asarray(gen_rows, dtype=np.float64),
+         )
+     )
+-    return histogram_mmd, mmd_gaussian_emd(ref_mass, gen_mass)
++    selected_mass_mmd = mmd_gaussian_emd(ref_mass, gen_mass)
++    if not return_by_order:
++        return histogram_mmd, selected_mass_mmd
++
++    histogram_by_order: dict[str, float] = {}
++    mass_by_order: dict[str, float] = {}
++    for key in mass_keys:
++        order_keys = {key: keys_by_k.get(key, [])}
++        order_ref_rows = [
++            flatten_graphlet_history({key: history.get(key, {})}, order_keys)
++            for history in histories[: len(reference)]
++        ]
++        order_gen_rows = [
++            flatten_graphlet_history({key: history.get(key, {})}, order_keys)
++            for history in histories[len(reference) :]
++        ]
++        order_width = len(order_keys[key])
++        histogram_by_order[key] = (
++            0.0
++            if order_width == 0
++            else mmd_gaussian_emd(
++                np.asarray(order_ref_rows, dtype=np.float64),
++                np.asarray(order_gen_rows, dtype=np.float64),
++            )
++        )
++        order_ref_mass = np.asarray(
++            [[item.get(key, 0.0)] for item in masses[: len(reference)]],
++            dtype=np.float64,
++        )
++        order_gen_mass = np.asarray(
++            [[item.get(key, 0.0)] for item in masses[len(reference) :]],
++            dtype=np.float64,
++        )
++        mass_by_order[key] = mmd_gaussian_emd(order_ref_mass, order_gen_mass)
++    return histogram_mmd, selected_mass_mmd, histogram_by_order, mass_by_order
+ 
+ 
+ def connectedness_rate(graphs: Sequence[nx.Graph]) -> float:
+diff --git a/tests/test_attributed_graphlets.py b/tests/test_attributed_graphlets.py
+index d256261..1a2a128 100644
+--- a/tests/test_attributed_graphlets.py
++++ b/tests/test_attributed_graphlets.py
+@@ -192,3 +192,23 @@ def test_cycle_only_graphlet_mmd_uses_ring_composition_and_mass() -> None:
+     assert np.allclose(identical, (0.0, 0.0))
+     assert different[0] > 0.0
+     assert different[1] > 0.0
++
++    aggregate_hist, aggregate_mass, by_order_hist, by_order_mass = (
++        mmd_graphlet_statistics(
++            [cycle],
++            [path],
++            k_min=3,
++            k_max=4,
++            topology_filter="simple_cycle",
++            node_label_attr="atomic_num",
++            edge_label_attr="bond_type",
++            attributed_backend="python",
++            return_by_order=True,
++        )
++    )
++    assert aggregate_hist > 0.0
++    assert aggregate_mass > 0.0
++    assert set(by_order_hist) == {"3", "4"}
++    assert set(by_order_mass) == {"3", "4"}
++    assert by_order_hist["4"] > 0.0
++    assert by_order_mass["4"] > 0.0
+diff --git a/tests/test_attributed_spectral_graphlet_diffusion.py b/tests/test_attributed_spectral_graphlet_diffusion.py
+index 4976037..fe9152b 100644
+--- a/tests/test_attributed_spectral_graphlet_diffusion.py
++++ b/tests/test_attributed_spectral_graphlet_diffusion.py
+@@ -30,7 +30,11 @@ from grapher.rewiring_mlp.attributed.spectral_data import (
+ from grapher.rewiring_mlp.attributed.spectral_graphlet_refiner import (
+     AttributedSpectralGraphletRefinerConfig,
+     _apply_attributed_action,
++    _graphlet_probability_and_mass_distance,
++    _normalized_conserved_l1,
++    _typed_degree_matrix,
+     _typed_actions_for_topology_action,
++    _weighted_valence_vector,
+     refine_attributed_graph_with_spectral_graphlet_diffusion,
+ )
+ from grapher.rewiring_mlp.attributed.spectral_model import (
+@@ -477,10 +481,13 @@ def test_model_forward_loss_and_checkpoint_roundtrip(tmp_path: Path) -> None:
+             "moment2": 0.25,
+             "graphlet_logit": 1.0,
+             "graphlet_probability": 0.25,
++            "graphlet_selected_mass": 1.0,
+         },
+     )
+     assert torch.isfinite(loss)
+     assert "topology_moment2_relative_error" in metrics
++    assert "graphlet_selected_mass_loss" in metrics
++    assert "graphlet_selected_mass_mae" in metrics
+ 
+     checkpoint = tmp_path / "checkpoint.pt"
+     save_attributed_spectral_graphlet_checkpoint(
+@@ -662,6 +669,111 @@ def test_cross_type_action_preserves_relaxed_invariant_but_can_change_typed_degr
+     assert [candidate.degree(i) for i in range(6)] == [graph.degree(i) for i in range(6)]
+ 
+ 
++def test_chemistry_drift_scores_detect_cross_type_reassignment() -> None:
++    graph = _mixed_bond_cycle_graph()
++    vocabulary = GraphCategoryVocabulary.from_graphs(
++        [graph],
++        {
++            "node_attribute": "atomic_num",
++            "node_categories": [6],
++            "edge_attribute": "bond_type",
++            "edge_categories": [1, 2],
++        },
++    )
++    config = AttributedSpectralGraphletRefinerConfig.from_dict(
++        {
++            "molecular": {
++                "require_same_edge_type_pair": False,
++                "preserve_global_edge_type_counts": True,
++                "enumerate_edge_type_permutations": True,
++                "typed_degree_drift_weight": 1.0,
++                "weighted_valence_drift_weight": 1.0,
++                "rdkit_candidate_check": False,
++            }
++        }
++    )
++    topology_action = next(
++        action
++        for action in candidate_actions_from_edge_pair((0, 1), (3, 4))
++        if set(action[1]) == {(0, 3), (1, 4)}
++    )
++    action = _typed_actions_for_topology_action(
++        graph,
++        topology_action,
++        vocabulary=vocabulary,
++        config=config,
++    )[0]
++    candidate = _apply_attributed_action(graph, action, vocabulary)
++
++    typed_reference = _typed_degree_matrix(graph, vocabulary=vocabulary)
++    valence_reference = _weighted_valence_vector(graph, vocabulary=vocabulary)
++    typed_drift = _normalized_conserved_l1(
++        _typed_degree_matrix(candidate, vocabulary=vocabulary), typed_reference
++    )
++    valence_drift = _normalized_conserved_l1(
++        _weighted_valence_vector(candidate, vocabulary=vocabulary),
++        valence_reference,
++    )
++    assert typed_drift > 0.0
++    assert valence_drift > 0.0
++    assert typed_drift <= 1.0
++    assert valence_drift <= 1.0
++
++
++def test_cycle_guidance_separates_class_composition_and_selected_mass() -> None:
++    basis = GraphletBasis(
++        keys_by_k={"3": ("ring_a", "ring_b", "__overflow__")},
++        connected_only=True,
++        topology_filter="simple_cycle",
++        attributed=True,
++        node_attribute="atomic_num",
++        edge_attribute="bond_type",
++        overflow_key="__overflow__",
++        attributed_backend="python",
++    )
++    # Same selected mass (0.20), different distribution over selected classes.
++    left = np.asarray([0.15, 0.04, 0.01, 0.80], dtype=np.float64)
++    right = np.asarray([0.04, 0.15, 0.01, 0.80], dtype=np.float64)
++    probability, mass = _graphlet_probability_and_mass_distance(
++        left,
++        right,
++        graphlet_basis=basis,
++        coordinate_mask=np.ones(4, dtype=np.bool_),
++        metric="rmse",
++        size_weights={"3": 1.0},
++    )
++    assert probability > 0.0
++    assert mass == pytest.approx(0.0)
++
++    lower_mass = np.asarray([0.03, 0.01, 0.01, 0.95], dtype=np.float64)
++    _, mass = _graphlet_probability_and_mass_distance(
++        left,
++        lower_mass,
++        graphlet_basis=basis,
++        coordinate_mask=np.ones(4, dtype=np.bool_),
++        metric="rmse",
++        size_weights={"3": 1.0},
++    )
++    assert mass == pytest.approx(0.15)
++
++
++def test_v2_cycle_config_uses_raw_validity_and_balanced_guidance() -> None:
++    config = load_yaml(
++        "configs/experiments/grapher/"
++        "qm9_attributed_spectral_cycle_graphlet_v2.yaml"
++    )
++    refiner = AttributedSpectralGraphletRefinerConfig.from_dict(
++        config["attributed_refiner"]
++    )
++    assert refiner.rdkit_validation_mode == "raw"
++    assert refiner.rdkit_infer_projected_formal_charges is False
++    assert refiner.graphlet_probability_distance_weight > 0.0
++    assert refiner.graphlet_selected_mass_weight > 0.0
++    assert refiner.typed_degree_drift_weight > 0.0
++    assert refiner.weighted_valence_drift_weight > 0.0
++    assert config["generation"]["require_rdkit_final_validity"] is True
++
++
+ def test_revised_qm9_configs_enable_bond_reassigning_kernel() -> None:
+     for config_path in (
+         "configs/experiments/grapher/qm9_attributed_spectral_graphlet_light.yaml",
+diff --git a/tests/test_evaluate_generated_molecules.py b/tests/test_evaluate_generated_molecules.py
+index 7b5a110..1d65b12 100644
+--- a/tests/test_evaluate_generated_molecules.py
++++ b/tests/test_evaluate_generated_molecules.py
+@@ -39,6 +39,16 @@ def _correctable_carbon_valence_five_graph() -> nx.Graph:
+     return graph
+ 
+ 
++def _projected_tetravalent_nitrogen_graph() -> nx.Graph:
++    graph = nx.Graph()
++    for node, atomic_num in enumerate((7, 6, 8, 8)):
++        graph.add_node(node, atomic_num=atomic_num, atom_type=atomic_num)
++    graph.add_edge(0, 1, bond_type=1, bond_order=1.0)
++    graph.add_edge(0, 2, bond_type=2, bond_order=2.0)
++    graph.add_edge(0, 3, bond_type=1, bond_order=1.0)
++    return graph
++
++
+ def test_reports_validity_with_and_without_correction() -> None:
+     pytest.importorskip("rdkit")
+     graphs = [_valid_cf4_graph(), _correctable_carbon_valence_five_graph()]
+@@ -58,6 +68,23 @@ def test_reports_validity_with_and_without_correction() -> None:
+     assert corrected["correction_steps"][1] == 1
+ 
+ 
++def test_projected_charge_validity_is_separate_from_bond_correction() -> None:
++    pytest.importorskip("rdkit")
++    graph = _projected_tetravalent_nitrogen_graph()
++    raw = MODULE._validity_and_smiles([graph])
++    projected = MODULE._validity_with_projected_formal_charges(
++        [graph],
++        raw_smiles=raw["all_smiles"],
++    )
++
++    assert raw["validity_without_correction"] == pytest.approx(0.0)
++    assert projected["validity_with_projected_formal_charges"] == pytest.approx(
++        1.0
++    )
++    assert projected["resolved_indices"] == [0]
++    assert projected["success_rate_on_raw_invalid"] == pytest.approx(1.0)
++
++
+ def test_evaluate_outputs_validity_raw_validity_and_fcd(
+     tmp_path: Path,
+     monkeypatch: pytest.MonkeyPatch,
+@@ -117,6 +144,9 @@ def test_evaluate_outputs_validity_raw_validity_and_fcd(
+ 
+     assert metrics["validity"] == pytest.approx(0.5)
+     assert metrics["validity_with_correction"] == pytest.approx(1.0)
++    assert metrics["validity_with_projected_formal_charges"] == pytest.approx(
++        0.5
++    )
+     assert metrics["validity_without_correction"] == pytest.approx(0.5)
+     assert metrics["fcd"] == pytest.approx(1.234)
+     assert metrics["fcd_num_valid_generated_molecules"] == 2

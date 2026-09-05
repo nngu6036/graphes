@@ -642,6 +642,8 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
         ).sum() / coordinate_count
         kl_terms: list[torch.Tensor] = []
         probability_mae_terms: list[torch.Tensor] = []
+        selected_mass_loss_terms: list[torch.Tensor] = []
+        selected_mass_mae_terms: list[torch.Tensor] = []
         for start, stop in self.graphlet_slices:
             valid_rows = graphlet_mask[:, start:stop].any(dim=1)
             if not torch.any(valid_rows):
@@ -652,6 +654,19 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
             truth_safe = truth.clamp_min(1.0e-12)
             kl_terms.append((truth * (torch.log(truth_safe) - torch.log(pred))).sum(dim=-1).mean())
             probability_mae_terms.append(torch.abs(pred - truth).mean())
+            # Every graphlet simplex block ends with the non-selected /
+            # background coordinate.  In cycle-only mode, one minus this
+            # coordinate is the induced-ring mass.  An explicit scalar loss
+            # prevents a large background probability from hiding an error in
+            # the much smaller selected-cycle mass.
+            pred_selected_mass = 1.0 - pred[:, -1]
+            truth_selected_mass = 1.0 - truth[:, -1]
+            selected_mass_loss_terms.append(
+                F.l1_loss(pred_selected_mass, truth_selected_mass)
+            )
+            selected_mass_mae_terms.append(
+                torch.abs(pred_selected_mass - truth_selected_mass).mean()
+            )
         graphlet_probability_loss = (
             torch.stack(kl_terms).mean() if kl_terms else predicted_logits.sum() * 0.0
         )
@@ -660,9 +675,21 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
             if probability_mae_terms
             else predicted_logits.sum() * 0.0
         )
+        graphlet_selected_mass_loss = (
+            torch.stack(selected_mass_loss_terms).mean()
+            if selected_mass_loss_terms
+            else predicted_logits.sum() * 0.0
+        )
+        graphlet_selected_mass_mae = (
+            torch.stack(selected_mass_mae_terms).mean()
+            if selected_mass_mae_terms
+            else predicted_logits.sum() * 0.0
+        )
         graphlet_total = (
             float(weights.get("graphlet_logit", 1.0)) * graphlet_logit_loss
             + float(weights.get("graphlet_probability", 0.25)) * graphlet_probability_loss
+            + float(weights.get("graphlet_selected_mass", 0.0))
+            * graphlet_selected_mass_loss
         )
         total = spectral_total + graphlet_total
 
@@ -709,6 +736,8 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
                 F.smooth_l1_loss(inv_logits, target_logits, reduction="none") * graphlet_weight
             ).sum() / coordinate_count
             inv_kl_terms: list[torch.Tensor] = []
+            inv_selected_mass_loss_terms: list[torch.Tensor] = []
+            inv_selected_mass_mae_terms: list[torch.Tensor] = []
             for start, stop in self.graphlet_slices:
                 valid_rows = graphlet_mask[:, start:stop].any(dim=1)
                 if not torch.any(valid_rows):
@@ -720,12 +749,32 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
                 inv_kl_terms.append(
                     (truth * (torch.log(truth_safe) - torch.log(pred))).sum(dim=-1).mean()
                 )
+                pred_selected_mass = 1.0 - pred[:, -1]
+                truth_selected_mass = 1.0 - truth[:, -1]
+                inv_selected_mass_loss_terms.append(
+                    F.l1_loss(pred_selected_mass, truth_selected_mass)
+                )
+                inv_selected_mass_mae_terms.append(
+                    torch.abs(pred_selected_mass - truth_selected_mass).mean()
+                )
             inv_probability_loss = (
                 torch.stack(inv_kl_terms).mean() if inv_kl_terms else inv_logits.sum() * 0.0
+            )
+            inv_selected_mass_loss = (
+                torch.stack(inv_selected_mass_loss_terms).mean()
+                if inv_selected_mass_loss_terms
+                else inv_logits.sum() * 0.0
+            )
+            inv_selected_mass_mae = (
+                torch.stack(inv_selected_mass_mae_terms).mean()
+                if inv_selected_mass_mae_terms
+                else inv_logits.sum() * 0.0
             )
             inv_graphlet_total = (
                 float(weights.get("graphlet_logit", 1.0)) * inv_logit_loss
                 + float(weights.get("graphlet_probability", 0.25)) * inv_probability_loss
+                + float(weights.get("graphlet_selected_mass", 0.0))
+                * inv_selected_mass_loss
             )
             invariant_summary_total = inv_spectral_total + inv_graphlet_total
             total = total + invariant_summary_weight * invariant_summary_total
@@ -740,6 +789,12 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
                 "invariant_summary_bond_nrmse": float(inv_channel_rmse[1].detach().cpu()),
                 "invariant_summary_graphlet_logit_loss": float(inv_logit_loss.detach().cpu()),
                 "invariant_summary_graphlet_probability_loss": float(inv_probability_loss.detach().cpu()),
+                "invariant_summary_graphlet_selected_mass_loss": float(
+                    inv_selected_mass_loss.detach().cpu()
+                ),
+                "invariant_summary_graphlet_selected_mass_mae": float(
+                    inv_selected_mass_mae.detach().cpu()
+                ),
             }
 
         with torch.no_grad():
@@ -790,6 +845,12 @@ class AttributedSpectralGraphletTransformerPredictor(nn.Module):
             "graphlet_logit_rmse": float(graphlet_rmse.detach().cpu()),
             "graphlet_logit_mae": float(graphlet_mae.detach().cpu()),
             "graphlet_probability_mae": float(probability_mae.detach().cpu()),
+            "graphlet_selected_mass_loss": float(
+                graphlet_selected_mass_loss.detach().cpu()
+            ),
+            "graphlet_selected_mass_mae": float(
+                graphlet_selected_mass_mae.detach().cpu()
+            ),
         }
         metrics.update(invariant_metrics)
         return total, metrics

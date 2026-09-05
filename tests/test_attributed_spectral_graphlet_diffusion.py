@@ -30,7 +30,11 @@ from grapher.rewiring_mlp.attributed.spectral_data import (
 from grapher.rewiring_mlp.attributed.spectral_graphlet_refiner import (
     AttributedSpectralGraphletRefinerConfig,
     _apply_attributed_action,
+    _graphlet_probability_and_mass_distance,
+    _normalized_conserved_l1,
+    _typed_degree_matrix,
     _typed_actions_for_topology_action,
+    _weighted_valence_vector,
     refine_attributed_graph_with_spectral_graphlet_diffusion,
 )
 from grapher.rewiring_mlp.attributed.spectral_model import (
@@ -477,10 +481,13 @@ def test_model_forward_loss_and_checkpoint_roundtrip(tmp_path: Path) -> None:
             "moment2": 0.25,
             "graphlet_logit": 1.0,
             "graphlet_probability": 0.25,
+            "graphlet_selected_mass": 1.0,
         },
     )
     assert torch.isfinite(loss)
     assert "topology_moment2_relative_error" in metrics
+    assert "graphlet_selected_mass_loss" in metrics
+    assert "graphlet_selected_mass_mae" in metrics
 
     checkpoint = tmp_path / "checkpoint.pt"
     save_attributed_spectral_graphlet_checkpoint(
@@ -660,6 +667,111 @@ def test_cross_type_action_preserves_relaxed_invariant_but_can_change_typed_degr
         data["bond_type"] for _, _, data in graph.edges(data=True)
     )
     assert [candidate.degree(i) for i in range(6)] == [graph.degree(i) for i in range(6)]
+
+
+def test_chemistry_drift_scores_detect_cross_type_reassignment() -> None:
+    graph = _mixed_bond_cycle_graph()
+    vocabulary = GraphCategoryVocabulary.from_graphs(
+        [graph],
+        {
+            "node_attribute": "atomic_num",
+            "node_categories": [6],
+            "edge_attribute": "bond_type",
+            "edge_categories": [1, 2],
+        },
+    )
+    config = AttributedSpectralGraphletRefinerConfig.from_dict(
+        {
+            "molecular": {
+                "require_same_edge_type_pair": False,
+                "preserve_global_edge_type_counts": True,
+                "enumerate_edge_type_permutations": True,
+                "typed_degree_drift_weight": 1.0,
+                "weighted_valence_drift_weight": 1.0,
+                "rdkit_candidate_check": False,
+            }
+        }
+    )
+    topology_action = next(
+        action
+        for action in candidate_actions_from_edge_pair((0, 1), (3, 4))
+        if set(action[1]) == {(0, 3), (1, 4)}
+    )
+    action = _typed_actions_for_topology_action(
+        graph,
+        topology_action,
+        vocabulary=vocabulary,
+        config=config,
+    )[0]
+    candidate = _apply_attributed_action(graph, action, vocabulary)
+
+    typed_reference = _typed_degree_matrix(graph, vocabulary=vocabulary)
+    valence_reference = _weighted_valence_vector(graph, vocabulary=vocabulary)
+    typed_drift = _normalized_conserved_l1(
+        _typed_degree_matrix(candidate, vocabulary=vocabulary), typed_reference
+    )
+    valence_drift = _normalized_conserved_l1(
+        _weighted_valence_vector(candidate, vocabulary=vocabulary),
+        valence_reference,
+    )
+    assert typed_drift > 0.0
+    assert valence_drift > 0.0
+    assert typed_drift <= 1.0
+    assert valence_drift <= 1.0
+
+
+def test_cycle_guidance_separates_class_composition_and_selected_mass() -> None:
+    basis = GraphletBasis(
+        keys_by_k={"3": ("ring_a", "ring_b", "__overflow__")},
+        connected_only=True,
+        topology_filter="simple_cycle",
+        attributed=True,
+        node_attribute="atomic_num",
+        edge_attribute="bond_type",
+        overflow_key="__overflow__",
+        attributed_backend="python",
+    )
+    # Same selected mass (0.20), different distribution over selected classes.
+    left = np.asarray([0.15, 0.04, 0.01, 0.80], dtype=np.float64)
+    right = np.asarray([0.04, 0.15, 0.01, 0.80], dtype=np.float64)
+    probability, mass = _graphlet_probability_and_mass_distance(
+        left,
+        right,
+        graphlet_basis=basis,
+        coordinate_mask=np.ones(4, dtype=np.bool_),
+        metric="rmse",
+        size_weights={"3": 1.0},
+    )
+    assert probability > 0.0
+    assert mass == pytest.approx(0.0)
+
+    lower_mass = np.asarray([0.03, 0.01, 0.01, 0.95], dtype=np.float64)
+    _, mass = _graphlet_probability_and_mass_distance(
+        left,
+        lower_mass,
+        graphlet_basis=basis,
+        coordinate_mask=np.ones(4, dtype=np.bool_),
+        metric="rmse",
+        size_weights={"3": 1.0},
+    )
+    assert mass == pytest.approx(0.15)
+
+
+def test_v2_cycle_config_uses_raw_validity_and_balanced_guidance() -> None:
+    config = load_yaml(
+        "configs/experiments/grapher/"
+        "qm9_attributed_spectral_cycle_graphlet_v2.yaml"
+    )
+    refiner = AttributedSpectralGraphletRefinerConfig.from_dict(
+        config["attributed_refiner"]
+    )
+    assert refiner.rdkit_validation_mode == "raw"
+    assert refiner.rdkit_infer_projected_formal_charges is False
+    assert refiner.graphlet_probability_distance_weight > 0.0
+    assert refiner.graphlet_selected_mass_weight > 0.0
+    assert refiner.typed_degree_drift_weight > 0.0
+    assert refiner.weighted_valence_drift_weight > 0.0
+    assert config["generation"]["require_rdkit_final_validity"] is True
 
 
 def test_revised_qm9_configs_enable_bond_reassigning_kernel() -> None:

@@ -756,7 +756,8 @@ def main() -> None:
                 f"top_spec={val_metrics['topology_spectral_nrmse']:.5f} "
                 f"bond_spec={val_metrics['bond_spectral_nrmse']:.5f} "
                 f"glogit={val_metrics['graphlet_logit_rmse']:.5f} "
-                f"gprob={val_metrics['graphlet_probability_mae']:.5f}",
+                f"gprob={val_metrics['graphlet_probability_mae']:.5f} "
+                f"gmass={val_metrics['graphlet_selected_mass_mae']:.5f}",
                 flush=True,
             )
 

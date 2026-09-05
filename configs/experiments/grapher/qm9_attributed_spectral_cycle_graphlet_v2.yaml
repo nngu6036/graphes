@@ -1,0 +1,370 @@
+experiment: qm9_attributed_spectral_cycle_graphlet_v2
+benchmark: qm9_heavy_atom
+seed: 42
+pipeline:
+  stage: attributed
+  factorization: typed_source_then_invariant_summary_enrichment_then_dual_spectral_attributed_graphlet_diffusion_rewiring
+protocol:
+  evaluation_seeds:
+  - 42
+  - 43
+  - 44
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  tune_on_split: val
+  final_split: test
+dataset:
+  name: qm9_attributed
+  config_path: configs/datasets/qm9.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+  max_val_graphs: 2000
+  max_generation_train_graphs: null
+categorical_state:
+  node_attribute: atomic_num
+  node_categories:
+  - 6
+  - 7
+  - 8
+  - 9
+  edge_attribute: bond_type
+  edge_categories:
+  - 1
+  - 2
+  - 3
+  require_exact_observed_support: true
+graphlet_prediction:
+  graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 6
+  graphlet_connected_only: true
+  graphlet_topology_filter: simple_cycle
+  attributed: true
+  attributed_backend: python
+  graphlet_num_samples: null
+  max_basis_graphs: 20000
+  clustering_summary: false
+  spectral_summary: false
+  motif_proxy: false
+  orbit_count: false
+graphlet_diffusion:
+  representation: clr_logits
+  logit_epsilon: 0.0005
+summary_diffusion:
+  storage: streaming
+  bridge: brownian_endpoint_conditioned
+  schedule: cosine
+  power: 2.0
+  spectral_sigma: 0.18
+  graphlet_sigma: 0.2
+  preserve_spectral_trace: true
+  fix_spectral_lambda1: true
+  samples_per_graph: 1
+  paths_per_graph: 1
+  time_sampling: stratified
+  cache_endpoints: true
+  endpoint_cache_path: outputs/cache/qm9_attributed_spectral_cycle_graphlet_v2/seed_42/endpoints.sqlite
+spectral_prediction:
+  normalization: mean_degree
+  distance: rmse
+  channel_weights:
+    topology: 1.0
+    bond_weighted: 1.25
+  low_frequency_weight: 1.5
+  low_frequency_cutoff: 4
+training_sources:
+  mode: target_typed_degree_constructor
+  ensure_connected_source: true
+  max_repair_trials: 50000
+  shared_relabel_augmentation: true
+  typed_constructor:
+    type: typed_backtracking
+    ensure_connected: true
+    randomize_assignment: false
+    max_restarts: 64
+    max_backtracks: 100000
+    candidate_ranking: uniform
+    max_ordinary_degree: null
+    max_weighted_valence: null
+attributed_predictor:
+  type: attributed_spectral_graphlet_transformer
+  checkpoint_path: outputs/attributed_grapher/qm9_spectral_cycle_graphlet_v2/seed_42/checkpoint.pt
+  device: auto
+  hidden_dim: 256
+  edge_dim: 128
+  graph_dim: 256
+  num_layers: 6
+  spectral_dim: 256
+  spectral_layers: 6
+  spectral_heads: 8
+  spectral_ff_dim: 1024
+  graphlet_dim: 512
+  dropout: 0.05
+  graphlet_dropout: 0.05
+  min_gap: 1.0e-06
+  input_normalization: mean_degree
+  batch_size: 128
+  epochs: 75
+  learning_rate: 0.00012
+  weight_decay: 5.0e-05
+  progress_interval: 1
+  batch_progress_interval: 10
+  progress_interval_seconds: 30
+  loss_weights:
+    spectrum: 1.0
+    topology_spectrum: 1.0
+    bond_spectrum: 1.25
+    moment2: 0.2
+    low_frequency: 0.75
+    low_frequency_k: 4
+    graphlet_logit: 1.0
+    graphlet_probability: 1.25
+    invariant_summary: 0.25
+    graphlet_selected_mass: 1.0
+generation:
+  invariant_source: learned
+  num_generate: 1024
+  max_attempts_per_graph: 128
+  checkpoint_every: 25
+  store_traces: true
+  require_rdkit_source_validity: true
+  require_rdkit_final_validity: true
+degree_generator:
+  enabled: true
+  type: typed_degree_histogram_vae
+  checkpoint_path: outputs/degree_generators/qm9_typed/seed_42/checkpoint.pt
+  device: auto
+  deterministic: false
+  sample_num_nodes: empirical
+  max_resample: 2000
+  fallback: error
+constructor:
+  type: typed_backtracking
+  ensure_connected: true
+  randomize_assignment: true
+  max_restarts: 256
+  max_backtracks: 100000
+  candidate_ranking: uniform
+  max_ordinary_degree: 4
+  max_weighted_valence:
+    6: 4.0
+    7: 4.0
+    8: 3.0
+    9: 1.0
+attributed_refiner:
+  mode: attributed_spectral_graphlet
+  steps: 40
+  proposal_budget: 384
+  valid_candidate_budget: 96
+  preserve_connectivity: true
+  reject_revisited_states: true
+  return_best_state: false
+  selection: greedy
+  temperature: 0.1
+  min_improvement: 1.0e-09
+  min_relative_improvement: 2.0e-05
+  relative_improvement_epsilon: 1.0e-12
+  spectral_guidance:
+    distance: rmse
+    normalization: mean_degree
+    channel_weights:
+      topology: 1.0
+      bond_weighted: 1.25
+    low_frequency_weight: 1.5
+    low_frequency_cutoff: 4
+    schedule: cosine
+    min_clean_mix: 0.1
+    max_clean_mix: 1.0
+    power: 2.0
+  graphlet_guidance:
+    distance: clr_rmse
+    logit_epsilon: 0.0005
+    size_weights:
+      '3': 1.0
+      '4': 1.0
+      '5': 1.0
+      '6': 1.0
+    schedule: cosine
+    min_clean_mix: 0.1
+    max_clean_mix: 1.0
+    power: 2.0
+    logit_weight: 0.25
+    probability_weight: 1.0
+    selected_mass_weight: 1.5
+    probability_distance: rmse
+  expand_on_plateau: true
+  plateau_expand_factor: 1.25
+  max_plateau_expansions: 4
+  global_to_local:
+    schedule: cosine
+    spectral_initial: 1.0
+    graphlet_initial: 0.15
+    spectral_final: 0.5
+    graphlet_final: 1.25
+    power: 1.5
+  prediction_horizon:
+    mode: annealed
+    initial_k: 4
+    final_k: 1
+    schedule: cosine
+    refresh_on_plateau: true
+  molecular:
+    require_same_edge_type_pair: false
+    preserve_removed_edge_type: false
+    preserve_global_edge_type_counts: true
+    enumerate_edge_type_permutations: true
+    preserve_node_types: true
+    preserve_ordinary_degree: true
+    preserve_typed_degree: false
+    preserve_weighted_valence: false
+    enforce_molecular_valence: true
+    allowed_bond_types:
+    - 1
+    - 2
+    - 3
+    max_valence:
+      6: 4.0
+      7: 4.0
+      8: 3.0
+      9: 1.0
+    rdkit_candidate_check: true
+    rdkit_infer_projected_formal_charges: false
+    rdkit_shortlist: 48
+    require_rdkit_source_validity: true
+    typed_degree_drift_weight: 0.75
+    weighted_valence_drift_weight: 1.5
+    rdkit_validation_mode: raw
+  debug:
+    enabled: false
+    print_every: 1
+    top_candidates: 5
+  candidate_search:
+    adaptive: true
+    initial_proposal_budget: 192
+    initial_valid_candidate_budget: 48
+    final_proposal_budget: 384
+    final_valid_candidate_budget: 96
+    schedule: cosine
+    spectrum_backend: auto
+    spectrum_batch_size: 128
+evaluation:
+  generated_graphs: molecular_graphs.pkl
+  validity: true
+  validity_with_correction: true
+  validity_without_correction: true
+  uniqueness: true
+  novelty: true
+  nspdk: true
+  fcd: true
+  graphlet_mmd: true
+  graphlet_k_min: 3
+  graphlet_k_max: 6
+  graphlet_topology_filter: simple_cycle
+  graphlet_node_attribute: atomic_num
+  graphlet_edge_attribute: bond_type
+  graphlet_attributed_backend: python
+source_enrichment:
+  enabled: true
+  summary_estimator:
+    enabled: true
+    hidden_dim: 256
+    layers: 2
+    dropout: 0.05
+    conditioning: atom_type_ordinary_degree_global_bond_counts
+  rewiring:
+    mode: attributed_spectral_graphlet
+    steps: 4
+    proposal_budget: 192
+    valid_candidate_budget: 48
+    preserve_connectivity: true
+    reject_revisited_states: true
+    return_best_state: true
+    selection: greedy
+    temperature: 0.1
+    min_improvement: 1.0e-09
+    min_relative_improvement: 2.0e-05
+    relative_improvement_epsilon: 1.0e-12
+    candidate_search:
+      adaptive: true
+      initial_proposal_budget: 96
+      initial_valid_candidate_budget: 24
+      final_proposal_budget: 192
+      final_valid_candidate_budget: 48
+      schedule: cosine
+      spectrum_backend: auto
+      spectrum_batch_size: 64
+    spectral_guidance:
+      distance: rmse
+      normalization: mean_degree
+      channel_weights:
+        topology: 1.0
+        bond_weighted: 1.25
+      low_frequency_weight: 1.5
+      low_frequency_cutoff: 4
+      schedule: cosine
+      min_clean_mix: 1.0
+      max_clean_mix: 1.0
+      power: 1.0
+    graphlet_guidance:
+      distance: clr_rmse
+      logit_epsilon: 0.0005
+      size_weights:
+        '3': 1.0
+        '4': 1.0
+        '5': 1.0
+        '6': 1.0
+      schedule: cosine
+      min_clean_mix: 1.0
+      max_clean_mix: 1.0
+      power: 1.0
+      logit_weight: 0.25
+      probability_weight: 1.0
+      selected_mass_weight: 1.5
+      probability_distance: rmse
+    expand_on_plateau: false
+    plateau_expand_factor: 1.25
+    max_plateau_expansions: 0
+    global_to_local:
+      schedule: linear
+      spectral_initial: 1.0
+      spectral_final: 1.0
+      graphlet_initial: 0.75
+      graphlet_final: 0.75
+      power: 1.0
+    prediction_horizon:
+      mode: fixed
+      initial_k: 1
+      final_k: 1
+      schedule: linear
+      refresh_on_plateau: false
+    molecular:
+      require_same_edge_type_pair: false
+      preserve_removed_edge_type: false
+      preserve_global_edge_type_counts: true
+      enumerate_edge_type_permutations: true
+      preserve_node_types: true
+      preserve_ordinary_degree: true
+      preserve_typed_degree: false
+      preserve_weighted_valence: false
+      enforce_molecular_valence: true
+      allowed_bond_types:
+      - 1
+      - 2
+      - 3
+      max_valence:
+        6: 4.0
+        7: 4.0
+        8: 3.0
+        9: 1.0
+      rdkit_candidate_check: true
+      rdkit_infer_projected_formal_charges: false
+      rdkit_shortlist: 32
+      require_rdkit_source_validity: true
+      typed_degree_drift_weight: 1.0
+      weighted_valence_drift_weight: 2.0
+      rdkit_validation_mode: raw
+    debug:
+      enabled: false
+      print_every: 1
+      top_candidates: 5

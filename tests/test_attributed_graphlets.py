@@ -192,3 +192,23 @@ def test_cycle_only_graphlet_mmd_uses_ring_composition_and_mass() -> None:
     assert np.allclose(identical, (0.0, 0.0))
     assert different[0] > 0.0
     assert different[1] > 0.0
+
+    aggregate_hist, aggregate_mass, by_order_hist, by_order_mass = (
+        mmd_graphlet_statistics(
+            [cycle],
+            [path],
+            k_min=3,
+            k_max=4,
+            topology_filter="simple_cycle",
+            node_label_attr="atomic_num",
+            edge_label_attr="bond_type",
+            attributed_backend="python",
+            return_by_order=True,
+        )
+    )
+    assert aggregate_hist > 0.0
+    assert aggregate_mass > 0.0
+    assert set(by_order_hist) == {"3", "4"}
+    assert set(by_order_mass) == {"3", "4"}
+    assert by_order_hist["4"] > 0.0
+    assert by_order_mass["4"] > 0.0

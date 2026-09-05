@@ -291,7 +291,11 @@ def mmd_graphlet_statistics(
     node_label_attr: str | None = None,
     edge_label_attr: str | None = None,
     attributed_backend: str = "auto",
-) -> tuple[float, float]:
+    return_by_order: bool = False,
+) -> (
+    tuple[float, float]
+    | tuple[float, float, dict[str, float], dict[str, float]]
+):
     """MMD for selected graphlet composition and induced-subset mass."""
 
     cfg = SummaryConfig(
@@ -372,6 +376,12 @@ def mmd_graphlet_statistics(
         flatten_graphlet_history(h, keys_by_k) for h in histories[len(reference) :]
     ]
     if not ref_rows or not gen_rows:
+        if return_by_order:
+            empty = {
+                str(k): float("nan")
+                for k in range(int(k_min), int(k_max) + 1)
+            }
+            return float("nan"), float("nan"), dict(empty), dict(empty)
         return float("nan"), float("nan")
     mass_keys = [str(k) for k in range(int(k_min), int(k_max) + 1)]
     ref_mass = np.asarray(
@@ -397,7 +407,41 @@ def mmd_graphlet_statistics(
             np.asarray(gen_rows, dtype=np.float64),
         )
     )
-    return histogram_mmd, mmd_gaussian_emd(ref_mass, gen_mass)
+    selected_mass_mmd = mmd_gaussian_emd(ref_mass, gen_mass)
+    if not return_by_order:
+        return histogram_mmd, selected_mass_mmd
+
+    histogram_by_order: dict[str, float] = {}
+    mass_by_order: dict[str, float] = {}
+    for key in mass_keys:
+        order_keys = {key: keys_by_k.get(key, [])}
+        order_ref_rows = [
+            flatten_graphlet_history({key: history.get(key, {})}, order_keys)
+            for history in histories[: len(reference)]
+        ]
+        order_gen_rows = [
+            flatten_graphlet_history({key: history.get(key, {})}, order_keys)
+            for history in histories[len(reference) :]
+        ]
+        order_width = len(order_keys[key])
+        histogram_by_order[key] = (
+            0.0
+            if order_width == 0
+            else mmd_gaussian_emd(
+                np.asarray(order_ref_rows, dtype=np.float64),
+                np.asarray(order_gen_rows, dtype=np.float64),
+            )
+        )
+        order_ref_mass = np.asarray(
+            [[item.get(key, 0.0)] for item in masses[: len(reference)]],
+            dtype=np.float64,
+        )
+        order_gen_mass = np.asarray(
+            [[item.get(key, 0.0)] for item in masses[len(reference) :]],
+            dtype=np.float64,
+        )
+        mass_by_order[key] = mmd_gaussian_emd(order_ref_mass, order_gen_mass)
+    return histogram_mmd, selected_mass_mmd, histogram_by_order, mass_by_order
 
 
 def connectedness_rate(graphs: Sequence[nx.Graph]) -> float:

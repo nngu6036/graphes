@@ -9,11 +9,13 @@ This script is intended for outputs from
 
 Metrics:
   - validity: direct RDKit sanitization success, without post-hoc correction
+  - validity_with_projected_formal_charges: charge-completion diagnostic only
   - validity_with_correction: deterministic valency-correction diagnostic
   - uniqueness_rate / novelty_rate on the configured valid-molecule source
   - FCD: optional, with reusable reference-statistics caching when supported
   - NSPDK MMD: HOG-Diff-compatible EDeN neighborhood-pair features by default
-  - optional attributed graphlet-composition and selected-mass MMD
+  - optional attributed graphlet-composition and selected-mass MMD, including
+    a per-order breakdown computed from the same graphlet-count pass
 
 The previous deterministic hashed neighborhood-pair proxy is retained as an
 explicit fallback/diagnostic backend.
@@ -56,10 +58,16 @@ def _canonicalize_smiles(smiles: str) -> str | None:
 
 def _graph_to_canonical_smiles_and_error(
     graph: nx.Graph,
+    *,
+    infer_projected_formal_charges: bool = False,
 ) -> tuple[str | None, str | None]:
     Chem = require_rdkit()
     try:
-        mol = nx_to_rdkit_mol(graph, sanitize=True)
+        mol = nx_to_rdkit_mol(
+            graph,
+            sanitize=True,
+            infer_projected_formal_charges=infer_projected_formal_charges,
+        )
         smi = str(Chem.MolToSmiles(mol, canonical=True, isomericSmiles=False))
         return smi, None
     except Exception as exc:
@@ -387,6 +395,62 @@ def _validity_with_correction(
     }
 
 
+def _validity_with_projected_formal_charges(
+    graphs: list[nx.Graph],
+    *,
+    raw_smiles: list[str | None],
+) -> dict[str, Any]:
+    """Audit validity after charge completion but before bond correction.
+
+    The heavy-atom categorical state does not explicitly model formal charge.
+    This diagnostic assigns the projected positive charges supported by the
+    GraphER QM9 codec (tetravalent N and trivalent O) and performs no bond
+    deletion or bond-order reduction.  It therefore separates representation
+    completion from the more permissive valency-correction metric.
+    """
+
+    if len(graphs) != len(raw_smiles):
+        raise ValueError("graphs and raw_smiles must have identical lengths.")
+
+    all_smiles: list[str | None] = []
+    valid_smiles: list[str] = []
+    resolved_indices: list[int] = []
+    errors: Counter[str] = Counter()
+    for idx, (graph, raw_smi) in enumerate(zip(graphs, raw_smiles)):
+        if raw_smi is not None:
+            all_smiles.append(raw_smi)
+            valid_smiles.append(raw_smi)
+            continue
+        smi, err = _graph_to_canonical_smiles_and_error(
+            graph,
+            infer_projected_formal_charges=True,
+        )
+        all_smiles.append(smi)
+        if smi is None:
+            errors[str(err or "ProjectedChargeInvalid")] += 1
+            continue
+        valid_smiles.append(smi)
+        resolved_indices.append(idx)
+
+    num_graphs = len(graphs)
+    num_valid = len(valid_smiles)
+    raw_invalid_count = sum(smi is None for smi in raw_smiles)
+    return {
+        "all_smiles": all_smiles,
+        "valid_smiles": valid_smiles,
+        "num_valid": num_valid,
+        "num_invalid": num_graphs - num_valid,
+        "validity_with_projected_formal_charges": num_valid / max(num_graphs, 1),
+        "resolved_indices": resolved_indices,
+        "error_counts": dict(errors),
+        "success_rate_on_raw_invalid": (
+            len(resolved_indices) / raw_invalid_count
+            if raw_invalid_count > 0
+            else 1.0
+        ),
+    }
+
+
 def _novelty(
     unique_valid_smiles: Iterable[str], train_smiles: Iterable[str]
 ) -> tuple[float | None, int]:
@@ -687,6 +751,10 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         train_smiles = train_smiles[: int(args.max_train)]
 
     valid_info = _validity_and_smiles(generated_graphs)
+    projected_charge_valid_info = _validity_with_projected_formal_charges(
+        generated_graphs,
+        raw_smiles=valid_info["all_smiles"],
+    )
     corrected_valid_info = _validity_with_correction(
         generated_graphs,
         raw_smiles=valid_info["all_smiles"],
@@ -765,27 +833,38 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     )
     graphlet_histogram_mmd: float | None = None
     graphlet_selected_mass_mmd: float | None = None
+    graphlet_histogram_mmd_by_order: dict[str, float | None] = {}
+    graphlet_selected_mass_mmd_by_order: dict[str, float | None] = {}
     if graphlet_enabled:
-        graphlet_histogram_mmd, graphlet_selected_mass_mmd = (
-            mmd_graphlet_statistics(
-                reference_graphs,
-                metric_graphs,
-                k_min=int(getattr(args, "graphlet_k_min", 3)),
-                k_max=int(getattr(args, "graphlet_k_max", 6)),
-                connected_only=True,
-                topology_filter=graphlet_topology_filter,
-                num_samples=getattr(args, "graphlet_num_samples", None),
-                backend="sampled",
-                node_label_attr=str(
-                    getattr(args, "graphlet_node_attribute", "atomic_num")
-                ),
-                edge_label_attr=str(
-                    getattr(args, "graphlet_edge_attribute", "bond_type")
-                ),
-                attributed_backend=str(
-                    getattr(args, "graphlet_attributed_backend", "python")
-                ),
-            )
+        graphlet_k_min = int(getattr(args, "graphlet_k_min", 3))
+        graphlet_k_max = int(getattr(args, "graphlet_k_max", 6))
+        graphlet_common = {
+            "connected_only": True,
+            "topology_filter": graphlet_topology_filter,
+            "num_samples": getattr(args, "graphlet_num_samples", None),
+            "backend": "sampled",
+            "node_label_attr": str(
+                getattr(args, "graphlet_node_attribute", "atomic_num")
+            ),
+            "edge_label_attr": str(
+                getattr(args, "graphlet_edge_attribute", "bond_type")
+            ),
+            "attributed_backend": str(
+                getattr(args, "graphlet_attributed_backend", "python")
+            ),
+        }
+        (
+            graphlet_histogram_mmd,
+            graphlet_selected_mass_mmd,
+            graphlet_histogram_mmd_by_order,
+            graphlet_selected_mass_mmd_by_order,
+        ) = mmd_graphlet_statistics(
+            reference_graphs,
+            metric_graphs,
+            k_min=graphlet_k_min,
+            k_max=graphlet_k_max,
+            return_by_order=True,
+            **graphlet_common,
         )
 
     # HOG-Diff evaluates distributional metrics after its deterministic validity
@@ -818,6 +897,11 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         "validity_with_correction": float(
             corrected_valid_info["validity_with_correction"]
         ),
+        "validity_with_projected_formal_charges": float(
+            projected_charge_valid_info[
+                "validity_with_projected_formal_charges"
+            ]
+        ),
         # Primary implementation audit: validity before any repair/correction.
         "validity_without_correction": float(
             valid_info["validity_without_correction"]
@@ -826,6 +910,18 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         "num_generated_graphs": int(len(generated_graphs)),
         "num_valid_generated_molecules": int(valid_info["num_valid"]),
         "num_invalid_generated_molecules": int(valid_info["num_invalid"]),
+        "num_valid_generated_molecules_with_projected_formal_charges": int(
+            projected_charge_valid_info["num_valid"]
+        ),
+        "num_invalid_generated_molecules_after_projected_formal_charges": int(
+            projected_charge_valid_info["num_invalid"]
+        ),
+        "num_raw_invalid_resolved_by_projected_formal_charges": int(
+            len(projected_charge_valid_info["resolved_indices"])
+        ),
+        "projected_formal_charge_success_rate_on_raw_invalid": float(
+            projected_charge_valid_info["success_rate_on_raw_invalid"]
+        ),
         "num_valid_generated_molecules_with_correction": int(
             corrected_valid_info["num_valid"]
         ),
@@ -855,6 +951,10 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             None
             if graphlet_selected_mass_mmd is None
             else float(graphlet_selected_mass_mmd)
+        ),
+        "graphlet_histogram_mmd_by_order": graphlet_histogram_mmd_by_order,
+        "graphlet_selected_mass_mmd_by_order": (
+            graphlet_selected_mass_mmd_by_order
         ),
         "nspdk_proxy_mmd_all_generated": (
             None if nspdk_proxy_all is None else float(nspdk_proxy_all)
@@ -893,6 +993,11 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 "Raw-valid molecules are retained; for raw-invalid molecules the "
                 "highest-order bond incident to an atom-valence problem is lowered "
                 "until sanitization succeeds or the correction budget is exhausted."
+            ),
+            "validity_with_projected_formal_charges": (
+                "Diagnostic charge completion for projected QM9 heavy-atom states: "
+                "assign +1 to neutral tetravalent nitrogen or trivalent oxygen, "
+                "then sanitize. No bond is deleted and no bond order is changed."
             ),
             "validity_without_correction": "RDKit Mol construction + Chem.SanitizeMol, no valency correction or edge resampling.",
             "correction_max_steps": int(args.correction_max_steps),
@@ -952,6 +1057,10 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         },
         "conversion_error_counts": valid_info["conversion_error_counts"],
         "invalid_indices": valid_info["invalid_indices"],
+        "projected_formal_charge_completion": {
+            "resolved_indices": projected_charge_valid_info["resolved_indices"],
+            "error_counts": projected_charge_valid_info["error_counts"],
+        },
         "correction": {
             "corrected_indices": corrected_valid_info["corrected_indices"],
             "correction_steps_by_index": corrected_valid_info["correction_steps"],

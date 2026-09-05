@@ -39,6 +39,16 @@ def _correctable_carbon_valence_five_graph() -> nx.Graph:
     return graph
 
 
+def _projected_tetravalent_nitrogen_graph() -> nx.Graph:
+    graph = nx.Graph()
+    for node, atomic_num in enumerate((7, 6, 8, 8)):
+        graph.add_node(node, atomic_num=atomic_num, atom_type=atomic_num)
+    graph.add_edge(0, 1, bond_type=1, bond_order=1.0)
+    graph.add_edge(0, 2, bond_type=2, bond_order=2.0)
+    graph.add_edge(0, 3, bond_type=1, bond_order=1.0)
+    return graph
+
+
 def test_reports_validity_with_and_without_correction() -> None:
     pytest.importorskip("rdkit")
     graphs = [_valid_cf4_graph(), _correctable_carbon_valence_five_graph()]
@@ -56,6 +66,23 @@ def test_reports_validity_with_and_without_correction() -> None:
     assert corrected["num_corrected"] == 1
     assert corrected["corrected_indices"] == [1]
     assert corrected["correction_steps"][1] == 1
+
+
+def test_projected_charge_validity_is_separate_from_bond_correction() -> None:
+    pytest.importorskip("rdkit")
+    graph = _projected_tetravalent_nitrogen_graph()
+    raw = MODULE._validity_and_smiles([graph])
+    projected = MODULE._validity_with_projected_formal_charges(
+        [graph],
+        raw_smiles=raw["all_smiles"],
+    )
+
+    assert raw["validity_without_correction"] == pytest.approx(0.0)
+    assert projected["validity_with_projected_formal_charges"] == pytest.approx(
+        1.0
+    )
+    assert projected["resolved_indices"] == [0]
+    assert projected["success_rate_on_raw_invalid"] == pytest.approx(1.0)
 
 
 def test_evaluate_outputs_validity_raw_validity_and_fcd(
@@ -117,6 +144,9 @@ def test_evaluate_outputs_validity_raw_validity_and_fcd(
 
     assert metrics["validity"] == pytest.approx(0.5)
     assert metrics["validity_with_correction"] == pytest.approx(1.0)
+    assert metrics["validity_with_projected_formal_charges"] == pytest.approx(
+        0.5
+    )
     assert metrics["validity_without_correction"] == pytest.approx(0.5)
     assert metrics["fcd"] == pytest.approx(1.234)
     assert metrics["fcd_num_valid_generated_molecules"] == 2

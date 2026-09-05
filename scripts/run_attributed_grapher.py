@@ -447,7 +447,19 @@ def main() -> None:
         f"proposal_budget={refiner_cfg.proposal_budget} "
         f"valid_candidate_budget={refiner_cfg.valid_candidate_budget} "
         f"rdkit_shortlist={refiner_cfg.rdkit_shortlist} "
+        f"rdkit_validation_mode={refiner_cfg.rdkit_validation_mode} "
         f"rewiring_kernel={'same_edge_type' if refiner_cfg.require_same_edge_type_pair else 'bond_reassigning_cross_type'}",
+        flush=True,
+    )
+    print(
+        "[GraphER/AttributedSpectralGraphlet] "
+        "cycle_guidance_components="
+        f"(clr={refiner_cfg.graphlet_logit_distance_weight:.3f},"
+        f"probability={refiner_cfg.graphlet_probability_distance_weight:.3f},"
+        f"selected_mass={refiner_cfg.graphlet_selected_mass_weight:.3f}) "
+        "chemistry_drift_weights="
+        f"(typed_degree={refiner_cfg.typed_degree_drift_weight:.3f},"
+        f"weighted_valence={refiner_cfg.weighted_valence_drift_weight:.3f})",
         flush=True,
     )
 
@@ -527,6 +539,7 @@ def main() -> None:
                         refiner_cfg.rdkit_infer_projected_formal_charges
                     ),
                 )
+                source_is_raw_valid = is_valid_molecular_graph(source)
                 if require_source_validity and not source_is_valid:
                     rejection_reasons["rdkit_invalid_source"] += 1
                     continue
@@ -605,6 +618,7 @@ def main() -> None:
                         refiner_cfg.rdkit_infer_projected_formal_charges
                     ),
                 )
+                final_is_raw_valid = is_valid_molecular_graph(refined)
                 if require_final_validity and not final_is_valid:
                     rejection_reasons["rdkit_invalid_final"] += 1
                     continue
@@ -620,8 +634,11 @@ def main() -> None:
                     {
                         **constructor_record,
                         "generation_attempt": attempt,
-                        "source_rdkit_valid": source_is_valid,
-                        "final_rdkit_valid": final_is_valid,
+                        "rdkit_validation_mode": refiner_cfg.rdkit_validation_mode,
+                        "source_rdkit_valid": source_is_raw_valid,
+                        "final_rdkit_valid": final_is_raw_valid,
+                        "source_rdkit_valid_configured": source_is_valid,
+                        "final_rdkit_valid_configured": final_is_valid,
                     }
                 )
                 source_metadata.append(invariant_metadata)
@@ -700,6 +717,24 @@ def main() -> None:
     ]
     source_validity = [is_valid_molecular_graph(graph) for graph in source_graphs]
     final_validity = [is_valid_molecular_graph(graph) for graph in final_graphs]
+    configured_source_validity = [
+        is_valid_molecular_graph(
+            graph,
+            infer_projected_formal_charges=(
+                refiner_cfg.rdkit_infer_projected_formal_charges
+            ),
+        )
+        for graph in source_graphs
+    ]
+    configured_final_validity = [
+        is_valid_molecular_graph(
+            graph,
+            infer_projected_formal_charges=(
+                refiner_cfg.rdkit_infer_projected_formal_charges
+            ),
+        )
+        for graph in final_graphs
+    ]
     rewiring_invariant_preservation = [
         attributed_rewiring_invariant_matches_graph(
             final,
@@ -738,6 +773,22 @@ def main() -> None:
         "guidance_mode": "dual_spectral_attributed_graphlet",
         "invariant_source": invariant_source,
         "source_enrichment_enabled": bool(source_enrichment_enabled),
+        "rdkit_validation_mode": refiner_cfg.rdkit_validation_mode,
+        "graphlet_logit_distance_weight": float(
+            refiner_cfg.graphlet_logit_distance_weight
+        ),
+        "graphlet_probability_distance_weight": float(
+            refiner_cfg.graphlet_probability_distance_weight
+        ),
+        "graphlet_selected_mass_weight": float(
+            refiner_cfg.graphlet_selected_mass_weight
+        ),
+        "typed_degree_drift_weight": float(
+            refiner_cfg.typed_degree_drift_weight
+        ),
+        "weighted_valence_drift_weight": float(
+            refiner_cfg.weighted_valence_drift_weight
+        ),
         "num_generated": len(final_graphs),
         "mean_source_enrichment_accepted_steps": float(
             np.mean([sum(bool(row.get("accepted")) for row in trace) for trace in enrichment_traces])
@@ -783,8 +834,17 @@ def main() -> None:
                 ]
             )
         ),
+        # Raw/no-correction rates match evaluate_generated_molecules.py.
         "rdkit_valid_source_rate": float(np.mean(source_validity)),
         "rdkit_valid_final_rate": float(np.mean(final_validity)),
+        "rdkit_valid_source_rate_raw": float(np.mean(source_validity)),
+        "rdkit_valid_final_rate_raw": float(np.mean(final_validity)),
+        "rdkit_valid_source_rate_configured": float(
+            np.mean(configured_source_validity)
+        ),
+        "rdkit_valid_final_rate_configured": float(
+            np.mean(configured_final_validity)
+        ),
         "mean_accepted_steps": float(np.mean(accepted_counts)),
         "mean_prediction_calls": float(np.mean(prediction_counts)),
         "mean_accepted_swaps_per_prediction_call": float(
@@ -798,6 +858,24 @@ def main() -> None:
             accepted_rows, "bond_spectral_gain"
         ),
         "mean_accepted_graphlet_gain": _mean(accepted_rows, "graphlet_gain"),
+        "mean_accepted_graphlet_logit_gain": _mean(
+            accepted_rows, "graphlet_logit_gain"
+        ),
+        "mean_accepted_graphlet_probability_gain": _mean(
+            accepted_rows, "graphlet_probability_gain"
+        ),
+        "mean_accepted_graphlet_selected_mass_gain": _mean(
+            accepted_rows, "graphlet_selected_mass_gain"
+        ),
+        "mean_accepted_chemistry_drift_gain": _mean(
+            accepted_rows, "chemistry_drift_gain"
+        ),
+        "mean_accepted_typed_degree_drift_gain": _mean(
+            accepted_rows, "typed_degree_drift_gain"
+        ),
+        "mean_accepted_weighted_valence_drift_gain": _mean(
+            accepted_rows, "weighted_valence_drift_gain"
+        ),
         "mean_projection_residual": _mean(accepted_rows, "projection_residual"),
         "mean_spectral_projection_residual": _mean(
             accepted_rows, "spectral_projection_residual"
@@ -810,6 +888,22 @@ def main() -> None:
         ),
         "mean_graphlet_projection_residual": _mean(
             accepted_rows, "graphlet_projection_residual"
+        ),
+        "mean_graphlet_logit_projection_residual": _mean(
+            accepted_rows, "graphlet_logit_projection_residual"
+        ),
+        "mean_graphlet_probability_projection_residual": _mean(
+            accepted_rows, "graphlet_probability_projection_residual"
+        ),
+        "mean_graphlet_selected_mass_projection_residual": _mean(
+            accepted_rows, "graphlet_selected_mass_projection_residual"
+        ),
+        "mean_chemistry_drift_penalty": _mean(
+            accepted_rows, "chemistry_drift_penalty"
+        ),
+        "mean_typed_degree_drift": _mean(accepted_rows, "typed_degree_drift"),
+        "mean_weighted_valence_drift": _mean(
+            accepted_rows, "weighted_valence_drift"
         ),
         "predictor_topology_spectral_nrmse": predictor_report.get(
             "val_topology_spectral_nrmse",
@@ -826,6 +920,10 @@ def main() -> None:
         "predictor_graphlet_probability_mae": predictor_report.get(
             "val_graphlet_probability_mae",
             predictor_report.get("graphlet_probability_mae"),
+        ),
+        "predictor_graphlet_selected_mass_mae": predictor_report.get(
+            "val_graphlet_selected_mass_mae",
+            predictor_report.get("graphlet_selected_mass_mae"),
         ),
         "mean_candidate_pass_rate": _mean(trace_rows, "candidate_pass_rate"),
         "rdkit_candidates_checked": int(
