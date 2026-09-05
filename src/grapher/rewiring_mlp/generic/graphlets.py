@@ -14,6 +14,7 @@ from grapher.rewiring_mlp.core.rewiring import Action
 from grapher.utils.motifs import (
     connected_graphlet_count_dict_exact,
     default_topology_canonicalizer,
+    normalize_graphlet_topology_filter,
     topology_graphlet_basis,
 )
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
@@ -65,7 +66,7 @@ def extract_topology_graphlet_counts(
     *,
     graphlet_basis: TopologyGraphletBasis,
 ) -> TopologyGraphletCounts:
-    """Count all connected topology graphlets in the fixed complete basis."""
+    """Count selected connected topology graphlets in the fixed basis."""
 
     if graphlet_basis.attributed or not graphlet_basis.connected_only:
         raise ValueError(
@@ -78,6 +79,7 @@ def extract_topology_graphlet_counts(
             graph,
             int(key),
             canonicalizer=canonicalizer,
+            topology_filter=graphlet_basis.topology_filter,
         )
         for key in graphlet_basis.sizes
     }
@@ -93,18 +95,18 @@ def _target_from_counts(
     masses: list[float] = []
     for key in graphlet_basis.sizes:
         counts = counts_by_size.get(key, {})
-        total_connected = int(sum(int(value) for value in counts.values()))
+        total_selected = int(sum(int(value) for value in counts.values()))
         history[key] = {
             graphlet_key: (
-                float(counts.get(graphlet_key, 0)) / total_connected
-                if total_connected > 0
+                float(counts.get(graphlet_key, 0)) / total_selected
+                if total_selected > 0
                 else 0.0
             )
             for graphlet_key in graphlet_basis.keys_by_k[key]
         }
         total_subsets = comb(int(num_nodes), int(key)) if num_nodes >= int(key) else 0
         masses.append(
-            float(total_connected / total_subsets) if total_subsets > 0 else 0.0
+            float(total_selected / total_subsets) if total_subsets > 0 else 0.0
         )
     return (
         graphlet_basis.flatten_history(history).astype(np.float64),
@@ -195,6 +197,12 @@ def extract_topology_structural_target(
         if cfg.clustering_summary
         else np.zeros(0, dtype=np.float64)
     )
+    if cfg.orbit_count and graphlet_basis.topology_filter != "all":
+        raise ValueError(
+            "Orbit targets require the complete connected graphlet basis; "
+            "disable orbit_count when graphlet_topology_filter is cyclic or "
+            "simple_cycle."
+        )
     orbit = (
         topology_orbit_count_vector_from_counts(
             counts,
@@ -259,6 +267,10 @@ def topology_structural_discrepancy_from_counts(
         )
     orbit_distance = 0.0
     if float(orbit_weight) != 0.0:
+        if graphlet_basis.topology_filter != "all":
+            raise ValueError(
+                "Orbit scoring requires the complete connected graphlet basis."
+            )
         current_orbit = topology_orbit_count_vector_from_counts(
             counts_by_size,
             num_nodes=graph.number_of_nodes(),
@@ -400,6 +412,30 @@ def _edge_mask_is_connected(mask: int, k: int) -> bool:
     return seen == (1 << k) - 1
 
 
+def _edge_mask_matches_topology_filter(
+    mask: int,
+    k: int,
+    topology_filter: str,
+) -> bool:
+    selected = normalize_graphlet_topology_filter(topology_filter)
+    if not _edge_mask_is_connected(mask, k):
+        return False
+    if selected == "all":
+        return True
+    edge_count = int(mask).bit_count()
+    if selected == "cyclic":
+        # Connected graph: cyclomatic number m - n + 1 is positive iff m >= n.
+        return edge_count >= int(k)
+    if int(k) < 3 or edge_count != int(k):
+        return False
+    degrees = [0] * int(k)
+    for bit, (left, right) in enumerate(_edge_positions(int(k))):
+        if (int(mask) >> bit) & 1:
+            degrees[left] += 1
+            degrees[right] += 1
+    return all(degree == 2 for degree in degrees)
+
+
 def _graph_from_edge_mask(mask: int, k: int) -> nx.Graph:
     graph = nx.Graph()
     graph.add_nodes_from(range(int(k)))
@@ -409,8 +445,11 @@ def _graph_from_edge_mask(mask: int, k: int) -> nx.Graph:
     return graph
 
 
-@lru_cache(maxsize=8)
-def _topology_graphlet_key_lookup(k: int) -> tuple[str | None, ...]:
+@lru_cache(maxsize=24)
+def _topology_graphlet_key_lookup(
+    k: int,
+    topology_filter: str = "all",
+) -> tuple[str | None, ...]:
     """Exact O(1) topology canonicalization lookup for small graphlets.
 
     A k-node induced graph has only 2^(k choose 2) labelled adjacency masks
@@ -422,12 +461,13 @@ def _topology_graphlet_key_lookup(k: int) -> tuple[str | None, ...]:
     """
 
     k = int(k)
+    selected_filter = normalize_graphlet_topology_filter(topology_filter)
     num_masks = 1 << (k * (k - 1) // 2)
     canonicalizer = default_topology_canonicalizer()
     canonical_to_key: dict[int, str] = {}
     result: list[str | None] = [None] * num_masks
     for mask in range(num_masks):
-        if not _edge_mask_is_connected(mask, k):
+        if not _edge_mask_matches_topology_filter(mask, k, selected_filter):
             continue
         canonical_mask = _canonical_edge_mask(mask, k)
         key = canonical_to_key.get(canonical_mask)
@@ -475,7 +515,7 @@ def candidate_topology_graphlet_counts(
     }
     for key in graphlet_basis.sizes:
         k = int(key)
-        lookup = _topology_graphlet_key_lookup(k)
+        lookup = _topology_graphlet_key_lookup(k, graphlet_basis.topology_filter)
         affected: set[frozenset[int]] = set()
         for edge in removed:
             affected.update(_connected_supersets_from_edge(graph, edge, k))

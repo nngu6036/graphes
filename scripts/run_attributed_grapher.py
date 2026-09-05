@@ -369,7 +369,9 @@ def main() -> None:
     )
     print(
         "[GraphER/AttributedSpectralGraphlet] guidance channels: unweighted topology spectrum, "
-        "bond-order-weighted spectrum, and attributed graphlet CLR/logit diffusion.",
+        "bond-order-weighted spectrum, and attributed graphlet CLR/logit diffusion "
+        f"(topology_filter={graphlet_basis.topology_filter}, "
+        f"orders={','.join(graphlet_basis.sizes)}).",
         flush=True,
     )
 
@@ -876,6 +878,7 @@ def main() -> None:
         ],
         "spectral_channels": ["topology", "bond_weighted"],
         "graphlet_orders": list(graphlet_basis.sizes),
+        "graphlet_topology_filter": graphlet_basis.topology_filter,
         "vocabulary": vocabulary.to_dict(),
         "summary_config": dict(summary_config.__dict__),
         "diagnostics": diagnostics,

@@ -17,6 +17,7 @@ from grapher.utils.motifs import (
     default_topology_canonicalizer,
     graphlet_count_dict,
     graphlet_history_l2_distance,
+    normalize_graphlet_topology_filter,
     normalize_count_dict,
     topology_graphlet_basis,
 )
@@ -90,6 +91,7 @@ class SummaryConfig:
     graphlet_k_min: int = 3
     graphlet_k_max: int = 5
     graphlet_connected_only: bool = True
+    graphlet_topology_filter: str = "all"
     graphlet_num_samples: int | None = None
     graphlet_backend: str = "sampled"
 
@@ -125,6 +127,17 @@ class SummaryConfig:
             if num_samples_raw in {None, "", "none", "None"}
             else int(num_samples_raw)
         )
+        topology_filter_raw = data.get(
+            "graphlet_topology_filter",
+            data.get("graphlet_filter", None),
+        )
+        if topology_filter_raw is None:
+            topology_filter_raw = (
+                "simple_cycle"
+                if bool(data.get("graphlet_cycle_only", False))
+                else "all"
+            )
+        topology_filter = normalize_graphlet_topology_filter(topology_filter_raw)
 
         return cls(
             degree_hist_max_degree=max_degree,
@@ -142,6 +155,7 @@ class SummaryConfig:
             graphlet_k_min=k_min,
             graphlet_k_max=k_max,
             graphlet_connected_only=bool(data.get("graphlet_connected_only", True)),
+            graphlet_topology_filter=topology_filter,
             graphlet_num_samples=num_samples,
             graphlet_backend=str(data.get("graphlet_backend", "sampled")).lower(),
         )
@@ -481,6 +495,12 @@ def graphlet_statistics_summary(
                 "The ORCA backend counts connected induced graphlets only. "
                 "Set graphlet_connected_only: true or use graphlet_backend: sampled."
             )
+        if cfg.graphlet_topology_filter != "all":
+            raise ValueError(
+                "The ORCA graphlet-history backend currently exposes the complete "
+                "connected basis. Use graphlet_backend: sampled for cyclic or "
+                "simple_cycle filtering."
+            )
         return orca_connected_graphlet_statistics(
             graph,
             k_min=cfg.graphlet_k_min,
@@ -503,6 +523,7 @@ def graphlet_statistics_summary(
             graph,
             k,
             connected_only=cfg.graphlet_connected_only,
+            topology_filter=cfg.graphlet_topology_filter,
             num_samples=num_samples,
             canonicalizer=canonicalizer,
         )
@@ -515,7 +536,11 @@ def graphlet_statistics_summary(
         )
         connected_mass[str(k)] = (
             float(sum(counts.values()) / sampled_subsets)
-            if sampled_subsets > 0 and cfg.graphlet_connected_only
+            if sampled_subsets > 0
+            and (
+                cfg.graphlet_connected_only
+                or cfg.graphlet_topology_filter != "all"
+            )
             else float(sampled_subsets > 0)
         )
     return history, connected_mass

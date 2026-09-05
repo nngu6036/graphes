@@ -20,7 +20,12 @@ from grapher.rewiring_mlp.generic.graphlet_diffusion import (
     graphlet_logit_distance as _graphlet_logit_distance,
     graphlet_simplex_to_clr as _graphlet_simplex_to_clr,
 )
-from grapher.utils.motifs import canonicalize_attributed_graph_python
+from grapher.utils.motifs import (
+    canonicalize_attributed_graph_python,
+    canonicalize_attributed_simple_cycle,
+    graphlet_topology_matches,
+    induced_simple_cycle_node_sets,
+)
 
 AttributedGraphletCounts = dict[str, dict[str, int]]
 
@@ -29,7 +34,9 @@ def _require_python_basis(graphlet_basis: GraphletBasis) -> None:
     if not graphlet_basis.attributed:
         raise ValueError("Attributed graphlet diffusion requires an attributed basis.")
     if not graphlet_basis.node_attribute or not graphlet_basis.edge_attribute:
-        raise ValueError("Attributed graphlet basis is missing node/edge attribute names.")
+        raise ValueError(
+            "Attributed graphlet basis is missing node/edge attribute names."
+        )
     if str(graphlet_basis.attributed_backend).lower() != "python":
         raise ValueError(
             "Fast exact attributed graphlet deltas currently require "
@@ -93,6 +100,12 @@ def _canonical_key(
     _require_python_basis(graphlet_basis)
     node_attribute = str(graphlet_basis.node_attribute)
     edge_attribute = str(graphlet_basis.edge_attribute)
+    if graphlet_basis.topology_filter == "simple_cycle":
+        return canonicalize_attributed_simple_cycle(
+            graph.subgraph(tuple(int(node) for node in nodes)),
+            node_label_attr=node_attribute,
+            edge_label_attr=edge_attribute,
+        )
     raw = _raw_pattern(
         graph,
         nodes,
@@ -104,6 +117,29 @@ def _canonical_key(
     )
 
 
+def _selected_key_or_none(
+    graph: nx.Graph,
+    nodes: Sequence[int],
+    *,
+    graphlet_basis: GraphletBasis,
+    size: str,
+) -> str | None:
+    subgraph = graph.subgraph(tuple(int(node) for node in nodes))
+    if (
+        graphlet_basis.connected_only
+        and len(nodes) > 1
+        and not nx.is_connected(subgraph)
+    ):
+        return None
+    if not graphlet_topology_matches(subgraph, graphlet_basis.topology_filter):
+        return None
+    return _basis_key(
+        _canonical_key(graph, nodes, graphlet_basis=graphlet_basis),
+        graphlet_basis,
+        size,
+    )
+
+
 def _basis_key(key: str, graphlet_basis: GraphletBasis, size: str) -> str:
     known = set(graphlet_basis.keys_by_k[size])
     if key in known:
@@ -111,7 +147,8 @@ def _basis_key(key: str, graphlet_basis: GraphletBasis, size: str) -> str:
     if graphlet_basis.overflow_key is not None and graphlet_basis.overflow_key in known:
         return str(graphlet_basis.overflow_key)
     raise KeyError(
-        f"Attributed graphlet key is outside the fixed basis and no overflow bin exists: {key}"
+        "Attributed graphlet key is outside the fixed basis and no overflow "
+        f"bin exists: {key}"
     )
 
 
@@ -120,7 +157,7 @@ def extract_attributed_graphlet_counts(
     *,
     graphlet_basis: GraphletBasis,
 ) -> AttributedGraphletCounts:
-    """Count connected attributed graphlets exactly in the fixed vocabulary."""
+    """Count selected attributed graphlets exactly in the fixed vocabulary."""
 
     _require_python_basis(graphlet_basis)
     nodes = tuple(sorted(int(node) for node in graph.nodes()))
@@ -129,16 +166,20 @@ def extract_attributed_graphlet_counts(
         k = int(size)
         block: defaultdict[str, int] = defaultdict(int)
         if len(nodes) >= k:
-            for subset in itertools.combinations(nodes, k):
-                subgraph = graph.subgraph(subset)
-                if k > 1 and not nx.is_connected(subgraph):
-                    continue
-                key = _basis_key(
-                    _canonical_key(graph, subset, graphlet_basis=graphlet_basis),
-                    graphlet_basis,
-                    size,
+            subsets = (
+                induced_simple_cycle_node_sets(graph, k)
+                if graphlet_basis.topology_filter == "simple_cycle"
+                else itertools.combinations(nodes, k)
+            )
+            for subset in subsets:
+                key = _selected_key_or_none(
+                    graph,
+                    subset,
+                    graphlet_basis=graphlet_basis,
+                    size=size,
                 )
-                block[key] += 1
+                if key is not None:
+                    block[key] += 1
         counts_by_size[size] = dict(block)
     return counts_by_size
 
@@ -165,9 +206,9 @@ def attributed_graphlet_simplex_from_counts(
             [float(counts.get(key, 0)) / float(total) for key in keys],
             dtype=np.float64,
         )
-        connected_mass = float(np.clip(block.sum(), 0.0, 1.0))
+        selected_mass = float(np.clip(block.sum(), 0.0, 1.0))
         full = np.concatenate(
-            [block, np.asarray([max(0.0, 1.0 - connected_mass)], dtype=np.float64)]
+            [block, np.asarray([max(0.0, 1.0 - selected_mass)], dtype=np.float64)]
         )
         full /= max(float(full.sum()), 1.0e-12)
         values.extend(full.tolist())
@@ -236,13 +277,107 @@ def attributed_graphlet_logit_distance(
     )
 
 
+def _connected_supersets_from_edge(
+    graph: nx.Graph,
+    edge: tuple[int, int],
+    k: int,
+) -> set[tuple[int, ...]]:
+    """Enumerate connected ``k``-node sets containing one present edge."""
+
+    u, v = int(edge[0]), int(edge[1])
+    if not graph.has_edge(u, v):
+        return set()
+    subsets: set[frozenset[int]] = {frozenset((u, v))}
+    for _size in range(3, int(k) + 1):
+        expanded: set[frozenset[int]] = set()
+        for subset in subsets:
+            frontier: set[int] = set()
+            for node in subset:
+                frontier.update(int(value) for value in graph.neighbors(node))
+            frontier.difference_update(subset)
+            for node in frontier:
+                expanded.add(subset | {node})
+        subsets = expanded
+        if not subsets:
+            break
+    return {tuple(sorted(subset)) for subset in subsets}
+
+
+def _simple_cycle_subsets_containing_pair(
+    graph: nx.Graph,
+    pair: tuple[int, int],
+    k: int,
+) -> set[tuple[int, ...]]:
+    """Enumerate induced ``C_k`` node sets containing both nodes in ``pair``.
+
+    A changed pair can alter an induced ring in two ways: it can be a ring
+    edge, or it can become/remove a chord.  Searching only for rings that use
+    a changed *edge* misses the second case.  This bounded DFS enumerates
+    simple length-``k`` cycles through one endpoint, retains those containing
+    the other endpoint, and then checks inducedness exactly.
+    """
+
+    u, v = int(pair[0]), int(pair[1])
+    k = int(k)
+    if k < 3 or u == v or u not in graph or v not in graph:
+        return set()
+    found: set[tuple[int, ...]] = set()
+
+    def visit(current: int, path: tuple[int, ...]) -> None:
+        if len(path) == k:
+            if v not in path or not graph.has_edge(current, u):
+                return
+            subset = tuple(sorted(path))
+            if graphlet_topology_matches(graph.subgraph(subset), "simple_cycle"):
+                found.add(subset)
+            return
+
+        remaining_nodes = k - len(path)
+        contains_v = v in path
+        for neighbor_raw in graph.neighbors(current):
+            neighbor = int(neighbor_raw)
+            if neighbor == u or neighbor in path:
+                continue
+            # When only one slot remains, it must include the second endpoint.
+            if not contains_v and remaining_nodes == 1 and neighbor != v:
+                continue
+            visit(neighbor, path + (neighbor,))
+
+    visit(u, (u,))
+    return found
+
+
 def _affected_subsets(
     graph: nx.Graph,
     candidate: nx.Graph,
     action: Action,
     k: int,
+    *,
+    connected_only: bool,
+    topology_filter: str,
 ) -> set[tuple[int, ...]]:
     removed, added = action
+    if topology_filter == "simple_cycle":
+        affected: set[tuple[int, ...]] = set()
+        changed_pairs = set(tuple(edge) for edge in tuple(removed) + tuple(added))
+        for pair in changed_pairs:
+            # Search both states. This covers removed/inserted ring edges and
+            # rings created or destroyed by removing/inserting a chord.
+            affected.update(
+                _simple_cycle_subsets_containing_pair(graph, pair, k)
+            )
+            affected.update(
+                _simple_cycle_subsets_containing_pair(candidate, pair, k)
+            )
+        return affected
+    if connected_only:
+        affected: set[tuple[int, ...]] = set()
+        for edge in removed:
+            affected.update(_connected_supersets_from_edge(graph, edge, k))
+        for edge in added:
+            affected.update(_connected_supersets_from_edge(candidate, edge, k))
+        return affected
+
     nodes = tuple(sorted(int(node) for node in graph.nodes()))
     affected: set[tuple[int, ...]] = set()
     for edge in tuple(removed) + tuple(added):
@@ -270,29 +405,37 @@ def candidate_attributed_graphlet_counts(
     for size in graphlet_basis.sizes:
         k = int(size)
         delta: defaultdict[str, int] = defaultdict(int)
-        for subset in _affected_subsets(graph, candidate, action, k):
-            before = graph.subgraph(subset)
-            if k <= 1 or nx.is_connected(before):
-                before_key = _basis_key(
-                    _canonical_key(graph, subset, graphlet_basis=graphlet_basis),
-                    graphlet_basis,
-                    size,
-                )
+        for subset in _affected_subsets(
+            graph,
+            candidate,
+            action,
+            k,
+            connected_only=graphlet_basis.connected_only,
+            topology_filter=graphlet_basis.topology_filter,
+        ):
+            before_key = _selected_key_or_none(
+                graph,
+                subset,
+                graphlet_basis=graphlet_basis,
+                size=size,
+            )
+            if before_key is not None:
                 delta[before_key] -= 1
-            after = candidate.subgraph(subset)
-            if k <= 1 or nx.is_connected(after):
-                after_key = _basis_key(
-                    _canonical_key(candidate, subset, graphlet_basis=graphlet_basis),
-                    graphlet_basis,
-                    size,
-                )
+            after_key = _selected_key_or_none(
+                candidate,
+                subset,
+                graphlet_basis=graphlet_basis,
+                size=size,
+            )
+            if after_key is not None:
                 delta[after_key] += 1
         updated = result[size]
         for key, value in delta.items():
             updated[key] = int(updated.get(key, 0) + value)
             if updated[key] < 0:
                 raise AssertionError(
-                    f"Attributed graphlet local delta produced a negative count for k={size}, key={key}."
+                    "Attributed graphlet local delta produced a negative count "
+                    f"for k={size}, key={key}."
                 )
             if updated[key] == 0:
                 updated.pop(key, None)

@@ -6,7 +6,10 @@ from typing import Any, Sequence
 import numpy as np
 
 from grapher.properties.summary import SummaryConfig
-from grapher.utils.motifs import topology_graphlet_keys_by_size
+from grapher.utils.motifs import (
+    normalize_graphlet_topology_filter,
+    topology_graphlet_keys_by_size,
+)
 
 
 @dataclass(frozen=True)
@@ -15,7 +18,15 @@ class TopologyGraphletBasis:
 
     keys_by_k: dict[str, tuple[str, ...]]
     connected_only: bool = True
+    topology_filter: str = "all"
     attributed: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "topology_filter",
+            normalize_graphlet_topology_filter(self.topology_filter),
+        )
 
     @classmethod
     def from_config(
@@ -35,8 +46,12 @@ class TopologyGraphletBasis:
             cfg.graphlet_k_min,
             cfg.graphlet_k_max,
             connected_only=True,
+            topology_filter=cfg.graphlet_topology_filter,
         )
-        return cls(keys_by_k={key: tuple(value) for key, value in keys.items()})
+        return cls(
+            keys_by_k={key: tuple(value) for key, value in keys.items()},
+            topology_filter=cfg.graphlet_topology_filter,
+        )
 
     @classmethod
     def fit_from_graphs(
@@ -72,7 +87,7 @@ class TopologyGraphletBasis:
 
     @property
     def simplex_width(self) -> int:
-        """Width after appending one disconnected-subset bin per order."""
+        """Width after appending one non-selected/background bin per order."""
 
         return sum(len(self.keys_by_k[key]) + 1 for key in self.sizes)
 
@@ -134,6 +149,7 @@ class TopologyGraphletBasis:
                 key: list(values) for key, values in self.keys_by_k.items()
             },
             "connected_only": True,
+            "topology_filter": self.topology_filter,
             "attributed": False,
         }
 
@@ -151,4 +167,9 @@ class TopologyGraphletBasis:
         }
         if not keys:
             raise ValueError("Topology graphlet basis contains no coordinates.")
-        return cls(keys_by_k=keys)
+        return cls(
+            keys_by_k=keys,
+            topology_filter=normalize_graphlet_topology_filter(
+                data.get("topology_filter", "all")
+            ),
+        )

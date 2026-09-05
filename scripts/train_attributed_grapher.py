@@ -478,6 +478,7 @@ def main() -> None:
         "[AttributedSetup] phase=graphlet_basis status=starting "
         f"graphs={len(basis_graphs)} "
         f"k={summary_cfg.graphlet_k_min}..{summary_cfg.graphlet_k_max} "
+        f"topology_filter={summary_cfg.graphlet_topology_filter} "
         f"backend={graphlet_cfg.get('attributed_backend', 'python')} "
         f"sampling={graphlet_sampling}",
         flush=True,
@@ -493,7 +494,7 @@ def main() -> None:
         "[AttributedSetup] phase=graphlet_basis status=complete "
         f"elapsed={_format_duration(time.perf_counter() - basis_started)} basis="
         + ", ".join(
-            f"k={size}:classes={len(graphlet_basis.keys_by_k[size])}+disconnected"
+            f"k={size}:classes={len(graphlet_basis.keys_by_k[size])}+background"
             for size in graphlet_basis.sizes
         ),
         flush=True,

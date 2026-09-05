@@ -13,6 +13,7 @@ Metrics:
   - uniqueness_rate / novelty_rate on the configured valid-molecule source
   - FCD: optional, with reusable reference-statistics caching when supported
   - NSPDK MMD: HOG-Diff-compatible EDeN neighborhood-pair features by default
+  - optional attributed graphlet-composition and selected-mass MMD
 
 The previous deterministic hashed neighborhood-pair proxy is retained as an
 explicit fallback/diagnostic backend.
@@ -28,6 +29,7 @@ from typing import Any, Iterable
 
 import networkx as nx
 
+from grapher.rewiring_mlp.evaluation.metrics import mmd_graphlet_statistics
 from grapher.rewiring_mlp.evaluation.molecular_nspdk import eden_nspdk_mmd
 from grapher.rewiring_mlp.molecular.graph_io import (
     graph_to_smiles,
@@ -757,6 +759,35 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     else:
         raise ValueError("--nspdk-backend must be eden or proxy.")
 
+    graphlet_enabled = bool(getattr(args, "graphlet_mmd", False))
+    graphlet_topology_filter = str(
+        getattr(args, "graphlet_topology_filter", "simple_cycle")
+    )
+    graphlet_histogram_mmd: float | None = None
+    graphlet_selected_mass_mmd: float | None = None
+    if graphlet_enabled:
+        graphlet_histogram_mmd, graphlet_selected_mass_mmd = (
+            mmd_graphlet_statistics(
+                reference_graphs,
+                metric_graphs,
+                k_min=int(getattr(args, "graphlet_k_min", 3)),
+                k_max=int(getattr(args, "graphlet_k_max", 6)),
+                connected_only=True,
+                topology_filter=graphlet_topology_filter,
+                num_samples=getattr(args, "graphlet_num_samples", None),
+                backend="sampled",
+                node_label_attr=str(
+                    getattr(args, "graphlet_node_attribute", "atomic_num")
+                ),
+                edge_label_attr=str(
+                    getattr(args, "graphlet_edge_attribute", "bond_type")
+                ),
+                attributed_backend=str(
+                    getattr(args, "graphlet_attributed_backend", "python")
+                ),
+            )
+        )
+
     # HOG-Diff evaluates distributional metrics after its deterministic validity
     # correction. GraphER defaults to strict raw-valid molecules, but this flag
     # and --metric-molecule-source make cross-codebase reproduction explicit.
@@ -815,6 +846,16 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         "novel_unique_valid_count": int(novel_count),
         "nspdk_mmd": None if nspdk_value is None else float(nspdk_value),
         "nspdk_mmd_valid_only": None if nspdk_value is None else float(nspdk_value),
+        "graphlet_histogram_mmd": (
+            None
+            if graphlet_histogram_mmd is None
+            else float(graphlet_histogram_mmd)
+        ),
+        "graphlet_selected_mass_mmd": (
+            None
+            if graphlet_selected_mass_mmd is None
+            else float(graphlet_selected_mass_mmd)
+        ),
         "nspdk_proxy_mmd_all_generated": (
             None if nspdk_proxy_all is None else float(nspdk_proxy_all)
         ),
@@ -873,6 +914,27 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                     not getattr(args, "no_nspdk_normalize", False)
                 ),
                 "metric_cache_dir": str(metric_cache_dir),
+            },
+            "graphlet": {
+                "enabled": graphlet_enabled,
+                "topology_filter": graphlet_topology_filter,
+                "k_min": int(getattr(args, "graphlet_k_min", 3)),
+                "k_max": int(getattr(args, "graphlet_k_max", 6)),
+                "connected_only": True,
+                "node_attribute": str(
+                    getattr(args, "graphlet_node_attribute", "atomic_num")
+                ),
+                "edge_attribute": str(
+                    getattr(args, "graphlet_edge_attribute", "bond_type")
+                ),
+                "attributed_backend": str(
+                    getattr(args, "graphlet_attributed_backend", "python")
+                ),
+                "num_samples": getattr(args, "graphlet_num_samples", None),
+                "mass_definition": (
+                    "fraction of induced k-node subsets matching the selected "
+                    "topology filter; for simple_cycle this is induced ring mass"
+                ),
             },
             "fcd": {
                 **fcd_info,
@@ -973,6 +1035,38 @@ def main() -> None:
     parser.add_argument("--nspdk-radius", type=int, default=2)
     parser.add_argument("--nspdk-distance", type=int, default=4)
     parser.add_argument("--no-nspdk-normalize", action="store_true")
+    parser.add_argument(
+        "--graphlet-mmd",
+        action="store_true",
+        help=(
+            "Also compute attributed graphlet-composition MMD and selected "
+            "induced-subset-mass MMD on the metric molecule source."
+        ),
+    )
+    parser.add_argument("--graphlet-k-min", type=int, default=3)
+    parser.add_argument("--graphlet-k-max", type=int, default=6)
+    parser.add_argument(
+        "--graphlet-topology-filter",
+        choices=["all", "cyclic", "simple_cycle"],
+        default="simple_cycle",
+        help=(
+            "all=historical connected graphlets; cyclic=any graphlet with a "
+            "cycle; simple_cycle=chordless induced rings C_k."
+        ),
+    )
+    parser.add_argument("--graphlet-node-attribute", default="atomic_num")
+    parser.add_argument("--graphlet-edge-attribute", default="bond_type")
+    parser.add_argument(
+        "--graphlet-attributed-backend",
+        choices=["python", "nauty", "auto"],
+        default="python",
+    )
+    parser.add_argument(
+        "--graphlet-num-samples",
+        type=int,
+        default=None,
+        help="Optional sampled induced subsets per graph and order; default is exact.",
+    )
     parser.add_argument(
         "--metric-cache-dir",
         default=None,

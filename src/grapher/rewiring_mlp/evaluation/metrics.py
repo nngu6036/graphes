@@ -180,19 +180,21 @@ def mmd_graphlet_statistics(
     k_min: int = 3,
     k_max: int = 5,
     connected_only: bool = True,
+    topology_filter: str = "all",
     num_samples: int | None = None,
     backend: str = "sampled",
     node_label_attr: str | None = None,
     edge_label_attr: str | None = None,
     attributed_backend: str = "auto",
 ) -> tuple[float, float]:
-    """MMD for graphlet composition and connected induced-subset mass."""
+    """MMD for selected graphlet composition and induced-subset mass."""
 
     cfg = SummaryConfig(
         graphlet_history=True,
         graphlet_k_min=int(k_min),
         graphlet_k_max=int(k_max),
         graphlet_connected_only=bool(connected_only),
+        graphlet_topology_filter=str(topology_filter),
         graphlet_num_samples=num_samples,
         graphlet_backend=str(backend),
     )
@@ -222,6 +224,7 @@ def mmd_graphlet_statistics(
                     node_label_attr=str(node_label_attr),
                     edge_label_attr=str(edge_label_attr),
                     connected_only=bool(connected_only),
+                    topology_filter=cfg.graphlet_topology_filter,
                     num_samples=num_samples,
                     rng=rng,
                     backend=str(attributed_backend),
@@ -240,7 +243,8 @@ def mmd_graphlet_statistics(
                 )
                 mass[str(k)] = (
                     float(sum(counts.values()) / sampled)
-                    if sampled > 0 and connected_only
+                    if sampled > 0
+                    and (connected_only or cfg.graphlet_topology_filter != "all")
                     else float(sampled > 0)
                 )
             histories.append(history)
@@ -254,6 +258,7 @@ def mmd_graphlet_statistics(
             int(k_min),
             int(k_max),
             connected_only=bool(connected_only),
+            topology_filter=cfg.graphlet_topology_filter,
         )
     ref_rows = [
         flatten_graphlet_history(h, keys_by_k) for h in histories[: len(reference)]
@@ -278,13 +283,16 @@ def mmd_graphlet_statistics(
         ],
         dtype=np.float64,
     )
-    return (
-        mmd_gaussian_emd(
+    histogram_width = sum(len(values) for values in keys_by_k.values())
+    histogram_mmd = (
+        0.0
+        if histogram_width == 0
+        else mmd_gaussian_emd(
             np.asarray(ref_rows, dtype=np.float64),
             np.asarray(gen_rows, dtype=np.float64),
-        ),
-        mmd_gaussian_emd(ref_mass, gen_mass),
+        )
     )
+    return histogram_mmd, mmd_gaussian_emd(ref_mass, gen_mass)
 
 
 def connectedness_rate(graphs: Sequence[nx.Graph]) -> float:
@@ -380,6 +388,7 @@ def evaluate_graph_sets(
     graphlet_k_min: int = 3,
     graphlet_k_max: int = 5,
     graphlet_connected_only: bool = True,
+    graphlet_topology_filter: str = "all",
     graphlet_num_samples: int | None = None,
     graphlet_backend: str = "sampled",
     graphlet_node_label_attr: str | None = None,
@@ -405,6 +414,7 @@ def evaluate_graph_sets(
             k_min=graphlet_k_min,
             k_max=graphlet_k_max,
             connected_only=graphlet_connected_only,
+            topology_filter=graphlet_topology_filter,
             num_samples=graphlet_num_samples,
             backend=graphlet_backend,
             node_label_attr=graphlet_node_label_attr,

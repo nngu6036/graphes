@@ -239,6 +239,14 @@ The attributed spectral–graphlet model combines:
 
 Candidate graphlets are updated using a **stateful local-delta cache**, while RDKit sanitization is restricted to a shortlisted set of promising candidates.
 
+For molecular ring-focused experiments, set
+`graphlet_topology_filter: simple_cycle`. This retains only chordless induced
+cycles, uses direct bounded-degree ring enumeration and dihedral attributed
+canonicalization, and keeps a background coordinate for all non-ring subsets.
+See [`docs/CYCLE_ONLY_GRAPHLET_GUIDANCE.md`](docs/CYCLE_ONLY_GRAPHLET_GUIDANCE.md)
+and
+[`configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet.yaml`](configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet.yaml).
+
 ---
 
 ## Engineering Highlights

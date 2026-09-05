@@ -709,8 +709,8 @@ def main() -> None:
         )
         if spectral_graphlet_mode:
             print(
-                "Graphlet-logit diffusion: each k-block is connected graphlet "
-                "probabilities + a disconnected bin, transformed to CLR logits. "
+                "Graphlet-logit diffusion: each k-block is selected graphlet "
+                "probabilities + a non-selected/background bin, transformed to CLR logits. "
                 "Training inputs are stochastic continuous bridge logits, not "
                 "graphlet summaries from a rewiring trajectory.",
                 flush=True,

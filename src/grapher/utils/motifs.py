@@ -221,6 +221,84 @@ class PythonCanonicalizer:
 
 TOPOLOGY_CANONICALIZER_CONVENTION = "python_lexicographic_graph6_v1"
 
+GRAPHLET_TOPOLOGY_FILTERS = frozenset({"all", "cyclic", "simple_cycle"})
+
+
+def normalize_graphlet_topology_filter(value: Any = "all") -> str:
+    """Return the canonical graphlet-topology filter name.
+
+    ``all`` retains the historical connected-induced graphlet basis.
+    ``cyclic`` retains every selected induced graphlet containing at least one
+    cycle. ``simple_cycle`` retains only chordless cycles :math:`C_k` (one
+    topology per order before attributes are considered).
+
+    Several aliases are accepted so old experiment scripts can expose a
+    concise ``graphlet_cycle_only`` boolean without changing checkpoint
+    semantics.
+    """
+
+    if value is None:
+        return "all"
+    if isinstance(value, bool):
+        return "simple_cycle" if value else "all"
+    normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "": "all",
+        "none": "all",
+        "any": "all",
+        "connected": "all",
+        "cycle_containing": "cyclic",
+        "contains_cycle": "cyclic",
+        "has_cycle": "cyclic",
+        "with_cycle": "cyclic",
+        "cycle": "simple_cycle",
+        "cycle_only": "simple_cycle",
+        "simple_cycles": "simple_cycle",
+        "induced_cycle": "simple_cycle",
+        "induced_cycles": "simple_cycle",
+        "chordless_cycle": "simple_cycle",
+        "chordless_cycles": "simple_cycle",
+        "ring": "simple_cycle",
+        "rings": "simple_cycle",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in GRAPHLET_TOPOLOGY_FILTERS:
+        choices = ", ".join(sorted(GRAPHLET_TOPOLOGY_FILTERS))
+        raise ValueError(
+            f"Unknown graphlet topology filter {value!r}; expected one of {choices}."
+        )
+    return normalized
+
+
+def graphlet_topology_matches(
+    graph: nx.Graph,
+    topology_filter: str = "all",
+) -> bool:
+    """Return whether an induced graphlet belongs to the selected topology set."""
+
+    selected = normalize_graphlet_topology_filter(topology_filter)
+    if selected == "all":
+        return True
+
+    _validate_simple_undirected(graph)
+    n = int(graph.number_of_nodes())
+    m = int(graph.number_of_edges())
+    if n < 3:
+        return False
+
+    if selected == "simple_cycle":
+        # In a simple graph, connected + every degree equal to two is exactly C_k.
+        return (
+            m == n
+            and all(int(degree) == 2 for _, degree in graph.degree())
+            and nx.is_connected(graph)
+        )
+
+    # A simple undirected graph has a cycle iff its cyclomatic number is
+    # positive: m - n + c > 0, where c is the number of components.
+    components = int(nx.number_connected_components(graph)) if n else 0
+    return m - n + components > 0
+
 
 def default_topology_canonicalizer() -> PythonCanonicalizer:
     """Return the portable topology canonicalizer used by checkpoints.
@@ -238,6 +316,7 @@ def default_topology_canonicalizer() -> PythonCanonicalizer:
 def _topology_graphlet_basis_cached(
     k: int,
     connected_only: bool,
+    topology_filter: str,
 ) -> tuple[tuple[str, bytes], ...]:
     """Return every unlabeled topology graphlet of size ``k``.
 
@@ -253,6 +332,7 @@ def _topology_graphlet_basis_cached(
             "The built-in complete topology graphlet basis supports 1 <= k <= 7."
         )
 
+    selected_filter = normalize_graphlet_topology_filter(topology_filter)
     representatives: list[nx.Graph] = []
     for graph in nx.graph_atlas_g():
         if graph.number_of_nodes() != k:
@@ -263,6 +343,8 @@ def _topology_graphlet_basis_cached(
             ordering="sorted",
         )
         if connected_only and k > 1 and not nx.is_connected(graph):
+            continue
+        if not graphlet_topology_matches(graph, selected_filter):
             continue
         representatives.append(graph)
 
@@ -282,6 +364,7 @@ def topology_graphlet_basis(
     k: int,
     *,
     connected_only: bool = True,
+    topology_filter: str = "all",
 ) -> list[tuple[str, nx.Graph]]:
     """Return a complete canonical-key/representative basis for one size."""
 
@@ -290,6 +373,7 @@ def topology_graphlet_basis(
         for key, raw in _topology_graphlet_basis_cached(
             int(k),
             bool(connected_only),
+            normalize_graphlet_topology_filter(topology_filter),
         )
     ]
 
@@ -299,6 +383,7 @@ def topology_graphlet_keys_by_size(
     k_max: int,
     *,
     connected_only: bool = True,
+    topology_filter: str = "all",
 ) -> dict[str, list[str]]:
     """Return the complete canonical topology basis for every requested size."""
 
@@ -310,6 +395,7 @@ def topology_graphlet_keys_by_size(
             for key, _ in topology_graphlet_basis(
                 k,
                 connected_only=connected_only,
+                topology_filter=topology_filter,
             )
         ]
         for k in range(int(k_min), int(k_max) + 1)
@@ -388,11 +474,102 @@ def _batched(items: Iterable[Any], batch_size: int) -> Iterator[list[Any]]:
         yield batch
 
 
+def induced_simple_cycle_node_sets(
+    G: nx.Graph,
+    k: int,
+) -> Iterator[tuple[Any, ...]]:
+    """Enumerate the node sets whose induced subgraph is a chordless ``C_k``.
+
+    The search grows induced paths from the smallest-labelled node of each
+    candidate ring.  Requiring the first endpoint to precede the last endpoint
+    removes the two traversal-direction duplicates.  For bounded maximum
+    degree this avoids scanning all ``binom(n, k)`` node subsets and visits at
+    most ``O(n * Delta * (Delta - 1) ** (k - 2))`` path prefixes.
+    """
+
+    _validate_simple_undirected(G)
+    k = int(k)
+    if k < 3 or k > G.number_of_nodes():
+        return
+
+    nodes = sorted(G.nodes(), key=lambda node: (type(node).__name__, repr(node)))
+    rank = {node: index for index, node in enumerate(nodes)}
+    rings: set[frozenset[Any]] = set()
+
+    for start in nodes:
+        start_rank = rank[start]
+        first_neighbors = sorted(
+            (
+                node
+                for node in G.neighbors(start)
+                if rank[node] > start_rank
+            ),
+            key=rank.__getitem__,
+        )
+        for first in first_neighbors:
+            path: list[Any] = [start, first]
+            visited: set[Any] = {start, first}
+
+            def visit(current: Any) -> None:
+                if len(path) == k:
+                    if not G.has_edge(current, start):
+                        return
+                    # Each undirected ring is reached in both directions.
+                    if rank[path[1]] >= rank[path[-1]]:
+                        return
+                    subset = frozenset(path)
+                    induced = G.subgraph(subset)
+                    if (
+                        induced.number_of_edges() == k
+                        and all(int(degree) == 2 for _, degree in induced.degree())
+                    ):
+                        rings.add(subset)
+                    return
+
+                next_length = len(path) + 1
+                for neighbor in G.neighbors(current):
+                    if neighbor == start or neighbor in visited:
+                        continue
+                    # ``start`` is the unique minimum-ranked node for this
+                    # traversal, preventing rotations of the same ring.
+                    if rank[neighbor] <= start_rank:
+                        continue
+
+                    # Preserve an induced path while growing it.  The only
+                    # permitted earlier adjacency is the closing edge to
+                    # ``start`` when adding the final node.
+                    chord = False
+                    for previous in path[:-1]:
+                        if not G.has_edge(neighbor, previous):
+                            continue
+                        if next_length == k and previous == start:
+                            continue
+                        chord = True
+                        break
+                    if chord:
+                        continue
+
+                    path.append(neighbor)
+                    visited.add(neighbor)
+                    visit(neighbor)
+                    visited.remove(neighbor)
+                    path.pop()
+
+            visit(first)
+
+    for subset in sorted(
+        rings,
+        key=lambda values: tuple(sorted((rank[node] for node in values))),
+    ):
+        yield tuple(sorted(subset, key=rank.__getitem__))
+
+
 def _iter_k_induced_subgraphs(
     G: nx.Graph,
     k: int,
     *,
     connected_only: bool,
+    topology_filter: str,
     num_samples: int | None,
     rng: np.random.Generator | None,
 ) -> Iterator[nx.Graph]:
@@ -404,7 +581,19 @@ def _iter_k_induced_subgraphs(
     if k > G.number_of_nodes():
         return
 
+    selected_filter = normalize_graphlet_topology_filter(topology_filter)
     nodes = sorted(G.nodes(), key=lambda node: (type(node).__name__, repr(node)))
+
+    total_subsets = comb(len(nodes), int(k))
+    exact = (
+        num_samples is None
+        or int(num_samples) <= 0
+        or total_subsets <= int(num_samples)
+    )
+    if selected_filter == "simple_cycle" and exact:
+        for subset in induced_simple_cycle_node_sets(G, int(k)):
+            yield G.subgraph(subset)
+        return
 
     for subset in _sample_node_subsets(
         nodes,
@@ -414,7 +603,19 @@ def _iter_k_induced_subgraphs(
     ):
         H = G.subgraph(subset)
 
-        if connected_only and not nx.is_connected(H):
+        # Cycle filters provide a cheaper degree/edge-count rejection before
+        # generic connectivity testing.  This matters during molecular basis
+        # fitting, where almost every induced subset is acyclic.
+        if selected_filter != "all":
+            if not graphlet_topology_matches(H, selected_filter):
+                continue
+            if (
+                connected_only
+                and selected_filter == "cyclic"
+                and not nx.is_connected(H)
+            ):
+                continue
+        elif connected_only and not nx.is_connected(H):
             continue
 
         yield H
@@ -423,6 +624,8 @@ def _iter_k_induced_subgraphs(
 def _iter_connected_k_induced_subgraphs_exact(
     G: nx.Graph,
     k: int,
+    *,
+    topology_filter: str = "all",
 ) -> Iterator[nx.Graph]:
     """Enumerate connected k-sets by local frontier expansion."""
 
@@ -430,6 +633,11 @@ def _iter_connected_k_induced_subgraphs_exact(
     if k <= 0:
         raise ValueError("k must be positive.")
     if k > G.number_of_nodes():
+        return
+    selected_filter = normalize_graphlet_topology_filter(topology_filter)
+    if selected_filter == "simple_cycle":
+        for subset in induced_simple_cycle_node_sets(G, int(k)):
+            yield G.subgraph(subset)
         return
     nodes = sorted(G.nodes(), key=lambda node: (type(node).__name__, repr(node)))
     connected_sets: set[frozenset[Any]] = {
@@ -458,7 +666,9 @@ def _iter_connected_k_induced_subgraphs_exact(
         ),
     )
     for subset in ordered_sets:
-        yield G.subgraph(subset)
+        subgraph = G.subgraph(subset)
+        if graphlet_topology_matches(subgraph, selected_filter):
+            yield subgraph
 
 
 def graphlet_count_dict(
@@ -466,6 +676,7 @@ def graphlet_count_dict(
     k: int,
     *,
     connected_only: bool = True,
+    topology_filter: str = "all",
     num_samples: int | None = None,
     rng: np.random.Generator | None = None,
     canonicalizer: NautyCanonicalizer | PythonCanonicalizer | None = None,
@@ -482,6 +693,7 @@ def graphlet_count_dict(
         G,
         k,
         connected_only=connected_only,
+        topology_filter=topology_filter,
         num_samples=num_samples,
         rng=rng,
     )
@@ -499,12 +711,17 @@ def connected_graphlet_count_dict_exact(
     *,
     canonicalizer: NautyCanonicalizer | PythonCanonicalizer | None = None,
     batch_size: int = 4096,
+    topology_filter: str = "all",
 ) -> dict[str, int]:
     """Exactly count connected induced topology graphlets of size ``k``."""
 
     canonicalizer = canonicalizer or default_topology_canonicalizer()
     counts: Counter[str] = Counter()
-    subgraphs = _iter_connected_k_induced_subgraphs_exact(G, int(k))
+    subgraphs = _iter_connected_k_induced_subgraphs_exact(
+        G,
+        int(k),
+        topology_filter=topology_filter,
+    )
     for batch in _batched(subgraphs, batch_size=batch_size):
         counts.update(canonicalizer.canonical_graph6_batch(batch))
     return {str(key): int(value) for key, value in counts.items()}
@@ -527,6 +744,7 @@ def graphlet_frequency_dict(
     k: int,
     *,
     connected_only: bool = True,
+    topology_filter: str = "all",
     num_samples: int | None = None,
     rng: np.random.Generator | None = None,
     canonicalizer: NautyCanonicalizer | PythonCanonicalizer | None = None,
@@ -537,6 +755,7 @@ def graphlet_frequency_dict(
             G,
             k,
             connected_only=connected_only,
+            topology_filter=topology_filter,
             num_samples=num_samples,
             rng=rng,
             canonicalizer=canonicalizer,
@@ -551,6 +770,7 @@ def graphlet_history(
     k_min: int = 3,
     k_max: int = 5,
     connected_only: bool = True,
+    topology_filter: str = "all",
     num_samples: int | None = None,
     rng: np.random.Generator | None = None,
     canonicalizer: NautyCanonicalizer | PythonCanonicalizer | None = None,
@@ -570,6 +790,7 @@ def graphlet_history(
             G,
             k,
             connected_only=connected_only,
+            topology_filter=topology_filter,
             num_samples=num_samples,
             rng=rng,
             canonicalizer=canonicalizer,
@@ -769,6 +990,89 @@ def canonicalize_attributed_graph_python(
     return f"ATTR_PY_V1|{best}"
 
 
+def canonicalize_attributed_simple_cycle(
+    graph: nx.Graph,
+    *,
+    node_label_attr: str = "node_label",
+    edge_label_attr: str = "edge_label",
+    missing_ok: bool = False,
+) -> str:
+    """Return an exact attributed key for a chordless cycle in ``O(k^2)``.
+
+    A cycle :math:`C_k` has only ``2k`` topology automorphisms (the dihedral
+    group), whereas the generic attributed fallback checks all ``k!`` node
+    orders.  Encoding every rotation in both directions is therefore exact
+    and much cheaper for ring-only graphlet guidance.
+    """
+
+    _validate_simple_undirected(graph)
+    if not graphlet_topology_matches(graph, "simple_cycle"):
+        raise ValueError("canonicalize_attributed_simple_cycle requires C_k.")
+
+    def node_sort_key(node: Any) -> tuple[str, str]:
+        return type(node).__name__, repr(node)
+
+    node_tokens: dict[Any, str] = {}
+    for node, data in graph.nodes(data=True):
+        if node_label_attr not in data and not missing_ok:
+            raise KeyError(f"Node {node!r} is missing {node_label_attr!r}")
+        node_tokens[node] = _stable_label_token(
+            data.get(node_label_attr, "__MISSING__")
+        )
+
+    edge_tokens: dict[frozenset[Any], str] = {}
+    for u, v, data in graph.edges(data=True):
+        if edge_label_attr not in data and not missing_ok:
+            raise KeyError(f"Edge {(u, v)!r} is missing {edge_label_attr!r}")
+        edge_tokens[frozenset((u, v))] = _stable_label_token(
+            data.get(edge_label_attr, "__MISSING__")
+        )
+
+    start = min(graph.nodes(), key=node_sort_key)
+    first_neighbor = min(graph.neighbors(start), key=node_sort_key)
+    cycle_order: list[Any] = [start]
+    previous = start
+    current = first_neighbor
+    while current != start:
+        cycle_order.append(current)
+        next_nodes = [node for node in graph.neighbors(current) if node != previous]
+        if len(next_nodes) != 1:
+            raise ValueError("Input graph is not a simple cycle.")
+        previous, current = current, next_nodes[0]
+        if len(cycle_order) > graph.number_of_nodes():
+            raise ValueError("Input graph is not a simple cycle.")
+    if len(cycle_order) != graph.number_of_nodes():
+        raise ValueError("Input graph is not a simple cycle.")
+
+    best: str | None = None
+    forward = tuple(cycle_order)
+    reverse = tuple(reversed(cycle_order))
+    for orientation in (forward, reverse):
+        for offset in range(len(orientation)):
+            order = orientation[offset:] + orientation[:offset]
+            encoded = [
+                [
+                    node_tokens[order[index]],
+                    edge_tokens[
+                        frozenset(
+                            (order[index], order[(index + 1) % len(order)])
+                        )
+                    ],
+                ]
+                for index in range(len(order))
+            ]
+            candidate = json.dumps(
+                encoded,
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
+            if best is None or candidate < best:
+                best = candidate
+    if best is None:
+        raise ValueError("A simple cycle must contain at least three nodes.")
+    return f"ATTR_CYCLE_V1|{best}"
+
+
 def attributed_graphlet_count_dict(
     graph: nx.Graph,
     k: int,
@@ -776,20 +1080,24 @@ def attributed_graphlet_count_dict(
     node_label_attr: str = "node_label",
     edge_label_attr: str = "edge_label",
     connected_only: bool = True,
+    topology_filter: str = "all",
     num_samples: int | None = None,
     rng: np.random.Generator | None = None,
     missing_ok: bool = False,
     backend: str = "auto",
     nauty_exec: str | os.PathLike[str] | None = NAUTY_EXEC,
 ) -> dict[str, int]:
-    """Count connected induced attributed graphlets of one size.
+    """Count selected induced attributed graphlets of one size.
 
-    ``backend='auto'`` uses nauty when available and otherwise uses exact
-    permutation enumeration.  Node and edge labels are both part of every
-    key, so two graphlets with the same topology but different chemistry are
-    distinct classes.
+    ``topology_filter`` selects all graphlets, every cycle-containing graphlet,
+    or chordless cycles only. ``backend='auto'`` uses nauty when available and
+    otherwise uses exact Python canonicalization. In ``simple_cycle`` mode the
+    Python backend compares only the ``2k`` dihedral cycle symmetries. Node and
+    edge labels are part of every key, so graphlets with the same topology but
+    different chemistry remain distinct classes.
     """
 
+    selected_filter = normalize_graphlet_topology_filter(topology_filter)
     backend = str(backend).lower()
     if backend not in {"auto", "python", "nauty"}:
         raise ValueError("backend must be 'auto', 'python', or 'nauty'.")
@@ -804,6 +1112,7 @@ def attributed_graphlet_count_dict(
         graph,
         int(k),
         connected_only=bool(connected_only),
+        topology_filter=selected_filter,
         num_samples=num_samples,
         rng=rng,
     ):
@@ -817,6 +1126,13 @@ def attributed_graphlet_count_dict(
             key = canonicalize_colored_graph_nauty(
                 transformed.colored_graph,
                 nauty_exec=nauty_exec,
+            )
+        elif selected_filter == "simple_cycle":
+            key = canonicalize_attributed_simple_cycle(
+                subgraph,
+                node_label_attr=node_label_attr,
+                edge_label_attr=edge_label_attr,
+                missing_ok=missing_ok,
             )
         else:
             key = canonicalize_attributed_graph_python(

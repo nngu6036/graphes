@@ -71,12 +71,15 @@ def graphlet_simplex_from_counts(
     num_nodes: int,
     graphlet_basis: TopologyGraphletBasis,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return per-k graphlet probabilities including one disconnected bin.
+    """Return per-k graphlet probabilities including one background bin.
 
-    For each order k, connected induced graphlet counts are divided by C(n,k).
+    For each order k, selected induced graphlet counts are divided by C(n,k).
     The final coordinate is the probability that a uniformly selected k-node
-    subset is disconnected.  Every valid block therefore lies on a probability
-    simplex and preserves connected-subgraph mass instead of normalizing it away.
+    subset is outside the configured graphlet basis.  With the historical
+    ``all`` filter this is exactly disconnected mass; with cycle filtering it
+    also includes connected acyclic or otherwise non-selected subsets. Every
+    valid block therefore lies on a probability simplex and preserves selected
+    graphlet mass instead of normalizing it away.
 
     Returns ``(probabilities, coordinate_mask)``.  A block is masked when n < k.
     """
@@ -97,9 +100,9 @@ def graphlet_simplex_from_counts(
             [float(counts.get(graphlet_key, 0)) / float(total) for graphlet_key in keys],
             dtype=np.float64,
         )
-        connected_mass = float(np.clip(block.sum(), 0.0, 1.0))
-        disconnected = max(0.0, 1.0 - connected_mass)
-        full = np.concatenate([block, np.asarray([disconnected], dtype=np.float64)])
+        selected_mass = float(np.clip(block.sum(), 0.0, 1.0))
+        background = max(0.0, 1.0 - selected_mass)
+        full = np.concatenate([block, np.asarray([background], dtype=np.float64)])
         # Numerical count arithmetic should already sum to one; normalize only
         # to remove floating-point drift.
         full /= max(float(full.sum()), 1.0e-12)

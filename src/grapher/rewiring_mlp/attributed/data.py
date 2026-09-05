@@ -23,6 +23,7 @@ from grapher.rewiring_mlp.core.rewiring import (
 from grapher.utils.motifs import (
     attributed_graphlet_count_dict,
     graphlet_count_dict,
+    normalize_graphlet_topology_filter,
     normalize_count_dict,
     topology_graphlet_keys_by_size,
 )
@@ -177,11 +178,19 @@ class GraphCategoryVocabulary:
 class GraphletBasis:
     keys_by_k: dict[str, tuple[str, ...]]
     connected_only: bool = True
+    topology_filter: str = "all"
     attributed: bool = False
     node_attribute: str | None = None
     edge_attribute: str | None = None
     overflow_key: str | None = None
     attributed_backend: str = "auto"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "topology_filter",
+            normalize_graphlet_topology_filter(self.topology_filter),
+        )
 
     @classmethod
     def from_config(
@@ -197,10 +206,12 @@ class GraphletBasis:
             cfg.graphlet_k_min,
             cfg.graphlet_k_max,
             connected_only=cfg.graphlet_connected_only,
+            topology_filter=cfg.graphlet_topology_filter,
         )
         return cls(
             keys_by_k={key: tuple(value) for key, value in keys.items()},
             connected_only=cfg.graphlet_connected_only,
+            topology_filter=cfg.graphlet_topology_filter,
         )
 
     @classmethod
@@ -258,6 +269,7 @@ class GraphletBasis:
                         node_label_attr=str(node_attribute),
                         edge_label_attr=str(edge_attribute),
                         connected_only=cfg.graphlet_connected_only,
+                        topology_filter=cfg.graphlet_topology_filter,
                         num_samples=cfg.graphlet_num_samples,
                         rng=rng,
                         backend=str(raw.get("attributed_backend", "auto")),
@@ -267,6 +279,7 @@ class GraphletBasis:
                         graph,
                         k,
                         connected_only=cfg.graphlet_connected_only,
+                        topology_filter=cfg.graphlet_topology_filter,
                         num_samples=cfg.graphlet_num_samples,
                         rng=rng,
                     )
@@ -277,6 +290,7 @@ class GraphletBasis:
         return cls(
             keys_by_k=keys_by_k,
             connected_only=cfg.graphlet_connected_only,
+            topology_filter=cfg.graphlet_topology_filter,
             attributed=bool(attributed),
             node_attribute=str(node_attribute) if node_attribute else None,
             edge_attribute=str(edge_attribute) if edge_attribute else None,
@@ -294,7 +308,7 @@ class GraphletBasis:
 
     @property
     def simplex_width(self) -> int:
-        """Width after appending one disconnected-subset bin per order."""
+        """Width after appending one non-selected/background bin per order."""
 
         return sum(len(self.keys_by_k[key]) + 1 for key in self.sizes)
 
@@ -364,6 +378,7 @@ class GraphletBasis:
                     node_label_attr=str(self.node_attribute),
                     edge_label_attr=str(self.edge_attribute),
                     connected_only=self.connected_only,
+                    topology_filter=self.topology_filter,
                     num_samples=cfg.graphlet_num_samples,
                     rng=generator,
                     backend=self.attributed_backend,
@@ -373,6 +388,7 @@ class GraphletBasis:
                     graph,
                     k,
                     connected_only=self.connected_only,
+                    topology_filter=self.topology_filter,
                     num_samples=cfg.graphlet_num_samples,
                     rng=generator,
                 )
@@ -393,7 +409,8 @@ class GraphletBasis:
             )
             connected_mass[key] = (
                 float(sum(counts.values()) / sampled)
-                if sampled > 0 and self.connected_only
+                if sampled > 0
+                and (self.connected_only or self.topology_filter != "all")
                 else float(sampled > 0)
             )
         return history, connected_mass
@@ -423,6 +440,7 @@ class GraphletBasis:
         return {
             "keys_by_k": {k: list(v) for k, v in self.keys_by_k.items()},
             "connected_only": self.connected_only,
+            "topology_filter": self.topology_filter,
             "attributed": self.attributed,
             "node_attribute": self.node_attribute,
             "edge_attribute": self.edge_attribute,
@@ -438,6 +456,9 @@ class GraphletBasis:
                 for k, keys in (data.get("keys_by_k", {}) or {}).items()
             },
             connected_only=bool(data.get("connected_only", True)),
+            topology_filter=normalize_graphlet_topology_filter(
+                data.get("topology_filter", "all")
+            ),
             attributed=bool(data.get("attributed", False)),
             node_attribute=data.get("node_attribute"),
             edge_attribute=data.get("edge_attribute"),

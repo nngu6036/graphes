@@ -103,7 +103,12 @@ def _vocabulary(graphs: list[nx.Graph]) -> GraphCategoryVocabulary:
     )
 
 
-def _basis(graphs: list[nx.Graph], vocabulary: GraphCategoryVocabulary) -> GraphletBasis:
+def _basis(
+    graphs: list[nx.Graph],
+    vocabulary: GraphCategoryVocabulary,
+    *,
+    topology_filter: str = "all",
+) -> GraphletBasis:
     return GraphletBasis.fit_from_graphs(
         graphs,
         {
@@ -111,6 +116,7 @@ def _basis(graphs: list[nx.Graph], vocabulary: GraphCategoryVocabulary) -> Graph
             "graphlet_k_min": 3,
             "graphlet_k_max": 4,
             "graphlet_connected_only": True,
+            "graphlet_topology_filter": topology_filter,
             "graphlet_num_samples": None,
             "attributed": True,
             "node_attribute": "atomic_num",
@@ -188,6 +194,95 @@ def test_stateful_attributed_graphlet_delta_matches_full_recount() -> None:
     )
     exact = extract_attributed_graphlet_counts(target, graphlet_basis=basis)
     assert updated == exact
+
+
+def test_stateful_cycle_only_delta_matches_full_recount() -> None:
+    source, target, action = _source_target_action()
+    vocabulary = _vocabulary([source, target])
+    basis = _basis(
+        [source, target],
+        vocabulary,
+        topology_filter="simple_cycle",
+    )
+    source_counts = extract_attributed_graphlet_counts(source, graphlet_basis=basis)
+    updated = candidate_attributed_graphlet_counts(
+        source,
+        target,
+        action,
+        current_counts=source_counts,
+        graphlet_basis=basis,
+    )
+    exact = extract_attributed_graphlet_counts(target, graphlet_basis=basis)
+    assert updated == exact
+    assert basis.topology_filter == "simple_cycle"
+
+
+def test_cycle_only_delta_handles_ring_destroyed_by_inserted_chord() -> None:
+    source = nx.Graph()
+    source.add_nodes_from(
+        (node, {"atomic_num": 6, "atom_type": 6}) for node in range(7)
+    )
+    source.add_edges_from(
+        [
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0),
+            (0, 4),
+            (2, 5),
+            (1, 6),
+            (4, 6),
+            (5, 6),
+        ]
+    )
+    for u, v in source.edges():
+        source.edges[u, v].update(bond_type=1, bond_order=1.0)
+    action = make_action([(0, 4), (2, 5)], [(0, 2), (4, 5)])
+    target = apply_action(source, action)
+    for u, v in target.edges():
+        target.edges[u, v].update(bond_type=1, bond_order=1.0)
+
+    vocabulary = _vocabulary([source, target])
+    basis = GraphletBasis.fit_from_graphs(
+        [source, target],
+        {
+            "graphlet_history": True,
+            "graphlet_k_min": 4,
+            "graphlet_k_max": 4,
+            "graphlet_connected_only": True,
+            "graphlet_topology_filter": "simple_cycle",
+            "graphlet_num_samples": None,
+            "attributed": True,
+            "node_attribute": "atomic_num",
+            "edge_attribute": "bond_type",
+            "attributed_backend": "python",
+        },
+        vocabulary=vocabulary,
+        attributed=True,
+        seed=7,
+    )
+    source_counts = extract_attributed_graphlet_counts(source, graphlet_basis=basis)
+    updated = candidate_attributed_graphlet_counts(
+        source,
+        target,
+        action,
+        current_counts=source_counts,
+        graphlet_basis=basis,
+    )
+    exact = extract_attributed_graphlet_counts(target, graphlet_basis=basis)
+    assert updated == exact
+
+    # The reverse move removes the chord and creates induced rings.
+    reverse_action = make_action([(0, 2), (4, 5)], [(0, 4), (2, 5)])
+    target_counts = extract_attributed_graphlet_counts(target, graphlet_basis=basis)
+    reverse_updated = candidate_attributed_graphlet_counts(
+        target,
+        source,
+        reverse_action,
+        current_counts=target_counts,
+        graphlet_basis=basis,
+    )
+    assert reverse_updated == source_counts
 
 
 def test_training_samples_continuous_diffusion_not_rewiring_states() -> None:
