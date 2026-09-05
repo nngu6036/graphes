@@ -242,7 +242,33 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
     --require-fcd \
  --hogdiff-compatible-metrics
 
-
+Molecular evaluation
+  validity: 0.6298828125
+  validity_with_correction: 1.0
+  validity_without_correction: 0.6298828125
+  fcd: 30.26908428972331
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 645
+  num_invalid_generated_molecules: 379
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 379
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 1.0
+  unique_valid_count: 1024
+  novelty_rate: 1.0
+  novel_unique_valid_count: 1024
+  nspdk_mmd: 0.050948799981983116
+  nspdk_mmd_valid_only: 0.050948799981983116
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  nspdk_proxy_mmd_all_generated: 0.001359081729907453
+  nspdk_proxy_mmd_metric_source: 0.0013675077333064488
+  fcd_num_reference_molecules: 1000
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
 
 
 export DIGRESS=/home/quang/DiGress
@@ -267,3 +293,58 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --output-dir "$GEN_DIR/evaluation" \
     --require-fcd \
  --hogdiff-compatible-metrics
+
+
+ Molecular evaluation
+  validity: 0.609375
+  validity_with_correction: 1.0
+  validity_without_correction: 0.609375
+  fcd: 32.27389469495516
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 624
+  num_invalid_generated_molecules: 400
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 400
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 1.0
+  unique_valid_count: 1024
+  novelty_rate: 1.0
+  novel_unique_valid_count: 1024
+  nspdk_mmd: 0.04070256045958943
+  nspdk_mmd_valid_only: 0.04070256045958943
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  nspdk_proxy_mmd_all_generated: 0.001794026756373583
+  nspdk_proxy_mmd_metric_source: 0.0017758253435140733
+  fcd_num_reference_molecules: 1000
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+
+
+
+
+  
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --dataset qm9 \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42 \
+  --epoch-progress-interval 10
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs \
+    outputs/baselines/gdss/qm9/seed_42/generations/seed_42_n_1024/base_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir \
+    outputs/baselines/gdss/qm9/seed_42/generations/seed_42_n_1024/evaluation_corrected_fcd \
+  --fcd-use-corrected \
+  --require-fcd \
+   --hogdiff-compatible-metrics

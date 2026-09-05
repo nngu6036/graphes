@@ -41,6 +41,7 @@ from grapher.models.gdss.runtime import (
     resolve_gdss_python,
     resolve_gdss_root,
 )
+from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 from grapher.utils.subprocess_progress import SubprocessLogReporter
 
 TRAINING_MANIFEST_FORMAT = "grapher_gdss_training_v1"
@@ -122,8 +123,7 @@ def _read_json(path: Path, *, label: str) -> dict[str, Any]:
 
 
 def _load_graphs(path: Path) -> list[Any]:
-    with path.open("rb") as handle:
-        value = pickle.load(handle)
+    value = load_trusted_networkx_pickle(path)
     if not isinstance(value, (list, tuple)):
         raise TypeError(f"Expected a graph sequence in {path}.")
     return list(value)

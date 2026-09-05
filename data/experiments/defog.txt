@@ -163,7 +163,7 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --output-dir \
     outputs/baselines/defog/qm9/seed_42/generations/seed_42_n_1024/evaluation_corrected_fcd \
   --fcd-use-corrected \
-  --require-fcd
+  --require-fcd \
    --hogdiff-compatible-metrics
 
 

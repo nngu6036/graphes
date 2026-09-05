@@ -666,3 +666,116 @@ PYTHONPATH=src   python scripts/train_degree_generator.py \
   fcd_num_reference_molecules: 12997
   fcd_num_valid_generated_molecules: 915
   fcd_generated_smiles_source: raw_valid
+
+
+CONFIG=configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2_strict_same_bond.yaml
+CHECKPOINT=outputs/attributed_grapher/qm9_spectral_cycle_graphlet/seed_42/checkpoint.pt
+OUTPUT=outputs/attributed_generation/qm9_spectral_cycle_graphlet_v2_strict/seed_42
+
+python scripts/run_attributed_grapher.py \
+  --config "$CONFIG" \
+  --checkpoint "$CHECKPOINT" \
+  --output-dir "$OUTPUT" \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
+
+
+python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$OUTPUT" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --nspdk-backend eden \
+  --graphlet-mmd \
+  --graphlet-k-min 3 \
+  --graphlet-k-max 6 \
+  --graphlet-topology-filter simple_cycle \
+  --graphlet-node-attribute atomic_num \
+  --graphlet-edge-attribute bond_type \
+  --graphlet-attributed-backend python \
+  --fcd-device auto \
+  --require-fcd \
+   --hogdiff-compatible-metrics \
+  --output-dir "$OUTPUT/evaluation"
+
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 1.0
+  validity_without_correction: 1.0
+  fcd: 1.9143890895151046
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1024
+  num_invalid_generated_molecules: 0
+  num_valid_generated_molecules_with_projected_formal_charges: 1024
+  num_invalid_generated_molecules_after_projected_formal_charges: 0
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 1.0
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 0
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.9658203125
+  unique_valid_count: 989
+  novelty_rate: 0.7593528816986855
+  novel_unique_valid_count: 751
+  nspdk_mmd: 0.00513852350059241
+  nspdk_mmd_valid_only: 0.00513852350059241
+  graphlet_histogram_mmd: 0.021664252059629074
+  graphlet_selected_mass_mmd: 0.013343685421572271
+  graphlet_histogram_mmd_by_order: {'3': 0.0031408056579584898, '4': 0.00111988297370047, '5': 0.00025487320818640136, '6': 0.00029364627667094467}
+  graphlet_selected_mass_mmd_by_order: {'3': 0.004926804035315424, '4': 0.0009542725523692397, '5': 0.0047274218655053435, '6': 0.001801984563952086}
+  nspdk_proxy_mmd_all_generated: 0.00011606425131704085
+  nspdk_proxy_mmd_metric_source: 0.00011627911303014579
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+
+
+CONFIG=configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2.yaml
+TRAIN_OUTPUT=outputs/attributed_grapher/qm9_spectral_cycle_graphlet_v2/seed_42
+
+python scripts/train_attributed_grapher.py \
+  --config "$CONFIG" \
+  --output-dir "$TRAIN_OUTPUT" \
+  --seed 42 \
+  --device gpu
+
+
+CHECKPOINT="$TRAIN_OUTPUT/checkpoint.pt"
+GEN_OUTPUT=outputs/attributed_generation/qm9_spectral_cycle_graphlet_v2/seed_42
+
+python scripts/run_attributed_grapher.py \
+  --config "$CONFIG" \
+  --checkpoint "$CHECKPOINT" \
+  --output-dir "$GEN_OUTPUT" \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
+
+
+python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_OUTPUT" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --nspdk-backend eden \
+  --graphlet-mmd \
+  --graphlet-k-min 3 \
+  --graphlet-k-max 6 \
+  --graphlet-topology-filter simple_cycle \
+  --graphlet-node-attribute atomic_num \
+  --graphlet-edge-attribute bond_type \
+  --graphlet-attributed-backend python \
+  --fcd-device auto \
+  --require-fcd \
+  --hogdiff-compatible-metrics \
+  --output-dir "$GEN_OUTPUT/evaluation"

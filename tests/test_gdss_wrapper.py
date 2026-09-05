@@ -12,7 +12,12 @@ import numpy as np
 import yaml
 
 from grapher.models.gdss.codec import profile_for
-from grapher.models.gdss.wrapper import GDSSWrapper, _environment, _resolved_gdss_config
+from grapher.models.gdss.wrapper import (
+    GDSSWrapper,
+    _environment,
+    _load_graphs,
+    _resolved_gdss_config,
+)
 from grapher.models.gdss.workers.train import _build_loader
 
 
@@ -131,6 +136,29 @@ def test_cpu_environment_hides_cuda() -> None:
     assert require_cuda is False
     assert env["CUDA_VISIBLE_DEVICES"] == ""
     assert env["PYTHONHASHSEED"] == "9"
+
+
+def test_dataset_loader_discards_cross_version_networkx_view_caches(
+    tmp_path: Path,
+) -> None:
+    graph = nx.Graph()
+    graph.add_node(0, atomic_num=6)
+    graph.add_node(1, atomic_num=8)
+    graph.add_edge(0, 1, bond_type=2)
+    tuple(graph.degree)
+    tuple(graph.edges)
+    tuple(graph.nodes)
+    path = tmp_path / "cached_views.pkl"
+    with path.open("wb") as handle:
+        pickle.dump([graph], handle, protocol=pickle.HIGHEST_PROTOCOL)
+    assert b"networkx.classes.reportviews" in path.read_bytes()
+
+    loaded = _load_graphs(path)
+    assert len(loaded) == 1
+    assert {"degree", "edges", "nodes"}.isdisjoint(loaded[0].__dict__)
+    assert loaded[0].nodes[0]["atomic_num"] == 6
+    assert loaded[0][0][1]["bond_type"] == 2
+    assert list(loaded[0].edges) == [(0, 1)]
 
 
 def test_ego_degree_17_uses_the_eighteenth_feature_channel(tmp_path: Path) -> None:
