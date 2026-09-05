@@ -4,6 +4,11 @@ gdss:
   python_env: GDSS_PYTHON
   upstream_config: ego_small.yaml
   native_dataset: ego_small
+  # Upstream allocates 17 degree channels, which only represents degrees
+  # 0..16. GraphER's fixed 18-node Ego-small graphs include degree 17.
+  config_overrides:
+    data:
+      max_feat_num: 18
   num_workers: 0
   generation_batch_size: 128
   training_estimates:

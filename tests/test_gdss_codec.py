@@ -67,6 +67,7 @@ def test_molecular_export_rejects_aromatic_category_not_supported_by_release(tmp
 
 def test_generated_generic_export_decodes_native_isolate_removed_state(tmp_path: Path) -> None:
     profile = profile_for("ego_small")
+    assert profile.max_feat_num == 18
     adjacency = np.zeros((2, 18, 18), dtype=np.int8)
     adjacency[0, 0, 1] = adjacency[0, 1, 0] = 1
     adjacency[1, :3, :3] = nx.to_numpy_array(nx.complete_graph(3), dtype=np.int8)

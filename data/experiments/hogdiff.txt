@@ -9,9 +9,52 @@ PYTHONPATH=src:. python scripts/run_hog_diff_baseline.py \
   --skip-training-estimates
 
 
-DEFOG_GENERATION_DIR="outputs/baselines/hog_diff/community_small/seed_42/generations/seed_42_n_1024"
+HOGDIFF_GENERATION_DIR="outputs/baselines/hog_diff/community_small/seed_42/generations/seed_42_n_1024"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --generated-dir "$DEFOG_GENERATION_DIR" \
-  --generated-stage defog_seed_42_n_1024 \
-  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_42_n_1024"
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --generated-dir "$HOGDIFF_GENERATION_DIR" \
+  --output-dir "$HOGDIFF_GENERATION_DIR/evaluation_report_seed_42_n_1024"
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+hog_diff_to_test                    0.068066          0.026772      0.067597
+
+  export HOGDIFF=/home/quang/HOG-Diff
+export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
+
+PYTHONPATH=src:. python scripts/run_hog_diff_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 43 \
+  --wrapper-config configs/baselines/hog_diff_community_small.yaml \
+  --skip-training-estimates
+
+
+HOGDIFF_GENERATION_DIR="outputs/baselines/hog_diff/community_small/seed_43/generations/seed_43_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --generated-dir "$HOGDIFF_GENERATION_DIR" \
+  --output-dir "$HOGDIFF_GENERATION_DIR/evaluation_report_seed_43_n_1024"
+
+
+
+
+  export HOGDIFF=/home/quang/HOG-Diff
+export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
+
+PYTHONPATH=src:. python scripts/run_hog_diff_baseline.py \
+  --dataset community_small \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --wrapper-config configs/baselines/hog_diff_community_small.yaml \
+  --skip-training-estimates
+
+
+HOGDIFF_GENERATION_DIR="outputs/baselines/hog_diff/community_small/seed_44/generations/seed_44_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
+  --generated-dir "$HOGDIFF_GENERATION_DIR" \
+  --output-dir "$HOGDIFF_GENERATION_DIR/evaluation_report_seed_44_n_1024"

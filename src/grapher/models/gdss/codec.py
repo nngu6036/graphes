@@ -35,7 +35,10 @@ PROFILES: dict[str, GDSSDatasetProfile] = {
         "community_small", "community_small", "community_small.yaml", "generic", 20, 10
     ),
     "ego_small": GDSSDatasetProfile(
-        "ego_small", "ego_small", "ego_small.yaml", "generic", 18, 17
+        # Radius-1 ego graphs can contain an 18-node star whose centre has
+        # degree 17. Degree is used directly as the one-hot class index, so
+        # classes 0..17 require 18 feature channels.
+        "ego_small", "ego_small", "ego_small.yaml", "generic", 18, 18
     ),
     "grid": GDSSDatasetProfile("grid", "grid", "grid.yaml", "generic", 361, 5),
     "qm9": GDSSDatasetProfile(

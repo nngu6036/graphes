@@ -5,6 +5,7 @@ import json
 import pickle
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import networkx as nx
 import numpy as np
@@ -12,6 +13,7 @@ import yaml
 
 from grapher.models.gdss.codec import profile_for
 from grapher.models.gdss.wrapper import GDSSWrapper, _environment, _resolved_gdss_config
+from grapher.models.gdss.workers.train import _build_loader
 
 
 def _generic_source_config(path: Path) -> Path:
@@ -88,6 +90,40 @@ def test_molecular_sampling_config_is_injected_without_changing_model_shape(tmp_
     assert resolved["sample"]["seed"] == 7
 
 
+def test_ego_wrapper_expands_upstream_degree_feature_space(tmp_path: Path) -> None:
+    source = yaml.safe_load(
+        _generic_source_config(tmp_path / "ego_small.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    source["data"].update(
+        data="ego_small",
+        max_node_num=18,
+        max_feat_num=17,
+    )
+    source_path = tmp_path / "ego_small.yaml"
+    source_path.write_text(yaml.safe_dump(source), encoding="utf-8")
+    repository_root = Path(__file__).resolve().parents[1]
+    wrapper_options = yaml.safe_load(
+        (repository_root / "configs/baselines/gdss_ego_small.yaml").read_text(
+            encoding="utf-8"
+        )
+    )["gdss"]
+
+    resolved = _resolved_gdss_config(
+        source_path=source_path,
+        sampling_path=None,
+        options=wrapper_options,
+        profile=profile_for("ego_small"),
+        run_id="seed_42",
+        seed=42,
+        progress={"epoch_interval": None},
+    )
+
+    assert resolved["data"]["max_node_num"] == 18
+    assert resolved["data"]["max_feat_num"] == 18
+
+
 def test_cpu_environment_hides_cuda() -> None:
     env, require_cuda = _environment(
         Path("/tmp/gdss"), seed=9, device="cpu", cuda_visible_devices="3"
@@ -95,6 +131,27 @@ def test_cpu_environment_hides_cuda() -> None:
     assert require_cuda is False
     assert env["CUDA_VISIBLE_DEVICES"] == ""
     assert env["PYTHONHASHSEED"] == "9"
+
+
+def test_ego_degree_17_uses_the_eighteenth_feature_channel(tmp_path: Path) -> None:
+    adjacency = np.zeros((1, 18, 18), dtype=np.int8)
+    adjacency[0] = nx.to_numpy_array(nx.star_graph(17), dtype=np.int8)
+    np.savez_compressed(
+        tmp_path / "ego.npz",
+        adjacency=adjacency,
+        num_nodes=np.asarray([18], dtype=np.int64),
+        sample_index=np.asarray([0], dtype=np.int64),
+    )
+    config = SimpleNamespace(
+        data=SimpleNamespace(max_feat_num=18, batch_size=1, num_workers=0)
+    )
+
+    features, _adjacency = next(
+        iter(_build_loader(tmp_path / "ego.npz", config, domain="generic", shuffle=False))
+    )
+
+    assert tuple(features.shape) == (1, 18, 18)
+    assert features[0, 0, 17].item() == 1.0
 
 
 def test_wrapper_train_generate_transaction(tmp_path: Path, monkeypatch) -> None:
