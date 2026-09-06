@@ -615,7 +615,10 @@ PYTHONPATH=src python scripts/draw_dataset.py \
   --output outputs/ego_small_all.png
 
 # Supplying both --k-min and --k-max also creates an induced-cycle graphlet
-# histogram (C3 through C5 here), sorted from highest to lowest frequency.
+# drawing for each cycle (C3 through C5 here), labeled with count and frequency,
+# sorted from highest to lowest frequency. Counts always use train+val+test,
+# independently of --split, --count, --seed, or --all used for graph drawings.
+# The historical _graphlet_histogram filename is retained for compatibility.
 # The commands above respectively write:
 #   outputs/community_small_all_graphlet_histogram.{png,json}
 #   outputs/ego_small_all_graphlet_histogram.{png,json}

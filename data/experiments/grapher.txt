@@ -779,3 +779,90 @@ python scripts/evaluate_generated_molecules.py \
   --require-fcd \
   --hogdiff-compatible-metrics \
   --output-dir "$GEN_OUTPUT/evaluation"
+
+
+  Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 1.0
+  validity_without_correction: 1.0
+  fcd: 2.0078381997748913
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1024
+  num_invalid_generated_molecules: 0
+  num_valid_generated_molecules_with_projected_formal_charges: 1024
+  num_invalid_generated_molecules_after_projected_formal_charges: 0
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 1.0
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 0
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.9736328125
+  unique_valid_count: 997
+  novelty_rate: 0.7512537612838516
+  novel_unique_valid_count: 749
+  nspdk_mmd: 0.005085562637530817
+  nspdk_mmd_valid_only: 0.005085562637530817
+  graphlet_histogram_mmd: 0.018346931441930447
+  graphlet_selected_mass_mmd: 0.012581828816705665
+  graphlet_histogram_mmd_by_order: {'3': 0.0036253691624379414, '4': 0.00037032308502937816, '5': 0.00023342399845383, '6': 0.0008678369049412993}
+  graphlet_selected_mass_mmd_by_order: {'3': 0.005896611484947911, '4': 0.00019658659366195153, '5': 0.002105726274727271, '6': 0.0029850372138227055}
+  nspdk_proxy_mmd_all_generated: 0.0001141375119193312
+  nspdk_proxy_mmd_metric_source: 0.00011402088112404703
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+
+
+
+
+  CONFIG=configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet_v2.yaml
+CHECKPOINT=outputs/attributed_grapher/qm9_spectral_cycle_graphlet_v2/seed_42/checkpoint.pt
+OUTPUT=outputs/attributed_generation/qm9_spectral_cycle_graphlet_v2_strict/seed_42
+
+python scripts/run_attributed_grapher.py \
+  --config "$CONFIG" \
+  --checkpoint "$CHECKPOINT" \
+  --output-dir "$OUTPUT" \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu \
+  --set attributed_refiner.molecular.require_same_edge_type_pair=true \
+  --set attributed_refiner.molecular.preserve_removed_edge_type=true \
+  --set attributed_refiner.molecular.enumerate_edge_type_permutations=false \
+  --set attributed_refiner.molecular.preserve_typed_degree=true \
+  --set attributed_refiner.molecular.preserve_weighted_valence=true \
+  --set attributed_refiner.molecular.typed_degree_drift_weight=0.0 \
+  --set attributed_refiner.molecular.weighted_valence_drift_weight=0.0 \
+  --set source_enrichment.rewiring.molecular.require_same_edge_type_pair=true \
+  --set source_enrichment.rewiring.molecular.preserve_removed_edge_type=true \
+  --set source_enrichment.rewiring.molecular.enumerate_edge_type_permutations=false \
+  --set source_enrichment.rewiring.molecular.preserve_typed_degree=true \
+  --set source_enrichment.rewiring.molecular.preserve_weighted_valence=true \
+  --set source_enrichment.rewiring.molecular.typed_degree_drift_weight=0.0 \
+  --set source_enrichment.rewiring.molecular.weighted_valence_drift_weight=0.0
+
+
+
+  python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$OUTPUT" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --hogdiff-compatible-metrics \
+  --nspdk-backend eden \
+  --graphlet-mmd \
+  --graphlet-k-min 3 \
+  --graphlet-k-max 6 \
+  --graphlet-topology-filter simple_cycle \
+  --graphlet-node-attribute atomic_num \
+  --graphlet-edge-attribute bond_type \
+  --graphlet-attributed-backend python \
+  --fcd-device auto \
+  --require-fcd \
+  --output-dir "$OUTPUT/evaluation"

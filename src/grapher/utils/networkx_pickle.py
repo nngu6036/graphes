@@ -50,8 +50,19 @@ class _NetworkXCompatibilityUnpickler(pickle.Unpickler):
 
 
 def _discard_graph_view_caches(value: Any) -> None:
-    candidates = value if isinstance(value, (list, tuple)) else (value,)
-    for graph in candidates:
+    candidates = [value]
+    visited: set[int] = set()
+    while candidates:
+        graph = candidates.pop()
+        if id(graph) in visited:
+            continue
+        visited.add(id(graph))
+        if isinstance(graph, dict):
+            candidates.extend(graph.values())
+            continue
+        if isinstance(graph, (list, tuple)):
+            candidates.extend(graph)
+            continue
         state = getattr(graph, "__dict__", None)
         if not isinstance(state, dict) or "_adj" not in state or "_node" not in state:
             continue

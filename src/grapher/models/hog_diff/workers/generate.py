@@ -138,7 +138,8 @@ def _pack_molecular(atoms, bonds, sample_nodes, *, max_nodes: int):
     out_atoms = np.full((quantized.shape[0], max_nodes), -1, dtype=np.int16)
     for index, n_value in enumerate(sizes):
         n = int(n_value)
-        if n < 1 or n > max_nodes:
+        # Preserve empty upstream samples for the validity denominator.
+        if n < 0 or n > max_nodes:
             raise ValueError(f"HOG-Diff returned invalid molecular node count {n}.")
         out_atoms[index, :n] = atom_channel[index, :n]
         # HOG-Diff's construct_mol reads the lower triangle.  Mirror exactly
@@ -412,6 +413,7 @@ def main() -> int:
             "domain": args.domain,
             "num_requested": int(args.num_graphs),
             "num_generated": int(args.num_graphs),
+            "num_empty_samples": int(np.count_nonzero(sizes == 0)),
             "batch_size": batch_size,
             "sampling_rounds": rounds,
             "seed": int(args.seed),

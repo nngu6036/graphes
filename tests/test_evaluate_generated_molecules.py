@@ -49,6 +49,47 @@ def _projected_tetravalent_nitrogen_graph() -> nx.Graph:
     return graph
 
 
+@pytest.mark.parametrize("wrapper", [None, "graphs", "molecular_graphs", "generated_graphs"])
+def test_loads_graphs_with_incompatible_cached_views(tmp_path, monkeypatch, wrapper) -> None:
+    graph = _valid_cf4_graph()
+    # Explicitly cache views, including on versions that do not cache properties.
+    graph.__dict__["edges"] = graph.edges
+    graph.__dict__["degree"] = graph.degree
+    graph.__dict__["nodes"] = graph.nodes
+    path = tmp_path / "graphs.pkl"
+    save_pickle([graph] if wrapper is None else {wrapper: [graph]}, path)
+
+    def incompatible_setstate(self, state):
+        raise AttributeError("'Graph' object has no attribute '_adj'")
+
+    monkeypatch.setattr(type(graph.edges), "__setstate__", incompatible_setstate)
+    loaded = MODULE._load_graphs_from_path(path)
+    assert len(loaded) == 1
+    restored = loaded[0]
+    assert dict(restored.nodes(data=True)) == dict(graph.nodes(data=True))
+    assert list(restored.edges(data=True)) == list(graph.edges(data=True))
+    assert dict(restored.degree) == dict(graph.degree)
+    restored.add_edge(1, 2, bond_type=1)
+    assert restored.degree[1] == 2
+    assert (1, 2) in restored.edges
+
+
+def test_empty_generated_graph_is_invalid_including_after_correction() -> None:
+    pytest.importorskip("rdkit")
+    graphs = [nx.Graph(), _valid_cf4_graph()]
+    raw = MODULE._validity_and_smiles(graphs)
+    assert raw["num_graphs"] == 2
+    assert raw["invalid_indices"] == [0]
+    assert raw["validity_without_correction"] == 0.5
+    assert raw["conversion_error_counts"] == {"EmptyGraph": 1}
+    assert MODULE._corrected_canonical_smiles_and_error(graphs[0]) == (
+        None, "EmptyGraph", 0
+    )
+    assert MODULE._graph_to_canonical_smiles_and_error(
+        graphs[0], infer_projected_formal_charges=True
+    ) == (None, "EmptyGraph")
+
+
 def test_reports_validity_with_and_without_correction() -> None:
     pytest.importorskip("rdkit")
     graphs = [_valid_cf4_graph(), _correctable_carbon_valence_five_graph()]

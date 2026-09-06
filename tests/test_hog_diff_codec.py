@@ -84,6 +84,41 @@ def test_molecular_projection_rejects_aromatic_internal_category(tmp_path: Path)
         )
 
 
+def test_empty_molecular_sample_survives_worker_export_and_decode(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+    from grapher.models.hog_diff.workers.generate import _pack_molecular
+
+    profile = profile_for("qm9")
+    atoms, bonds, sizes = _pack_molecular(
+        torch.ones((2, 9, 4)), torch.zeros((2, 9, 9)),
+        torch.tensor([0, 1]), max_nodes=9,
+    )
+    assert sizes.tolist() == [0, 1]
+    assert np.all(atoms[0] == -1)
+    assert not bonds[0].any()
+    output = tmp_path / "empty_molecule.npz"
+    np.savez_compressed(
+        output, adjacency=bonds, node_types=atoms, num_nodes=sizes,
+        sample_index=np.arange(2),
+    )
+    graphs = load_generated_export(output, profile=profile)
+    assert [g.number_of_nodes() for g in graphs] == [0, 1]
+    assert graphs[0].graph["hog_diff_sample_index"] == 0
+    assert graphs[0].graph["hog_diff_raw_num_nodes"] == 0
+
+
+@pytest.mark.parametrize("size", [-1, 10])
+def test_molecular_worker_still_rejects_invalid_sizes(size: int) -> None:
+    torch = pytest.importorskip("torch")
+    from grapher.models.hog_diff.workers.generate import _pack_molecular
+
+    with pytest.raises(ValueError, match="invalid molecular node count"):
+        _pack_molecular(
+            torch.ones((1, 9, 4)), torch.zeros((1, 9, 9)),
+            torch.tensor([size]), max_nodes=9,
+        )
+
+
 def test_generated_generic_export_decodes_order_and_padding(tmp_path: Path) -> None:
     profile = profile_for("ego_small")
     adjacency = np.zeros((2, 18, 18), dtype=np.int8)

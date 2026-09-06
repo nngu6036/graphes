@@ -374,7 +374,8 @@ def load_generated_export(
     graphs: list[nx.Graph] = []
     for index in range(count):
         n = int(num_nodes[index])
-        if n < 1 or n > profile.max_nodes:
+        minimum_nodes = 0 if profile.domain == "attributed" else 1
+        if n < minimum_nodes or n > profile.max_nodes:
             raise ValueError(f"Invalid HOG-Diff num_nodes={n} for sample {index}.")
         raw = np.asarray(adjacency[index])
         if profile.domain == "generic":

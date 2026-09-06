@@ -41,7 +41,8 @@ from grapher.rewiring_mlp.molecular.graph_io import (
     require_rdkit,
 )
 from grapher.utils.device import resolve_torch_device
-from grapher.utils.io import ensure_dir, load_pickle, save_json
+from grapher.utils.io import ensure_dir, save_json
+from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 
 
 def _canonicalize_smiles(smiles: str) -> str | None:
@@ -61,6 +62,8 @@ def _graph_to_canonical_smiles_and_error(
     *,
     infer_projected_formal_charges: bool = False,
 ) -> tuple[str | None, str | None]:
+    if graph.number_of_nodes() == 0:
+        return None, "EmptyGraph"
     Chem = require_rdkit()
     try:
         mol = nx_to_rdkit_mol(
@@ -119,6 +122,8 @@ def _corrected_canonical_smiles_and_error(
     not affect the raw ``validity_without_correction`` metric.
     """
 
+    if graph.number_of_nodes() == 0:
+        return None, "EmptyGraph", 0
     Chem = require_rdkit()
     max_steps = max(int(max_steps), 0)
     try:
@@ -214,7 +219,7 @@ def _load_graphs_from_path(path: str | Path) -> list[nx.Graph]:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(path)
-    obj = load_pickle(path)
+    obj = load_trusted_networkx_pickle(path)
     if isinstance(obj, dict):
         for key in ["graphs", "molecular_graphs", "generated_graphs"]:
             if key in obj:

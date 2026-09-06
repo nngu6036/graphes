@@ -698,6 +698,34 @@ def test_cli_draws_all_generic_graphs_across_all_splits(tmp_path: Path) -> None:
     assert [row["graphlet"] for row in payload["graphlets"]] == ["C3", "C4"]
 
 
+def test_graphlet_frequencies_use_full_dataset_when_drawing_one_graph(tmp_path: Path) -> None:
+    pytest.importorskip("PIL")
+    directory = tmp_path / "datasets" / "generic"
+    directory.mkdir(parents=True)
+    save_pickle([nx.cycle_graph(3), nx.cycle_graph(3)], directory / "train.pkl")
+    save_pickle([nx.cycle_graph(4)], directory / "val.pkl")
+    save_pickle([nx.path_graph(3), nx.cycle_graph(4)], directory / "test.pkl")
+
+    for seed in (1, 42):
+        output = tmp_path / f"sample_{seed}.png"
+        assert draw.main([
+            "--dataset", "generic", "--root", str(directory.parent),
+            "--split", "test", "--count", "1", "--seed", str(seed),
+            "--k-min", "3", "--k-max", "4", "--output", str(output),
+        ]) == 0
+        payload = json.loads(
+            output.with_name(f"sample_{seed}_graphlet_histogram.json").read_text()
+        )
+        assert payload["split"] == "all"
+        assert payload["selected_graphs"] == 5
+        assert payload["drawn_graphs"] == 1
+        assert payload["drawn_split"] == "test"
+        assert payload["total_cycle_graphlets"] == 4
+        assert [(row["count"], row["frequency"]) for row in payload["graphlets"]] == [
+            (2, 0.5), (2, 0.5)
+        ]
+
+
 def test_cli_draws_a_prepared_molecule_end_to_end(tmp_path: Path) -> None:
     pytest.importorskip("rdkit")
     pytest.importorskip("PIL")

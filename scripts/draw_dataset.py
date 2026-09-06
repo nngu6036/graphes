@@ -60,7 +60,9 @@ Draw the complete Community-small dataset across all prepared splits::
       --output outputs/community_small_all.png
 
 When both ``--k-min`` and ``--k-max`` are supplied, the script also writes a
-descending histogram of induced simple-cycle graphlets. For example, the
+frequency-sorted drawings of induced simple-cycle graphlets, counted across
+the full train/validation/test dataset regardless of the drawing selection.
+For example, the
 command above creates ``outputs/community_small_all_graphlet_histogram.png``
 and a JSON sidecar containing the raw counts and normalization details.
 """
@@ -952,12 +954,12 @@ def _render_cycle_graphlet_histogram(
     dataset_label: str,
     graph_count: int,
 ) -> Any:
-    """Render a descending horizontal histogram of induced cycle graphlets."""
+    """Draw each cycle topology with its dataset-wide count and frequency."""
 
     from PIL import Image, ImageDraw
 
     width = 1100
-    row_height = 58
+    row_height = 130
     top = 112
     bottom = 68
     height = max(320, top + bottom + row_height * max(len(rows), 1))
@@ -970,7 +972,7 @@ def _render_cycle_graphlet_histogram(
 
     draw.text(
         (28, 22),
-        f"{dataset_label}: induced cycle graphlet histogram",
+        f"{dataset_label}: induced cycle graphlets",
         fill="#111827",
         font=title_font,
     )
@@ -978,34 +980,32 @@ def _render_cycle_graphlet_histogram(
         (28, 58),
         (
             f"graphs={graph_count} | only chordless induced subgraphs Ck | "
-            "bars sorted by cycle-share frequency"
+            "sorted by cycle-share frequency"
         ),
         fill="#4B5563",
         font=body_font,
     )
 
     label_x = 34
-    bar_x = 118
-    bar_width = 580
-    value_x = bar_x + bar_width + 18
-    maximum = max((row.frequency for row in rows), default=0.0)
-    scale = maximum if maximum > 0.0 else 1.0
+    value_x = 260
     colours = ("#2563EB", "#0891B2", "#16A34A", "#9333EA", "#EA580C")
 
     for index, row in enumerate(rows):
         y = top + index * row_height
         draw.text((label_x, y + 8), f"C{row.order}", fill="#111827", font=label_font)
-        draw.rounded_rectangle(
-            (bar_x, y + 6, bar_x + bar_width, y + 34),
-            radius=8,
-            fill="#EEF2F7",
-        )
-        filled = int(round(bar_width * row.frequency / scale))
-        if filled > 0:
-            draw.rounded_rectangle(
-                (bar_x, y + 6, bar_x + max(filled, 3), y + 34),
-                radius=8,
+        points = [
+            (
+                170 + 46 * math.cos(2 * math.pi * node / row.order - math.pi / 2),
+                y + 58 + 46 * math.sin(2 * math.pi * node / row.order - math.pi / 2),
+            )
+            for node in range(row.order)
+        ]
+        draw.line(points + [points[0]], fill="#64748B", width=3)
+        for x_node, y_node in points:
+            draw.ellipse(
+                (x_node - 6, y_node - 6, x_node + 6, y_node + 6),
                 fill=colours[index % len(colours)],
+                outline="#1E293B",
             )
         draw.text(
             (value_x, y + 1),
@@ -1235,7 +1235,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--graphlet-output",
         type=Path,
         help=(
-            "Optional PNG path for the induced-cycle histogram. By default, "
+            "Optional PNG path for cycle drawings with full-dataset frequencies. By default, "
             "_graphlet_histogram is appended to the --output stem."
         ),
     )
@@ -1404,10 +1404,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Saved: {page_output}")
 
     if graphlet_requested:
-        selected_graphs = [prepared_graphs[index] for index in indices]
+        if args.split == "all":
+            histogram_graphs = prepared_graphs
+        else:
+            histogram_graphs, _, _, _ = _load_prepared_dataset_selection(
+                args.dataset, args.root, "all"
+            )
         eligible_subsets = sum(
             math.comb(graph.number_of_nodes(), order)
-            for graph in selected_graphs
+            for graph in histogram_graphs
             for order in range(args.k_min, args.k_max + 1)
             if isinstance(graph, nx.Graph)
             and graph.number_of_nodes() >= order
@@ -1415,11 +1420,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(
             "Counting exact induced cycle graphlets "
             f"C{args.k_min}..C{args.k_max} over "
+            f"all {len(histogram_graphs)} graphs (train+val+test), "
             f"{eligible_subsets:,} eligible node subsets...",
             flush=True,
         )
         histogram_rows = _cycle_graphlet_histogram(
-            selected_graphs,
+            histogram_graphs,
             k_min=args.k_min,
             k_max=args.k_max,
         )
@@ -1432,8 +1438,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         histogram_output.parent.mkdir(parents=True, exist_ok=True)
         histogram = _render_cycle_graphlet_histogram(
             histogram_rows,
-            dataset_label=dataset_label,
-            graph_count=len(selected_graphs),
+            dataset_label=f"{dataset_name}/all",
+            graph_count=len(histogram_graphs),
         )
         histogram.save(histogram_output)
         histogram_report = histogram_output.with_suffix(".json")
@@ -1441,8 +1447,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         save_json(
             {
                 "dataset": dataset_name,
-                "split": args.split,
-                "selected_graphs": len(selected_graphs),
+                "split": "all",
+                "selected_graphs": len(histogram_graphs),
+                "drawn_split": args.split,
+                "drawn_graphs": len(indices),
                 "definition": "induced_simple_cycle_Ck",
                 "normalization": (
                     "count / total induced-cycle count over all requested k"
@@ -1466,7 +1474,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             },
             histogram_report,
         )
-        print(f"Saved graphlet histogram: {histogram_output}")
+        print(f"Saved graphlet drawings and frequencies: {histogram_output}")
         print(f"Saved graphlet counts: {histogram_report}")
 
     ok_count = sum(1 for item in loaded_items if item.error is None)
