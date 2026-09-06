@@ -866,3 +866,35 @@ python scripts/run_attributed_grapher.py \
   --fcd-device auto \
   --require-fcd \
   --output-dir "$OUTPUT/evaluation"
+
+
+
+  export PYTHONPATH="$PWD/src:$PWD"
+
+CONFIG=configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml
+
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config "$CONFIG" \
+  --output-dir outputs/topology_grapher/community_small_spectral_graphlet_v2/seed_42 \
+  --seed 42 \
+  --device gpu
+
+
+CONFIG=configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml
+CHECKPOINT=outputs/topology_grapher/community_small_spectral_graphlet_v2/seed_42/checkpoint.pt
+GEN_OUTPUT=outputs/topology_generation/community_small_topology_spectral_graphlet_v2/seed_42
+
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CONFIG" \
+  --checkpoint "$CHECKPOINT" \
+  --output-dir "$GEN_OUTPUT" \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config "$CONFIG" \
+  --generated-dir "$GEN_OUTPUT" \
+  --generated-stage grapher \
+  --output-dir "$GEN_OUTPUT/evaluation_report
