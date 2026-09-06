@@ -45,3 +45,16 @@ __all__ = [
     "get_wrapper_class",
     "normalize_baseline_id",
 ]
+
+
+_LAZY_WRAPPERS = {
+    "CatFlowWrapper": "catflow", "GDSMWrapper": "gdsm", "GSDMWrapper": "gdsm",
+    "EDGEWrapper": "edge", "SPECTREWrapper": "spectre",
+}
+__all__.extend(_LAZY_WRAPPERS)
+
+
+def __getattr__(name):
+    if name in _LAZY_WRAPPERS:
+        return get_wrapper_class(_LAZY_WRAPPERS[name])
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

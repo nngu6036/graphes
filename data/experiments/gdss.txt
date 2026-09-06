@@ -406,3 +406,98 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --fcd-use-corrected \
   --require-fcd \
    --hogdiff-compatible-metrics
+
+
+  Molecular evaluation
+  validity: 0.7880859375
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.970703125
+  validity_without_correction: 0.7880859375
+  fcd: 3.1656555295528754
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 807
+  num_invalid_generated_molecules: 217
+  num_valid_generated_molecules_with_projected_formal_charges: 994
+  num_invalid_generated_molecules_after_projected_formal_charges: 30
+  num_raw_invalid_resolved_by_projected_formal_charges: 187
+  projected_formal_charge_success_rate_on_raw_invalid: 0.8617511520737328
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 217
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 1.0
+  unique_valid_count: 1024
+  novelty_rate: 0.8896484375
+  novel_unique_valid_count: 911
+  nspdk_mmd: 0.003206485320760774
+  nspdk_mmd_valid_only: 0.003206485320760774
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.00016936630387531985
+  nspdk_proxy_mmd_metric_source: 0.00017003889088195966
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+
+
+  
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --dataset qm9 \
+  --num-samples 1024 \
+  --seed-id 44 \
+  --run-id seed_44 \
+  --epoch-progress-interval 10
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs \
+    outputs/baselines/gdss/qm9/seed_44/generations/seed_44_n_1024/base_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir \
+    outputs/baselines/gdss/qm9/seed_44/generations/seed_44_n_1024/evaluation_corrected_fcd \
+  --fcd-use-corrected \
+  --require-fcd \
+   --hogdiff-compatible-metrics
+
+  Molecular evaluation
+  validity: 0.8330078125
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9609375
+  validity_without_correction: 0.8330078125
+  fcd: 3.209300191152309
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 853
+  num_invalid_generated_molecules: 171
+  num_valid_generated_molecules_with_projected_formal_charges: 984
+  num_invalid_generated_molecules_after_projected_formal_charges: 40
+  num_raw_invalid_resolved_by_projected_formal_charges: 131
+  projected_formal_charge_success_rate_on_raw_invalid: 0.7660818713450293
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 171
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.9990234375
+  unique_valid_count: 1023
+  novelty_rate: 0.8758553274682307
+  novel_unique_valid_count: 896
+  nspdk_mmd: 0.003596141451194552
+  nspdk_mmd_valid_only: 0.003596141451194552
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.0001346613782570921
+  nspdk_proxy_mmd_metric_source: 0.00013631488912751983
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction

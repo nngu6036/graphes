@@ -1,0 +1,34 @@
+# Shared GraphER report; molecular FCD/NSPDK use evaluate_generated_molecules.py.
+benchmark: community_small
+seed: 42
+dataset:
+  name: sbm
+  benchmark: community_small
+  config_path: configs/datasets/community_small.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+  max_val_graphs: null
+evaluation:
+  inline_during_generation: false
+  orca_exec: null
+  compute_orbit: true
+  compute_graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 8192
+  generic_mmd_protocol: graphrnn
+  generic_clustering_bins: 100
+protocol:
+  evaluation_seeds:
+  - 42
+  - 43
+  - 44
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  max_reference_graphs: null
+  tune_on_split: val
+  final_split: test
+experiment: community_small_external_baselines_evaluation

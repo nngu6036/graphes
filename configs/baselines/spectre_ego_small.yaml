@@ -1,0 +1,54 @@
+# Source-backed SPECTRE on frozen GraphER ego_small splits.
+# Rerun starting point, not a claim of paper-identical settings or reproduced metrics.
+spectre:
+  train:
+    epochs: 12000
+    batch_size: 10
+    log_every: 100
+  model:
+    k_eigval: 2
+    gen_gelu: true
+    disc_gelu: true
+    SON_D_full_readout: true
+    SON_normalize_left: true
+    SON_small: true
+    lambda_gating: true
+    lambda_last_gating: true
+    lambda_upsample: true
+    noisy_gen: true
+    noisy_disc: true
+    derived_eigval_noise: true
+    normalize_noise: true
+    spectral_norm: true
+    eigvec_right_noise: true
+    gp_shared_alpha: true
+    no_restart: true
+    gp_do_backwards: true
+    eigvec_sign_flip: true
+    ignore_first_eigv: true
+    gp_include_unpermuted: true
+    clip_grad_norm: 1.0
+    eigvec_temp_decay: true
+    eigval_temp_decay: true
+    decay_eigvec_temp_over: 2000
+    decay_eigval_temp_over: 2000
+    n_eigval_warmup_epochs: 2000
+    n_eigvec_warmup_epochs: 2000
+    min_eigval_temp: 0.8
+    min_eigvec_temp: 0.8
+    SON_gumbel_temperature_decay: true
+    decay_SON_gumbel_temp_over: 10000
+    SON_gumbel_temperature_warmup_epochs: 0
+  sample:
+    use_ema: true
+  generation_batch_size: 32
+  runtime:
+    device: auto
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+  source_env: SPECTRE
+  python_env: SPECTRE_PYTHON
+  training_estimates:
+    enabled: false

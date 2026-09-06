@@ -1,0 +1,34 @@
+# Source-backed EDGE on frozen GraphER grid splits.
+# Rerun starting point, not a claim of paper-identical settings or reproduced metrics.
+edge:
+  train:
+    epochs: 50000
+    batch_size: 2
+    lr: 0.0001
+    clip_value: 1.0
+    log_every: 100
+  model:
+    arch: TGNN_degree_guided
+    parametrization: xt_prescribed_st
+    loss_type: vb_ce_xt_prescribred_st
+    diffusion_steps: 128
+    diffusion_dim: 64
+    noise_schedule: linear
+    dp_rate: 0.1
+    num_heads:
+    - 8
+    - 8
+    - 8
+    - 8
+    - 1
+  generation_batch_size: 2
+  runtime:
+    device: auto
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+  source_env: EDGE
+  python_env: EDGE_PYTHON
+  training_estimates:
+    enabled: false

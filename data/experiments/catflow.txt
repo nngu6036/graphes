@@ -1,0 +1,20 @@
+export CATFLOW="/home/quang/CatFlow"
+export CATFLOW_PYTHON="$(command -v python)"
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --wrapper-config configs/baselines/catflow_community_small.yaml \
+  --seed-id 42 \
+  --run-id seed_42 \
+  --num-samples 1024 \
+  --device gpu
+
+# Evaluation
+GEN_DIR="outputs/baselines/catflow/community_small/seed_42/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --generated-stage catflow \
+  --output-dir "$GEN_DIR/evaluation_report"

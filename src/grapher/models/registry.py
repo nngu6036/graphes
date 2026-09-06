@@ -15,6 +15,9 @@ _WRAPPER_PATHS: Final[dict[str, str]] = {
     "defog": "grapher.models.defog.wrapper:DeFoGWrapper",
     "gdss": "grapher.models.gdss:GDSSWrapper",
     "hog_diff": "grapher.models.hog_diff:HOGDiffWrapper",
+    "gdsm": "grapher.models.gdsm:GDSMWrapper",
+    "edge": "grapher.models.edge:EDGEWrapper",
+    "spectre": "grapher.models.spectre:SPECTREWrapper",
     "flagg": "grapher.models.flagg:FLAGGWrapper",
 }
 
@@ -28,6 +31,9 @@ _ALIASES: Final[dict[str, str]] = {
     "de-fog": "defog",
     "gd-ss": "gdss",
     "hog-diff": "hog_diff",
+    "gsdm": "gdsm",
+    "gs-dm": "gdsm",
+    "gd-sm": "gdsm",
 }
 
 

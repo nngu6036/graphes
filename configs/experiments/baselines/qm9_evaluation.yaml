@@ -1,0 +1,27 @@
+# Structural report only. Use evaluate_generated_molecules.py for FCD/NSPDK.
+benchmark: qm9_heavy_atom
+seed: 42
+dataset:
+  name: qm9_attributed
+  config_path: configs/datasets/qm9.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+  max_val_graphs: 2000
+  max_generation_train_graphs: null
+evaluation:
+  generic_mmd_protocol: graphrnn
+  generic_clustering_bins: 100
+  compute_orbit: true
+  graphlet_backend: sampled
+protocol:
+  evaluation_seeds:
+  - 42
+  - 43
+  - 44
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  tune_on_split: val
+  final_split: test
+  max_reference_graphs: null
+experiment: qm9_external_baselines_evaluation

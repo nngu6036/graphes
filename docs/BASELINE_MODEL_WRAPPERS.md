@@ -61,6 +61,14 @@ src/grapher/models/
 │       ├── train.py
 │       └── export.py
 ├── catflow.py
+├── gdsm.py
+├── gsdm.py
+├── edge.py
+├── spectre.py
+├── external_wrapper.py
+├── external_codec.py
+├── external_cli.py
+├── external_workers/  # isolated source adapters; no vendored neural models
 ├── defog/
 │   ├── __init__.py
 │   ├── wrapper.py
@@ -125,6 +133,9 @@ The canonical registry identifiers are:
 - `defog`
 - `gdss`
 - `hog_diff`
+- `gdsm` (`gsdm` is an alias; the paper/source spelling is GSDM)
+- `edge`
+- `spectre`
 - `flagg`
 
 The registry is lazy. Importing `grapher.models` must never import an upstream
@@ -262,7 +273,10 @@ splits into the upstream data format without validation/test optimization
 leakage, and exports raw generated tensors before HOG-Diff's molecular validity
 correction. All completed external wrappers export neutral numeric NPZ batches
 and validate dataset-specific schemas before publishing GraphER-facing NetworkX
-graphs. CatFlow and FLAGG remain explicit placeholders.
+graphs. CatFlow, GSDM, EDGE and SPECTRE now implement the same managed contract.
+Only FLAGG remains an explicit placeholder. See `SOURCE_BACKED_BASELINES.md`
+for domain support, adaptations and the distinction between implementation
+and end-to-end runtime validation.
 Unimplemented methods raise `BaselineNotImplementedError` before creating any
 directories; an incomplete adapter must not leave a partial run that looks
 like evidence.
@@ -276,3 +290,17 @@ are documented in `docs/GRAPHRNN_WRAPPER.md`; DiGress-specific setup is in
 `docs/DIGRESS_WRAPPER.md`, GDSS setup/protocol details are in `docs/GDSS_WRAPPER.md`, and HOG-Diff setup/protocol details are in
 `docs/HOG_DIFF_WRAPPER.md`. DeFoG molecular preparation records the exact source
 representation and, for ZINC, the verified Kekule model view.
+
+
+## Four additional source adapters (September 2026)
+
+`scripts/run_catflow_baseline.py`, `scripts/run_gdsm_baseline.py`,
+`scripts/run_edge_baseline.py`, and `scripts/run_spectre_baseline.py` accept
+`--stage train`, `--stage generate`, or `--stage all`. The GSDM spelling is also
+available as `run_gsdm_baseline.py`. Class exports include `CatFlowWrapper`,
+`GDSMWrapper`, `GSDMWrapper` (alias), `EDGEWrapper`, and `SPECTREWrapper`.
+
+Optional copies of the user-supplied external checkouts in the standalone
+distribution live under top-level `external/`, never under `src/grapher/models`.
+They are imported only in worker subprocesses. See `SOURCE_BACKED_BASELINES.md`
+for the common evaluator commands and explicit source-compatibility adjustments.

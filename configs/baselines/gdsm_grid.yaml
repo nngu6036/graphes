@@ -1,0 +1,21 @@
+# Source-backed GSDM on frozen GraphER grid splits.
+# Rerun starting point, not a claim of paper-identical settings or reproduced metrics.
+gdsm:
+  upstream_config: grid.yaml
+  train:
+    epochs: 1000
+    batch_size: 8
+    log_every: 10
+  sample:
+    use_ema: false
+  generation_batch_size: 8
+  runtime:
+    device: auto
+    progress:
+      enabled: true
+      stream_output: true
+      interval_seconds: 15
+  source_env: GDSM
+  python_env: GDSM_PYTHON
+  training_estimates:
+    enabled: false

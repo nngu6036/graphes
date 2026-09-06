@@ -185,9 +185,18 @@ Supported or scaffolded integrations include:
 | DeFoG | External discrete-flow baseline | Ready |
 | GDSS | External score/SDE baseline | Ready |
 | GraphRNN | External autoregressive baseline | Ready |
-| CatFlow | External baseline | Integration scaffold |
+| CatFlow | External categorical-flow baseline | Implemented; CPU smoke-tested |
+| GSDM (`gdsm` / `gsdm`) | External spectral-diffusion baseline | Implemented; CPU smoke-tested |
+| EDGE | External degree-guided diffusion baseline | Implemented; native environment still requires validation |
+| SPECTRE | External spectral GAN baseline | Implemented; CPU smoke-tested |
 | HOG-Diff | External higher-order / bridge diffusion baseline | Ready |
 | FLAGG | External baseline | Integration scaffold |
+
+CatFlow, GSDM, EDGE, and SPECTRE setup, supported datasets, source adaptations,
+separate training/generation/evaluation commands, and validation limits are in
+[Source-backed baseline guide](docs/SOURCE_BACKED_BASELINES.md).
+The standalone distribution includes the four uploaded sources under `external/`,
+not inside the `grapher` Python package. These workers do not train GraphER itself.
 
 ---
 

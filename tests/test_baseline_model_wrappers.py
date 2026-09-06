@@ -25,6 +25,9 @@ EXPECTED_BASELINES = (
     "defog",
     "gdss",
     "hog_diff",
+    "gdsm",
+    "edge",
+    "spectre",
     "flagg",
 )
 
@@ -48,6 +51,10 @@ class BaselineRegistryTests(unittest.TestCase):
                 "defog": "ready",
                 "gdss": "ready",
                 "hog_diff": "ready",
+                "catflow": "ready",
+                "gdsm": "ready",
+                "edge": "ready",
+                "spectre": "ready",
             }
         )
         for model_id, status in expected.items():
@@ -179,12 +186,12 @@ class PlaceholderBehaviorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp) / "baselines"
             run = RunSpec.for_seed(
-                model_id="catflow",
+                model_id="flagg",
                 dataset_id="community_small",
                 seed=42,
                 output_root=output_root,
             )
-            wrapper = create_baseline("catflow")
+            wrapper = create_baseline("flagg")
             train_request = TrainRequest(
                 run=run,
                 dataset=DatasetReference(
