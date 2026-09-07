@@ -187,7 +187,11 @@ def main() -> None:
 
     seed = int(args.seed if args.seed is not None else config.get("seed", 0))
     seed_sequence = np.random.SeedSequence(seed)
-    source_seed_sequence, refiner_seed_sequence = seed_sequence.spawn(2)
+    # Keep construction/refinement as the first two streams so their seeded
+    # behavior stays unchanged when source enrichment is enabled.
+    source_seed_sequence, refiner_seed_sequence, enrichment_seed_sequence = (
+        seed_sequence.spawn(3)
+    )
     source_rng = np.random.default_rng(source_seed_sequence)
     torch.manual_seed(seed)
 
@@ -209,6 +213,7 @@ def main() -> None:
     if num_generate <= 0:
         raise ValueError("num_generate must be positive.")
     refiner_graph_seeds = refiner_seed_sequence.spawn(num_generate)
+    enrichment_graph_seeds = enrichment_seed_sequence.spawn(num_generate)
 
     predictor_cfg = dict(config.get("topology_predictor", {}) or {})
     checkpoint_path = args.checkpoint or predictor_cfg.get("checkpoint_path")
@@ -484,7 +489,7 @@ def main() -> None:
                 graphlet_basis=graphlet_basis,
                 refiner_config=source_enrichment_settings,
                 device=model_device,
-                rng=np.random.default_rng(refiner_graph_seeds[index] ^ 0x5A5A5A5A),
+                rng=np.random.default_rng(enrichment_graph_seeds[index]),
                 return_trace=True,
             )
 
@@ -881,6 +886,8 @@ def main() -> None:
         "rng_streams": {
             "source_and_refiner_decoupled": True,
             "refiner_rng_per_graph": True,
+            "source_enrichment_decoupled": True,
+            "source_enrichment_rng_per_graph": True,
         },
         "config": config,
     }

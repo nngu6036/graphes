@@ -2,6 +2,15 @@ export CATFLOW="/home/quang/CatFlow"
 export CATFLOW_PYTHON="$(command -v python)"
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --wrapper-config configs/baselines/catflow_community_small.yaml \
+  --seed-id 42 \
+  --run-id seed_42 \
+  --device gpu \
+  --n-epochs 200000
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset community_small \
   --wrapper-config configs/baselines/catflow_community_small.yaml \

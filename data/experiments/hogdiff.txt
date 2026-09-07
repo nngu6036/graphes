@@ -159,3 +159,60 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --fcd-use-corrected \
   --require-fcd \
    --hogdiff-compatible-metrics
+
+
+Molecular evaluation
+  validity: 0.9248046875
+  validity_with_correction: 0.9990234375
+  validity_with_projected_formal_charges: 0.9580078125
+  validity_without_correction: 0.9248046875
+  fcd: 0.5604355918235591
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 947
+  num_invalid_generated_molecules: 77
+  num_valid_generated_molecules_with_projected_formal_charges: 981
+  num_invalid_generated_molecules_after_projected_formal_charges: 43
+  num_raw_invalid_resolved_by_projected_formal_charges: 34
+  projected_formal_charge_success_rate_on_raw_invalid: 0.44155844155844154
+  num_valid_generated_molecules_with_correction: 1023
+  num_invalid_generated_molecules_after_correction: 1
+  num_molecules_corrected_to_valid: 76
+  correction_success_rate_on_raw_invalid: 0.987012987012987
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.9960899315738025
+  unique_valid_count: 1019
+  novelty_rate: 0.39352306182531893
+  novel_unique_valid_count: 401
+  nspdk_mmd: 0.0013497010363451576
+  nspdk_mmd_valid_only: 0.0013497010363451576
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.7166396428927914e-05
+  nspdk_proxy_mmd_metric_source: 2.6113310686148197e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1023
+  fcd_generated_smiles_source: valid_with_correction
+  
+
+PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
+  --dataset qm9 \
+  --num-samples 1024 \
+  --seed-id 43 \
+  --run-id seed_43 \
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs \
+    outputs/baselines/hog_diff/qm9/seed_42/generations/seed_43_n_1024/base_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --output-dir \
+    outputs/baselines/hog_diff/qm9/seed_42/generations/seed_43_n_1024/evaluation_corrected_fcd \
+  --fcd-use-corrected \
+  --require-fcd \
+   --hogdiff-compatible-metrics

@@ -869,8 +869,6 @@ python scripts/run_attributed_grapher.py \
 
 
 
-  export PYTHONPATH="$PWD/src:$PWD"
-
 export PYTHONPATH="$PWD/src:$PWD"
 
 CONFIG=configs/experiments/grapher/community_small_topology_spectral_cycle_graphlet_v4_enriched_source.yaml
@@ -895,6 +893,7 @@ python scripts/run_topology_grapher.py \
   --seed 42 \
   --device gpu
 
+GEN_OUTPUT=outputs/topology_generation/community_small_spectral_cycle_graphlet_v4_enriched_source/seed_42
 
 python scripts/evaluate_graph_generation_report.py \
   --config "$CONFIG" \

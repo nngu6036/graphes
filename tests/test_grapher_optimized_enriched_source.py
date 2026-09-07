@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+import sys
+
 import networkx as nx
 import numpy as np
 import pytest
 import torch
 
+from grapher.utils.io import load_pickle, save_yaml
 from grapher.rewiring_mlp.core.rewiring import enumerate_valid_double_edge_swaps
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.graphlet_diffusion import (
@@ -301,3 +305,66 @@ def test_streaming_diffusion_caches_fixed_endpoints() -> None:
     list(iter(dataset))
     np.testing.assert_allclose(dataset._endpoint_cache[0].source_spectrum, first_source)
     assert dataset.last_diagnostics[-1]["endpoint_cache"] is True
+
+
+def test_enriched_generation_cli_has_reproducible_independent_rng_streams(tmp_path, monkeypatch) -> None:
+    from scripts import run_topology_grapher as run
+
+    basis = _basis()
+    checkpoint = tmp_path / "checkpoint.pt"
+    save_topology_spectral_graphlet_checkpoint(
+        _model(basis).eval(), checkpoint, graphlet_basis=basis,
+        report={"val_spectral_normalized_rmse": 0.1, "val_graphlet_logit_rmse": 0.1},
+    )
+    config_path = tmp_path / "config.yaml"
+    save_yaml({
+        "generation": {"degree_source": "test_oracle"},
+        "topology_refiner": {"steps": 1},
+        "source_enrichment": {"enabled": True, "rewiring": {"steps": 1}},
+        "evaluation": {"inline_during_generation": False},
+    }, config_path)
+    monkeypatch.setattr(run, "load_dataset_splits", lambda *args, **kwargs: {
+        "train": [_graph()], "test": [_graph()],
+    })
+
+    draws = {"enrichment": [], "refiner": []}
+
+    def record_rng(name, function):
+        def wrapped(*args, **kwargs):
+            draws[name].append(kwargs["rng"].random(4))
+            return function(*args, **kwargs)
+        return wrapped
+
+    monkeypatch.setattr(run, "enrich_graph_with_degree_summary", record_rng(
+        "enrichment", run.enrich_graph_with_degree_summary,
+    ))
+    monkeypatch.setattr(run, "refine_graph_with_spectral_graphlet_predictions", record_rng(
+        "refiner", run.refine_graph_with_spectral_graphlet_predictions,
+    ))
+
+    # Increasing the requested count must preserve the prefix of every stream.
+    for count in (2, 3):
+        output = tmp_path / f"generation_{count}"
+        monkeypatch.setattr(sys, "argv", [
+            "run_topology_grapher.py", "--config", str(config_path),
+            "--checkpoint", str(checkpoint), "--output-dir", str(output),
+            "--num-generate", str(count), "--seed", "42", "--device", "cpu",
+        ])
+        run.main()
+        report = json.loads((output / "report.json").read_text())
+        assert report["num_generated"] == count
+        assert report["diagnostics"]["source_enrichment_enabled"] is True
+        assert report["diagnostics"]["final_target_degree_match_rate"] == 1.0
+
+    for values in draws.values():
+        np.testing.assert_array_equal(values[:2], values[2:4])
+        assert not np.array_equal(values[0], values[1])
+    assert not np.array_equal(draws["enrichment"][0], draws["refiner"][0])
+    # Refinement keeps the same seed stream used before enrichment was added.
+    old_refiner_seed = np.random.SeedSequence(42).spawn(2)[1]
+    for actual, seed in zip(draws["refiner"][:2], old_refiner_seed.spawn(2)):
+        np.testing.assert_array_equal(actual, np.random.default_rng(seed).random(4))
+    for filename in ("coarse_graphs.pkl", "enriched_base_graphs.pkl", "topology_refined_graphs.pkl"):
+        first = load_pickle(tmp_path / "generation_2" / filename)
+        second = load_pickle(tmp_path / "generation_3" / filename)
+        assert all(nx.utils.graphs_equal(a, b) for a, b in zip(first, second))
