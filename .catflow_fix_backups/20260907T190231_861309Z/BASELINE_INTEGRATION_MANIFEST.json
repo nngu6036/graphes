@@ -797,15 +797,5 @@
   "baseline_config_count": 15,
   "shared_evaluation_config_count": 5,
   "validation": "validation/source_baselines/VALIDATION.json",
-  "commands": "docs/SOURCE_BACKED_BASELINES.md",
-  "followup_updates": [
-    {
-      "date": "2026-09-08",
-      "scope": "CatFlow probability-path and checkpoint-policy correction",
-      "report": "docs/CATFLOW_PATH_AUDIT_20260908.md",
-      "validation": "validation/catflow_v2/validation.json",
-      "existing_upstream_sources_changed": false,
-      "actual_benchmark_recovery_verified": false
-    }
-  ]
+  "commands": "docs/SOURCE_BACKED_BASELINES.md"
 }

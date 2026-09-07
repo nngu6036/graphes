@@ -11,10 +11,9 @@ class CatFlowWrapper(SourceBackedWrapper):
     source_markers = ("utils.py", "flow_matching.py", "models/transformer.py")
     default_options = {
         "train": {"epochs": 1000, "batch_size": 128, "lr": 0.0002, "ema": 0.999, "log_every": 10,
-                  "distribution": "normal", "loss_function": "kld", "path": "linear",
-                  "validation_every": 100, "validation_repeats": 4, "checkpoint_every": 1000},
+                  "distribution": "normal", "loss_function": "kld"},
         "model": {"num_layers": 6, "small_model": 0},
-        "sample": {"method": "dopri5", "t_end": 0.95, "steps": 100, "atol": 1e-5, "rtol": 1e-5, "use_ema": True, "checkpoint_selection": "auto"},
+        "sample": {"method": "dopri5", "t_end": 0.95, "steps": 100, "atol": 1e-5, "rtol": 1e-5, "use_ema": True},
         "generation_batch_size": 128, "runtime": {"device": "auto"},
     }
-    implementation_note = "Native CatFlow transformer with explicit linear/kld path (v2); fixed EMA validation, best/last snapshots, frozen splits and raw exports."
+    implementation_note = "Native CatFlow transformer and default normal/kld path; frozen GraphER splits and exact-count raw exports."

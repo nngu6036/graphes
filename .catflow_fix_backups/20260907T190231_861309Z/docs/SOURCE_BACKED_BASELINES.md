@@ -3,12 +3,6 @@
 Integration date: 6 September 2026. The basis is the five source ZIPs supplied
 with the request, not a replacement implementation obtained from the web.
 
-**CatFlow correction, 8 September 2026:** new training uses an explicit linear
-probability path instead of the uploaded source's inconsistent fixed-noise path.
-Read [the audit and migration guide](CATFLOW_PATH_AUDIT_20260908.md) before rerunning
-CatFlow. Old checkpoints keep legacy sampling semantics and emit a warning.
-The original integration tests below are historical, not validation of the v2 path.
-
 ## Scope and validation status
 
 The four requested classes are implemented: `CatFlowWrapper`, `GDSMWrapper`,
@@ -325,7 +319,7 @@ held-out graph. Generated formal charges are zero before the common evaluator.
 
 ## Config inventory and budgets
 
-There are 16 wrapper YAMLs: six CatFlow (including the v2 diagnostic config), three GSDM, three EDGE, and four
+There are 15 wrapper YAMLs: five CatFlow, three GSDM, three EDGE, and four
 SPECTRE. There are also five shared structural-report experiment YAMLs under
 `configs/experiments/baselines/`. Molecular FCD/NSPDK use the separate script
 above, not flags placed in a structural-report YAML.
@@ -355,9 +349,9 @@ Override epochs with `--n-epochs`, training batch size with `--batch-size`, and
 generation batch size with `--generation-batch-size`. Model-specific settings
 remain in the YAML. Generation cannot change a trained architecture.
 
-CatFlow v2 defaults to the explicit linear/KLD path and `dopri5` integration up to `t=0.95`;
+CatFlow defaults to the normal/KLD path and `dopri5` integration up to `t=0.95`;
 `t_end` must be strictly less than 1 because the KLD velocity divides by `1-t`.
-Its `sample.steps` controls fixed-grid solvers (Euler, RK4, etc.), not adaptive DOPRI5.
+Its `sample.steps` controls the optional Euler solver only, not adaptive DOPRI5.
 GSDM defaults to the source VP spectral configurations and native PC sampler.
 EDGE uses 64 linear-schedule steps on Community-small/Ego-small, within the
 small-graph range advised in the supplied README; Grid retains 128. The native
@@ -417,15 +411,11 @@ code is unchanged by this integration.
 
 ## Source-specific adaptations
 
-**CatFlow.** The worker executes the supplied `get_GT_model` and graph transformer.
-Version 2 explicitly constructs `(1-t)*z + t*one_hot_target` without additional
-constant noise. This corrects the probability-path mismatch in the uploaded
-normal `conditional_velocity` branch; that branch is retained only through
-explicit `train.path: upstream` for labelled legacy diagnostics. Source files
-remain read-only. It uses dense frozen-data batches, the source CE weights
-(node + 5 x edge), clipping, AdamW, cosine schedule and EMA. Validation uses fixed
-noise/time draws and EMA weights on the real validation split. Both best-EMA and
-final snapshots are stored, with the selected epoch recorded during sampling. The one-example time
+**CatFlow.** The worker executes the supplied `get_GT_model`, graph transformer,
+and normal `conditional_velocity` definitions, retaining the extra 0.5 Gaussian
+path perturbation. It uses dense frozen-data batches, the source CE weights
+(node + 5 x edge), clipping, AdamW, cosine schedule and EMA. Validation reads the
+actual validation split instead of reusing training data. The one-example time
 embedding is kept two-dimensional. The managed ODE/export loop fixes the supplied
 sampler's per-batch accumulator reset and floor-sized ten-batch sample loss.
 The native `ema.py` is used if `torch_ema` is unavailable; the backend is saved.

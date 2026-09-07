@@ -1,12 +1,13 @@
-# Source-backed CatFlow on frozen GraphER zinc splits.
+# Corrected CatFlow path. Retrain under a NEW run-id; not a claim of benchmark convergence.
+# Source-backed CatFlow on frozen GraphER community_small splits.
 # Rerun starting point, not a claim of paper-identical settings or reproduced metrics.
 catflow:
   train:
-    epochs: 500
-    batch_size: 1024
+    epochs: 10000
+    batch_size: 128
     lr: 0.0002
     ema: 0.999
-    log_every: 10
+    log_every: 100
     distribution: normal
     loss_function: kld
     path: linear  # v2: no fixed endpoint noise; pairs with the sampling velocity

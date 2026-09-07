@@ -27,3 +27,8 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN_DIR" \
   --generated-stage catflow \
   --output-dir "$GEN_DIR/evaluation_report"
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+catflow_to_test                     0.081284          0.767483      0.421003

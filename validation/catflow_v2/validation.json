@@ -1,0 +1,137 @@
+{
+  "audit_date": "2026-09-08",
+  "basis": "Uploaded VFM_CatFlow.zip and previously delivered GraphER wrappers; no user run artifacts were available.",
+  "environment": {
+    "python": "3.13.5",
+    "torch": "2.10.0+cpu",
+    "cuda_available": false,
+    "torchdiffeq_available": false,
+    "ema_backend_tested": "bundled"
+  },
+  "pytest": {
+    "command": "PYTHONPATH=src:. pytest -q tests/test_catflow_path_v2.py tests/test_source_backed_baselines.py tests/test_baseline_model_wrappers.py tests/test_graph_generation_report.py tests/test_generic_mmd_protocol.py tests/test_readme_contract.py",
+    "passed": 62,
+    "subtests_passed": 5,
+    "duration_seconds": 8.6
+  },
+  "source_probe": {
+    "source_root": "/mnt/data/catflow_audit/wrapped/graphes/external/catflow",
+    "source_flow_matching_sha256": "c1d3ab645a62599f3ccd8b25cb90bb91fee24269842d05795e62e12f6da4593b",
+    "upstream_path_probe": {
+      "node_residual_std_at_t1": 0.5020672082901001,
+      "edge_residual_std_at_t1": 0.3524218499660492,
+      "seed": 1729,
+      "num_probe_graphs": 4096
+    },
+    "warnings": [
+      "Upstream normal path has nonvanishing endpoint noise. Legacy straight-line sampling is not path-consistent.",
+      "No training manifest found; this is a source-only audit, not an audit of your trained weights."
+    ]
+  },
+  "exact_posterior_test": {
+    "trained_network": false,
+    "dataset": "one synthetic binary edge",
+    "results": [
+      {
+        "target_edge_probability": 0.2,
+        "training_extra_noise_std": 0.0,
+        "generated_edge_frequency": 0.199325,
+        "num_samples": 200000,
+        "endpoint": 0.95,
+        "method": "rk4",
+        "steps": 400
+      },
+      {
+        "target_edge_probability": 0.2,
+        "training_extra_noise_std": 0.5,
+        "generated_edge_frequency": 0.06197,
+        "num_samples": 200000,
+        "endpoint": 0.95,
+        "method": "rk4",
+        "steps": 400
+      },
+      {
+        "target_edge_probability": 0.35,
+        "training_extra_noise_std": 0.0,
+        "generated_edge_frequency": 0.349615,
+        "num_samples": 200000,
+        "endpoint": 0.95,
+        "method": "rk4",
+        "steps": 400
+      },
+      {
+        "target_edge_probability": 0.35,
+        "training_extra_noise_std": 0.5,
+        "generated_edge_frequency": 0.243475,
+        "num_samples": 200000,
+        "endpoint": 0.95,
+        "method": "rk4",
+        "steps": 400
+      },
+      {
+        "target_edge_probability": 0.5,
+        "training_extra_noise_std": 0.0,
+        "generated_edge_frequency": 0.498685,
+        "num_samples": 200000,
+        "endpoint": 0.95,
+        "method": "rk4",
+        "steps": 400
+      },
+      {
+        "target_edge_probability": 0.5,
+        "training_extra_noise_std": 0.5,
+        "generated_edge_frequency": 0.498685,
+        "num_samples": 200000,
+        "endpoint": 0.95,
+        "method": "rk4",
+        "steps": 400
+      }
+    ]
+  },
+  "legacy_checkpoint_replay": {
+    "same_seed": 17,
+    "num_generated": 5,
+    "training_epochs": 2,
+    "solver": "euler",
+    "steps": 16,
+    "array_equality": {
+      "adjacency": true,
+      "num_nodes": true,
+      "node_types": true
+    },
+    "legacy_warning_emitted": true
+  },
+  "managed_cli_epoch_override_test": {
+    "dataset": "synthetic cycles/paths, NOT real Community-small",
+    "yaml_epochs": 1000,
+    "cli_epochs": 3,
+    "generation_repeated_epoch_override": false,
+    "actual_saved_epoch": 3,
+    "optimizer_steps": 6,
+    "best_epoch": 3,
+    "probability_path": "linear",
+    "source_matches_training": true,
+    "graph_count": 5,
+    "generation_provenance": {
+      "generation_seed": 42,
+      "num_generated": 5,
+      "checkpoint_sha256": "65ab1026b968a4d5c208ef927e6d904c0d9f2fe6a32fbdae92bc4b239660c39e",
+      "graphs_match_manifest": true,
+      "checkpoint_matches_training_manifest": true
+    }
+  },
+  "limitations": [
+    "No user checkpoint, logs, graph splits or generated outputs inspected.",
+    "No actual Community-small MMD improvement measured.",
+    "No GPU execution tested.",
+    "Default adaptive dopri5 not numerically tested because torchdiffeq is unavailable.",
+    "Native numerical tests used small upstream transformer and Euler.",
+    "No converged full-architecture or molecular benchmark reproduction."
+  ],
+  "patch_installer_validation": {
+    "dry_run": true,
+    "apply_on_original_archive": true,
+    "idempotent_reapply": true,
+    "refuses_modified_file_without_partial_writes": true
+  }
+}

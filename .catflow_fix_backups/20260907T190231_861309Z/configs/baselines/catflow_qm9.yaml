@@ -1,18 +1,14 @@
-# Source-backed CatFlow on frozen GraphER zinc splits.
+# Source-backed CatFlow on frozen GraphER qm9 splits.
 # Rerun starting point, not a claim of paper-identical settings or reproduced metrics.
 catflow:
   train:
-    epochs: 500
+    epochs: 300
     batch_size: 1024
     lr: 0.0002
     ema: 0.999
     log_every: 10
     distribution: normal
     loss_function: kld
-    path: linear  # v2: no fixed endpoint noise; pairs with the sampling velocity
-    validation_every: 100
-    validation_repeats: 4
-    checkpoint_every: 1000
   model:
     num_layers: 6
     small_model: 0
@@ -23,7 +19,6 @@ catflow:
     atol: 1.0e-05
     rtol: 1.0e-05
     use_ema: true
-    checkpoint_selection: auto  # best for v2, last (with warning) for legacy checkpoints
   generation_batch_size: 128
   runtime:
     device: auto

@@ -1,0 +1,56 @@
+[
+  {
+    "target_edge_probability": 0.2,
+    "training_extra_noise_std": 0.0,
+    "generated_edge_frequency": 0.199325,
+    "num_samples": 200000,
+    "endpoint": 0.95,
+    "method": "rk4",
+    "steps": 400
+  },
+  {
+    "target_edge_probability": 0.2,
+    "training_extra_noise_std": 0.5,
+    "generated_edge_frequency": 0.06197,
+    "num_samples": 200000,
+    "endpoint": 0.95,
+    "method": "rk4",
+    "steps": 400
+  },
+  {
+    "target_edge_probability": 0.35,
+    "training_extra_noise_std": 0.0,
+    "generated_edge_frequency": 0.349615,
+    "num_samples": 200000,
+    "endpoint": 0.95,
+    "method": "rk4",
+    "steps": 400
+  },
+  {
+    "target_edge_probability": 0.35,
+    "training_extra_noise_std": 0.5,
+    "generated_edge_frequency": 0.243475,
+    "num_samples": 200000,
+    "endpoint": 0.95,
+    "method": "rk4",
+    "steps": 400
+  },
+  {
+    "target_edge_probability": 0.5,
+    "training_extra_noise_std": 0.0,
+    "generated_edge_frequency": 0.498685,
+    "num_samples": 200000,
+    "endpoint": 0.95,
+    "method": "rk4",
+    "steps": 400
+  },
+  {
+    "target_edge_probability": 0.5,
+    "training_extra_noise_std": 0.5,
+    "generated_edge_frequency": 0.498685,
+    "num_samples": 200000,
+    "endpoint": 0.95,
+    "method": "rk4",
+    "steps": 400
+  }
+]

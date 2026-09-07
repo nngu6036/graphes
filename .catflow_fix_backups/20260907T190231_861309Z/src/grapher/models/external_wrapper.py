@@ -240,8 +240,7 @@ class SourceBackedWrapper(BaseGeneratorWrapper):
                                     "split_sha256": {s: sha256(p) for s, p in request.dataset.split_paths.items()}},
                         "profile": profile.to_dict(), "source": source, "runtime": {"source_root": str(root), "python": str(python)},
                         "wrapper_options": options, "checkpoint": {"path": "checkpoints/" + checkpoint.name, "sha256": sha256(checkpoint)},
-                        "data_conversion": conversion, "checkpoint_selection": json.loads((work / "worker_manifest.json").read_text()).get(
-                            "checkpoint_selection", "final_configured_epoch"), "test_used_for_training": False}
+                        "data_conversion": conversion, "checkpoint_selection": "final_configured_epoch", "test_used_for_training": False}
             write_json(work / "manifest.json", manifest)
             if layout.train_dir.exists():
                 shutil.rmtree(layout.train_dir)
