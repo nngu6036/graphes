@@ -7,7 +7,8 @@ PYTHONPATH=src python scripts/run_spectre_baseline.py \
   --wrapper-config configs/baselines/spectre_community_small.yaml \
   --seed-id 42 \
   --run-id seed_42 \
-  --device gpu
+  --device gpu \
+  --n-epochs 10000
 
 # Generation
 PYTHONPATH=src python scripts/run_spectre_baseline.py \
@@ -27,3 +28,42 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN_DIR" \
   --generated-stage spectre \
   --output-dir "$GEN_DIR/evaluation_report"
+
+
+  Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+spectre_to_test                     0.014370          0.058542      0.003513
+
+
+export SPECTRE="/home/quang/SPECTRE"
+export SPECTRE_PYTHON="$(command -v python)"
+
+PYTHONPATH=src python scripts/run_spectre_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --wrapper-config configs/baselines/spectre_community_small.yaml \
+  --seed-id 43 \
+  --run-id seed_43 \
+  --device gpu \
+  --n-epochs 10000
+
+# Generation
+PYTHONPATH=src python scripts/run_spectre_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --wrapper-config configs/baselines/spectre_community_small.yaml \
+  --seed-id 43 \
+  --run-id seed_43 \
+  --num-samples 1024 \
+  --device gpu
+
+# Evaluation
+GEN_DIR="outputs/baselines/spectre/community_small/seed_43/generations/seed_43_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --generated-stage spectre \
+  --output-dir "$GEN_DIR/evaluation_report"
+
