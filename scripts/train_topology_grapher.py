@@ -243,6 +243,10 @@ def main() -> None:
     if bool(summary_data.get("attributed", False)):
         raise ValueError("The generic topology stage cannot use attributed graphlets.")
     summary_cfg = SummaryConfig.from_dict(summary_data, train_graphs)
+    structure_summary_cfg = dict(config.get("structure_summary_prediction", {}) or {})
+    clustering_coefficient_enabled = bool(
+        structure_summary_cfg.get("clustering_coefficient", False)
+    )
 
     graphlet_basis: TopologyGraphletBasis | None = None
     if not spectral_mode:
@@ -548,6 +552,7 @@ def main() -> None:
                 )
             ),
             "use_graph_context": bool(predictor_cfg.get("use_graph_context", True)),
+            "predict_clustering_coefficient": clustering_coefficient_enabled,
         }
         if spectral_graphlet_mode:
             assert graphlet_basis is not None
@@ -637,6 +642,15 @@ def main() -> None:
                 "Spectral-family loss cannot contain legacy structural-summary terms: "
                 f"{sorted(forbidden_loss_keys)}"
             )
+        if (
+            "clustering_coefficient" in loss_weights
+            and not clustering_coefficient_enabled
+            and float(loss_weights["clustering_coefficient"]) != 0.0
+        ):
+            raise ValueError(
+                "loss_weights.clustering_coefficient is active but "
+                "structure_summary_prediction.clustering_coefficient is false."
+            )
         active_loss_defaults = [
             ("spectrum", 1.0),
             ("moment2", 0.1),
@@ -646,6 +660,8 @@ def main() -> None:
             active_loss_defaults.extend(
                 [("graphlet_logit", 1.0), ("graphlet_probability", 0.25)]
             )
+        if clustering_coefficient_enabled:
+            active_loss_defaults.append(("clustering_coefficient", 1.0))
         if not any(
             float(loss_weights.get(key, default)) != 0.0
             for key, default in active_loss_defaults
@@ -712,6 +728,13 @@ def main() -> None:
             print(
                 "[GraphER/SpectralOnly] graph/GNN context disabled: denoiser inputs are "
                 "noisy spectrum + HH/source spectrum + rank + diffusion time + graph size only.",
+                flush=True,
+            )
+        if clustering_coefficient_enabled:
+            print(
+                "[GraphER/SpectralOnly] auxiliary structure target: clean average "
+                "clustering coefficient. It is predicted from the spectral Transformer "
+                "state but is not diffused and is not used for generation scoring yet.",
                 flush=True,
             )
         if spectral_graphlet_mode:
@@ -819,6 +842,11 @@ def main() -> None:
                     f" graphlet_prob_mae={val_metrics['graphlet_probability_mae']:.5f}"
                     if spectral_graphlet_mode else ""
                 )
+                if clustering_coefficient_enabled:
+                    extra += (
+                        f" clustering_mae={val_metrics['clustering_coefficient_mae']:.5f}"
+                        f" clustering_rmse={val_metrics['clustering_coefficient_rmse']:.5f}"
+                    )
                 print(
                     f"epoch={epoch:04d} "
                     f"train={train_metrics['loss']:.5f} "
@@ -864,6 +892,8 @@ def main() -> None:
             "clean_graphlet_clr_logits": bool(spectral_graphlet_mode),
             "graphlet_simplex_includes_disconnected_bin": bool(spectral_graphlet_mode),
             "graphlet_logit_epsilon": (graphlet_logit_epsilon if spectral_graphlet_mode else None),
+            "clean_average_clustering_coefficient": clustering_coefficient_enabled,
+            "clustering_coefficient_is_diffused": False,
         }
         graphlet_basis_report = (
             graphlet_basis.to_dict() if spectral_graphlet_mode and graphlet_basis is not None else None

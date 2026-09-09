@@ -118,3 +118,17 @@ The config points to the verified Community-small DH-VAE checkpoint `outputs/deg
 - Oracle projection good, denoiser poor -> spectral diffusion/predictor/loss problem.
 - Denoiser good, empirical-degree generation poor -> train/generation state mismatch or projection-policy problem.
 - Empirical-degree generation good, learned-degree generation poor -> DH-VAE/invariant prior problem.
+
+## Auxiliary clustering-coefficient prediction
+
+The minimal spectral debug model now optionally predicts the clean graph-average
+local clustering coefficient,
+
+`C(G) = (1 / |V|) * sum_v C_v`.
+
+This is an **auxiliary x0 target only**. The diffusion state remains the Laplacian
+eigenvalue vector; clustering is not noised/diffused, and the generation refiner
+still scores double-edge swaps using spectral distance only. This deliberately
+separates "can the representation predict a simple structural summary?" from
+"does that summary improve rewiring?".
+

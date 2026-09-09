@@ -50,6 +50,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
         min_gap: float = 1.0e-6,
         input_normalization: str = "mean_degree",
         use_graph_context: bool = True,
+        predict_clustering_coefficient: bool = False,
     ) -> None:
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -64,6 +65,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
         self.min_gap = float(min_gap)
         self.input_normalization = str(input_normalization).lower()
         self.use_graph_context = bool(use_graph_context)
+        self.predict_clustering_coefficient = bool(predict_clustering_coefficient)
 
         if self.spectral_dim <= 0 or self.spectral_heads <= 0:
             raise ValueError("spectral_dim and spectral_heads must be positive.")
@@ -134,6 +136,19 @@ class TopologySpectralTransformerPredictor(nn.Module):
             nn.Linear(self.spectral_dim, self.spectral_dim),
             nn.SiLU(),
             nn.Linear(self.spectral_dim, 1),
+        )
+        # Minimal structural-summary auxiliary head. It pools the same spectral
+        # Transformer tokens used for x0 spectrum prediction, so when graph
+        # context is disabled it cannot inspect adjacency/GNN features.
+        clustering_hidden = max(self.spectral_dim // 2, 16)
+        self.clustering_coefficient_head = (
+            nn.Sequential(
+                nn.Linear(self.spectral_dim, clustering_hidden),
+                nn.SiLU(),
+                nn.Linear(clustering_hidden, 1),
+            )
+            if self.predict_clustering_coefficient
+            else None
         )
 
     @staticmethod
@@ -323,11 +338,18 @@ class TopologySpectralTransformerPredictor(nn.Module):
         encoded = self.spectral_norm(encoded)
         raw_gap_scores = self.gap_head(encoded).squeeze(-1)
         clean_spectrum = self._constrained_spectrum(raw_gap_scores, batch)
-        return {
+        result = {
             "clean_spectrum": clean_spectrum,
             "raw_gap_scores": raw_gap_scores,
             "spectral_mask": mask,
         }
+        if self.clustering_coefficient_head is not None:
+            weights = mask.unsqueeze(-1).to(encoded.dtype)
+            pooled = (encoded * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
+            result["clean_clustering_coefficient"] = torch.sigmoid(
+                self.clustering_coefficient_head(pooled).squeeze(-1)
+            )
+        return result
 
     def forward(self, batch: TopologySpectralBatch) -> dict[str, torch.Tensor]:
         # Debug-friendly spectral-only mode deliberately removes adjacency/GNN
@@ -395,6 +417,30 @@ class TopologySpectralTransformerPredictor(nn.Module):
             + float(weights.get("low_frequency", 0.0)) * low_frequency_loss
         )
 
+        clustering_loss = predicted.sum() * 0.0
+        clustering_mae = predicted.sum() * 0.0
+        clustering_rmse = predicted.sum() * 0.0
+        if self.predict_clustering_coefficient:
+            if batch.clean_clustering_coefficient_target is None:
+                raise ValueError(
+                    "Clustering-coefficient prediction is enabled but the spectral "
+                    "batch has no clean clustering target."
+                )
+            predicted_clustering = outputs["clean_clustering_coefficient"]
+            target_clustering = batch.clean_clustering_coefficient_target.to(
+                predicted_clustering.dtype
+            )
+            clustering_loss = F.smooth_l1_loss(
+                predicted_clustering, target_clustering
+            )
+            total = total + float(
+                weights.get("clustering_coefficient", 1.0)
+            ) * clustering_loss
+            with torch.no_grad():
+                clustering_delta = predicted_clustering - target_clustering
+                clustering_mae = torch.mean(torch.abs(clustering_delta))
+                clustering_rmse = torch.sqrt(torch.mean(clustering_delta.square()))
+
         with torch.no_grad():
             abs_delta = torch.abs(predicted - target) * valid_weight
             spectral_mae = abs_delta.sum() / count
@@ -436,6 +482,20 @@ class TopologySpectralTransformerPredictor(nn.Module):
                 monotonic_violations.detach().cpu()
             ),
         }
+        if self.predict_clustering_coefficient:
+            metrics.update(
+                {
+                    "clustering_coefficient_loss": float(
+                        clustering_loss.detach().cpu()
+                    ),
+                    "clustering_coefficient_mae": float(
+                        clustering_mae.detach().cpu()
+                    ),
+                    "clustering_coefficient_rmse": float(
+                        clustering_rmse.detach().cpu()
+                    ),
+                }
+            )
         return total, metrics
 
 
@@ -466,6 +526,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "min_gap": self.min_gap,
             "input_normalization": self.input_normalization,
             "use_graph_context": self.use_graph_context,
+            "predict_clustering_coefficient": self.predict_clustering_coefficient,
         }
 
 

@@ -884,7 +884,7 @@ CHECKPOINT=outputs/topology_grapher/community_small_spectral_cycle_graphlet_v4_e
 
 GEN_OUTPUT=outputs/topology_generation/community_small_spectral_cycle_graphlet_v4_enriched_source/seed_42
 
-python scripts/run_topology_grapher.py \
+ PYTHONPATH=src python scripts/run_topology_grapher.py \
   --config "$CONFIG" \
   --checkpoint "$CHECKPOINT" \
   --output-dir "$GEN_OUTPUT" \
@@ -895,8 +895,30 @@ python scripts/run_topology_grapher.py \
 CONFIG=configs/experiments/grapher/community_small_topology_spectral_cycle_graphlet_v4_enriched_source.yaml
 GEN_OUTPUT=outputs/topology_generation/community_small_spectral_cycle_graphlet_v4_enriched_source/seed_42
 
-python scripts/evaluate_graph_generation_report.py \
+ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config "$CONFIG" \
   --generated-dir "$GEN_OUTPUT" \
   --generated-stage grapher \
   --output-dir "$GEN_OUTPUT/evaluation_report"
+
+
+
+  PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_debug.yaml \
+  --output-dir outputs/topology_grapher/community_small_spectral_debug/seed_42 \
+  --seed 42 \
+  --device gpu
+
+  PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config configs/experiments/grapher/community_small_topology_spectral_debug.yaml \
+  --checkpoint outputs/topology_grapher/community_small_spectral_debug/seed_42/checkpoint.pt \
+  --output-dir outputs/topology_generation/community_small_spectral_debug_empirical/seed_42 \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
+
+
+  PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+ --config configs/experiments/grapher/community_small_topology_spectral_debug.yaml \
+  --generated-dir outputs/topology_generation/community_small_spectral_debug_empirical/seed_42 \
+  --output-dir outputs/topology_grapher/community_small_spectral_debug_empirical/seed_42/evaluation

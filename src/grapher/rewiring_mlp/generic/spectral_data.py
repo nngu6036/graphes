@@ -46,6 +46,10 @@ class TopologySpectralExample:
     current_graph: nx.Graph
     time: float
     clean_spectrum_target: np.ndarray
+    # Optional clean structural summary target. For the minimal spectral debug
+    # model this is the graph-average local clustering coefficient in [0, 1].
+    # It is predicted as an auxiliary x0 target but is NOT itself diffused.
+    clean_clustering_coefficient_target: float | None = None
     current_spectrum: np.ndarray | None = None
     source_spectrum: np.ndarray | None = None
     # Optional graphlet-logit diffusion supervision. Each graphlet order is a
@@ -81,6 +85,7 @@ class TopologySpectralBatch:
     source_spectrum: torch.Tensor
     clean_spectrum_target: torch.Tensor
     spectrum_mask: torch.Tensor
+    clean_clustering_coefficient_target: torch.Tensor | None = None
     current_graphlet_probabilities: torch.Tensor | None = None
     source_graphlet_probabilities: torch.Tensor | None = None
     clean_graphlet_probabilities_target: torch.Tensor | None = None
@@ -118,6 +123,19 @@ def collate_spectral_examples(
     source_spectra = np.zeros((batch_size, max_nodes), dtype=np.float32)
     clean_spectra = np.zeros((batch_size, max_nodes), dtype=np.float32)
     spectrum_mask = np.zeros((batch_size, max_nodes), dtype=np.bool_)
+
+    clustering_enabled = any(
+        example.clean_clustering_coefficient_target is not None for example in examples
+    )
+    if clustering_enabled and any(
+        example.clean_clustering_coefficient_target is None for example in examples
+    ):
+        raise ValueError(
+            "Cannot mix spectral examples with and without clean clustering targets."
+        )
+    clean_clustering = (
+        np.zeros(batch_size, dtype=np.float32) if clustering_enabled else None
+    )
 
     graphlet_widths = {
         int(np.asarray(example.current_graphlet_logits).size)
@@ -207,6 +225,13 @@ def collate_spectral_examples(
         source_spectra[index, :n] = source_spectrum
         clean_spectra[index, :n] = target
         spectrum_mask[index, :n] = True
+        if clean_clustering is not None:
+            value = float(example.clean_clustering_coefficient_target)
+            if not np.isfinite(value) or value < -1.0e-8 or value > 1.0 + 1.0e-8:
+                raise ValueError(
+                    "clean_clustering_coefficient_target must be finite and in [0, 1]."
+                )
+            clean_clustering[index] = float(np.clip(value, 0.0, 1.0))
         if graphlet_enabled:
             assert current_graphlet_probabilities is not None
             assert source_graphlet_probabilities is not None
@@ -255,6 +280,9 @@ def collate_spectral_examples(
         source_spectrum=torch.from_numpy(source_spectra),
         clean_spectrum_target=torch.from_numpy(clean_spectra),
         spectrum_mask=torch.from_numpy(spectrum_mask),
+        clean_clustering_coefficient_target=(
+            torch.from_numpy(clean_clustering) if clean_clustering is not None else None
+        ),
         current_graphlet_probabilities=(
             torch.from_numpy(current_graphlet_probabilities)
             if current_graphlet_probabilities is not None else None
@@ -1043,6 +1071,7 @@ class TopologySpectralDiffusionEndpoint:
     source_graphlet_logits: np.ndarray | None = None
     clean_graphlet_logits: np.ndarray | None = None
     graphlet_coordinate_mask: np.ndarray | None = None
+    clean_clustering_coefficient: float = 0.0
     spectral_endpoint_distance: float = 0.0
 
 
@@ -1109,6 +1138,7 @@ def _prepare_spectral_diffusion_endpoint(
         source_graphlet_logits=source_logits,
         clean_graphlet_logits=clean_logits,
         graphlet_coordinate_mask=graphlet_mask,
+        clean_clustering_coefficient=float(nx.average_clustering(target)),
         spectral_endpoint_distance=spectral_distance(
             source_spectrum,
             clean_spectrum,
@@ -1185,6 +1215,9 @@ def _sample_spectral_diffusion_endpoint_examples(
                     current_spectrum=current_spectrum.astype(np.float32),
                     source_spectrum=endpoint.source_spectrum.astype(np.float32),
                     clean_spectrum_target=endpoint.clean_spectrum.astype(np.float32),
+                    clean_clustering_coefficient_target=float(
+                        endpoint.clean_clustering_coefficient
+                    ),
                     current_graphlet_probabilities=(
                         None if current_prob is None else current_prob.astype(np.float32)
                     ),
@@ -1294,6 +1327,7 @@ def build_spectral_diffusion_examples(
         )
         source_spectrum = laplacian_eigenvalues(source)
         clean_spectrum = laplacian_eigenvalues(target)
+        clean_clustering_coefficient = float(nx.average_clustering(target))
         scale = spectral_scale(source, mode=str(spec_cfg.get("normalization", "mean_degree")))
 
         source_prob = source_logits = clean_prob = clean_logits = graphlet_mask = None
@@ -1386,6 +1420,7 @@ def build_spectral_diffusion_examples(
                         current_spectrum=current_spectrum.astype(np.float32),
                         source_spectrum=source_spectrum.astype(np.float32),
                         clean_spectrum_target=clean_spectrum.astype(np.float32),
+                        clean_clustering_coefficient_target=clean_clustering_coefficient,
                         current_graphlet_probabilities=(
                             None if current_prob is None else current_prob.astype(np.float32)
                         ),

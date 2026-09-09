@@ -44,7 +44,13 @@ graphlet_prediction:
   motif_proxy: false
   orbit_count: false
 
-# Eigenvalue-only target.  Eigenvectors are deliberately excluded.
+# Minimal auxiliary clean-structure target. This scalar is predicted jointly
+# from the spectral Transformer representation, but it is NOT diffused and is
+# NOT used to score rewiring candidates yet.
+structure_summary_prediction:
+  clustering_coefficient: true
+
+# Eigenvalue-only diffusion target.  Eigenvectors are deliberately excluded.
 spectral_prediction:
   require_same_degree_sequence: true
   distance: rmse
@@ -103,12 +109,13 @@ topology_predictor:
   learning_rate: 0.0003
   weight_decay: 0.00001
 
-  # One objective only: reconstruct the clean eigenvalue vector.
+  # Main denoising objective plus one clean structural-summary auxiliary loss.
   loss_weights:
     spectrum: 1.0
     moment2: 0.0
     low_frequency: 0.0
     low_frequency_k: 0
+    clustering_coefficient: 1.0
 
   progress_interval: 5
 

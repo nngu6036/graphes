@@ -171,6 +171,8 @@ def main() -> None:
             trace_pred = (predicted * mask.to(predicted.dtype)).sum(dim=1)
             trace_target = (target * mask.to(target.dtype)).sum(dim=1)
             lambda1 = torch.abs(predicted[:, 0])
+            predicted_clustering = outputs.get("clean_clustering_coefficient")
+            target_clustering = batch.clean_clustering_coefficient_target
 
             for i in range(predicted.shape[0]):
                 t = float(batch.time[i].detach().cpu())
@@ -186,6 +188,16 @@ def main() -> None:
                     ),
                     "lambda1_abs": float(lambda1[i].detach().cpu()),
                 }
+                if predicted_clustering is not None and target_clustering is not None:
+                    row["clustering_target"] = float(
+                        target_clustering[i].detach().cpu()
+                    )
+                    row["clustering_prediction"] = float(
+                        predicted_clustering[i].detach().cpu()
+                    )
+                    row["clustering_abs_error"] = abs(
+                        row["clustering_prediction"] - row["clustering_target"]
+                    )
                 all_rows.append(row)
                 if t < 0.25:
                     label = "[0.00,0.25)"
@@ -212,6 +224,11 @@ def main() -> None:
             "lambda1_abs",
         ):
             result[key] = _mean([row[key] for row in rows])
+        clustering_rows = [row for row in rows if "clustering_abs_error" in row]
+        if clustering_rows:
+            result["clustering_coefficient_mae"] = _mean(
+                [row["clustering_abs_error"] for row in clustering_rows]
+            )
         result["denoising_gain_vs_noisy"] = (
             result["noisy_nrmse"] - result["predicted_nrmse"]
         )
@@ -248,6 +265,11 @@ def main() -> None:
     )
     print(f"  trace abs error:          {overall['trace_abs_error']:.6e}")
     print(f"  lambda1 abs:              {overall['lambda1_abs']:.6e}")
+    if "clustering_coefficient_mae" in overall:
+        print(
+            "  clustering coefficient MAE: "
+            f"{overall['clustering_coefficient_mae']:.6f}"
+        )
     print("  by diffusion time:")
     for label, row in report["by_time"].items():
         print(
