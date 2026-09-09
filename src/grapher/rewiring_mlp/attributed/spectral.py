@@ -8,6 +8,7 @@ import torch
 
 from grapher.rewiring_mlp.generic.spectral import spectral_distance
 from grapher.rewiring_mlp.molecular.constraints import bond_order
+from grapher.utils.device import resolve_torch_device
 
 SPECTRAL_CHANNELS = ("topology", "bond_weighted")
 
@@ -123,7 +124,7 @@ def batched_attributed_laplacian_spectra(
     resolved = str(backend).lower()
     if resolved == "np":
         resolved = "numpy"
-    torch_device = torch.device(device)
+    torch_device = resolve_torch_device(device)
     if resolved == "auto":
         resolved = "torch" if torch_device.type == "cuda" else "numpy"
     if resolved not in {"torch", "numpy"}:

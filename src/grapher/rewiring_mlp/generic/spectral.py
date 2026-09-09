@@ -7,6 +7,8 @@ import networkx as nx
 import numpy as np
 import torch
 
+from grapher.utils.device import resolve_torch_device
+
 
 def laplacian_eigenvalues(graph: nx.Graph) -> np.ndarray:
     """Return the sorted combinatorial-Laplacian eigenvalues of ``graph``.
@@ -83,7 +85,7 @@ def batched_laplacian_eigenvalues(
     laplacian[:, diagonal, diagonal] += degree
 
     resolved = str(backend).lower()
-    torch_device = torch.device(device)
+    torch_device = resolve_torch_device(device)
     if resolved == "auto":
         resolved = "torch" if torch_device.type == "cuda" else "numpy"
     if resolved not in {"torch", "numpy"}:
