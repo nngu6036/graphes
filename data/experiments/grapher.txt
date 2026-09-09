@@ -19,7 +19,6 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
   --generated-dir outputs/topology_generation/community_small_topology_spectral_graphlet_v2/seed_42 \
   --output-dir outputs/topology_grapher/community_small_topology_spectral_graphlet_v2/seed_42/evaluation
-  --max-graphs 1024
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
 train_to_test                       0.028458          0.041560      0.005482
@@ -893,6 +892,7 @@ python scripts/run_topology_grapher.py \
   --seed 42 \
   --device gpu
 
+CONFIG=configs/experiments/grapher/community_small_topology_spectral_cycle_graphlet_v4_enriched_source.yaml
 GEN_OUTPUT=outputs/topology_generation/community_small_spectral_cycle_graphlet_v4_enriched_source/seed_42
 
 python scripts/evaluate_graph_generation_report.py \

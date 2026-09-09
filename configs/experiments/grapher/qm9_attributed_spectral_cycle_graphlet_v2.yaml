@@ -6,9 +6,9 @@ pipeline:
   factorization: typed_source_then_invariant_summary_enrichment_then_dual_spectral_attributed_graphlet_diffusion_rewiring
 protocol:
   evaluation_seeds:
-  - 42
-  - 43
-  - 44
+    - 42
+    - 43
+    - 44
   report_mean_and_std: true
   generated_graphs_per_seed: 1024
   tune_on_split: val
@@ -18,21 +18,21 @@ dataset:
   config_path: configs/datasets/qm9.yaml
   root: outputs/datasets
   build_if_missing: false
-  max_train_graphs: null
+  max_train_graphs:
   max_val_graphs: 2000
-  max_generation_train_graphs: null
+  max_generation_train_graphs:
 categorical_state:
   node_attribute: atomic_num
   node_categories:
-  - 6
-  - 7
-  - 8
-  - 9
+    - 6
+    - 7
+    - 8
+    - 9
   edge_attribute: bond_type
   edge_categories:
-  - 1
-  - 2
-  - 3
+    - 1
+    - 2
+    - 3
   require_exact_observed_support: true
 graphlet_prediction:
   graphlet_history: true
@@ -42,7 +42,7 @@ graphlet_prediction:
   graphlet_topology_filter: simple_cycle
   attributed: true
   attributed_backend: python
-  graphlet_num_samples: null
+  graphlet_num_samples:
   max_basis_graphs: 20000
   clustering_summary: false
   spectral_summary: false
@@ -85,8 +85,8 @@ training_sources:
     max_restarts: 64
     max_backtracks: 100000
     candidate_ranking: uniform
-    max_ordinary_degree: null
-    max_weighted_valence: null
+    max_ordinary_degree:
+    max_weighted_valence:
 attributed_predictor:
   type: attributed_spectral_graphlet_transformer
   checkpoint_path: outputs/attributed_grapher/qm9_spectral_cycle_graphlet_v2/seed_42/checkpoint.pt
@@ -220,9 +220,9 @@ attributed_refiner:
     preserve_weighted_valence: false
     enforce_molecular_valence: true
     allowed_bond_types:
-    - 1
-    - 2
-    - 3
+      - 1
+      - 2
+      - 3
     max_valence:
       6: 4.0
       7: 4.0
@@ -265,7 +265,7 @@ evaluation:
   graphlet_edge_attribute: bond_type
   graphlet_attributed_backend: python
 source_enrichment:
-  enabled: true
+  enabled: false
   summary_estimator:
     enabled: true
     hidden_dim: 256
@@ -349,9 +349,9 @@ source_enrichment:
       preserve_weighted_valence: false
       enforce_molecular_valence: true
       allowed_bond_types:
-      - 1
-      - 2
-      - 3
+        - 1
+        - 2
+        - 3
       max_valence:
         6: 4.0
         7: 4.0

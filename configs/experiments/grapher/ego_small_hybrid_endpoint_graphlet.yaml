@@ -16,13 +16,13 @@ dataset:
   config_path: configs/datasets/ego_small.yaml
   root: outputs/datasets
   build_if_missing: false
-  max_train_graphs: null
-  max_val_graphs: null
+  max_train_graphs:
+  max_val_graphs:
 
 categorical_state:
-  node_attribute: null
+  node_attribute:
   node_categories: [0]
-  edge_attribute: null
+  edge_attribute:
   edge_categories: [1]
 
 graphlet_prediction:
@@ -104,10 +104,14 @@ degree_generator:
   deterministic: false
   sample_num_nodes: empirical
   max_resample: 500
-  parity_conditioned: true
-  max_parity_resample: 64
+  parity_conditioned: false
+  max_parity_resample: 1
   fallback: error
 
+  sample_num_edges: model
+  exact_degree_sum_conditioning: true
+  model_resample_attempts: 32
+  postprocess_policy: reject_only
 constructor:
   type: havel_hakimi
   ensure_connected: true
@@ -141,7 +145,7 @@ hybrid_refiner:
   report_guidance_consistency: false
 
 evaluation:
-  orca_exec: null
+  orca_exec:
   compute_orbit: true
   compute_graphlet_history: true
   graphlet_k_min: 3

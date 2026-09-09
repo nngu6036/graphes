@@ -23,7 +23,7 @@ dataset:
   # limits only after this light run trains and generates successfully.
   max_train_graphs: 2000
   max_val_graphs: 250
-  max_generation_train_graphs: null
+  max_generation_train_graphs:
 
 # The prepared heavy-atom QM9 split is expected to be kekulized. Training
 # stops with a clear error if the observed bond support is not exactly 1/2/3.
@@ -44,7 +44,7 @@ graphlet_prediction:
   graphlet_connected_only: true
   attributed: true
   attributed_backend: python
-  graphlet_num_samples: null
+  graphlet_num_samples:
   max_basis_graphs: 2000
   clustering_summary: false
   spectral_summary: false

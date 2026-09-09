@@ -1,17 +1,17 @@
-experiment: community_small_topology_spectral_graphlet_v3_enriched_source
+experiment: community_small_topology_spectral_cycle_graphlet_v4
 benchmark: community_small
 seed: 42
 pipeline:
   stage: topology
-  factorization: dhvae_hh_then_degree_summary_enriched_base_then_spectral_graphlet_diffusion_guided_degree_rewiring
+  factorization: dhvae_hh_then_spectral_cycle_graphlet_diffusion_guided_degree_rewiring
 protocol:
   evaluation_seeds:
-  - 42
-  - 43
-  - 44
+    - 42
+    - 43
+    - 44
   report_mean_and_std: true
   generated_graphs_per_seed: 1024
-  max_reference_graphs: null
+  max_reference_graphs:
   tune_on_split: val
   final_split: test
 dataset:
@@ -20,8 +20,8 @@ dataset:
   config_path: configs/datasets/community_small.yaml
   root: outputs/datasets
   build_if_missing: false
-  max_train_graphs: null
-  max_val_graphs: null
+  max_train_graphs:
+  max_val_graphs:
 training_sources:
   mode: target_degree_havel_hakimi
 graphlet_prediction:
@@ -35,7 +35,7 @@ graphlet_prediction:
   graphlet_topology_filter: simple_cycle
 
   graphlet_backend: sampled
-  graphlet_num_samples: null
+  graphlet_num_samples:
 
   clustering_summary: true
   clustering_bins: 20
@@ -83,7 +83,7 @@ summary_diffusion:
   cache_endpoints: true
 topology_predictor:
   type: spectral_graphlet_transformer
-  checkpoint_path: outputs/topology_grapher/community_small_spectral_graphlet_v3_enriched_source/seed_42/checkpoint.pt
+  checkpoint_path: outputs/topology_grapher/community_small_spectral_cycle_graphlet_v4/seed_42/checkpoint.pt
   device: auto
   hidden_dim: 256
   edge_dim: 128
@@ -119,15 +119,18 @@ generation:
 degree_generator:
   enabled: true
   type: degree_histogram_vae
-  checkpoint_path: outputs/baselines/dhvae_hh/community_small/seed_42/train/checkpoints/checkpoint.pt
+  checkpoint_path: outputs/degree_generators/sbm/seed_42/checkpoint.pt
   device: auto
   deterministic: false
   sample_num_nodes: empirical
   max_resample: 500
-  parity_conditioned: true
-  max_parity_resample: 64
+  parity_conditioned: false
+  max_parity_resample: 1
   postprocess_policy: reject_only
   fallback: error
+  sample_num_edges: model
+  exact_degree_sum_conditioning: true
+  model_resample_attempts: 32
 constructor:
   type: havel_hakimi
   ensure_connected: true
@@ -203,7 +206,7 @@ topology_refiner:
     spectrum_batch_size: 512
 evaluation:
   inline_during_generation: false
-  orca_exec: null
+  orca_exec:
   compute_orbit: true
   compute_graphlet_history: true
   graphlet_k_min: 3
@@ -212,7 +215,7 @@ evaluation:
   graphlet_backend: sampled
   graphlet_num_samples: 8192
 source_enrichment:
-  enabled: true
+  enabled: false
   summary_estimator:
     enabled: true
     hidden_dim: 256

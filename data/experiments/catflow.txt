@@ -32,3 +32,39 @@ Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
 train_to_test                       0.004733          0.009889      0.000399
 catflow_to_test                     0.081284          0.767483      0.421003
+
+
+
+export CATFLOW="/home/quang/CatFlow"
+export CATFLOW_PYTHON="$(command -v python)"
+
+CFG="configs/baselines/catflow_community_small_linear_v2.yaml"
+RUN="seed_42_linear_v2"
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --wrapper-config "$CFG" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu \
+  --n-epochs 10000
+
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --wrapper-config "$CFG" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples 1024 \
+  --device gpu
+
+
+GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --generated-stage catflow_linear_v2 \
+  --output-dir "$GEN_DIR/evaluation_report"

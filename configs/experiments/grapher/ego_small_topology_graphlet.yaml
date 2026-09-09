@@ -12,7 +12,7 @@ protocol:
   generated_graphs_per_seed: 1024
   # Use the complete held-out split. A small reference cap can make the very
   # low Ego-small MMD values unstable.
-  max_reference_graphs: null
+  max_reference_graphs:
   tune_on_split: val
   final_split: test
 
@@ -22,8 +22,8 @@ dataset:
   config_path: configs/datasets/ego_small.yaml
   root: outputs/datasets
   build_if_missing: false
-  max_train_graphs: null
-  max_val_graphs: null
+  max_train_graphs:
+  max_val_graphs:
 
 # Rewiring-MLP states start from completed outputs of the frozen base generator.
 # Pairing remains based only on node count and sorted degree profile.
@@ -37,7 +37,7 @@ training_sources:
     disconnected_policy: drop
     # Do not guess this scale. After inspecting the matching-cost distribution,
     # set a validation-selected cutoff that retains roughly 70--90% of pairs.
-    max_degree_cost: null
+    max_degree_cost:
   generators:
     - id: dhvae_hh
       manifest_path: outputs/baselines/dhvae_hh/ego_small/seed_{seed}/train/training_estimates/manifest.json
@@ -53,7 +53,7 @@ graphlet_prediction:
   graphlet_backend: sampled
   # Full graph summaries are exact when graphlet_num_samples is null; candidate
   # scores use exact local deltas around the four switch endpoints.
-  graphlet_num_samples: null
+  graphlet_num_samples:
   clustering_summary: true
   clustering_bins: 20
   spectral_summary: false
@@ -117,16 +117,19 @@ generation:
 degree_generator:
   enabled: true
   type: degree_histogram_vae
-  checkpoint_path: outputs/baselines/dhvae_hh/ego_small/seed_42/train/checkpoints/checkpoint.pt
+  checkpoint_path: outputs/degree_generators/ego_small/seed_42/checkpoint.pt
   device: auto
   deterministic: false
   sample_num_nodes: empirical
   max_resample: 500
-  parity_conditioned: true
-  max_parity_resample: 64
+  parity_conditioned: false
+  max_parity_resample: 1
   postprocess_policy: reject_only
   fallback: error
 
+  sample_num_edges: model
+  exact_degree_sum_conditioning: true
+  model_resample_attempts: 32
 constructor:
   type: havel_hakimi
   ensure_connected: true
@@ -168,7 +171,7 @@ evaluation:
   generic_mmd_protocol: graphrnn
   generic_clustering_bins: 100
   inline_during_generation: false
-  orca_exec: null
+  orca_exec:
   compute_orbit: true
   compute_graphlet_history: true
   graphlet_k_min: 3

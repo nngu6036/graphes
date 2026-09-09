@@ -15,8 +15,8 @@ dataset:
   config_path: configs/datasets/qm9.yaml
   root: outputs/datasets
   build_if_missing: false
-  max_train_graphs: null
-  max_val_graphs: null
+  max_train_graphs:
+  max_val_graphs:
 
 # Heavy-atom QM9 categories. Edge index zero remains reserved for no edge.
 categorical_state:
@@ -194,7 +194,7 @@ hybrid_refiner:
 
 evaluation:
   # Leave null to use ORCA_EXEC or an `orca` executable on PATH.
-  orca_exec: null
+  orca_exec:
   compute_orbit: true
   compute_graphlet_history: true
   graphlet_k_min: 3

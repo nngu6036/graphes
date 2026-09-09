@@ -12,7 +12,7 @@ protocol:
   generated_graphs_per_seed: 1024
   # Use the complete held-out Ego-small split. Its MMD values can be unstable
   # when the reference set is capped too aggressively.
-  max_reference_graphs: null
+  max_reference_graphs:
   tune_on_split: val
   final_split: test
   reuse_identical_base_samples: true
@@ -56,8 +56,8 @@ base_generator:
   # Set generated_path to a trusted DeFoG .pkl or neutral .npz export to reuse
   # exactly the same raw samples across correction ablations. When using an NPZ,
   # set manifest_path to its matching defog_manifest.json.
-  generated_path: null
-  manifest_path: null
+  generated_path:
+  manifest_path:
 
   sampling:
     batch_size: 64
@@ -70,8 +70,8 @@ base_generator:
 
   runtime:
     device: auto
-    python_executable: null
-    cuda_visible_devices: null
+    python_executable:
+    cuda_visible_devices:
     timeout_seconds: 21600
 
   dataset_contract:
@@ -117,7 +117,7 @@ topology_refiner:
 
 evaluation:
   inline_during_generation: false
-  orca_exec: null
+  orca_exec:
   compute_orbit: true
   compute_graphlet_history: true
   graphlet_k_min: 3

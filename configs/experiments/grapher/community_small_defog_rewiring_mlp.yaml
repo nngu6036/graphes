@@ -21,8 +21,8 @@ dataset:
   config_path: configs/datasets/community_small.yaml
   root: outputs/datasets
   build_if_missing: false
-  max_train_graphs: null
-  max_val_graphs: null
+  max_train_graphs:
+  max_val_graphs:
 
 # Rewiring-MLP states start from finished outputs of the declared frozen base
 # generator. The wrapper manifest is checksum-verified, partitioned
@@ -36,7 +36,7 @@ training_sources:
     method: hungarian_degree_profile
     require_exact_node_count: true
     disconnected_policy: drop
-    max_degree_cost: null
+    max_degree_cost:
   generators:
     - id: defog
       manifest_path: outputs/baselines/defog/community_small/seed_{seed}/train/training_estimates/manifest.json
@@ -52,7 +52,7 @@ graphlet_prediction:
   graphlet_backend: sampled
   # Connected topology graphlets are enumerated exactly; candidate scores use
   # exact local deltas around the four switch endpoints.
-  graphlet_num_samples: null
+  graphlet_num_samples:
   clustering_summary: true
   clustering_bins: 20
   spectral_summary: false
@@ -125,11 +125,14 @@ degree_generator:
   deterministic: false
   sample_num_nodes: empirical
   max_resample: 500
-  parity_conditioned: true
-  max_parity_resample: 64
+  parity_conditioned: false
+  max_parity_resample: 1
   postprocess_policy: reject_only
   fallback: error
 
+  sample_num_edges: model
+  exact_degree_sum_conditioning: true
+  model_resample_attempts: 32
 constructor:
   type: havel_hakimi
   ensure_connected: true
@@ -156,7 +159,7 @@ topology_refiner:
 
 evaluation:
   inline_during_generation: false
-  orca_exec: null
+  orca_exec:
   compute_orbit: true
   compute_graphlet_history: true
   graphlet_k_min: 3

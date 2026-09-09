@@ -15,8 +15,8 @@ dataset:
   config_path: configs/datasets/zinc.yaml
   root: outputs/datasets
   build_if_missing: false
-  max_train_graphs: null
-  max_val_graphs: null
+  max_train_graphs:
+  max_val_graphs:
 
 categorical_state:
   node_attribute: atomic_num
@@ -159,7 +159,7 @@ hybrid_refiner:
   rdkit_candidate_check: true
 
 evaluation:
-  orca_exec: null
+  orca_exec:
   compute_orbit: true
   compute_graphlet_history: true
   graphlet_k_min: 3

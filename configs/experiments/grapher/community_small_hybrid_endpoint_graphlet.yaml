@@ -22,15 +22,15 @@ dataset:
   # Prepare once with prepare_generic_dataset.py and keep the same serialized
   # splits for all models and seeds.
   build_if_missing: false
-  max_train_graphs: null
-  max_val_graphs: null
+  max_train_graphs:
+  max_val_graphs:
 
 # Generic featureless graphs use one node category and two dense pair states:
 # no-edge (reserved index 0) and edge (index 1).
 categorical_state:
-  node_attribute: null
+  node_attribute:
   node_categories: [0]
-  edge_attribute: null
+  edge_attribute:
   edge_categories: [1]
 
 # The paper uses connected induced graphlets of sizes {3, 4, 5}. The 2,048
@@ -121,13 +121,17 @@ degree_generator:
   deterministic: false
   sample_num_nodes: empirical
   max_resample: 500
-  parity_conditioned: true
-  max_parity_resample: 64
+  parity_conditioned: false
+  max_parity_resample: 1
   # Never replace a failed model draw with a training degree sequence in the
   # main experiment. The current runner raises on an exhausted draw, making the
   # failure visible instead of silently contaminating the learned-prior result.
   fallback: error
 
+  sample_num_edges: model
+  exact_degree_sum_conditioning: true
+  model_resample_attempts: 32
+  postprocess_policy: reject_only
 constructor:
   type: havel_hakimi
   ensure_connected: true
@@ -165,7 +169,7 @@ evaluation:
   # Four-node orbit MMD uses ORCA. Leave null to use ORCA_EXEC or `orca` on
   # PATH. Graphlet MMD includes size 5, so it must use the sampled backend;
   # this code's exact ORCA graphlet-history backend supports k <= 4 only.
-  orca_exec: null
+  orca_exec:
   compute_orbit: true
   compute_graphlet_history: true
   graphlet_k_min: 3

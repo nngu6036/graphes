@@ -25,7 +25,7 @@ dataset:
   build_if_missing: false
 
   # Final experiment: use the complete training split.
-  max_train_graphs: null
+  max_train_graphs:
 
   # Validation is capped only to keep per-epoch validation affordable.
   # It is still drawn exclusively from the declared validation split.
@@ -33,7 +33,7 @@ dataset:
 
   # All training graphs remain available when empirical information is needed
   # during generation/evaluation.
-  max_generation_train_graphs: null
+  max_generation_train_graphs:
 
 categorical_state:
   node_attribute: atomic_num
@@ -65,7 +65,7 @@ graphlet_prediction:
 
   attributed: true
   attributed_backend: python
-  graphlet_num_samples: null
+  graphlet_num_samples:
 
   # A reasonably large training-only subset is sufficient to establish the
   # QM9 attributed graphlet vocabulary while keeping preprocessing practical.

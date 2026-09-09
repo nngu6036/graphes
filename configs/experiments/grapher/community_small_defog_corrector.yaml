@@ -46,8 +46,8 @@ base_generator:
 
   # Set this to a trusted DeFoG .pkl or a previously exported neutral .npz to
   # reuse exactly the same base samples for correction ablations.
-  generated_path: null
-  manifest_path: null
+  generated_path:
+  manifest_path:
 
   sampling:
     batch_size: 64
@@ -60,8 +60,8 @@ base_generator:
 
   runtime:
     device: auto
-    python_executable: null
-    cuda_visible_devices: null
+    python_executable:
+    cuda_visible_devices:
     timeout_seconds: 21600
 
   dataset_contract:
@@ -101,7 +101,7 @@ topology_refiner:
 
 evaluation:
   inline_during_generation: false
-  orca_exec: null
+  orca_exec:
   compute_orbit: true
   compute_graphlet_history: true
   graphlet_k_min: 3
