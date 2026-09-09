@@ -51,6 +51,8 @@ class TopologySpectralTransformerPredictor(nn.Module):
         input_normalization: str = "mean_degree",
         use_graph_context: bool = True,
         predict_clustering_coefficient: bool = False,
+        predict_clustering_histogram: bool = False,
+        clustering_histogram_bins: int = 100,
     ) -> None:
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -66,6 +68,14 @@ class TopologySpectralTransformerPredictor(nn.Module):
         self.input_normalization = str(input_normalization).lower()
         self.use_graph_context = bool(use_graph_context)
         self.predict_clustering_coefficient = bool(predict_clustering_coefficient)
+        self.predict_clustering_histogram = bool(predict_clustering_histogram)
+        if (
+            isinstance(clustering_histogram_bins, bool)
+            or int(clustering_histogram_bins) != clustering_histogram_bins
+            or int(clustering_histogram_bins) < 2
+        ):
+            raise ValueError("clustering_histogram_bins must be an integer >= 2.")
+        self.clustering_histogram_bins = int(clustering_histogram_bins)
 
         if self.spectral_dim <= 0 or self.spectral_heads <= 0:
             raise ValueError("spectral_dim and spectral_heads must be positive.")
@@ -149,6 +159,15 @@ class TopologySpectralTransformerPredictor(nn.Module):
             )
             if self.predict_clustering_coefficient
             else None
+        )
+
+        self.clustering_histogram_head = (
+            nn.Sequential(
+                nn.Linear(self.spectral_dim, clustering_hidden),
+                nn.SiLU(),
+                nn.Linear(clustering_hidden, self.clustering_histogram_bins),
+            )
+            if self.predict_clustering_histogram else None
         )
 
     @staticmethod
@@ -343,9 +362,14 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "raw_gap_scores": raw_gap_scores,
             "spectral_mask": mask,
         }
-        if self.clustering_coefficient_head is not None:
+        if self.clustering_coefficient_head is not None or self.clustering_histogram_head is not None:
             weights = mask.unsqueeze(-1).to(encoded.dtype)
             pooled = (encoded * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
+        if self.clustering_histogram_head is not None:
+            logits = self.clustering_histogram_head(pooled)
+            result["clean_clustering_histogram_logits"] = logits
+            result["clean_clustering_histogram"] = torch.softmax(logits, dim=-1)
+        if self.clustering_coefficient_head is not None:
             result["clean_clustering_coefficient"] = torch.sigmoid(
                 self.clustering_coefficient_head(pooled).squeeze(-1)
             )
@@ -441,6 +465,35 @@ class TopologySpectralTransformerPredictor(nn.Module):
                 clustering_mae = torch.mean(torch.abs(clustering_delta))
                 clustering_rmse = torch.sqrt(torch.mean(clustering_delta.square()))
 
+        histogram_metrics: dict[str, float] = {}
+        if self.predict_clustering_histogram:
+            histogram_target = batch.clean_clustering_histogram_target
+            histogram_prediction = outputs["clean_clustering_histogram"]
+            if histogram_target is None:
+                raise ValueError("Clustering-histogram prediction is enabled but the batch has no histogram target.")
+            histogram_target = histogram_target.to(histogram_prediction.dtype)
+            if histogram_target.shape != histogram_prediction.shape:
+                raise ValueError("Clustering histogram target width does not match the checkpoint bin count.")
+            # CDF loss respects the ordering of coefficient bins. The final
+            # CDF entry is constant 1 and is omitted; spacing is 1 / bins.
+            cdf_delta = torch.cumsum(histogram_prediction - histogram_target, dim=-1)[..., :-1]
+            histogram_loss = cdf_delta.square().sum(dim=-1).mean() / self.clustering_histogram_bins
+            histogram_ce = -(
+                histogram_target
+                * F.log_softmax(outputs["clean_clustering_histogram_logits"], dim=-1)
+            ).sum(dim=-1).mean()
+            total = total + float(weights.get("clustering_histogram", 1.0)) * histogram_loss
+            total = total + float(weights.get("clustering_histogram_ce", 0.0)) * histogram_ce
+            with torch.no_grad():
+                histogram_w1 = cdf_delta.abs().sum(dim=-1).mean() / self.clustering_histogram_bins
+                histogram_tv = 0.5 * (histogram_prediction - histogram_target).abs().sum(dim=-1).mean()
+                histogram_metrics = {
+                    "clustering_histogram_loss": float(histogram_loss.detach().cpu()),
+                    "clustering_histogram_ce": float(histogram_ce.detach().cpu()),
+                    "clustering_histogram_w1": float(histogram_w1.detach().cpu()),
+                    "clustering_histogram_tv": float(histogram_tv.detach().cpu()),
+                }
+
         with torch.no_grad():
             abs_delta = torch.abs(predicted - target) * valid_weight
             spectral_mae = abs_delta.sum() / count
@@ -468,6 +521,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
         metrics = {
             "loss": float(total.detach().cpu()),
             "spectrum_loss": float(spectrum_loss.detach().cpu()),
+            "spectral_loss": float(spectrum_loss.detach().cpu()),
             "moment2_loss": float(moment2_loss.detach().cpu()),
             "low_frequency_loss": float(low_frequency_loss.detach().cpu()),
             "spectral_mae": float(spectral_mae.detach().cpu()),
@@ -496,6 +550,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
                     ),
                 }
             )
+        metrics.update(histogram_metrics)
         return total, metrics
 
 
@@ -527,6 +582,8 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "input_normalization": self.input_normalization,
             "use_graph_context": self.use_graph_context,
             "predict_clustering_coefficient": self.predict_clustering_coefficient,
+            "predict_clustering_histogram": self.predict_clustering_histogram,
+            "clustering_histogram_bins": self.clustering_histogram_bins,
         }
 
 

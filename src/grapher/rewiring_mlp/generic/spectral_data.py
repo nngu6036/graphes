@@ -9,6 +9,9 @@ import torch
 
 from grapher.rewiring_mlp.core.rewiring import Action, make_action
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
+from grapher.rewiring_mlp.generic.clustering import (
+    clustering_histogram_bins, extract_clustering_histogram, validate_clustering_histogram,
+)
 from grapher.rewiring_mlp.generic.data import (
     TopologyTrainingPair,
     _construct_source_from_degree_sequence,
@@ -71,6 +74,7 @@ class TopologySpectralExample:
     teacher_actions: tuple[Action, ...] = ()
     teacher_distribution: np.ndarray | None = None
     teacher_selected_index: int = -1
+    clean_clustering_histogram_target: np.ndarray | None = None
 
 
 @dataclass
@@ -93,6 +97,8 @@ class TopologySpectralBatch:
     source_graphlet_logits: torch.Tensor | None = None
     clean_graphlet_logits_target: torch.Tensor | None = None
     graphlet_coordinate_mask: torch.Tensor | None = None
+
+    clean_clustering_histogram_target: torch.Tensor | None = None
 
     def to(self, device: torch.device | str) -> "TopologySpectralBatch":
         return TopologySpectralBatch(
@@ -136,6 +142,16 @@ def collate_spectral_examples(
     clean_clustering = (
         np.zeros(batch_size, dtype=np.float32) if clustering_enabled else None
     )
+
+    histogram_targets = [example.clean_clustering_histogram_target for example in examples]
+    clean_clustering_histogram = None
+    if any(value is not None for value in histogram_targets):
+        if any(value is None for value in histogram_targets):
+            raise ValueError("Cannot mix examples with and without clean clustering histogram targets.")
+        histograms = [validate_clustering_histogram(value) for value in histogram_targets]
+        if len({value.size for value in histograms}) != 1:
+            raise ValueError("Clustering histogram targets in a batch must share one bin count.")
+        clean_clustering_histogram = np.stack(histograms).astype(np.float32)
 
     graphlet_widths = {
         int(np.asarray(example.current_graphlet_logits).size)
@@ -280,6 +296,10 @@ def collate_spectral_examples(
         source_spectrum=torch.from_numpy(source_spectra),
         clean_spectrum_target=torch.from_numpy(clean_spectra),
         spectrum_mask=torch.from_numpy(spectrum_mask),
+        clean_clustering_histogram_target=(
+            torch.from_numpy(clean_clustering_histogram)
+            if clean_clustering_histogram is not None else None
+        ),
         clean_clustering_coefficient_target=(
             torch.from_numpy(clean_clustering) if clean_clustering is not None else None
         ),
@@ -1073,6 +1093,7 @@ class TopologySpectralDiffusionEndpoint:
     graphlet_coordinate_mask: np.ndarray | None = None
     clean_clustering_coefficient: float = 0.0
     spectral_endpoint_distance: float = 0.0
+    clean_clustering_histogram: np.ndarray | None = None
 
 
 def _prepare_spectral_diffusion_endpoint(
@@ -1084,6 +1105,7 @@ def _prepare_spectral_diffusion_endpoint(
     graphlet_logit_epsilon: float,
     require_same_degree_sequence: bool,
     rng: np.random.Generator,
+    structure_summary_config: dict[str, Any] | None = None,
 ) -> TopologySpectralDiffusionEndpoint:
     source, target, metadata = _resolve_spectral_diffusion_endpoints(
         raw_item,
@@ -1126,6 +1148,7 @@ def _prepare_spectral_diffusion_endpoint(
             coordinate_mask=graphlet_mask,
         )
 
+    histogram_bins = clustering_histogram_bins(structure_summary_config)
     return TopologySpectralDiffusionEndpoint(
         source=source,
         target=target,
@@ -1139,6 +1162,10 @@ def _prepare_spectral_diffusion_endpoint(
         clean_graphlet_logits=clean_logits,
         graphlet_coordinate_mask=graphlet_mask,
         clean_clustering_coefficient=float(nx.average_clustering(target)),
+        clean_clustering_histogram=(
+            extract_clustering_histogram(target, histogram_bins)
+            if histogram_bins is not None else None
+        ),
         spectral_endpoint_distance=spectral_distance(
             source_spectrum,
             clean_spectrum,
@@ -1215,6 +1242,10 @@ def _sample_spectral_diffusion_endpoint_examples(
                     current_spectrum=current_spectrum.astype(np.float32),
                     source_spectrum=endpoint.source_spectrum.astype(np.float32),
                     clean_spectrum_target=endpoint.clean_spectrum.astype(np.float32),
+                    clean_clustering_histogram_target=(
+                        None if endpoint.clean_clustering_histogram is None
+                        else endpoint.clean_clustering_histogram.astype(np.float32)
+                    ),
                     clean_clustering_coefficient_target=float(
                         endpoint.clean_clustering_coefficient
                     ),
@@ -1292,6 +1323,7 @@ def build_spectral_diffusion_examples(
     graphlet_basis: TopologyGraphletBasis | None = None,
     graphlet_logit_epsilon: float = 1.0e-5,
     seed: int = 0,
+    structure_summary_config: dict[str, Any] | None = None,
 ) -> tuple[list[TopologySpectralExample], dict[str, Any]]:
     """Sample continuous stochastic summary-diffusion training states.
 
@@ -1305,6 +1337,7 @@ def build_spectral_diffusion_examples(
     diff_cfg = SummaryDiffusionConfig.from_dict(diff_values)
     source_cfg = dict(source_config or {})
     spec_cfg = dict(spectral_config or {})
+    histogram_bins = clustering_histogram_bins(structure_summary_config)
     rng = np.random.default_rng(int(seed))
     require_same_degree_sequence = bool(
         spec_cfg.get("require_same_degree_sequence", True)
@@ -1328,6 +1361,10 @@ def build_spectral_diffusion_examples(
         source_spectrum = laplacian_eigenvalues(source)
         clean_spectrum = laplacian_eigenvalues(target)
         clean_clustering_coefficient = float(nx.average_clustering(target))
+        clean_histogram = (
+            extract_clustering_histogram(target, histogram_bins)
+            if histogram_bins is not None else None
+        )
         scale = spectral_scale(source, mode=str(spec_cfg.get("normalization", "mean_degree")))
 
         source_prob = source_logits = clean_prob = clean_logits = graphlet_mask = None
@@ -1421,6 +1458,9 @@ def build_spectral_diffusion_examples(
                         source_spectrum=source_spectrum.astype(np.float32),
                         clean_spectrum_target=clean_spectrum.astype(np.float32),
                         clean_clustering_coefficient_target=clean_clustering_coefficient,
+                        clean_clustering_histogram_target=(
+                            None if clean_histogram is None else clean_histogram.astype(np.float32)
+                        ),
                         current_graphlet_probabilities=(
                             None if current_prob is None else current_prob.astype(np.float32)
                         ),
@@ -1497,12 +1537,15 @@ class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset)
         graphlet_logit_epsilon: float = 1.0e-5,
         seed: int = 0,
         shuffle_graphs: bool = True,
+        structure_summary_config: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.graphs = tuple(graphs)
         self.diffusion_config = dict(diffusion_config or {})
         self.source_config = dict(source_config or {})
         self.spectral_config = dict(spectral_config or {})
+        self.structure_summary_config = dict(structure_summary_config or {})
+        clustering_histogram_bins(self.structure_summary_config)
         self.graphlet_basis = graphlet_basis
         self.graphlet_logit_epsilon = float(graphlet_logit_epsilon)
         self.seed = int(seed)
@@ -1528,6 +1571,7 @@ class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset)
                     _prepare_spectral_diffusion_endpoint(
                         raw_item,
                         source_config=self.source_config,
+                        structure_summary_config=self.structure_summary_config,
                         spectral_config=self.spectral_config,
                         graphlet_basis=self.graphlet_basis,
                         graphlet_logit_epsilon=self.graphlet_logit_epsilon,
@@ -1580,6 +1624,7 @@ class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset)
                     [self.graphs[int(graph_index)]],
                     diffusion_config=self.diffusion_config,
                     source_config=self.source_config,
+                    structure_summary_config=self.structure_summary_config,
                     spectral_config=self.spectral_config,
                     graphlet_basis=self.graphlet_basis,
                     graphlet_logit_epsilon=self.graphlet_logit_epsilon,

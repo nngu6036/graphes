@@ -9,6 +9,10 @@ import torch
 
 from grapher.rewiring_mlp.core.rewiring import Action
 from grapher.rewiring_mlp.generic.data import normalize_topology_graph
+from grapher.rewiring_mlp.generic.clustering import (
+    extract_clustering_histogram, validate_clustering_histogram,
+    clustering_histogram_wasserstein,
+)
 from grapher.rewiring_mlp.generic.rewiring import (
     propose_valid_topology_swaps,
     topology_state_key,
@@ -37,6 +41,7 @@ class SpectralPrediction:
     trace: float
     second_moment: float
     clean_clustering_coefficient: float | None = None
+    clean_clustering_histogram: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +85,10 @@ class SpectralRefinerConfig:
     guidance_mode: str = "spectral"
     spectral_weight: float = 1.0
     clustering_weight: float = 1.0
+    # Keep mean-clustering semantics for existing configs and checkpoints.
+    clustering_statistic: str = "mean"
+    clustering_histogram_bins: int | None = None
+    clustering_histogram_distance: str = "wasserstein1"
 
     distance: str = "rmse"
     normalization: str = "mean_degree"
@@ -306,6 +315,9 @@ class SpectralRefinerConfig:
             guidance_mode=str(values.get("guidance_mode", "spectral")).lower(),
             spectral_weight=float(guidance.get("weight", 1.0)),
             clustering_weight=float(clustering_guidance.get("weight", 1.0)),
+            clustering_statistic=str(clustering_guidance.get("statistic", "mean")).lower(),
+            clustering_histogram_bins=clustering_guidance.get("histogram_bins"),
+            clustering_histogram_distance=str(clustering_guidance.get("distance", "wasserstein1")).lower(),
             distance=str(guidance.get("distance", "rmse")).lower(),
             normalization=str(guidance.get("normalization", "mean_degree")).lower(),
             low_frequency_weight=float(
@@ -343,6 +355,13 @@ class SpectralRefinerConfig:
             debug_spectrum_values=max(int(debug.get("spectrum_values", 12)), 1),
             debug_store_spectra=bool(debug.get("store_spectra", False)),
         )
+        if config.clustering_statistic not in {"mean", "histogram"}:
+            raise ValueError("clustering_guidance.statistic must be mean or histogram.")
+        bins = config.clustering_histogram_bins
+        if bins is not None and (isinstance(bins, bool) or int(bins) != bins or int(bins) < 2):
+            raise ValueError("clustering_guidance.histogram_bins must be an integer >= 2.")
+        if config.clustering_statistic == "histogram" and config.clustering_histogram_distance != "wasserstein1":
+            raise ValueError("Histogram guidance currently supports only distance: wasserstein1.")
         if config.guidance_mode not in {"spectral", "clustering", "spectral_clustering"}:
             raise ValueError(
                 "topology_refiner.guidance_mode must be spectral, clustering, "
@@ -507,12 +526,18 @@ def predict_clean_spectrum(
         if clustering_output is None
         else float(clustering_output[0].detach().cpu().item())
     )
+    histogram_output = outputs.get("clean_clustering_histogram")
+    clean_histogram = (
+        None if histogram_output is None else
+        validate_clustering_histogram(histogram_output[0].detach().cpu().numpy())
+    )
     return SpectralPrediction(
         clean_spectrum=predicted,
         current_spectrum=current,
         trace=trace,
         second_moment=second,
         clean_clustering_coefficient=clean_clustering,
+        clean_clustering_histogram=clean_histogram,
     )
 
 
@@ -523,6 +548,7 @@ def score_spectral_candidates(
     clean_spectrum: np.ndarray,
     next_spectrum_target: np.ndarray,
     clean_clustering_coefficient: float | None = None,
+    clean_clustering_histogram: np.ndarray | None = None,
     config: SpectralRefinerConfig,
     candidate_graphs: dict[Action, nx.Graph],
     device: torch.device | str = "cpu",
@@ -546,17 +572,23 @@ def score_spectral_candidates(
         low_frequency_cutoff=config.low_frequency_cutoff,
     )
     needs_clustering = config.guidance_mode in {"clustering", "spectral_clustering"}
-    if needs_clustering and clean_clustering_coefficient is None:
-        raise ValueError(
-            "Clustering-guided rewiring requires a checkpoint with "
-            "clean_clustering_coefficient prediction enabled."
+    use_histogram = needs_clustering and config.clustering_statistic == "histogram"
+    target_histogram = current_histogram = None
+    if use_histogram:
+        if clean_clustering_histogram is None:
+            raise ValueError("Histogram-guided rewiring requires a checkpoint with clean_clustering_histogram prediction enabled.")
+        target_histogram = validate_clustering_histogram(
+            clean_clustering_histogram, bins=config.clustering_histogram_bins,
         )
+        current_histogram = extract_clustering_histogram(graph, target_histogram.size)
+        current_clustering_discrepancy = clustering_histogram_wasserstein(current_histogram, target_histogram)
+    elif needs_clustering:
+        if clean_clustering_coefficient is None or not np.isfinite(clean_clustering_coefficient):
+            raise ValueError("Mean-clustering guidance requires a finite clean_clustering_coefficient prediction.")
+        current_clustering_discrepancy = abs(float(nx.average_clustering(graph)) - float(clean_clustering_coefficient))
+    else:
+        current_clustering_discrepancy = None
     current_clustering = float(nx.average_clustering(graph)) if needs_clustering else None
-    current_clustering_discrepancy = (
-        abs(current_clustering - float(clean_clustering_coefficient))
-        if needs_clustering and current_clustering is not None
-        else None
-    )
 
     candidate_list = [candidate_graphs[action] for action in candidates]
     spectra = batched_laplacian_eigenvalues(
@@ -593,11 +625,15 @@ def score_spectral_candidates(
         candidate_clustering = (
             float(nx.average_clustering(candidate)) if needs_clustering else None
         )
-        candidate_clustering_discrepancy = (
-            abs(candidate_clustering - float(clean_clustering_coefficient))
-            if needs_clustering and candidate_clustering is not None
-            else None
-        )
+        candidate_histogram = None
+        if use_histogram:
+            candidate_histogram = extract_clustering_histogram(candidate, target_histogram.size)
+            candidate_clustering_discrepancy = clustering_histogram_wasserstein(candidate_histogram, target_histogram)
+        else:
+            candidate_clustering_discrepancy = (
+                abs(candidate_clustering - float(clean_clustering_coefficient))
+                if needs_clustering and candidate_clustering is not None else None
+            )
         clustering_gain = (
             float(current_clustering_discrepancy - candidate_clustering_discrepancy)
             if needs_clustering
@@ -655,6 +691,11 @@ def score_spectral_candidates(
                 "spectral_gain": local_gain,
                 "clean_spectral_gain": clean_gain,
                 "spectral_relative_improvement": spectral_relative,
+                "clustering_statistic": config.clustering_statistic if needs_clustering else None,
+                "clustering_histogram_bins": int(target_histogram.size) if use_histogram else None,
+                "target_clustering_histogram": target_histogram.tolist() if use_histogram else None,
+                "current_clustering_histogram": current_histogram.tolist() if use_histogram else None,
+                "candidate_clustering_histogram": candidate_histogram.tolist() if use_histogram else None,
                 "current_clustering_coefficient": current_clustering,
                 "candidate_clustering_coefficient": candidate_clustering,
                 "target_clustering_coefficient": clean_clustering_coefficient,
@@ -845,14 +886,13 @@ def refine_graph_with_spectral_predictions(
                 raise ValueError(
                     "Spectral predictor returned the wrong number of eigenvalues."
                 )
-            if (
-                cfg.guidance_mode in {"clustering", "spectral_clustering"}
-                and prediction.clean_clustering_coefficient is None
-            ):
-                raise ValueError(
-                    "Clustering-guided rewiring requires a checkpoint trained with "
-                    "structure_summary_prediction.clustering_coefficient=true."
-                )
+            if cfg.guidance_mode in {"clustering", "spectral_clustering"}:
+                if cfg.clustering_statistic == "histogram":
+                    if prediction.clean_clustering_histogram is None:
+                        raise ValueError("Histogram guidance requires structure_summary_prediction.clustering_histogram=true in the trained checkpoint.")
+                    validate_clustering_histogram(prediction.clean_clustering_histogram, bins=cfg.clustering_histogram_bins)
+                elif prediction.clean_clustering_coefficient is None:
+                    raise ValueError("Mean-clustering guidance requires structure_summary_prediction.clustering_coefficient=true in the trained checkpoint.")
             prediction_calls += 1
             prediction_block += 1
             accepted_since_prediction = 0
@@ -961,6 +1001,7 @@ def refine_graph_with_spectral_predictions(
                 clean_spectrum=clean_spectrum,
                 next_spectrum_target=next_target,
                 clean_clustering_coefficient=prediction.clean_clustering_coefficient,
+                clean_clustering_histogram=prediction.clean_clustering_histogram,
                 config=cfg,
                 candidate_graphs=candidate_graphs,
                 device=device,
@@ -1060,7 +1101,7 @@ def refine_graph_with_spectral_predictions(
                             + (
                                 f"c_gain={row['clustering_gain']:.6f} "
                                 f"c_rel={row['clustering_relative_improvement']:.6f} "
-                                if row.get("target_clustering_coefficient") is not None
+                                if row.get("current_clustering_discrepancy") is not None
                                 else ""
                             )
                             + _format_action(row["action"])
@@ -1222,7 +1263,11 @@ def refine_graph_with_spectral_predictions(
                 "step": decision_step,
                 "accepted_step": accepted_steps,
                 "accepted": True,
-                "reason": "spectral_denoising_swap",
+                "reason": (
+                    "clustering_histogram_guided_swap"
+                    if cfg.clustering_statistic == "histogram" and cfg.guidance_mode != "spectral"
+                    else "spectral_denoising_swap"
+                ),
                 "move_kind": move_kind,
                 "terminal_stop": False,
                 "action": chosen["action"],
@@ -1250,6 +1295,16 @@ def refine_graph_with_spectral_predictions(
                 "candidate_clean_spectral_discrepancy": float(
                     chosen["candidate_clean_spectral_discrepancy"]
                 ),
+                **{
+                    key: chosen[key] for key in (
+                        "clustering_statistic", "clustering_histogram_bins",
+                        "current_clustering_discrepancy", "candidate_clustering_discrepancy",
+                        "clustering_gain", "clustering_relative_improvement",
+                        "current_clustering_coefficient", "candidate_clustering_coefficient",
+                        "target_clustering_coefficient", "target_clustering_histogram",
+                        "current_clustering_histogram", "candidate_clustering_histogram",
+                    )
+                },
                 "spectral_gain": float(chosen["spectral_gain"]),
                 "clean_spectral_gain": float(chosen["clean_spectral_gain"]),
                 "projection_residual": float(chosen["projection_residual"]),

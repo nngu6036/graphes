@@ -261,6 +261,12 @@ def main() -> None:
         structure_summary_cfg.get("clustering_coefficient", False)
     )
 
+    from grapher.rewiring_mlp.generic.clustering import clustering_histogram_bins
+    histogram_bins = clustering_histogram_bins(structure_summary_cfg)
+    clustering_histogram_enabled = histogram_bins is not None
+    if clustering_histogram_enabled and not spectral_family_mode:
+        raise ValueError("structure_summary_prediction.clustering_histogram requires a spectral-family predictor.")
+
     graphlet_basis: TopologyGraphletBasis | None = None
     if not spectral_mode:
         if str(summary_data.get("estimator", "exact_connected_local_delta")).lower() != "exact_connected_local_delta":
@@ -454,6 +460,7 @@ def main() -> None:
                 diffusion_config=diffusion_cfg,
                 source_config=source_construction_cfg,
                 spectral_config=spectral_cfg,
+                structure_summary_config=structure_summary_cfg,
                 graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
                 seed=seed,
@@ -464,6 +471,7 @@ def main() -> None:
                 diffusion_config=diffusion_cfg,
                 source_config=source_construction_cfg,
                 spectral_config=spectral_cfg,
+                structure_summary_config=structure_summary_cfg,
                 graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
                 seed=seed + 1,
@@ -479,6 +487,7 @@ def main() -> None:
                 diffusion_config=diffusion_cfg,
                 source_config=source_construction_cfg,
                 spectral_config=spectral_cfg,
+                structure_summary_config=structure_summary_cfg,
                 graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
                 seed=seed,
@@ -488,6 +497,7 @@ def main() -> None:
                 diffusion_config=diffusion_cfg,
                 source_config=source_construction_cfg,
                 spectral_config=spectral_cfg,
+                structure_summary_config=structure_summary_cfg,
                 graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
                 seed=seed + 1,
@@ -566,6 +576,8 @@ def main() -> None:
             ),
             "use_graph_context": bool(predictor_cfg.get("use_graph_context", True)),
             "predict_clustering_coefficient": clustering_coefficient_enabled,
+            "predict_clustering_histogram": clustering_histogram_enabled,
+            "clustering_histogram_bins": histogram_bins or 100,
         }
         if spectral_graphlet_mode:
             assert graphlet_basis is not None
@@ -664,6 +676,9 @@ def main() -> None:
                 "loss_weights.clustering_coefficient is active but "
                 "structure_summary_prediction.clustering_coefficient is false."
             )
+        for key in ("clustering_histogram", "clustering_histogram_ce"):
+            if not clustering_histogram_enabled and float(loss_weights.get(key, 0.0)) != 0.0:
+                raise ValueError(f"loss_weights.{key} requires structure_summary_prediction.clustering_histogram=true.")
         active_loss_defaults = [
             ("spectrum", 1.0),
             ("moment2", 0.1),
@@ -675,6 +690,8 @@ def main() -> None:
             )
         if clustering_coefficient_enabled:
             active_loss_defaults.append(("clustering_coefficient", 1.0))
+        if clustering_histogram_enabled:
+            active_loss_defaults.extend([("clustering_histogram", 1.0), ("clustering_histogram_ce", 0.0)])
         if not any(
             float(loss_weights.get(key, default)) != 0.0
             for key, default in active_loss_defaults
@@ -747,8 +764,13 @@ def main() -> None:
             print(
                 "[GraphER/SpectralOnly] auxiliary structure target: clean average "
                 "clustering coefficient. It is predicted from the spectral Transformer "
-                "state but is not diffused and is not used for generation scoring yet.",
+                "state but is not diffused; its use in rewiring is configured independently.",
                 flush=True,
+            )
+        if clustering_histogram_enabled:
+            print(
+                f"[GraphER/Spectral] clean local-clustering histogram: {histogram_bins} bins; "
+                "softmax head, CDF-MSE loss; histogram is NOT diffused.", flush=True,
             )
         if spectral_graphlet_mode:
             print(
@@ -860,6 +882,11 @@ def main() -> None:
                         f" clustering_mae={val_metrics['clustering_coefficient_mae']:.5f}"
                         f" clustering_rmse={val_metrics['clustering_coefficient_rmse']:.5f}"
                     )
+                if clustering_histogram_enabled:
+                    extra += (
+                        f" clustering_hist_w1={val_metrics['clustering_histogram_w1']:.5f}"
+                        f" clustering_hist_tv={val_metrics['clustering_histogram_tv']:.5f}"
+                    )
                 print(
                     f"epoch={epoch:04d} "
                     f"train={train_metrics['loss']:.5f} "
@@ -907,6 +934,10 @@ def main() -> None:
             "graphlet_logit_epsilon": (graphlet_logit_epsilon if spectral_graphlet_mode else None),
             "clean_average_clustering_coefficient": clustering_coefficient_enabled,
             "clustering_coefficient_is_diffused": False,
+            "clean_local_clustering_histogram": clustering_histogram_enabled,
+            "clustering_histogram_bins": histogram_bins,
+            "clustering_histogram_is_diffused": False,
+            "clustering_histogram_loss": "cdf_mse" if clustering_histogram_enabled else None,
         }
         graphlet_basis_report = (
             graphlet_basis.to_dict() if spectral_graphlet_mode and graphlet_basis is not None else None
@@ -957,6 +988,8 @@ def main() -> None:
             else "structural_summary"
         ),
         "predictor_type": predictor_type,
+        "config_overrides": list(args.config_overrides),
+        "resolved_config": config,
         "checkpoint_format": checkpoint_format,
         "best_epoch": best_epoch,
         "best_val_loss": best_val,

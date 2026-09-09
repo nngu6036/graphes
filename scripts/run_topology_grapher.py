@@ -378,6 +378,21 @@ def main() -> None:
             )
         else:
             refiner_settings = SpectralRefinerConfig.from_dict(refiner_cfg)
+            if refiner_settings.guidance_mode in {"clustering", "spectral_clustering"}:
+                if refiner_settings.clustering_statistic == "histogram":
+                    if not getattr(model, "predict_clustering_histogram", False):
+                        raise ValueError("Histogram guidance requested, but checkpoint has no histogram head. Train with structure_summary_prediction.clustering_histogram=true.")
+                    bins = refiner_settings.clustering_histogram_bins
+                    if bins is not None and int(bins) != model.clustering_histogram_bins:
+                        raise ValueError("clustering_guidance.histogram_bins disagrees with the checkpoint.")
+                elif not getattr(model, "predict_clustering_coefficient", False):
+                    raise ValueError("Mean-clustering guidance requested, but checkpoint has no scalar clustering head.")
+            print(
+                f"[GraphER/Spectral] rewiring_guidance={refiner_settings.guidance_mode} "
+                f"clustering_statistic={refiner_settings.clustering_statistic} "
+                f"histogram_bins={getattr(model, 'clustering_histogram_bins', None) if getattr(model, 'predict_clustering_histogram', False) else None}",
+                flush=True,
+            )
             print(
                 "[GraphER/Spectral] loaded Spectral Transformer checkpoint "
                 f"format={checkpoint_format} device={model_device}",
@@ -810,6 +825,13 @@ def main() -> None:
     elif guidance_mode == "spectral":
         diagnostics.update(
             {
+                "rewiring_guidance_mode": refiner_settings.guidance_mode,
+                "clustering_guidance_statistic": refiner_settings.clustering_statistic,
+                "clustering_histogram_bins": getattr(model, "clustering_histogram_bins", None) if getattr(model, "predict_clustering_histogram", False) else None,
+                "predictor_clustering_histogram_w1": (checkpoint.get("report", {}) or {}).get("val_clustering_histogram_w1"),
+                "mean_accepted_clustering_gain": _mean_or_zero(accepted_rows, "clustering_gain"),
+                "mean_accepted_clustering_discrepancy_before": _mean_or_zero(accepted_rows, "current_clustering_discrepancy"),
+                "mean_accepted_clustering_discrepancy_after": _mean_or_zero(accepted_rows, "candidate_clustering_discrepancy"),
                 "mean_accepted_spectral_gain": _mean_or_zero(accepted_rows, "spectral_gain"),
                 "mean_accepted_clean_spectral_gain": _mean_or_zero(
                     accepted_rows,

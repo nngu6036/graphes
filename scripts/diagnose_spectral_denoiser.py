@@ -11,6 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from grapher.data.io import load_dataset_splits
+from grapher.rewiring_mlp.generic.clustering import extract_clustering_histogram
 from grapher.rewiring_mlp.generic.spectral_data import (
     build_spectral_diffusion_examples,
     collate_spectral_examples,
@@ -72,6 +73,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--json-out", default=None)
+    parser.add_argument("--source-endpoint-only", action="store_true", help="Evaluate t=0 on HH spectra only, without clean-target information in the input.")
     args = parser.parse_args()
 
     config = load_yaml(args.config)
@@ -135,8 +137,21 @@ def main() -> None:
         source_config=source_cfg,
         spectral_config=spectral_cfg,
         graphlet_basis=None,
+        structure_summary_config={
+            "clustering_histogram": bool(getattr(model, "predict_clustering_histogram", False)),
+            "clustering_bins": int(getattr(model, "clustering_histogram_bins", 100)),
+        },
         seed=int(args.seed),
     )
+    if args.source_endpoint_only:
+        for example in examples:
+            example.time = 0.0
+            example.current_spectrum = example.source_spectrum.copy()
+    source_histograms = (
+        [extract_clustering_histogram(example.current_graph, model.clustering_histogram_bins) for example in examples]
+        if getattr(model, "predict_clustering_histogram", False) else None
+    )
+    example_offset = 0
     loader = DataLoader(
         examples,
         batch_size=max(int(args.batch_size), 1),
@@ -173,6 +188,19 @@ def main() -> None:
             lambda1 = torch.abs(predicted[:, 0])
             predicted_clustering = outputs.get("clean_clustering_coefficient")
             target_clustering = batch.clean_clustering_coefficient_target
+            predicted_histogram = outputs.get("clean_clustering_histogram")
+            target_histogram = batch.clean_clustering_histogram_target
+            hist_w1 = hist_tv = source_hist_w1 = None
+            if predicted_histogram is not None and target_histogram is not None:
+                cdf_delta = torch.cumsum(predicted_histogram - target_histogram, dim=-1)[..., :-1]
+                hist_w1 = cdf_delta.abs().sum(dim=-1) / model.clustering_histogram_bins
+                hist_tv = 0.5 * (predicted_histogram - target_histogram).abs().sum(dim=-1)
+                source_histogram = torch.as_tensor(
+                    np.stack(source_histograms[example_offset:example_offset + predicted.shape[0]]),
+                    dtype=predicted_histogram.dtype, device=predicted_histogram.device,
+                )
+                source_hist_w1 = torch.cumsum(source_histogram - target_histogram, dim=-1)[..., :-1].abs().sum(dim=-1) / model.clustering_histogram_bins
+            example_offset += predicted.shape[0]
 
             for i in range(predicted.shape[0]):
                 t = float(batch.time[i].detach().cpu())
@@ -198,6 +226,10 @@ def main() -> None:
                     row["clustering_abs_error"] = abs(
                         row["clustering_prediction"] - row["clustering_target"]
                     )
+                if hist_w1 is not None:
+                    row["clustering_histogram_w1"] = float(hist_w1[i].detach().cpu())
+                    row["clustering_histogram_tv"] = float(hist_tv[i].detach().cpu())
+                    row["source_clustering_histogram_w1"] = float(source_hist_w1[i].detach().cpu())
                 all_rows.append(row)
                 if t < 0.25:
                     label = "[0.00,0.25)"
@@ -229,6 +261,10 @@ def main() -> None:
             result["clustering_coefficient_mae"] = _mean(
                 [row["clustering_abs_error"] for row in clustering_rows]
             )
+        for key in ("clustering_histogram_w1", "clustering_histogram_tv", "source_clustering_histogram_w1"):
+            values = [row[key] for row in rows if key in row]
+            if values:
+                result[key] = _mean(values)
         result["denoising_gain_vs_noisy"] = (
             result["noisy_nrmse"] - result["predicted_nrmse"]
         )
@@ -247,6 +283,8 @@ def main() -> None:
         "predictor_type": checkpoint.get("predictor_type"),
         "use_graph_context": bool(getattr(model, "use_graph_context", True)),
         "diffusion": diffusion_report,
+        "source_endpoint_only": bool(args.source_endpoint_only),
+        "clustering_histogram_bins": model.clustering_histogram_bins if getattr(model, "predict_clustering_histogram", False) else None,
         "overall": summarize(all_rows),
         "by_time": {key: summarize(rows) for key, rows in sorted(bins.items())},
     }
@@ -270,12 +308,17 @@ def main() -> None:
             "  clustering coefficient MAE: "
             f"{overall['clustering_coefficient_mae']:.6f}"
         )
+    if "clustering_histogram_w1" in overall:
+        print(f"  HH -> clean histogram W1:   {overall['source_clustering_histogram_w1']:.6f}")
+        print(f"  pred -> clean histogram W1: {overall['clustering_histogram_w1']:.6f}")
+        print(f"  pred -> clean histogram TV: {overall['clustering_histogram_tv']:.6f}")
     print("  by diffusion time:")
     for label, row in report["by_time"].items():
         print(
             f"    {label}: noisy={row['noisy_nrmse']:.6f} "
             f"pred={row['predicted_nrmse']:.6f} "
             f"gain={row['denoising_gain_vs_noisy']:.6f}"
+            + (f" hist_w1={row['clustering_histogram_w1']:.6f}" if "clustering_histogram_w1" in row else "")
         )
 
     if args.json_out:

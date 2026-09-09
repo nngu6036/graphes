@@ -648,3 +648,11 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --dataset community_small \
   --num-samples 1024 \
   --seed-id 42
+
+## Minimal spectral diffusion + clustering histogram experiment
+
+The optional clean local-clustering histogram head and histogram-guided rewiring are documented in
+[`GRAPHER_CLUSTERING_HISTOGRAM.md`](GRAPHER_CLUSTERING_HISTOGRAM.md). The new experiment is
+`configs/experiments/grapher/community_small_topology_spectral_clustering_histogram.yaml`.
+It uses 100 normalized bins, a softmax head and CDF loss, and spectral + histogram-W1
+candidate scoring. Existing scalar-clustering configs/checkpoints retain their behavior.

@@ -956,6 +956,11 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir outputs/topology_generation/community_small_ablation_spectral_only/seed_42/evaluation
 
 
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+hh_source_to_test                   0.011551          0.369613      0.167560
+topology_final_to_test              0.011551          0.335930      0.152975
+
 # Clustering
 PYTHONPATH=src python scripts/train_topology_grapher.py \
   --config configs/experiments/grapher/community_small_topology_spectral_debug.yaml \
@@ -985,6 +990,12 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/grapher/community_small_topology_spectral_debug.yaml \
   --generated-dir outputs/topology_generation/community_small_ablation_clustering_only/seed_42 \
   --output-dir outputs/topology_generation/community_small_ablation_clustering_only/seed_42/evaluation
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+hh_source_to_test                   0.011551          0.369613      0.167560
+topology_final_to_test              0.011551          0.113729      0.131143
+
 
 # Spectrum + clustering
 
