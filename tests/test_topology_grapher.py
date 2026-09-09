@@ -45,6 +45,25 @@ from grapher.rewiring_mlp.generic.refiner import (
 from grapher.rewiring_mlp.generic.rewiring import propose_valid_topology_swaps
 
 
+@pytest.mark.parametrize("graph,cyclic,simple_cycle", [
+    (nx.path_graph(4), False, False),
+    (nx.cycle_graph(4), True, True),
+    (nx.complete_graph(4), True, False),
+])
+def test_edge_mask_cycle_filters(graph, cyclic, simple_cycle) -> None:
+    from itertools import combinations
+
+    from grapher.rewiring_mlp.generic.graphlets import _edge_mask_matches_topology_filter
+
+    n = graph.number_of_nodes()
+    mask = sum(
+        1 << bit for bit, edge in enumerate(combinations(range(n), 2))
+        if graph.has_edge(*edge)
+    )
+    assert _edge_mask_matches_topology_filter(mask, n, "cyclic") is cyclic
+    assert _edge_mask_matches_topology_filter(mask, n, "simple_cycle") is simple_cycle
+
+
 def _basis(k_max: int = 4) -> tuple[TopologyGraphletBasis, SummaryConfig]:
     config = SummaryConfig.from_dict(
         {

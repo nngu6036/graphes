@@ -422,7 +422,8 @@ def _edge_mask_matches_topology_filter(
         return False
     if selected == "all":
         return True
-    edge_count = int(mask).bit_count()
+    # Python 3.9 baseline environments do not provide int.bit_count().
+    edge_count = bin(int(mask)).count("1")
     if selected == "cyclic":
         # Connected graph: cyclomatic number m - n + 1 is positive iff m >= n.
         return edge_count >= int(k)

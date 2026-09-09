@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import networkx as nx
 import numpy as np
 import pytest
 import torch
 
+from grapher.data.io import save_dataset_splits
 from grapher.rewiring_mlp.evaluation.studies import aggregate_pipeline_diagnostics
 from grapher.rewiring_mlp.generic.rewiring import propose_valid_topology_swaps
 from grapher.rewiring_mlp.generic.spectral import (
@@ -28,6 +35,7 @@ from grapher.rewiring_mlp.generic.spectral_refiner import (
     SpectralRefinerConfig,
     refine_graph_with_spectral_predictions,
 )
+from grapher.utils.io import load_pickle, save_yaml
 
 
 def _small_model() -> TopologySpectralTransformerPredictor:
@@ -352,3 +360,61 @@ def test_spectral_only_checkpoint_preserves_mode(tmp_path) -> None:
     loaded, _summary, checkpoint = load_topology_spectral_checkpoint(path, device="cpu")
     assert checkpoint["model_config"]["use_graph_context"] is False
     assert loaded.use_graph_context is False
+
+
+def test_topology_generation_without_python310_imports(tmp_path) -> None:
+    repository = Path(__file__).resolve().parents[1]
+    root = tmp_path / "datasets"
+    graph = _nontrivial_graph()
+    save_dataset_splits(
+        "tiny", {split: [graph] for split in ("train", "val", "test")}, {}, root,
+    )
+    config = tmp_path / "config.yaml"
+    save_yaml({
+        "dataset": {"name": "tiny", "root": str(root), "build_if_missing": False},
+        "generation": {"degree_source": "empirical"},
+        "topology_refiner": {"steps": 1},
+        "evaluation": {"inline_during_generation": False},
+    }, config)
+    checkpoint = tmp_path / "checkpoint.pt"
+    model = _small_model().eval()
+    model.use_graph_context = False
+    save_topology_spectral_checkpoint(
+        model, checkpoint, report={"val_spectral_normalized_rmse": 0.1},
+    )
+    output = tmp_path / "generated"
+    # A fresh process ensures the imports cannot pass via sys.modules caching.
+    # Limit the missing-API simulation to GraphER: host dependencies may target
+    # newer Python versions than those installed in the baseline environment.
+    code = """
+import builtins
+import runpy
+import sys
+
+original_import = builtins.__import__
+def compatible_import(name, globals=None, locals=None, fromlist=(), level=0):
+    caller = (globals or {}).get('__name__', '')
+    missing = {'itertools': {'pairwise'}, 'typing': {'TypeAlias'}}
+    unavailable = missing.get(name, set()).intersection(fromlist or ())
+    if caller.startswith('grapher.') and unavailable:
+        raise ImportError(f'Python 3.9 does not provide {name}.{sorted(unavailable)}')
+    return original_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = compatible_import
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name='__main__')
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code, "scripts/run_topology_grapher.py",
+         "--config", str(config), "--checkpoint", str(checkpoint),
+         "--output-dir", str(output), "--num-generate", "2", "--seed", "42",
+         "--device", "cpu"],
+        cwd=repository, env={**os.environ, "PYTHONPATH": str(repository / "src")},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads((output / "report.json").read_text())
+    assert report["num_generated"] == 2
+    assert report["degree_source"] == "empirical"
+    assert report["diagnostics"]["final_target_degree_match_rate"] == 1.0
+    assert len(load_pickle(output / "topology_refined_graphs.pkl")) == 2

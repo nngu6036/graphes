@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from collections import Counter, deque
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
-from itertools import combinations, pairwise
+from itertools import combinations
 from math import comb, sqrt
-from typing import Any
+from typing import Any, Union
 
 import networkx as nx
 import numpy as np
@@ -23,7 +23,8 @@ DEFAULT_EVALUATION_SEEDS = (42, 43, 44)
 EXACT_REACHABILITY_MAX_NODES = 8
 DEFAULT_REACHABILITY_MAX_STATES = 100_000
 
-GraphDescriptor = Callable[[nx.Graph], Sequence[float] | np.ndarray]
+# Alias assignments are evaluated even with postponed annotations on Python 3.9.
+GraphDescriptor = Callable[[nx.Graph], Union[Sequence[float], np.ndarray]]
 EdgeCompatibility = Callable[[Hashable, Hashable, Mapping[str, Any]], bool]
 MoveFilter = Callable[
     [
@@ -109,7 +110,7 @@ def generation_error_decomposition(
     directions = dict(metric_higher_is_better or {})
 
     transitions: list[dict[str, Any]] = []
-    for before, after in pairwise(order):
+    for before, after in zip(order, order[1:]):
         raw_delta = {
             metric: normalized[after][metric] - normalized[before][metric]
             for metric in metric_names
