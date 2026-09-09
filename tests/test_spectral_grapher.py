@@ -285,3 +285,70 @@ def test_pipeline_diagnostics_accept_spectral_guidance() -> None:
     )
     assert result["pipeline_mode"] == "topology"
     assert result["metrics"]["spectral_error"]["mean"] == pytest.approx(0.2)
+
+
+def test_spectral_only_mode_ignores_graph_topology_context() -> None:
+    graph_a = nx.cycle_graph(6)
+    graph_b = nx.Graph()
+    graph_b.add_nodes_from(range(6))
+    graph_b.add_edges_from([(0, 1), (1, 2), (2, 0), (2, 3), (3, 4), (4, 5)])
+    assert graph_a.number_of_edges() == graph_b.number_of_edges()
+    assert nx.is_connected(graph_b)
+
+    source = laplacian_eigenvalues(graph_a).astype(np.float32)
+    current = (source + np.linspace(0.0, 0.05, source.size)).astype(np.float32)
+    current[0] = 0.0
+    target = source.copy()
+    batch = collate_spectral_examples(
+        [
+            TopologySpectralExample(
+                current_graph=graph_a,
+                time=0.4,
+                current_spectrum=current,
+                source_spectrum=source,
+                clean_spectrum_target=target,
+            ),
+            TopologySpectralExample(
+                current_graph=graph_b,
+                time=0.4,
+                current_spectrum=current,
+                source_spectrum=source,
+                clean_spectrum_target=target,
+            ),
+        ]
+    )
+    model = TopologySpectralTransformerPredictor(
+        hidden_dim=8,
+        edge_dim=8,
+        graph_dim=8,
+        num_layers=1,
+        spectral_dim=16,
+        spectral_layers=1,
+        spectral_heads=4,
+        spectral_ff_dim=32,
+        dropout=0.0,
+        use_graph_context=False,
+    ).eval()
+    with torch.no_grad():
+        output = model(batch)["clean_spectrum"]
+    torch.testing.assert_close(output[0], output[1], rtol=0.0, atol=1.0e-7)
+
+
+def test_spectral_only_checkpoint_preserves_mode(tmp_path) -> None:
+    model = TopologySpectralTransformerPredictor(
+        hidden_dim=8,
+        edge_dim=8,
+        graph_dim=8,
+        num_layers=1,
+        spectral_dim=16,
+        spectral_layers=1,
+        spectral_heads=4,
+        spectral_ff_dim=32,
+        dropout=0.0,
+        use_graph_context=False,
+    ).eval()
+    path = tmp_path / "spectral_only.pt"
+    save_topology_spectral_checkpoint(model, path)
+    loaded, _summary, checkpoint = load_topology_spectral_checkpoint(path, device="cpu")
+    assert checkpoint["model_config"]["use_graph_context"] is False
+    assert loaded.use_graph_context is False

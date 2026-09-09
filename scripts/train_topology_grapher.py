@@ -547,6 +547,7 @@ def main() -> None:
                     spectral_cfg.get("normalization", "mean_degree"),
                 )
             ),
+            "use_graph_context": bool(predictor_cfg.get("use_graph_context", True)),
         }
         if spectral_graphlet_mode:
             assert graphlet_basis is not None
@@ -707,6 +708,12 @@ def main() -> None:
             "eigenvectors are not predicted.",
             flush=True,
         )
+        if spectral_mode and not bool(predictor_cfg.get("use_graph_context", True)):
+            print(
+                "[GraphER/SpectralOnly] graph/GNN context disabled: denoiser inputs are "
+                "noisy spectrum + HH/source spectrum + rank + diffusion time + graph size only.",
+                flush=True,
+            )
         if spectral_graphlet_mode:
             print(
                 "Graphlet-logit diffusion: each k-block is selected graphlet "
@@ -849,6 +856,7 @@ def main() -> None:
             "prediction": "joint_one_shot",
             "variable_length": "spectral_tokens_with_padding_mask",
             "eigenvectors_predicted": False,
+            "graph_context_enabled": bool(predictor_cfg.get("use_graph_context", True)),
             "lambda1_fixed_zero": True,
             "sorted_by_positive_gaps": True,
             "trace_sum_lambda_equals_2m": True,

@@ -1,0 +1,206 @@
+experiment: community_small_topology_spectral_debug
+benchmark: community_small
+seed: 42
+
+pipeline:
+  stage: topology
+  factorization: dhvae_hh_then_spectral_only_diffusion_then_spectral_rewiring
+
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 1024
+  max_reference_graphs:
+  tune_on_split: val
+  final_split: test
+
+dataset:
+  name: sbm
+  benchmark: community_small
+  config_path: configs/datasets/community_small.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs:
+  max_val_graphs:
+
+# During training, the source is a connected HH realization of the CLEAN
+# target graph's degree sequence.  This removes DH-VAE error from predictor
+# training and guarantees source/target lie in the same degree fibre.
+training_sources:
+  mode: target_degree_havel_hakimi
+
+# Evaluation settings only.  No graphlet quantity is predicted, diffused, or
+# used in the loss/refiner.
+graphlet_prediction:
+  estimator: exact_connected_local_delta
+  graphlet_history: false
+  graphlet_k_min: 3
+  graphlet_k_max: 4
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples:
+  clustering_summary: false
+  spectral_summary: false
+  motif_proxy: false
+  orbit_count: false
+
+# Eigenvalue-only target.  Eigenvectors are deliberately excluded.
+spectral_prediction:
+  require_same_degree_sequence: true
+  distance: rmse
+  normalization: mean_degree
+  low_frequency_weight: 1.0
+  low_frequency_cutoff: 0
+
+# The ONLY diffusion state in this debug model is the Laplacian spectrum:
+#   lambda_t = (1-alpha_t) lambda_HH + alpha_t lambda_clean + noise.
+# No intermediate graph, graphlet, node feature, or edge feature is diffused.
+summary_diffusion:
+  storage: streaming
+  bridge: brownian_endpoint_conditioned
+  schedule: linear
+  power: 1.0
+  spectral_sigma: 0.20
+  preserve_spectral_trace: true
+  fix_spectral_lambda1: true
+  samples_per_graph: 16
+  paths_per_graph: 2
+  time_sampling: stratified
+  min_progress: 0.0
+  max_progress: 1.0
+  source_randomization_steps: 0
+  random_relabel_source: true
+  ensure_connected_source: true
+  max_repair_trials: 10000
+  cache_endpoints: true
+
+# Minimal denoiser.  The crucial switch is use_graph_context: false.
+# Inputs are only noisy spectrum, HH/source spectrum, spectral rank, time,
+# graph size and mask.  There is no adjacency/GNN conditioning.
+topology_predictor:
+  type: spectral_transformer
+  checkpoint_path: outputs/topology_grapher/community_small_spectral_debug/seed_42/checkpoint.pt
+  device: auto
+  use_graph_context: false
+
+  # Graph encoder dimensions are retained only for checkpoint compatibility;
+  # they are not used when use_graph_context=false.
+  hidden_dim: 32
+  edge_dim: 16
+  graph_dim: 32
+  num_layers: 1
+
+  spectral_dim: 128
+  spectral_layers: 3
+  spectral_heads: 4
+  spectral_ff_dim: 256
+  dropout: 0.0
+  min_gap: 0.000001
+  input_normalization: mean_degree
+
+  batch_size: 8
+  epochs: 200
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+
+  # One objective only: reconstruct the clean eigenvalue vector.
+  loss_weights:
+    spectrum: 1.0
+    moment2: 0.0
+    low_frequency: 0.0
+    low_frequency_k: 0
+
+  progress_interval: 5
+
+generation:
+  # Debug default: remove DH-VAE sampling error and draw complete degree
+  # sequences from the CURRENT training split.  After the spectral path works,
+  # override this with --set generation.degree_source=learned.
+  degree_source: train_empirical
+  num_generate: 64
+  max_attempts_per_graph: 8
+  write_legacy_hybrid_alias: false
+
+degree_generator:
+  enabled: true
+  type: degree_histogram_vae
+  checkpoint_path: outputs/degree_generators/sbm/seed_42/checkpoint.pt
+  device: auto
+  deterministic: false
+  sample_num_nodes: empirical
+  sample_num_edges: model
+  exact_degree_sum_conditioning: true
+  max_resample: 500
+  model_resample_attempts: 32
+  parity_conditioned: false
+  max_parity_resample: 1
+  postprocess_policy: reject_only
+  fallback: error
+
+constructor:
+  type: havel_hakimi
+  ensure_connected: true
+  random_relabel: true
+  max_repair_trials: 10000
+
+# No enriched base.  Start directly from HH.
+source_enrichment:
+  enabled: false
+
+# The projection/refiner also uses spectra only.  To make debugging transparent,
+# every prediction is refreshed after one accepted swap and every candidate is
+# scored directly against the predicted clean spectrum (clean_mix=1).
+topology_refiner:
+  mode: spectral
+  steps: 32
+  proposal_budget: 256
+  valid_candidate_budget: 64
+  preserve_connectivity: true
+  reject_revisited_states: true
+  selection: greedy
+  temperature: 0.1
+  accept_only_improving: true
+  min_improvement: 0.0000000001
+  min_relative_improvement: 0.0
+  relative_improvement_epsilon: 0.000000000001
+
+  spectral_guidance:
+    distance: rmse
+    normalization: mean_degree
+    low_frequency_weight: 1.0
+    low_frequency_cutoff: 0
+    schedule: linear
+    min_clean_mix: 1.0
+    max_clean_mix: 1.0
+    power: 1.0
+    expand_on_plateau: false
+    plateau_expand_factor: 1.0
+    max_plateau_expansions: 0
+
+  prediction_horizon:
+    mode: fixed
+    k: 1
+    refresh_on_plateau: false
+
+  candidate_search:
+    adaptive: false
+    spectrum_backend: auto
+    spectrum_batch_size: 256
+
+  debug:
+    enabled: true
+    print_every: 1
+    top_candidates: 5
+    spectrum_values: 16
+    store_spectra: true
+
+evaluation:
+  inline_during_generation: false
+  orca_exec:
+  compute_orbit: true
+  compute_graphlet_history: false
+  graphlet_k_min: 3
+  graphlet_k_max: 4
+  graphlet_connected_only: true
+  graphlet_backend: sampled
+  graphlet_num_samples: 8192

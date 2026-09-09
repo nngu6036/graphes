@@ -49,6 +49,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
         dropout: float = 0.0,
         min_gap: float = 1.0e-6,
         input_normalization: str = "mean_degree",
+        use_graph_context: bool = True,
     ) -> None:
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -62,6 +63,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
         self.dropout_p = float(dropout)
         self.min_gap = float(min_gap)
         self.input_normalization = str(input_normalization).lower()
+        self.use_graph_context = bool(use_graph_context)
 
         if self.spectral_dim <= 0 or self.spectral_heads <= 0:
             raise ValueError("spectral_dim and spectral_heads must be positive.")
@@ -287,7 +289,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
     def _spectral_outputs_from_graph_hidden(
         self,
         batch: TopologySpectralBatch,
-        graph_hidden: torch.Tensor,
+        graph_hidden: torch.Tensor | None,
     ) -> dict[str, torch.Tensor]:
         mask = batch.spectrum_mask.bool()
         batch_size, width = mask.shape
@@ -311,7 +313,8 @@ class TopologySpectralTransformerPredictor(nn.Module):
             dim=-1,
         )
         tokens = self.spectral_token_in(token_features)
-        tokens = tokens + self.graph_to_spectral(graph_hidden).unsqueeze(1)
+        if graph_hidden is not None:
+            tokens = tokens + self.graph_to_spectral(graph_hidden).unsqueeze(1)
         tokens = tokens * mask.unsqueeze(-1).to(tokens.dtype)
         encoded = self.spectral_transformer(
             tokens,
@@ -327,7 +330,13 @@ class TopologySpectralTransformerPredictor(nn.Module):
         }
 
     def forward(self, batch: TopologySpectralBatch) -> dict[str, torch.Tensor]:
-        graph_hidden = self._graph_context(batch)
+        # Debug-friendly spectral-only mode deliberately removes adjacency/GNN
+        # context from the denoiser.  The network then receives only the noisy
+        # bridge spectrum, the fixed HH/source spectrum, normalized rank,
+        # diffusion progress, graph size, and the padding mask.  The adjacency
+        # is still carried by the batch for invariant trace normalization, but
+        # its topology is not encoded by the neural predictor.
+        graph_hidden = self._graph_context(batch) if self.use_graph_context else None
         return self._spectral_outputs_from_graph_hidden(batch, graph_hidden)
 
     def _spectral_loss_from_outputs(
@@ -456,6 +465,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "dropout": self.dropout_p,
             "min_gap": self.min_gap,
             "input_normalization": self.input_normalization,
+            "use_graph_context": self.use_graph_context,
         }
 
 
