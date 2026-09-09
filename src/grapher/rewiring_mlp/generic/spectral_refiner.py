@@ -36,6 +36,7 @@ class SpectralPrediction:
     current_spectrum: np.ndarray
     trace: float
     second_moment: float
+    clean_clustering_coefficient: float | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,13 @@ class SpectralRefinerConfig:
     min_relative_improvement: float = 0.0
     relative_improvement_epsilon: float = 1.0e-12
     reject_revisited_states: bool = True
+
+    # Which predicted clean target(s) are used to rank valid rewiring actions.
+    # `spectral_clustering` combines relative improvements, which makes the two
+    # heterogeneous discrepancies comparable without hand tuning raw scales.
+    guidance_mode: str = "spectral"
+    spectral_weight: float = 1.0
+    clustering_weight: float = 1.0
 
     distance: str = "rmse"
     normalization: str = "mean_degree"
@@ -201,6 +209,7 @@ class SpectralRefinerConfig:
         )
 
         guidance = dict(values.get("spectral_guidance", {}) or {})
+        clustering_guidance = dict(values.get("clustering_guidance", {}) or {})
         bridge = SpectralBridgeSchedule.from_dict(guidance)
         legacy_refresh = int(values.get("refresh_prediction_every", 1))
         horizon_data = values.get("prediction_horizon")
@@ -294,6 +303,9 @@ class SpectralRefinerConfig:
                 values.get("relative_improvement_epsilon", 1.0e-12)
             ),
             reject_revisited_states=bool(values.get("reject_revisited_states", True)),
+            guidance_mode=str(values.get("guidance_mode", "spectral")).lower(),
+            spectral_weight=float(guidance.get("weight", 1.0)),
+            clustering_weight=float(clustering_guidance.get("weight", 1.0)),
             distance=str(guidance.get("distance", "rmse")).lower(),
             normalization=str(guidance.get("normalization", "mean_degree")).lower(),
             low_frequency_weight=float(
@@ -331,6 +343,23 @@ class SpectralRefinerConfig:
             debug_spectrum_values=max(int(debug.get("spectrum_values", 12)), 1),
             debug_store_spectra=bool(debug.get("store_spectra", False)),
         )
+        if config.guidance_mode not in {"spectral", "clustering", "spectral_clustering"}:
+            raise ValueError(
+                "topology_refiner.guidance_mode must be spectral, clustering, "
+                "or spectral_clustering."
+            )
+        if config.spectral_weight < 0.0 or config.clustering_weight < 0.0:
+            raise ValueError("Guidance weights must be nonnegative.")
+        if config.guidance_mode == "spectral" and config.spectral_weight <= 0.0:
+            raise ValueError("spectral guidance requires spectral_guidance.weight > 0.")
+        if config.guidance_mode == "clustering" and config.clustering_weight <= 0.0:
+            raise ValueError("clustering guidance requires clustering_guidance.weight > 0.")
+        if config.guidance_mode == "spectral_clustering" and (
+            config.spectral_weight <= 0.0 or config.clustering_weight <= 0.0
+        ):
+            raise ValueError(
+                "spectral_clustering guidance requires both guidance weights > 0."
+            )
         if config.steps < 0:
             raise ValueError("topology_refiner.steps must be non-negative.")
         if config.time_horizon is not None and config.time_horizon <= 0:
@@ -472,11 +501,18 @@ def predict_clean_spectrum(
     )
     current = current_spectrum.astype(np.float64)
     trace, second = spectrum_moments(predicted)
+    clustering_output = outputs.get("clean_clustering_coefficient")
+    clean_clustering = (
+        None
+        if clustering_output is None
+        else float(clustering_output[0].detach().cpu().item())
+    )
     return SpectralPrediction(
         clean_spectrum=predicted,
         current_spectrum=current,
         trace=trace,
         second_moment=second,
+        clean_clustering_coefficient=clean_clustering,
     )
 
 
@@ -486,6 +522,7 @@ def score_spectral_candidates(
     *,
     clean_spectrum: np.ndarray,
     next_spectrum_target: np.ndarray,
+    clean_clustering_coefficient: float | None = None,
     config: SpectralRefinerConfig,
     candidate_graphs: dict[Action, nx.Graph],
     device: torch.device | str = "cpu",
@@ -508,6 +545,19 @@ def score_spectral_candidates(
         low_frequency_weight=config.low_frequency_weight,
         low_frequency_cutoff=config.low_frequency_cutoff,
     )
+    needs_clustering = config.guidance_mode in {"clustering", "spectral_clustering"}
+    if needs_clustering and clean_clustering_coefficient is None:
+        raise ValueError(
+            "Clustering-guided rewiring requires a checkpoint with "
+            "clean_clustering_coefficient prediction enabled."
+        )
+    current_clustering = float(nx.average_clustering(graph)) if needs_clustering else None
+    current_clustering_discrepancy = (
+        abs(current_clustering - float(clean_clustering_coefficient))
+        if needs_clustering and current_clustering is not None
+        else None
+    )
+
     candidate_list = [candidate_graphs[action] for action in candidates]
     spectra = batched_laplacian_eigenvalues(
         candidate_list,
@@ -535,10 +585,64 @@ def score_spectral_candidates(
         )
         local_gain = float(current_local - candidate_local)
         clean_gain = float(current_clean - candidate_clean)
-        relative = float(
+        spectral_relative = float(
             local_gain
             / max(abs(current_local), float(config.relative_improvement_epsilon))
         )
+
+        candidate_clustering = (
+            float(nx.average_clustering(candidate)) if needs_clustering else None
+        )
+        candidate_clustering_discrepancy = (
+            abs(candidate_clustering - float(clean_clustering_coefficient))
+            if needs_clustering and candidate_clustering is not None
+            else None
+        )
+        clustering_gain = (
+            float(current_clustering_discrepancy - candidate_clustering_discrepancy)
+            if needs_clustering
+            and current_clustering_discrepancy is not None
+            and candidate_clustering_discrepancy is not None
+            else 0.0
+        )
+        clustering_relative = (
+            float(
+                clustering_gain
+                / max(
+                    abs(float(current_clustering_discrepancy)),
+                    float(config.relative_improvement_epsilon),
+                )
+            )
+            if needs_clustering and current_clustering_discrepancy is not None
+            else 0.0
+        )
+
+        if config.guidance_mode == "spectral":
+            energy_improvement = local_gain
+            relative = spectral_relative
+            objective_residual = candidate_local
+        elif config.guidance_mode == "clustering":
+            energy_improvement = config.clustering_weight * clustering_relative
+            relative = energy_improvement
+            objective_residual = float(candidate_clustering_discrepancy)
+        else:
+            energy_improvement = (
+                config.spectral_weight * spectral_relative
+                + config.clustering_weight * clustering_relative
+            )
+            relative = energy_improvement
+            objective_residual = (
+                config.spectral_weight
+                * candidate_local
+                / max(abs(current_local), float(config.relative_improvement_epsilon))
+                + config.clustering_weight
+                * float(candidate_clustering_discrepancy)
+                / max(
+                    abs(float(current_clustering_discrepancy)),
+                    float(config.relative_improvement_epsilon),
+                )
+            )
+
         rows.append(
             {
                 "action": action,
@@ -550,9 +654,18 @@ def score_spectral_candidates(
                 "candidate_clean_spectral_discrepancy": float(candidate_clean),
                 "spectral_gain": local_gain,
                 "clean_spectral_gain": clean_gain,
+                "spectral_relative_improvement": spectral_relative,
+                "current_clustering_coefficient": current_clustering,
+                "candidate_clustering_coefficient": candidate_clustering,
+                "target_clustering_coefficient": clean_clustering_coefficient,
+                "current_clustering_discrepancy": current_clustering_discrepancy,
+                "candidate_clustering_discrepancy": candidate_clustering_discrepancy,
+                "clustering_gain": clustering_gain,
+                "clustering_relative_improvement": clustering_relative,
                 "projection_residual": float(candidate_local),
-                "energy_improvement": local_gain,
-                "relative_energy_improvement": relative,
+                "objective_residual": float(objective_residual),
+                "energy_improvement": float(energy_improvement),
+                "relative_energy_improvement": float(relative),
             }
         )
     return rows
@@ -732,6 +845,14 @@ def refine_graph_with_spectral_predictions(
                 raise ValueError(
                     "Spectral predictor returned the wrong number of eigenvalues."
                 )
+            if (
+                cfg.guidance_mode in {"clustering", "spectral_clustering"}
+                and prediction.clean_clustering_coefficient is None
+            ):
+                raise ValueError(
+                    "Clustering-guided rewiring requires a checkpoint trained with "
+                    "structure_summary_prediction.clustering_coefficient=true."
+                )
             prediction_calls += 1
             prediction_block += 1
             accepted_since_prediction = 0
@@ -839,6 +960,7 @@ def refine_graph_with_spectral_predictions(
                 candidates,
                 clean_spectrum=clean_spectrum,
                 next_spectrum_target=next_target,
+                clean_clustering_coefficient=prediction.clean_clustering_coefficient,
                 config=cfg,
                 candidate_graphs=candidate_graphs,
                 device=device,
@@ -935,6 +1057,12 @@ def refine_graph_with_spectral_predictions(
                             f"rel_gain={row['relative_energy_improvement']:.6f} "
                             f"d_next={row['candidate_spectral_discrepancy']:.6f} "
                             f"d_clean={row['candidate_clean_spectral_discrepancy']:.6f} "
+                            + (
+                                f"c_gain={row['clustering_gain']:.6f} "
+                                f"c_rel={row['clustering_relative_improvement']:.6f} "
+                                if row.get("target_clustering_coefficient") is not None
+                                else ""
+                            )
                             + _format_action(row["action"])
                         ),
                     )
@@ -1063,9 +1191,9 @@ def refine_graph_with_spectral_predictions(
             consecutive_sideways = 0
         # Track the best state by distance to the predicted clean spectrum, so
         # a plateau escape that ends worse cannot degrade the returned graph.
-        candidate_clean = float(chosen["candidate_clean_spectral_discrepancy"])
-        if candidate_clean < best_clean_distance:
-            best_clean_distance = candidate_clean
+        candidate_objective = float(chosen.get("objective_residual", chosen["candidate_clean_spectral_discrepancy"]))
+        if candidate_objective < best_clean_distance:
+            best_clean_distance = candidate_objective
             best_graph = current.copy()
         _debug_print(
             cfg,

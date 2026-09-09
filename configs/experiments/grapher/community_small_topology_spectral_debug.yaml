@@ -159,6 +159,8 @@ source_enrichment:
 # scored directly against the predicted clean spectrum (clean_mix=1).
 topology_refiner:
   mode: spectral
+  # Generation ablation switch: spectral | clustering | spectral_clustering
+  guidance_mode: spectral
   steps: 32
   proposal_budget: 256
   valid_candidate_budget: 64
@@ -172,6 +174,7 @@ topology_refiner:
   relative_improvement_epsilon: 0.000000000001
 
   spectral_guidance:
+    weight: 1.0
     distance: rmse
     normalization: mean_degree
     low_frequency_weight: 1.0
@@ -183,6 +186,9 @@ topology_refiner:
     expand_on_plateau: false
     plateau_expand_factor: 1.0
     max_plateau_expansions: 0
+
+  clustering_guidance:
+    weight: 1.0
 
   prediction_horizon:
     mode: fixed

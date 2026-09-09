@@ -41,7 +41,7 @@ from grapher.rewiring_mlp.generic.training_sources import (
     build_completed_base_training_pairs,
 )
 from grapher.utils.device import resolve_torch_device
-from grapher.utils.io import ensure_dir, load_yaml, save_json
+from grapher.utils.io import apply_config_overrides, ensure_dir, load_yaml, save_json
 
 
 _SPECTRAL_TYPES = {"spectral", "spectral_transformer", "spectrum_transformer"}
@@ -181,9 +181,22 @@ def main() -> None:
     parser.add_argument("--max-val-graphs", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", default=None)
+    parser.add_argument(
+        "--set",
+        "--override",
+        dest="config_overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help=(
+            "Override any YAML option using a dotted path. Repeat this flag for "
+            "multiple values; values are parsed as YAML."
+        ),
+    )
     args = parser.parse_args()
 
     config = load_yaml(args.config)
+    apply_config_overrides(config, args.config_overrides)
     pipeline_stage = str((config.get("pipeline", {}) or {}).get("stage", "topology")).lower()
     if pipeline_stage != "topology":
         raise ValueError("train_topology_grapher.py requires pipeline.stage: topology.")
