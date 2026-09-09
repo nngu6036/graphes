@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Iterable, TypeAlias
+from typing import Iterable
 
 import networkx as nx
 import numpy as np
 
-Edge: TypeAlias = tuple[int, int]
-Action: TypeAlias = tuple[tuple[Edge, Edge], tuple[Edge, Edge]]
+# Implicit aliases also work in the Python 3.9 baseline environments.
+Edge = tuple[int, int]
+Action = tuple[tuple[Edge, Edge], tuple[Edge, Edge]]
 
 
 def canonical_edge(u: int, v: int) -> Edge:

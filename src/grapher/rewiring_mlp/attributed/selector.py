@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal
 
 import networkx as nx
 import numpy as np
@@ -14,7 +14,7 @@ from grapher.rewiring_mlp.core.rewiring import Action, is_valid_action
 from grapher.utils.device import resolve_torch_device
 
 SELECTOR_CHECKPOINT_FORMAT = "learned_candidate_selector_v1"
-SelectorMode: TypeAlias = Literal["energy", "policy", "hybrid"]
+SelectorMode = Literal["energy", "policy", "hybrid"]
 
 CANDIDATE_FEATURE_NAMES = (
     "energy_improvement",
