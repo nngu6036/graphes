@@ -353,6 +353,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
         self,
         batch: TopologySpectralBatch,
         graph_hidden: torch.Tensor | None,
+        degree_context: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         mask = batch.spectrum_mask.bool()
         batch_size, width = mask.shape
@@ -376,6 +377,8 @@ class TopologySpectralTransformerPredictor(nn.Module):
             dim=-1,
         )
         tokens = self.spectral_token_in(token_features)
+        if degree_context is not None:
+            tokens = tokens + degree_context.unsqueeze(1)
         if graph_hidden is not None:
             tokens = tokens + self.graph_to_spectral(graph_hidden).unsqueeze(1)
         tokens = tokens * mask.unsqueeze(-1).to(tokens.dtype)
@@ -1181,7 +1184,11 @@ def save_topology_spectral_checkpoint(
             "format": TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT,
             "pipeline_mode": "topology",
             "guidance_mode": "spectral",
-            "predictor_type": "spectral_transformer",
+            "predictor_type": (
+                "joint_degree_spectral_transformer"
+                if getattr(model, "joint_degree_enabled", False) else "spectral_transformer"
+            ),
+            "joint_degree_enabled": bool(getattr(model, "joint_degree_enabled", False)),
             "model_state_dict": model.state_dict(),
             "model_config": model.model_config(),
             "summary_config": (
@@ -1218,9 +1225,13 @@ def load_topology_spectral_checkpoint(
             "Checkpoint is not a topology Spectral Transformer predictor "
             f"({TOPOLOGY_SPECTRAL_CHECKPOINT_FORMAT})."
         )
-    model = TopologySpectralTransformerPredictor(
-        **dict(checkpoint.get("model_config", {}) or {})
-    ).to(resolved_device)
+    model_config = dict(checkpoint.get("model_config", {}) or {})
+    if "joint_degree_config" in model_config:
+        # Lazy import avoids a circular dependency with the base predictor.
+        from grapher.rewiring_mlp.generic.joint_degree_model import JointDegreeSpectralPredictor
+        model = JointDegreeSpectralPredictor(**model_config).to(resolved_device)
+    else:
+        model = TopologySpectralTransformerPredictor(**model_config).to(resolved_device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     summary_config = SummaryConfig.from_dict(

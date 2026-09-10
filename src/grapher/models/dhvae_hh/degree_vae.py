@@ -963,6 +963,8 @@ class DegreeHistogramVAE(nn.Module):
         z: torch.Tensor,
         node_counts: torch.Tensor,
         edge_counts: torch.Tensor | None = None,
+        *,
+        return_hidden: bool = False,
     ) -> dict[str, torch.Tensor]:
         node_counts = node_counts.to(device=z.device, dtype=torch.long).reshape(-1)
         if node_counts.shape[0] != z.shape[0]:
@@ -1009,6 +1011,10 @@ class DegreeHistogramVAE(nn.Module):
             "conditioned_num_nodes": node_counts,
             "expected_mean_degree": expected_mean_degree,
         }
+        if return_hidden:
+            # Optional differentiable connection to the joint GraphER predictor.
+            # The default API/output dictionary remains unchanged.
+            result["degree_hidden"] = degree_hidden
         if edge_logits is not None:
             result["num_edges_logits"] = edge_logits
             result["conditioned_num_edges"] = edge_counts

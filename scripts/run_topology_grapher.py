@@ -343,13 +343,28 @@ def main() -> None:
 
     degree_source = str(generation_cfg.get("degree_source", "learned")).lower()
     degree_cfg = dict(config.get("degree_generator", {}) or {})
-    degree_sampler = _build_generation_degree_sampler(
-        degree_source,
-        degree_cfg,
-        train_graphs=train_graphs,
-        reference_graphs=reference_graphs,
-        seed=seed,
-    )
+    joint_degree_enabled = bool(getattr(model, "joint_degree_enabled", False))
+    if bool((config.get("joint_degree", {}) or {}).get("enabled", False)) and not joint_degree_enabled:
+        raise ValueError("Joint-degree config requires a joint checkpoint; train with this config first.")
+    if joint_degree_enabled:
+        from grapher.rewiring_mlp.generic.joint_degree_training import graph_fingerprint
+        recorded = dict((checkpoint.get("report", {}) or {}).get("dataset_graph_fingerprints", {}) or {})
+        for split_name, expected in recorded.items():
+            if graph_fingerprint(list(splits.get(split_name, []))) != expected:
+                raise ValueError(f"Joint checkpoint dataset fingerprint mismatch for {split_name}; refusing stale-dataset generation.")
+    if joint_degree_enabled and degree_source in {"learned", "degree_vae"}:
+        from grapher.rewiring_mlp.generic.joint_degree_model import build_embedded_degree_sampler
+        degree_sampler = build_embedded_degree_sampler(model, degree_cfg, seed=seed)
+        degree_sampler_source = "joint_checkpoint_embedded"
+    else:
+        degree_sampler = _build_generation_degree_sampler(
+            degree_source, degree_cfg, train_graphs=train_graphs,
+            reference_graphs=reference_graphs, seed=seed,
+        )
+        degree_sampler_source = "external_checkpoint" if degree_source in {"learned", "degree_vae"} else degree_source
+    if joint_degree_enabled:
+        print(f"[GraphER/JointDegree] degree_source={degree_source} sampler={degree_sampler_source}; "
+              f"conditioning=realized_degree_histogram; orbit_consistency={model.orbit_consistency}", flush=True)
 
     constructor_cfg = dict(config.get("constructor", {}) or {})
     if str(constructor_cfg.get("type", "havel_hakimi")).lower() != "havel_hakimi":
@@ -958,6 +973,12 @@ def main() -> None:
         refresh_on_plateau = refiner_settings.refresh_on_plateau
         report_format = "topology_structural_generation_v2"
 
+    diagnostics.update({
+        "joint_degree_enabled": joint_degree_enabled,
+        "degree_sampler_source": degree_sampler_source,
+        "degree_conditioning": "actual_histogram_posterior_mean_decoder_features" if joint_degree_enabled else None,
+        "orbit_consistency": model.orbit_consistency if joint_degree_enabled else None,
+    })
     report = {
         "format": report_format,
         "pipeline_mode": "topology",
@@ -966,6 +987,10 @@ def main() -> None:
         "legacy_predictor_guidance_mode": guidance_mode,
         "checkpoint_format": checkpoint.get("format"),
         "degree_source": degree_source,
+        "degree_sampler_source": degree_sampler_source,
+        "joint_degree_enabled": joint_degree_enabled,
+        "checkpoint_path": str(checkpoint_path),
+        "dataset_graph_fingerprints": (checkpoint.get("report", {}) or {}).get("dataset_graph_fingerprints"),
         "prediction_horizon": {
             "mode": refiner_settings.prediction_horizon_mode,
             "initial_k": refiner_settings.prediction_horizon_initial_k,

@@ -199,6 +199,10 @@ def main() -> None:
 
     config = load_yaml(args.config)
     apply_config_overrides(config, args.config_overrides)
+    if bool((config.get("joint_degree", {}) or {}).get("enabled", False)):
+        from grapher.rewiring_mlp.generic.joint_degree_training import train_joint_degree_grapher
+        train_joint_degree_grapher(config, args)
+        return
     pipeline_stage = str((config.get("pipeline", {}) or {}).get("stage", "topology")).lower()
     if pipeline_stage != "topology":
         raise ValueError("train_topology_grapher.py requires pipeline.stage: topology.")

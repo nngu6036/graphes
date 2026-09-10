@@ -31,6 +31,8 @@ class DegreeVAESampler:
         max_parity_resample: int = 32,
         fallback: str = "empirical_nearest_n",
         postprocess_policy: str = "repair",
+        model: Any | None = None,
+        vectorizer: Any | None = None,
     ):
         self.checkpoint_path = str(checkpoint_path)
         self.device = resolve_torch_device(device)
@@ -45,9 +47,14 @@ class DegreeVAESampler:
         self.max_parity_resample = int(max_parity_resample)
         self.fallback = str(fallback)
         self.postprocess_policy = str(postprocess_policy)
-        self._model = None
-        self._vectorizer = None
-        self._load()
+        if (model is None) != (vectorizer is None):
+            raise ValueError("Provide both embedded model and vectorizer, or neither.")
+        self._model = model
+        self._vectorizer = vectorizer
+        if model is None:
+            self._load()
+        elif next(model.parameters()).device != self.device:
+            raise ValueError("Embedded degree model must already be on the sampler device.")
 
     def _load(self) -> None:
         model, vectorizer, _ = load_degree_vae_checkpoint(
@@ -57,7 +64,10 @@ class DegreeVAESampler:
         self._vectorizer = vectorizer
 
     @classmethod
-    def from_config(cls, data: dict[str, Any], *, seed: int = 0) -> "DegreeVAESampler":
+    def from_config(
+        cls, data: dict[str, Any], *, seed: int = 0,
+        model: Any | None = None, vectorizer: Any | None = None,
+    ) -> "DegreeVAESampler":
         checkpoint_path = data.get("checkpoint_path") or data.get("checkpoint")
         if not checkpoint_path:
             raise ValueError(
@@ -79,6 +89,8 @@ class DegreeVAESampler:
             max_parity_resample=int(data.get("max_parity_resample", 32)),
             fallback=str(data.get("fallback", "empirical_nearest_n")),
             postprocess_policy=str(data.get("postprocess_policy", "repair")),
+            model=model,
+            vectorizer=vectorizer,
         )
 
     def sample(self, rng: np.random.Generator | None = None) -> dict[str, Any]:

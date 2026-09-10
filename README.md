@@ -697,3 +697,14 @@ clustering histogram and orbit summary. See
 limits, checkpoint requirements, diagnostics, and training/generation/evaluation
 commands. The new config is
 `configs/experiments/grapher/community_small_topology_spectral_clustering_orbit_cycle3.yaml`.
+
+
+## Joint degree-conditioned GraphER
+
+The optional `community_small_topology_joint_degree.yaml` experiment embeds the
+ordinary DH-VAE in GraphER, shares degree encoder/decoder features with the spectral
+summary predictor, and enforces nine necessary degree/orbit identities. Generation
+uses the degree model in the selected joint checkpoint. See
+[GRAPHER_JOINT_DEGREE.md](GRAPHER_JOINT_DEGREE.md) for warm-start requirements,
+training/generation/evaluation commands, ablations, and limitations. Existing
+separate-model configurations remain supported.
