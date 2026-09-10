@@ -1412,3 +1412,83 @@ Saved metrics: outputs/topology_generation/community_small_spectral_clustering_h
 Saved report:  outputs/topology_generation/community_small_spectral_clustering_histogram_orbit/seed_42/evaluation_val/graph_evaluation_report.json
 Saved figure:  outputs/topology_generation/community_small_spectral_clustering_histogram_orbit/seed_42/evaluation_val/generated_graph_samples.png
 Saved figure:  outputs/topology_generation/community_small_spectral_clustering_histogram_orbit/seed_42/evaluation_val/generated_graph_samples.pdf
+
+
+CFG=configs/experiments/grapher/community_small_topology_spectral_clustering_orbit_cycle3.yaml
+
+TRAIN=outputs/topology_grapher/community_small_spectral_clustering_orbit_cycle3/seed_42
+
+GEN=outputs/topology_generation/community_small_spectral_clustering_orbit_cycle3/seed_42
+
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --seed 42 \
+  --device gpu
+
+
+Spectral denoiser diagnostic (no rewiring)
+  split=val graphs=16 examples=16
+  use_graph_context=False
+  source -> clean NRMSE:    0.067658
+  noisy  -> clean NRMSE:    0.067658
+  pred   -> clean NRMSE:    0.064871
+  denoising gain:           0.002786
+  relative NRMSE reduction: 4.12%
+  trace abs error:          1.668930e-06
+  lambda1 abs:              0.000000e+00
+  HH -> clean histogram W1:   0.105741
+  pred -> clean histogram W1: 0.039673
+  pred -> clean histogram TV: 0.359487
+  HH -> clean orbit log-RMSE:   0.350841
+  pred -> clean orbit log-RMSE: 0.117026
+  pred -> clean orbit raw-NRMSE:0.156808
+  HH -> clean cycle3 histogram TV:   0.006321
+  pred -> clean cycle3 histogram TV: 0.003200
+  pred -> clean triangle count MAE:  1.586458
+  cycle/orbit predicted triangle-count gap: 1.510831
+  by diffusion time:
+    [0.00,0.25): noisy=0.067658 pred=0.064871 gain=0.002786 hist_w1=0.039673 orbit_log_rmse=0.117026 cycle3_tv=0.003200
+
+PYTHONPATH=src python scripts/diagnose_spectral_denoiser.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --split val \
+  --source-endpoint-only \
+  --samples-per-graph 1 \
+  --paths-per-graph 1 \
+  --seed 42 \
+  --device gpu \
+  --json-out "$TRAIN/denoiser_hh_endpoint_val.json"
+
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate 64 \
+  --seed 42 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config "$CFG" \
+  --generated-dir "$GEN" \
+  --reference-split val \
+  --output-dir "$GEN/evaluation_val"
+
+
+Generic MMD protocol: graphrnn (clustering_bins=100)
+Dataset: benchmark=community_small serialized=sbm protocol=graphes_community_small_spectre_v2
+Dataset splits: train=64 val=16 test=20
+Dataset fingerprint: 5d342c35939e49ac4e63b79d2c726292dae37539302199876036c9c2c8b43a4e
+  train SHA256: 29a487fc51d452cd503045befef320ca9c780f3d5299eaf3ba5d3aed1a11b76c
+  val SHA256: d14a369f3cbc2154b7e9b29c0797a99f4a61c318c600ca03df5149e91f325731
+  test SHA256: 02ae6b8dc2330e2efdf823edb15d1b38596500f694b3acb7d55eda13566e544c
+Generated graph input: outputs/topology_generation/community_small_spectral_clustering_orbit_cycle3/seed_42/topology_refined_graphs.pkl
+Generated stage label: topology_final
+Evaluation counts: reference_val=16 generated=64 train_reference=64
+Graph-distribution MMD against held-out val graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_val                        0.064707          0.055468      0.004454
+hh_source_to_val                    0.068362          0.298500      0.136374
+topology_final_to_val               0.068362          0.057220      0.038329
