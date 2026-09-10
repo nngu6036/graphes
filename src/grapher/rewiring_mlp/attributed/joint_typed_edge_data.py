@@ -26,16 +26,17 @@ ENDPOINT_VALENCE_POLICY = 'preserve_prepared_target_bond_types'
 
 
 def endpoint_constructor_config(config: dict) -> dict:
-    """Reconstruct observed typed graphs without applying generation valence caps.
+    """Reconstruct observed typed graphs without generation degree/valence caps.
 
     Canonical QM9 is loaded with sanitize=False and may contain stored bond-order
-    sums beyond the generation envelope (for example, raw pentavalent nitrogen).
+    sums or ordinary degrees beyond the generation envelope.
     Sanitizing or repairing that target would change its indexed signatures.
     The target itself witnesses a simple connected realization, so retain its
     labels exactly and leave chemical acceptance to unconditional generation.
     """
     constructor = deepcopy(config.get('constructor', {}))
     constructor['randomize_assignment'] = False
+    constructor['max_ordinary_degree'] = None
     constructor['max_weighted_valence'] = None
     return constructor
 

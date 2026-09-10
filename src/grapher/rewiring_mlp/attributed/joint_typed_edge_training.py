@@ -247,7 +247,7 @@ def train_joint_typed_edge(config,args):
                   'validation_vocabulary_policy':'strict_training_support_no_refit'}
     atomic_json({'config':config,**dataset_info},output/'run_config.json')
     print('[JointTypedEdge] endpoints preserve prepared target bond types; '
-          'chemical valence caps apply to generation.', flush=True)
+          'degree and chemical valence caps apply to generation.', flush=True)
     cache=config.get('training_sources',{}).get('endpoint_cache_path')
     training=EndpointStore(train,model.vectorizer,model.atom_types,config,seed=seed,cache_path=cache)
     validation=EndpointStore(val,model.vectorizer,model.atom_types,config,seed=seed+1,cache_path=cache)

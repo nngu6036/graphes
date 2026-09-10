@@ -124,7 +124,14 @@ def test_joint_endpoint_alignment_cache_and_relabel(tmp_path):
     assert torch.equal((b['target_labels'][...,None]==torch.tensor([1,2,3])).sum(2),b['typed_degrees'])
 
 
-def raw_qm9_target():
+def raw_qm9_target(case='bond_order_sum'):
+    if case == 'ordinary_degree':
+        graph = nx.empty_graph(6)
+        graph.add_edges_from((4, node) for node in (0, 1, 2, 3, 5))
+        nx.set_node_attributes(graph, 6, 'atomic_num')
+        graph.nodes[4]['atomic_num'] = 7
+        nx.set_edge_attributes(graph, 1, 'bond_type')
+        return graph
     # Raw SDF nitro representation: C-N(=O)=O. Sanitization would change bonds.
     graph = nx.Graph()
     graph.add_nodes_from((i, {'atomic_num': z}) for i, z in enumerate([6, 7, 8, 8]))
@@ -142,14 +149,20 @@ def raw_qm9_config(root=None):
     return cfg
 
 
-def test_raw_target_endpoints_preserve_signatures_and_keep_generation_valence_caps(tmp_path):
+@pytest.mark.parametrize('case', ['bond_order_sum', 'ordinary_degree'])
+def test_raw_target_endpoints_preserve_signatures_and_keep_generation_valence_caps(tmp_path, case):
     cfg = raw_qm9_config()
     before_cfg = deepcopy(cfg)
-    target = raw_qm9_target()
+    target = raw_qm9_target(case)
     before_target = graph_record(target)
     invariant = extract_typed_invariant(target, edge_types=(1, 2, 3))
-    with pytest.raises(TypedConstructionError, match='weighted degree 5 exceeds 4'):
-        construct_typed_graph(invariant, cfg['constructor'])
+    strict_constructor = deepcopy(cfg['constructor'])
+    if case == 'ordinary_degree':
+        # Isolate the ordinary-degree cap from the weighted-valence cap.
+        strict_constructor['max_weighted_valence'] = None
+    error = 'node 4: degree 5 exceeds 4' if case == 'ordinary_degree' else 'weighted degree 5 exceeds 4'
+    with pytest.raises(TypedConstructionError, match=error):
+        construct_typed_graph(invariant, strict_constructor)
     model = build_model(cfg, [target], torch.device('cpu'))
     cache = tmp_path / 'endpoints.sqlite'
     for _ in range(2):  # Exercise construction and SQLite replay.
@@ -160,32 +173,39 @@ def test_raw_target_endpoints_preserve_signatures_and_keep_generation_valence_ca
             assert graph_record(item['target']) == before_target
             assert item['constructor']['valence_policy'] == ENDPOINT_VALENCE_POLICY
             batch = collate([item], model.vectorizer, model.atom_types)
-            assert batch['typed_degrees'][0, 1].tolist() == [1., 2., 0.]
-            assert batch['spectral_trace'][0].tolist() == [6., 10.]
+            if case == 'ordinary_degree':
+                assert batch['typed_degrees'][0, 4].tolist() == [5., 0., 0.]
+                assert batch['spectral_trace'][0].tolist() == [10., 10.]
+            else:
+                assert batch['typed_degrees'][0, 1].tolist() == [1., 2., 0.]
+                assert batch['spectral_trace'][0].tolist() == [6., 10.]
         finally:
             store.close()
     assert cfg == before_cfg
     assert graph_record(target) == before_target
     assert model.vectorizer.max_weighted_valence[7] == 4.
+    assert model.vectorizer.max_ordinary_degree == 4
     # Unconditional empirical generation must still reject this stored encoding.
     cfg['generation'].update(invariant_source='train_empirical', max_attempts_per_graph=1,
                              require_rdkit_source_validity=False)
     cfg['attributed_refiner']['rdkit_candidate_filter'] = False
+    cfg['constructor'] = strict_constructor
     with pytest.raises(RuntimeError, match="constructor_failures.*1"):
         list(generation_sources(model, [target], cfg, seed=42, num_generate=1))
 
 
 @pytest.mark.parametrize('warm_start', [False, True])
-def test_raw_qm9_targets_train_and_diagnose(tmp_path, monkeypatch, warm_start):
+@pytest.mark.parametrize('case', ['bond_order_sum', 'ordinary_degree'])
+def test_raw_qm9_targets_train_and_diagnose(tmp_path, monkeypatch, warm_start, case):
     from scripts import diagnose_joint_typed_edge as diagnose
 
     cfg = raw_qm9_config(tmp_path / 'data')
     dataset = tmp_path / 'data' / 'toy'
     dataset.mkdir(parents=True)
     for split in ('train', 'val', 'test'):
-        save_pickle([raw_qm9_target()] * 2, dataset / f'{split}.pkl')
+        save_pickle([raw_qm9_target(case)] * 2, dataset / f'{split}.pkl')
     if warm_start:
-        initial = build_model(cfg, [raw_qm9_target()], torch.device('cpu'))
+        initial = build_model(cfg, [raw_qm9_target(case)], torch.device('cpu'))
         component = tmp_path / 'typed_degree.pt'
         save_typed_signature_checkpoint(component, initial.degree_model, initial.vectorizer)
         cfg['joint_typed_degree']['initialize_degree_checkpoint'] = str(component)
@@ -199,6 +219,7 @@ def test_raw_qm9_targets_train_and_diagnose(tmp_path, monkeypatch, warm_start):
     assert json.loads((output / 'run_config.json').read_text())['endpoint_valence_policy'] == ENDPOINT_VALENCE_POLICY
     model, _ = load_checkpoint(output / 'checkpoint.pt', 'cpu')
     assert model.vectorizer.max_weighted_valence[7] == 4.
+    assert model.vectorizer.max_ordinary_degree == 4
     config_path = tmp_path / 'config.yaml'
     save_yaml(cfg, config_path)
     diagnostic = tmp_path / 'diagnostic.json'
