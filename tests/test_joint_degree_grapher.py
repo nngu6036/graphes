@@ -209,6 +209,91 @@ def test_support_overflow_fails_not_clips():
         restricted(collate_spectral_examples([example(nx.star_graph(5))]))
 
 
+def test_fresh_joint_support_covers_denser_graphs_without_changing_empirical_prior():
+    model, report = build_joint_model(configuration(), graphs())
+    vectorizer = model.degree_vectorizer
+    assert vectorizer.max_edges == 15
+    assert report['degree_edge_support']['initial_max_edges'] == 7
+    assert vectorizer.empirical_edge_counts == [4, 5, 5, 7]
+    assert vectorizer.empirical_node_counts == [5, 5, 6, 6]
+    batch = collate_spectral_examples([example(nx.complete_graph(6))])
+    _, targets, _ = exact_degree_inputs(batch, vectorizer)
+    assert targets['num_edges_count'].item() == 15
+    loss, metrics = model.degree_loss(
+        batch, beta=.005, weights=configuration()['joint_degree']['degree_loss_weights'],
+    )
+    assert torch.isfinite(loss)
+    assert np.isfinite(metrics['num_edges_loss'])
+    # The node and degree bounds still apply, independently of edge support.
+    cfg = configuration()
+    cfg['joint_degree']['max_degree'] = 3
+    restricted, _ = build_joint_model(cfg, graphs())
+    assert restricted.degree_vectorizer.max_edges == 9
+
+
+@pytest.mark.parametrize('edge_conditioning,edge_prior', [(False, False), (True, False), (True, True)])
+def test_warm_start_expands_edge_support_preserving_conditioning_and_roundtrips(
+    tmp_path, edge_conditioning, edge_prior,
+):
+    cfg = configuration()
+    vectorizer = DegreeVectorizer.fit(graphs(), max_degree=5, require_connected=True)
+    prior_cfg = dict(cfg['joint_degree']['degree_model'])
+    prior_cfg.update(use_edge_count_conditioning=edge_conditioning, prior_condition_on_edges=edge_prior)
+    source = build_degree_vae(vectorizer, **prior_cfg).eval()
+    # A nontrivial learned prior exposes errors in edge-feature rescaling.
+    with torch.no_grad():
+        source.conditional_prior.net[-1].weight.normal_(0, 0.1)
+    source_path = tmp_path / 'component.pt'
+    save_degree_vae_checkpoint(source_path, source, vectorizer)
+    cfg['joint_degree']['initialize_degree_checkpoint'] = str(source_path)
+    model, report = build_joint_model(cfg, graphs())
+    model.eval()
+    expanded = model.degree_model
+    assert expanded.max_edges == model.degree_vectorizer.max_edges == 15
+    assert report['degree_edge_support']['expanded']
+    assert model.degree_vectorizer.empirical_degree_sequences == vectorizer.empirical_degree_sequences
+    z, n, m = torch.randn(2, source.latent_dim), torch.tensor([5, 6]), torch.tensor([5, 7])
+    with torch.no_grad():
+        before = source.decode(z, n, m, return_hidden=True)
+        after = expanded.decode(z, n, m, return_hidden=True)
+        for key in ('degree_hidden', 'degree_logits', 'num_nodes_logits'):
+            torch.testing.assert_close(after[key], before[key])
+        before_prior, after_prior = source.prior_parameters(n, m), expanded.prior_parameters(n, m)
+        for key in before_prior:
+            torch.testing.assert_close(after_prior[key], before_prior[key])
+        if edge_conditioning:
+            torch.testing.assert_close(after['num_edges_logits'][:, :8], before['num_edges_logits'], atol=0, rtol=0)
+            assert torch.all(after['num_edges_logits'].softmax(-1)[:, 8:].sum(-1) <= 1.01e-6)
+            torch.testing.assert_close(
+                after['num_edges_logits'].softmax(-1)[:, :8],
+                before['num_edges_logits'].softmax(-1), atol=1e-6, rtol=1e-6,
+            )
+    dense = collate_spectral_examples([example(nx.complete_graph(6))])
+    loss, _ = model.degree_loss(
+        dense, beta=.005, weights=cfg['joint_degree']['degree_loss_weights'],
+    )
+    assert torch.isfinite(loss)
+    loss.backward()
+    if edge_conditioning:
+        assert torch.isfinite(expanded.num_edges_head.bias.grad).all()
+        assert expanded.num_edges_head.bias.grad[15] < 0
+    checkpoint = tmp_path / 'joint.pt'
+    save_topology_spectral_checkpoint(model, checkpoint)
+    loaded, _, _ = load_topology_spectral_checkpoint(checkpoint, device='cpu')
+    export = tmp_path / 'export.pt'
+    save_degree_vae_checkpoint(export, expanded, model.degree_vectorizer)
+    standalone, exported_vectorizer, _ = load_degree_vae_checkpoint(export, device='cpu')
+    assert exported_vectorizer.max_edges == 15
+    with torch.no_grad():
+        torch.testing.assert_close(loaded(dense)['clean_spectrum'], model(dense)['clean_spectrum'])
+        torch.testing.assert_close(standalone.decode(z, n, m)['degree_logits'], after['degree_logits'])
+    # Migration never rewrites the original component checkpoint.
+    original, original_vectorizer, _ = load_degree_vae_checkpoint(source_path, device='cpu')
+    assert original.max_edges == original_vectorizer.max_edges == 7
+    for key, value in original.state_dict().items():
+        torch.testing.assert_close(value, source.state_dict()[key], atol=0, rtol=0)
+
+
 def test_graph_balanced_degree_loss_evaluations_do_not_multiply_with_bridge_views():
     cfg=configuration();model=joint();eps=_endpoints(graphs(),cfg,42)
     for views in [1,4]:
@@ -238,13 +323,21 @@ def test_component_warm_start_and_stale_prior_guard(tmp_path):
         build_joint_model(cfg,[nx.cycle_graph(5)]*4)
 
 
-def test_end_to_end_cli_train_generate_diagnose_evaluate(tmp_path,monkeypatch):
+@pytest.mark.parametrize('warm_degree', [False, True])
+def test_end_to_end_cli_train_generate_diagnose_evaluate(tmp_path,monkeypatch,warm_degree):
     from scripts import train_topology_grapher as train
     from scripts import run_topology_grapher as generate
     from scripts import diagnose_spectral_denoiser as diagnose
     from scripts import evaluate_graph_generation_report as evaluate
     cfg=configuration()
-    root=tmp_path/'data';save_dataset_splits('joint_fixture', {'train':graphs(), 'val':[nx.cycle_graph(6)], 'test':[nx.path_graph(5)]}, {}, root)
+    if warm_degree:
+        vectorizer = DegreeVectorizer.fit(graphs(), max_degree=5, require_connected=True)
+        degree = build_degree_vae(vectorizer, **cfg['joint_degree']['degree_model'])
+        component = tmp_path / 'degree_component.pt'
+        save_degree_vae_checkpoint(component, degree, vectorizer)
+        cfg['joint_degree']['initialize_degree_checkpoint'] = str(component)
+    # Held-out edge count 10 exceeds the old training-only support of 7.
+    root=tmp_path/'data';save_dataset_splits('joint_fixture', {'train':graphs(), 'val':[nx.wheel_graph(6)], 'test':[nx.path_graph(5)]}, {}, root)
     cfg['dataset'].update(name='joint_fixture',root=str(root),config_path=None)
     train_dir=tmp_path/'train'; gen_dir=tmp_path/'generated'
     cfg['topology_predictor']['checkpoint_path']=str(train_dir/'checkpoint.pt')
@@ -253,6 +346,8 @@ def test_end_to_end_cli_train_generate_diagnose_evaluate(tmp_path,monkeypatch):
     train.main()
     report=json.loads((train_dir/'report.json').read_text())
     assert report['best_epoch'] > cfg['joint_degree']['freeze_epochs']
+    assert report['warm_start']['degree_edge_support']['initial_max_edges'] == 7
+    assert report['warm_start']['degree_edge_support']['max_edges'] == 15
     model,_,cp=load_topology_spectral_checkpoint(train_dir/'checkpoint.pt',device='cpu')
     assert cp['report']['degree_parameter_l2_change_from_initialization']>0
     assert cp['report']['val_orbit_identity_max_abs'] < 1e-5

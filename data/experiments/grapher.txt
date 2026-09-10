@@ -1480,3 +1480,29 @@ Spectral denoiser diagnostic (no rewiring)
   pred -> clean C5 count MAE:    1.519777
   by diffusion time:
     [0.00,0.25): noisy=0.067658 pred=0.056376 gain=0.011282 hist_w1=0.031197 orbit_log_rmse=0.106374 cycle5_tv=0.000586
+
+# Joint degree
+
+CFG=configs/experiments/grapher/community_small_topology_joint_degree.yaml
+
+TRAIN=outputs/topology_grapher/community_small_joint_degree/seed_42
+
+GEN=outputs/topology_generation/community_small_joint_degree/seed_42
+
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --seed 42 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/diagnose_spectral_denoiser.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --split val \
+  --source-endpoint-only \
+  --samples-per-graph 1 \
+  --paths-per-graph 1 \
+  --seed 42 \
+  --device gpu \
+  --json-out "$TRAIN/denoiser_hh_endpoint_val.json"

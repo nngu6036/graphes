@@ -708,3 +708,12 @@ uses the degree model in the selected joint checkpoint. See
 [GRAPHER_JOINT_DEGREE.md](GRAPHER_JOINT_DEGREE.md) for warm-start requirements,
 training/generation/evaluation commands, ablations, and limitations. Existing
 separate-model configurations remain supported.
+
+Joint training covers edge counts up to the simple-graph bound implied by the
+DH-VAE's existing node and degree limits, even when validation graphs have more
+edges than any training graph. Warm-start checkpoints with a smaller edge head
+are expanded automatically: learned conditioning and existing logits are
+preserved, and new edge classes start with at most `1e-6` total probability per
+supported graph size. Empirical distributions still use only training graphs.
+The expansion is logged and saved in the training report and joint checkpoint;
+the training command and component checkpoint paths need no changes.

@@ -22,7 +22,8 @@ import torch
 
 from grapher.data.io import load_dataset_splits
 from grapher.models.dhvae_hh.degree_vae import (
-    DegreeVectorizer, build_degree_vae, load_degree_vae_checkpoint, save_degree_vae_checkpoint,
+    DegreeHistogramVAE, DegreeVectorizer, build_degree_vae,
+    load_degree_vae_checkpoint, save_degree_vae_checkpoint,
 )
 from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.generic.joint_degree_model import (
@@ -61,6 +62,60 @@ def _limit(items, value):
     return list(items) if value is None or int(value) <= 0 else list(items)[:int(value)]
 
 
+def _degree_edge_support_bound(vectorizer: DegreeVectorizer) -> int:
+    """Cover simple graphs within the existing node/degree support, without held-out data."""
+    degree_bound = min(vectorizer.max_degree, vectorizer.max_nodes - 1)
+    return max(vectorizer.max_edges, vectorizer.max_nodes * degree_bound // 2)
+
+
+@torch.no_grad()
+def _expand_degree_edge_support(
+    model: DegreeHistogramVAE, vectorizer: DegreeVectorizer,
+) -> None:
+    """Expand a warm-start edge head while preserving its learned conditioning.
+
+    Existing edge logits are copied exactly. New classes share at most 1e-6
+    initial probability per supported size in eval mode, so expanding support
+    does not replace the pretrained sampling distribution with random logits.
+    The new classes remain trainable and have finite likelihoods.
+    """
+    old_max = vectorizer.max_edges
+    new_max = _degree_edge_support_bound(vectorizer)
+    if model.max_edges != old_max:
+        raise ValueError("Warm-start DH-VAE model and vectorizer edge supports disagree.")
+    if new_max == old_max:
+        return
+    if model.use_edge_count_conditioning:
+        old_head = model.num_edges_head
+        if old_head.out_features != old_max + 1:
+            raise ValueError("Warm-start DH-VAE edge head and vectorizer supports disagree.")
+        training = model.training
+        model.eval()
+        sizes = torch.arange(
+            vectorizer.min_nodes, vectorizer.max_nodes + 1,
+            device=old_head.weight.device,
+        )
+        log_normalizer = torch.logsumexp(model.edge_count_logits(sizes), dim=-1).min()
+        model.train(training)
+        head = torch.nn.Linear(old_head.in_features, new_max + 1).to(old_head.weight)
+        head.weight[:old_max + 1].copy_(old_head.weight)
+        head.bias[:old_max + 1].copy_(old_head.bias)
+        head.weight[old_max + 1:].zero_()
+        head.bias[old_max + 1:].fill_(
+            float(log_normalizer) + math.log(1e-6 / (new_max - old_max))
+        )
+        head.train(old_head.training)
+        model.num_edges_head = head
+        # _edge_features uses m/max_edges. Rescale its input weights so
+        # explicit (n,m) conditioning is unchanged by the new denominator.
+        scale = max(new_max, 1) / max(old_max, 1)
+        model.edge_encoder.net[0].weight[:, 0].mul_(scale)
+        if model.prior_condition_on_edges:
+            model.conditional_prior.net[0].weight[:, 2].mul_(scale)
+    model.max_edges = vectorizer.max_edges = new_max
+    model.head_dims["num_edges"] = new_max + 1
+
+
 def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
     """Initialize from trusted component checkpoints or explicitly from scratch."""
     joint = dict(config.get("joint_degree", {}) or {})
@@ -86,6 +141,8 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
                     "Check dataset provenance; never silently use an old prior. For an intentional transfer only, "
                     "set joint_degree.verify_degree_training_sequences=false."
                 )
+        initial_max_edges = vectorizer.max_edges
+        _expand_degree_edge_support(degree_model, vectorizer)
     else:
         max_degree = joint.get("max_degree")
         if max_degree is None:
@@ -93,6 +150,8 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
         vectorizer = DegreeVectorizer.fit(
             train_graphs, max_degree=int(max_degree), require_connected=True,
         )
+        initial_max_edges = vectorizer.max_edges
+        vectorizer.max_edges = _degree_edge_support_bound(vectorizer)
         degree_model = build_degree_vae(vectorizer, **prior_cfg)
     # Always use this experiment's training-split size distribution. No held-out
     # graph may define the prior's empirical support/probabilities.
@@ -127,7 +186,17 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
     )
     model.degree_model.load_state_dict(degree_model.state_dict())
     warm_report = {"degree_checkpoint": str(prior_path) if prior_path else None,
-                   "topology_checkpoint": None, "skipped_source_parameters": []}
+                   "topology_checkpoint": None, "skipped_source_parameters": [],
+                   "degree_edge_support": {
+                       "initial_max_edges": initial_max_edges,
+                       "max_edges": vectorizer.max_edges,
+                       "policy": "simple_graph_bound_from_existing_node_and_degree_support",
+                       "expanded": vectorizer.max_edges > initial_max_edges,
+                       "new_class_initial_probability_mass_bound": (
+                           1e-6 if prior_path and degree_model.use_edge_count_conditioning
+                           and vectorizer.max_edges > initial_max_edges else None
+                       ),
+                   }}
     topology_path = joint.get("initialize_topology_checkpoint")
     if topology_path:
         if not Path(topology_path).is_file():
@@ -329,6 +398,11 @@ def train_joint_degree_grapher(config: dict[str, Any], args) -> None:
         raise FileExistsError(f"Refusing to overwrite joint checkpoint {path}; use a new output directory.")
     model, warm_report = build_joint_model(config, train_graphs, degree_provenance_graphs=list(splits["train"]))
     model.to(device)
+    support = warm_report["degree_edge_support"]
+    if support["expanded"]:
+        print(f"[GraphER/JointDegree] expanded DH-VAE edge support "
+              f"max_edges={support['initial_max_edges']} -> {support['max_edges']} "
+              "from existing node/degree limits; empirical prior uses training graphs only.", flush=True)
     print(f"[GraphER/JointDegree] embedded DH-VAE; train={len(train_graphs)} val={len(val_graphs)} "
           f"graphs_per_batch={joint.get('graphs_per_batch',8)}; freeze_epochs={freeze_epochs}; degree_trainable={trainable}", flush=True)
     print("[GraphER/JointDegree] conditioning=actual degree histogram -> posterior mean -> decoder features; "

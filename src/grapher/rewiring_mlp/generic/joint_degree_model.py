@@ -57,7 +57,11 @@ def exact_degree_inputs(
         raise ValueError("Edges incident to padded nodes are not allowed.")
     m = (degrees.sum(-1) / 2).long()
     if torch.any(m > vectorizer.max_edges):
-        raise ValueError(f"Edge count exceeds joint DH-VAE support max_edges={vectorizer.max_edges}.")
+        raise ValueError(
+            f"Edge count {int(m.max())} exceeds joint DH-VAE support "
+            f"max_edges={vectorizer.max_edges}. Rebuild the joint checkpoint with "
+            "the updated joint trainer to expand edge support; counts are never clipped."
+        )
     hist = torch.zeros((n.numel(), vectorizer.degree_dim), device=degrees.device, dtype=degrees.dtype)
     hist.scatter_add_(1, degrees.long(), mask.to(degrees.dtype))
     n_float = n.to(degrees.dtype)

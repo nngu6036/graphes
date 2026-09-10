@@ -1,6 +1,8 @@
 # Joint DH-VAE + degree-conditioned GraphER. Simple, unattributed graphs only.
 # Warm-start paths must exist; null explicitly selects fresh initialization.
 # Generation samples from the DH-VAE EMBEDDED in checkpoint.pt, not the paths below.
+# Edge support expands to the existing node/degree limits, preserving warm-start
+# conditioning. Empirical size/edge/degree distributions use only training graphs.
 # --batch-size counts REAL GRAPHS; structural losses average bridge views per graph.
 # Deterministic re-encoding of actual degrees conditions structure at train AND inference.
 # Nine necessary orbit equalities are enforced; full graph realizability is not guaranteed.
