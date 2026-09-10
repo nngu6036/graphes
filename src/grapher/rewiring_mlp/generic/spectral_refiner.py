@@ -95,6 +95,9 @@ class SpectralRefinerConfig:
     clustering_histogram_distance: str = "wasserstein1"
     orbit_weight: float = 1.0
     orbit_distance: str = "log_rmse"
+    # False avoids candidate eigensolves when spectrum is not scored. The
+    # selected successor is still measured, preserving accepted-step diagnostics.
+    compute_candidate_spectral_diagnostics: bool = True
 
     distance: str = "rmse"
     normalization: str = "mean_degree"
@@ -327,6 +330,9 @@ class SpectralRefinerConfig:
             clustering_histogram_distance=str(clustering_guidance.get("distance", "wasserstein1")).lower(),
             orbit_weight=float(orbit_guidance.get("weight", 1.0)),
             orbit_distance=str(orbit_guidance.get("distance", "log_rmse")).lower(),
+            compute_candidate_spectral_diagnostics=bool(
+                candidate_search.get("compute_spectral_diagnostics", True)
+            ),
             distance=str(guidance.get("distance", "rmse")).lower(),
             normalization=str(guidance.get("normalization", "mean_degree")).lower(),
             low_frequency_weight=float(
@@ -629,36 +635,49 @@ def score_spectral_candidates(
         )
 
     candidate_list = [candidate_graphs[action] for action in candidates]
-    spectra = batched_laplacian_eigenvalues(
-        candidate_list,
-        device=device,
-        backend=config.candidate_spectrum_backend,
-        batch_size=config.candidate_spectrum_batch_size,
+    compute_candidate_spectra = (
+        "spectral" in active_components
+        or config.compute_candidate_spectral_diagnostics
+        or config.debug_enabled
+        or config.debug_store_spectra
+    )
+    spectra = (
+        batched_laplacian_eigenvalues(
+            candidate_list,
+            device=device,
+            backend=config.candidate_spectrum_backend,
+            batch_size=config.candidate_spectrum_batch_size,
+        )
+        if compute_candidate_spectra else [None] * len(candidate_list)
     )
     rows: list[dict[str, Any]] = []
     for action, candidate, spectrum in zip(candidates, candidate_list, spectra):
-        candidate_local = spectral_distance(
-            spectrum,
-            next_spectrum_target,
-            metric=config.distance,
-            scale=scale,
-            low_frequency_weight=config.low_frequency_weight,
-            low_frequency_cutoff=config.low_frequency_cutoff,
-        )
-        candidate_clean = spectral_distance(
-            spectrum,
-            clean_spectrum,
-            metric=config.distance,
-            scale=scale,
-            low_frequency_weight=config.low_frequency_weight,
-            low_frequency_cutoff=config.low_frequency_cutoff,
-        )
-        local_gain = float(current_local - candidate_local)
-        clean_gain = float(current_clean - candidate_clean)
-        spectral_relative = float(
-            local_gain
-            / max(abs(current_local), float(config.relative_improvement_epsilon))
-        )
+        if spectrum is not None:
+            candidate_local = spectral_distance(
+                spectrum,
+                next_spectrum_target,
+                metric=config.distance,
+                scale=scale,
+                low_frequency_weight=config.low_frequency_weight,
+                low_frequency_cutoff=config.low_frequency_cutoff,
+            )
+            candidate_clean = spectral_distance(
+                spectrum,
+                clean_spectrum,
+                metric=config.distance,
+                scale=scale,
+                low_frequency_weight=config.low_frequency_weight,
+                low_frequency_cutoff=config.low_frequency_cutoff,
+            )
+            local_gain = float(current_local - candidate_local)
+            clean_gain = float(current_clean - candidate_clean)
+            spectral_relative = float(
+                local_gain
+                / max(abs(current_local), float(config.relative_improvement_epsilon))
+            )
+        else:
+            candidate_local = candidate_clean = None
+            local_gain = clean_gain = spectral_relative = None
 
         candidate_clustering = (
             float(nx.average_clustering(candidate)) if needs_clustering else None
@@ -746,10 +765,12 @@ def score_spectral_candidates(
                 "action": action,
                 "candidate_graph": candidate,
                 "candidate_spectrum": spectrum,
+                "candidate_spectral_diagnostics_eager": compute_candidate_spectra,
+                "scoring_components": sorted(active_components),
                 "current_spectral_discrepancy": float(current_local),
-                "candidate_spectral_discrepancy": float(candidate_local),
+                "candidate_spectral_discrepancy": None if candidate_local is None else float(candidate_local),
                 "current_clean_spectral_discrepancy": float(current_clean),
-                "candidate_clean_spectral_discrepancy": float(candidate_clean),
+                "candidate_clean_spectral_discrepancy": None if candidate_clean is None else float(candidate_clean),
                 "spectral_gain": local_gain,
                 "clean_spectral_gain": clean_gain,
                 "spectral_relative_improvement": spectral_relative,
@@ -772,13 +793,47 @@ def score_spectral_candidates(
                 "candidate_orbit_discrepancy": candidate_orbit_discrepancy,
                 "orbit_gain": float(orbit_gain),
                 "orbit_relative_improvement": float(orbit_relative),
-                "projection_residual": float(candidate_local),
+                "projection_residual": None if candidate_local is None else float(candidate_local),
                 "objective_residual": float(objective_residual),
                 "energy_improvement": float(energy_improvement),
                 "relative_energy_improvement": float(relative),
             }
         )
     return rows
+
+
+def _complete_selected_spectral_diagnostics(
+    row: dict[str, Any], *, next_target: np.ndarray,
+    clean_spectrum: np.ndarray, scale: float,
+    config: SpectralRefinerConfig, device: torch.device | str,
+) -> None:
+    """Measure only the chosen successor when candidate spectra were skipped.
+
+    These fields are diagnostics only in this mode. Do not alter the frozen
+    summary score, candidate order, eligibility, or selection probabilities.
+    """
+    spectrum = batched_laplacian_eigenvalues(
+        [row["candidate_graph"]], device=device,
+        backend=config.candidate_spectrum_backend,
+        batch_size=config.candidate_spectrum_batch_size,
+    )[0]
+    kwargs = dict(metric=config.distance, scale=scale,
+                  low_frequency_weight=config.low_frequency_weight,
+                  low_frequency_cutoff=config.low_frequency_cutoff)
+    local = spectral_distance(spectrum, next_target, **kwargs)
+    clean = spectral_distance(spectrum, clean_spectrum, **kwargs)
+    gain = float(row["current_spectral_discrepancy"] - local)
+    row.update(
+        candidate_spectrum=spectrum,
+        candidate_spectral_discrepancy=float(local),
+        candidate_clean_spectral_discrepancy=float(clean),
+        spectral_gain=gain,
+        clean_spectral_gain=float(row["current_clean_spectral_discrepancy"] - clean),
+        spectral_relative_improvement=gain / max(
+            abs(row["current_spectral_discrepancy"]), config.relative_improvement_epsilon
+        ),
+        projection_residual=float(local),
+    )
 
 
 def _select_row(
@@ -1156,7 +1211,7 @@ def refine_graph_with_spectral_predictions(
                     f"rejections={proposal_diagnostics.get('candidate_rejection_reasons', {})}"
                 ),
             )
-            if cfg.debug_top_candidates > 0 and rows:
+            if cfg.debug_enabled and cfg.debug_top_candidates > 0 and rows:
                 ranked = sorted(
                     enumerate(rows),
                     key=lambda pair: float(pair[1]["energy_improvement"]),
@@ -1223,7 +1278,7 @@ def refine_graph_with_spectral_predictions(
             reason = (
                 "prediction_plateau_refresh"
                 if refresh_after_plateau
-                else "explicit_stop_below_spectral_improvement_threshold"
+                else "explicit_stop_below_guidance_improvement_threshold"
             )
             best_gain = max(
                 (float(row["energy_improvement"]) for row in rows),
@@ -1245,6 +1300,11 @@ def refine_graph_with_spectral_predictions(
                     "accepted_step": accepted_steps,
                     "accepted": False,
                     "reason": reason,
+                    "rewiring_guidance_mode": cfg.guidance_mode,
+                    "legacy_reason": (
+                        "explicit_stop_below_spectral_improvement_threshold"
+                        if not refresh_after_plateau else reason
+                    ),
                     "terminal_stop": not refresh_after_plateau,
                     "prediction_refreshed": prediction_refreshed,
                     "prediction_calls": prediction_calls,
@@ -1284,6 +1344,11 @@ def refine_graph_with_spectral_predictions(
             break
 
         chosen = rows[selected]
+        if chosen["candidate_spectrum"] is None:
+            _complete_selected_spectral_diagnostics(
+                chosen, next_target=next_target, clean_spectrum=clean_spectrum,
+                scale=spectral_scale(current, mode=cfg.normalization), config=cfg, device=device,
+            )
         candidate = chosen["candidate_graph"]
         if [int(candidate.degree(node)) for node in sorted(candidate.nodes())] != (
             initial_degrees
@@ -1338,6 +1403,11 @@ def refine_graph_with_spectral_predictions(
                 "step": decision_step,
                 "accepted_step": accepted_steps,
                 "accepted": True,
+                "rewiring_guidance_mode": cfg.guidance_mode,
+                "scoring_components": list(chosen["scoring_components"]),
+                "candidate_spectral_diagnostics_eager": chosen["candidate_spectral_diagnostics_eager"],
+                "clustering_diagnostics_computed": chosen["current_clustering_discrepancy"] is not None,
+                "orbit_diagnostics_computed": chosen["current_orbit_discrepancy"] is not None,
                 "reason": (
                     "orbit_summary_guided_swap"
                     if "orbit" in set(cfg.guidance_mode.split("_"))

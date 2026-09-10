@@ -144,6 +144,48 @@ def _mean_or_zero(rows: list[dict[str, Any]], key: str) -> float:
     return float(np.mean(values)) if values else 0.0
 
 
+def _guidance_diagnostic_summary(
+    settings: SpectralRefinerConfig,
+    accepted_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Separate scored components from optional measurements on selected moves.
+
+    All discrepancies are against the prediction frozen for ONE decision, not a
+    trajectory-wide target. A missing/inactive measurement is null, never zero.
+    """
+    components = set(settings.guidance_mode.split("_"))
+    result: dict[str, Any] = {
+        "spectral_guidance_weight": settings.spectral_weight if "spectral" in components else 0.0,
+        "clustering_guidance_weight": settings.clustering_weight if "clustering" in components else 0.0,
+        "orbit_guidance_weight": settings.orbit_weight if "orbit" in components else 0.0,
+        "scoring_components": sorted(components),
+        "discrepancy_scope": "same_step_frozen_prediction; accepted_moves_only",
+        "candidate_spectral_diagnostics_requested": settings.compute_candidate_spectral_diagnostics,
+        "accepted_spectral_diagnostics_computed": bool(accepted_rows),
+    }
+    for component in ("clustering", "orbit"):
+        active = component in components
+        measured = [r for r in accepted_rows if active and r.get(f"current_{component}_discrepancy") is not None]
+        result[f"{component}_diagnostics_computed"] = bool(measured)
+        result[f"accepted_{component}_measurements"] = len(measured)
+        gains = [float(r[f"{component}_gain"]) for r in measured]
+        for suffix, key in (
+            ("gain", f"{component}_gain"),
+            ("discrepancy_before", f"current_{component}_discrepancy"),
+            ("discrepancy_after", f"candidate_{component}_discrepancy"),
+        ):
+            result[f"mean_accepted_{component}_{suffix}"] = (
+                float(np.mean([float(r[key]) for r in measured])) if measured else None
+            )
+        result[f"accepted_{component}_improved_fraction"] = (
+            float(np.mean(np.asarray(gains) > 1e-10)) if gains else None
+        )
+        result[f"accepted_{component}_worsened_fraction"] = (
+            float(np.mean(np.asarray(gains) < -1e-10)) if gains else None
+        )
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -397,7 +439,9 @@ def main() -> None:
                 f"[GraphER/Spectral] rewiring_guidance={refiner_settings.guidance_mode} "
                 f"clustering_statistic={refiner_settings.clustering_statistic} "
                 f"histogram_bins={getattr(model, 'clustering_histogram_bins', None) if getattr(model, 'predict_clustering_histogram', False) else None} "
-                f"orbit_summary={getattr(model, 'predict_orbit_summary', False)}",
+                f"orbit_summary={getattr(model, 'predict_orbit_summary', False)} "
+                f"weights=(spectral={refiner_settings.spectral_weight}, "
+                f"clustering={refiner_settings.clustering_weight}, orbit={refiner_settings.orbit_weight})",
                 flush=True,
             )
             print(
@@ -406,9 +450,9 @@ def main() -> None:
                 flush=True,
             )
             print(
-                "[GraphER/Spectral] guidance: model predicts the full clean Laplacian "
-                "eigenvalue vector jointly; the bridge derives the next spectral target; "
-                "valid degree-preserving swaps project the graph toward that target.",
+                "[GraphER/Spectral] predictor uses current/source spectra; "
+                f"valid degree-preserving swaps are ranked by {refiner_settings.guidance_mode}. "
+                "Predicted targets are frozen within each decision and refreshed after the configured horizon.",
                 flush=True,
             )
         if not refiner_settings.preserve_connectivity:
@@ -601,7 +645,11 @@ def main() -> None:
 
         pipeline_record: dict[str, Any] = {
             "pipeline_mode": "topology",
+            # Keep the internal aggregator's legacy family field; explicit active
+            # guidance is separate. Top-level report/diagnostics use active mode.
             "guidance_mode": guidance_mode,
+            "predictor_family": guidance_mode,
+            "rewiring_guidance_mode": refiner_settings.guidance_mode if guidance_mode == "spectral" else guidance_mode,
             "invariant_feasible": 1.0,
             "constructor_success": 1.0,
             "accepted_swaps": accepted,
@@ -737,7 +785,9 @@ def main() -> None:
 
     diagnostics: dict[str, Any] = {
         "pipeline_mode": "topology",
-        "guidance_mode": guidance_mode,
+        "guidance_mode": refiner_settings.guidance_mode if guidance_mode == "spectral" else guidance_mode,
+        "predictor_family": guidance_mode,
+        "legacy_predictor_guidance_mode": guidance_mode,
         "degree_preservation_rate": degree_preservation_rate(coarse_graphs, refined_graphs),
         "source_enrichment_degree_preservation_rate": degree_preservation_rate(
             coarse_graphs, enriched_base_graphs
@@ -866,8 +916,16 @@ def main() -> None:
                 "spectral_debug_enabled": refiner_settings.debug_enabled,
             }
         )
+        diagnostics.update(_guidance_diagnostic_summary(refiner_settings, accepted_rows))
+        # Historical predictor_* aliases above are retained for readers of old reports.
+        # Explicitly identify their source; they are NOT measured on generated graphs.
+        diagnostics["predictor_error_scope"] = "checkpoint_validation_report"
+        diagnostics["checkpoint_validation_metrics"] = {
+            key: value for key, value in (checkpoint.get("report", {}) or {}).items()
+            if key.startswith("val_") and isinstance(value, (int, float, str, bool, type(None)))
+        }
         refresh_on_plateau = refiner_settings.refresh_on_prediction_plateau
-        report_format = "topology_spectral_generation_v1"
+        report_format = "topology_spectral_generation_v2"
     else:
         diagnostics.update(
             {
@@ -892,7 +950,9 @@ def main() -> None:
     report = {
         "format": report_format,
         "pipeline_mode": "topology",
-        "guidance_mode": guidance_mode,
+        "guidance_mode": refiner_settings.guidance_mode if guidance_mode == "spectral" else guidance_mode,
+        "predictor_family": guidance_mode,
+        "legacy_predictor_guidance_mode": guidance_mode,
         "checkpoint_format": checkpoint.get("format"),
         "degree_source": degree_source,
         "prediction_horizon": {

@@ -656,3 +656,14 @@ The optional clean local-clustering histogram head and histogram-guided rewiring
 `configs/experiments/grapher/community_small_topology_spectral_clustering_histogram.yaml`.
 It uses 100 normalized bins, a softmax head and CDF loss, and spectral + histogram-W1
 candidate scoring. Existing scalar-clustering configs/checkpoints retain their behavior.
+
+
+## Orbit-dominant clustering + orbit debug configuration
+
+The new `community_small_topology_spectral_clustering_histogram_orbit_dominant.yaml`
+keeps joint spectral/histogram/orbit training unchanged and uses generation weights
+clustering=0.25, orbit=1.0, spectrum=0.0. Existing joint checkpoints can be reused.
+The graph report evaluator now supports `--reference-split val|test`; use validation
+for guidance selection. See [GRAPHER_ORBIT_DOMINANT.md](GRAPHER_ORBIT_DOMINANT.md)
+for installation, checkpoint reuse, optional training, generation, evaluation,
+performance options, and reporting compatibility notes.

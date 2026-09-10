@@ -885,8 +885,35 @@ def _write_molecular_csv(
         writer.writerows(rows)
 
 
-def _print_table(rows: Sequence[dict[str, Any]]) -> None:
-    print("Graph-distribution MMD against held-out test graphs (lower is better)")
+def resolve_reference_split(
+    config: dict[str, Any], explicit_split: str | None = None,
+) -> str:
+    """CLI overrides evaluation.reference_split; legacy configs default to test.
+
+    protocol.tune_on_split is intentionally not treated as a CLI instruction.
+    """
+    value = explicit_split
+    if value is None:
+        value = (config.get("evaluation", {}) or {}).get("reference_split", "test")
+    split = str(value).strip().lower()
+    if split not in {"val", "test"}:
+        raise ValueError("evaluation.reference_split must be 'val' or 'test'.")
+    return split
+
+
+def validate_report_reference_split(output_dir: Path, reference_split: str) -> None:
+    """Prevent validation and test reports from silently overwriting one another."""
+    report = _load_json_mapping(output_dir / "graph_evaluation_report.json")
+    if report is not None and report.get("reference_split", "test") != reference_split:
+        raise ValueError(
+            "This output directory already contains a report for a different "
+            "reference split. Use separate --output-dir paths for validation "
+            "and test (for example evaluation_val and evaluation_test)."
+        )
+
+
+def _print_table(rows: Sequence[dict[str, Any]], *, reference_split: str = "test") -> None:
+    print(f"Graph-distribution MMD against held-out {reference_split} graphs (lower is better)")
     print(
         f"{'Comparison':30s}"
         f"{'Degree MMD':>14s}"
@@ -934,6 +961,11 @@ def main() -> None:
     )
     parser.add_argument("--config", required=True)
     parser.add_argument(
+        "--reference-split", choices=("val", "test"), default=None,
+        help=("Reference graphs for all MMD rows. Overrides evaluation.reference_split; "
+              "legacy configs default to test. Use val for weight selection."),
+    )
+    parser.add_argument(
         "--generic-mmd-protocol",
         choices=("config", "graphrnn", "graphes_adaptive"),
         default="config",
@@ -969,7 +1001,7 @@ def main() -> None:
         type=int,
         default=None,
         help=(
-            "Cap generated/source candidate graphs only. The held-out test "
+            "Cap generated/source candidate graphs only. The selected held-out "
             "reference remains fixed; use protocol.max_reference_graphs in "
             "the config to cap the reference set explicitly."
         ),
@@ -1005,6 +1037,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_yaml(args.config)
+    reference_split = resolve_reference_split(config, args.reference_split)
     generated_dir = Path(args.generated_dir)
     (
         generated_path,
@@ -1023,7 +1056,9 @@ def main() -> None:
     # Do not evaluate the same artifact twice as both the source and final row.
     if _same_artifact(base_path, generated_path):
         base_path, base_stage = None, None
-    output_dir = ensure_dir(args.output_dir or generated_dir / "evaluation_report")
+    default_output_name = "evaluation_report" if reference_split == "test" else "evaluation_report_val"
+    output_dir = ensure_dir(args.output_dir or generated_dir / default_output_name)
+    validate_report_reference_split(output_dir, reference_split)
 
     evaluation_cfg = config.get("evaluation", {}) or {}
     generic_mmd_protocol = (
@@ -1073,7 +1108,7 @@ def main() -> None:
         config_path=dataset_cfg.get("config_path"),
     )
     train_graphs = list(splits.get("train", []))
-    test_graphs = list(splits.get("test", []))
+    reference_graphs = list(splits.get(reference_split, []))
     provenance = dataset_provenance(dataset_cfg, splits)
     _print_dataset_provenance(provenance)
     training_manifest, training_manifest_path = _find_training_manifest(
@@ -1099,13 +1134,13 @@ def main() -> None:
         if enriched_base_path.is_file()
         else []
     )
-    if not test_graphs:
-        raise ValueError("The configured dataset has no test graphs.")
+    if not reference_graphs:
+        raise ValueError(f"The configured dataset has no {reference_split} graphs.")
 
     protocol_cfg = config.get("protocol", {}) or {}
     configured_reference_cap = protocol_cfg.get("max_reference_graphs")
     reference_count, generated_count = resolve_evaluation_counts(
-        num_reference=len(test_graphs),
+        num_reference=len(reference_graphs),
         num_generated=len(generated_graphs),
         configured_reference_cap=(
             int(configured_reference_cap)
@@ -1118,7 +1153,7 @@ def main() -> None:
         raise ValueError("No held-out reference graphs are available.")
     if generated_count <= 0:
         raise ValueError("No generated graphs are available.")
-    reference = test_graphs[:reference_count]
+    reference = reference_graphs[:reference_count]
     generated = generated_graphs[:generated_count]
     molecular = is_molecular_evaluation(dataset_cfg, generated_graphs)
     final_stage = resolve_generated_stage(
@@ -1135,7 +1170,7 @@ def main() -> None:
         )
     print(f"Generated stage label: {final_stage}", flush=True)
     print(
-        f"Evaluation counts: reference_test={len(reference)} "
+        f"Evaluation counts: reference_{reference_split}={len(reference)} "
         f"generated={len(generated)} train_reference={len(train_graphs)}",
         flush=True,
     )
@@ -1144,7 +1179,7 @@ def main() -> None:
     if train_graphs:
         rows.append(
             {
-                "comparison": "train_to_test",
+                "comparison": f"train_to_{reference_split}",
                 **_paper_mmd(
                     reference,
                     train_graphs,
@@ -1160,7 +1195,7 @@ def main() -> None:
             base_count = min(base_count, int(args.max_graphs))
         rows.append(
             {
-                "comparison": f"{base_stage}_to_test",
+                "comparison": f"{base_stage}_to_{reference_split}",
                 **_paper_mmd(
                     reference,
                     base_graphs[:base_count],
@@ -1176,7 +1211,7 @@ def main() -> None:
             enriched_count = min(enriched_count, int(args.max_graphs))
         rows.append(
             {
-                "comparison": "enriched_base_to_test",
+                "comparison": f"enriched_base_to_{reference_split}",
                 **_paper_mmd(
                     reference,
                     enriched_base_graphs[:enriched_count],
@@ -1188,7 +1223,7 @@ def main() -> None:
         )
     rows.append(
         {
-            "comparison": f"{final_stage}_to_test",
+            "comparison": f"{final_stage}_to_{reference_split}",
             **_paper_mmd(
                 reference,
                 generated,
@@ -1228,7 +1263,7 @@ def main() -> None:
     conversion_error_counts: dict[str, int] = {}
     if molecular:
         stage_graphs: list[tuple[str, Sequence[nx.Graph]]] = [
-            ("real_test", reference),
+            (f"real_{reference_split}", reference),
         ]
         if base_graphs:
             base_count = len(base_graphs)
@@ -1258,7 +1293,10 @@ def main() -> None:
 
     save_json(
         {
-            "format": "graph_generation_evaluation_report_v4",
+            "format": "graph_generation_evaluation_report_v5",
+            "reference_split": reference_split,
+            "reference_split_sha256": provenance["split_sha256"][reference_split],
+            "reference_graph_indices_zero_based": list(range(reference_count)),
             "orca_exec": orca_exec,
             "compute_orbit": compute_orbit,
             "generic_mmd_protocol": generic_mmd_protocol,
@@ -1336,7 +1374,7 @@ def main() -> None:
         },
         json_path,
     )
-    _print_table(rows)
+    _print_table(rows, reference_split=reference_split)
     if molecular_metrics is not None:
         _print_molecular_metrics(molecular_stage_rows)
     print(f"Saved metrics: {csv_path}")
