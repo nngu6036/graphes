@@ -69,8 +69,11 @@ When both ``--k-min`` and ``--k-max`` are supplied, the script also writes
 frequency-sorted drawings of induced simple-cycle graphlets, counted across
 the full train/validation/test dataset regardless of the drawing selection.
 For molecular datasets, counts and normalization use only valid molecules.
-For example, the
-command above creates ``outputs/community_small_all_graphlet_histogram.png``
+Cycles are distinguished by atomic numbers and bond types, including their
+arrangement around the ring; equivalent rotations and reflections are grouped.
+Drawings show element labels and bond types. Generic graphlets use topology only.
+For example, the command above creates
+``outputs/community_small_all_graphlet_histogram.png``
 and a JSON sidecar containing the raw counts and normalization details.
 
 To collect 1,024 random molecules and the full-dataset cycle graphlet drawings
@@ -83,7 +86,9 @@ in one PDF::
 
 PDF output appends the graphlet drawings after the graph pages and writes
 ``outputs/qm9_random_1024_graphlet_histogram.json`` with the counts. An explicit
-``--graphlet-output`` additionally exports the graphlet page as PNG or PDF.
+``--graphlet-output`` additionally exports the graphlet drawings as PNG or PDF.
+All observed types are drawn, with at most six graphlets per page; multiple PNG
+pages receive numbered filenames.
 """
 
 from __future__ import annotations
@@ -91,6 +96,7 @@ from __future__ import annotations
 import argparse
 import io
 import itertools
+import json
 import math
 import random
 import sys
@@ -103,6 +109,7 @@ import networkx as nx
 from grapher.data.statistics import resolve_prepared_dataset
 from grapher.rewiring_mlp.molecular.graph_io import nx_to_rdkit_mol
 from grapher.utils.io import load_pickle, save_json
+from grapher.utils.motifs import canonicalize_attributed_simple_cycle
 
 
 ATOM_COLOURS_HEX: Mapping[str, str] = {
@@ -134,6 +141,9 @@ BOND_LABELS: Mapping[str, str] = {
     "AROMATIC": "aromatic",
     "OTHER": "other",
 }
+
+BOND_TYPE_KEYS = {1: "SINGLE", 2: "DOUBLE", 3: "TRIPLE", 4: "AROMATIC"}
+GRAPHLETS_PER_PAGE = 6
 
 GENERIC_NODE_COLOURS = (
     "#2563EB",
@@ -173,6 +183,9 @@ class CycleGraphletFrequency:
     possible_subsets: int
     frequency: float
     subset_rate: float
+    canonical_key: str | None = None
+    node_types: tuple[int, ...] = ()
+    edge_types: tuple[int, ...] = ()
 
 
 def _hex_to_rgb255(value: str) -> Tuple[int, int, int]:
@@ -385,8 +398,8 @@ def _prepared_bond_type(value: Any, *, edge: tuple[Any, Any]) -> int:
     return rounded
 
 
-def _validated_molecule(graph: Any, *, label: str) -> Any:
-    """Normalize molecular attributes and require successful RDKit sanitization."""
+def _normalized_molecular_graph(graph: Any, *, label: str) -> nx.Graph:
+    """Normalize atom and bond types identically for validation and graphlets."""
     if not isinstance(graph, nx.Graph):
         raise TypeError(
             f"{label} is not a NetworkX graph ({type(graph).__name__})."
@@ -445,8 +458,13 @@ def _validated_molecule(graph: Any, *, label: str) -> Any:
             bond_type=_prepared_bond_type(raw_bond_type, edge=(u, v)),
         )
 
+    return normalized
+
+
+def _validated_molecule(graph: Any, *, label: str) -> Any:
+    """Require successful RDKit sanitization of the normalized molecular graph."""
     return nx_to_rdkit_mol(
-        normalized,
+        _normalized_molecular_graph(graph, label=label),
         sanitize=True,
         infer_projected_formal_charges=True,
     )
@@ -976,8 +994,9 @@ def _cycle_graphlet_histogram(
     *,
     k_min: int,
     k_max: int,
+    molecular: bool = False,
 ) -> list[CycleGraphletFrequency]:
-    """Count induced cycle graphlets and sort their frequencies descending."""
+    """Count induced cycles, respecting atom/bond types for molecular datasets."""
 
     if k_min < 3:
         raise ValueError("Cycle graphlets require --graphlet-k-min >= 3.")
@@ -986,38 +1005,77 @@ def _cycle_graphlet_histogram(
     if not all(isinstance(graph, nx.Graph) for graph in graphs):
         raise TypeError("Graphlet histograms require NetworkX graphs.")
 
-    counts = {order: 0 for order in range(k_min, k_max + 1)}
+    counts: dict[tuple[int, str | None], int] = (
+        {} if molecular else {(order, None): 0 for order in range(k_min, k_max + 1)}
+    )
     possible = {order: 0 for order in range(k_min, k_max + 1)}
     for graph in graphs:
-        simple_graph = nx.Graph(graph)
+        simple_graph = (
+            _normalized_molecular_graph(graph, label="graphlet source")
+            if molecular else nx.Graph(graph)
+        )
         nodes = tuple(simple_graph.nodes())
         adjacency = {
             node: set(simple_graph.neighbors(node)) for node in nodes
         }
-        for order in counts:
+        for order in possible:
             if len(nodes) < order:
                 continue
             possible[order] += math.comb(len(nodes), order)
-            counts[order] += sum(
-                1
-                for subset in itertools.combinations(nodes, order)
-                if _is_induced_cycle_from_adjacency(adjacency, subset)
-            )
+            for subset in itertools.combinations(nodes, order):
+                if not _is_induced_cycle_from_adjacency(adjacency, subset):
+                    continue
+                key = (
+                    canonicalize_attributed_simple_cycle(
+                        simple_graph.subgraph(subset),
+                        node_label_attr="atomic_num", edge_label_attr="bond_type",
+                    )
+                    if molecular else None
+                )
+                counts[order, key] = counts.get((order, key), 0) + 1
 
     total_cycles = sum(counts.values())
-    rows = [
-        CycleGraphletFrequency(
+    rows = []
+    for (order, key), count in counts.items():
+        # ATTR_CYCLE_V1 stores [node type, outgoing bond type] around the
+        # canonical cycle. Normalization above guarantees integer type tokens.
+        encoded = json.loads(key.split("|", 1)[1]) if key is not None else []
+        node_types = tuple(int(node.split(":", 1)[1]) for node, _ in encoded)
+        edge_types = tuple(int(edge.split(":", 1)[1]) for _, edge in encoded)
+        rows.append(CycleGraphletFrequency(
             order=order,
-            count=counts[order],
+            count=count,
             possible_subsets=possible[order],
-            frequency=(counts[order] / total_cycles if total_cycles else 0.0),
+            frequency=(count / total_cycles if total_cycles else 0.0),
             subset_rate=(
-                counts[order] / possible[order] if possible[order] else 0.0
+                count / possible[order] if possible[order] else 0.0
             ),
+            canonical_key=key, node_types=node_types, edge_types=edge_types,
+        ))
+    return sorted(rows, key=lambda row: (-row.frequency, row.order, row.canonical_key or ""))
+
+
+def _draw_typed_cycle_bond(draw: Any, start: tuple[float, float], end: tuple[float, float], bond_type: int) -> None:
+    colour = BOND_COLOURS_HEX[BOND_TYPE_KEYS[bond_type]]
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    length = math.hypot(dx, dy)
+    if bond_type == 4:
+        for distance in range(0, math.ceil(length), 10):
+            left, right = distance / length, min(distance + 6, length) / length
+            draw.line(
+                (start[0] + left * dx, start[1] + left * dy,
+                 start[0] + right * dx, start[1] + right * dy),
+                fill=colour, width=3,
+            )
+        return
+    offsets = {1: (0,), 2: (-3, 3), 3: (-5, 0, 5)}[bond_type]
+    for offset in offsets:
+        shift_x, shift_y = -dy * offset / length, dx * offset / length
+        draw.line(
+            (start[0] + shift_x, start[1] + shift_y,
+             end[0] + shift_x, end[1] + shift_y),
+            fill=colour, width=3,
         )
-        for order in counts
-    ]
-    return sorted(rows, key=lambda row: (-row.frequency, row.order))
 
 
 def _render_cycle_graphlet_histogram(
@@ -1025,15 +1083,19 @@ def _render_cycle_graphlet_histogram(
     *,
     dataset_label: str,
     graph_count: int,
+    molecular: bool = False,
+    page_index: int = 0,
+    total_pages: int = 1,
 ) -> Any:
-    """Draw each cycle topology with its dataset-wide count and frequency."""
+    """Draw each cycle, including molecular types, with dataset-wide frequencies."""
 
     from PIL import Image, ImageDraw
 
     width = 1100
     row_height = 130
     top = 112
-    bottom = 68
+    molecular = molecular or any(row.canonical_key is not None for row in rows)
+    bottom = 100 if molecular else 68
     height = max(320, top + bottom + row_height * max(len(rows), 1))
     canvas = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(canvas)
@@ -1041,10 +1103,14 @@ def _render_cycle_graphlet_histogram(
     body_font = _load_font(15)
     label_font = _load_font(16, bold=True)
     small_font = _load_font(13)
+    atom_font = _load_font(13, bold=True)
+    title = f"{dataset_label}: induced {'typed ' if molecular else ''}cycle graphlets"
+    if total_pages > 1:
+        title += f" | page {page_index + 1}/{total_pages}"
 
     draw.text(
         (28, 22),
-        f"{dataset_label}: induced cycle graphlets",
+        title,
         fill="#111827",
         font=title_font,
     )
@@ -1072,13 +1138,36 @@ def _render_cycle_graphlet_histogram(
             )
             for node in range(row.order)
         ]
-        draw.line(points + [points[0]], fill="#64748B", width=3)
-        for x_node, y_node in points:
-            draw.ellipse(
-                (x_node - 6, y_node - 6, x_node + 6, y_node + 6),
-                fill=colours[index % len(colours)],
-                outline="#1E293B",
+        if row.canonical_key is not None:
+            from rdkit import Chem
+
+            for edge_index, bond_type in enumerate(row.edge_types):
+                _draw_typed_cycle_bond(draw, points[edge_index], points[(edge_index + 1) % row.order], bond_type)
+            symbols = [Chem.GetPeriodicTable().GetElementSymbol(value) for value in row.node_types]
+            for (x_node, y_node), symbol in zip(points, symbols):
+                draw.ellipse(
+                    (x_node - 12, y_node - 12, x_node + 12, y_node + 12),
+                    fill=ATOM_COLOURS_HEX.get(symbol, ATOM_COLOURS_HEX["OTHER"]),
+                    outline="#1E293B",
+                )
+                draw.text((x_node, y_node), symbol, anchor="mm", fill="#111827", font=atom_font)
+            draw.text(
+                (label_x, y + 32), f"#{page_index * GRAPHLETS_PER_PAGE + index + 1}",
+                fill="#6B7280", font=small_font,
             )
+            draw.text((value_x, y + 51), "Atoms: " + " / ".join(symbols), fill="#4B5563", font=small_font)
+            draw.text(
+                (value_x, y + 74),
+                "Bonds: " + " / ".join(BOND_LABELS[BOND_TYPE_KEYS[value]] for value in row.edge_types),
+                fill="#4B5563", font=small_font,
+            )
+        else:
+            draw.line(points + [points[0]], fill="#64748B", width=3)
+            for x_node, y_node in points:
+                draw.ellipse(
+                    (x_node - 6, y_node - 6, x_node + 6, y_node + 6),
+                    fill=colours[index % len(colours)], outline="#1E293B",
+                )
         draw.text(
             (value_x, y + 1),
             f"frequency={row.frequency:.6f}  count={row.count:,}",
@@ -1096,11 +1185,19 @@ def _render_cycle_graphlet_histogram(
         )
 
     if not rows:
-        draw.text((28, top), "No graphlet orders requested.", fill="#6B7280", font=body_font)
-    draw.line((28, height - 44, width - 28, height - 44), fill="#D1D5DB", width=2)
+        draw.text((28, top), "No induced cycle graphlets found." if molecular else "No graphlet orders requested.", fill="#6B7280", font=body_font)
+    draw.line((28, height - bottom + 24, width - 28, height - bottom + 24), fill="#D1D5DB", width=2)
+    if molecular:
+        for index, (bond_type, key) in enumerate(BOND_TYPE_KEYS.items()):
+            x = 28 + index * 250
+            _draw_typed_cycle_bond(draw, (x, height - 56), (x + 38, height - 56), bond_type)
+            draw.text(
+                (x + 48, height - 64), BOND_LABELS[key] + (" (dashed)" if bond_type == 4 else ""),
+                fill="#4B5563", font=small_font,
+            )
     draw.text(
         (28, height - 32),
-        "frequency = Ck count / total induced-cycle count over all requested k",
+        "frequency = graphlet count / total induced-cycle count over all requested k",
         fill="#6B7280",
         font=small_font,
     )
@@ -1302,7 +1399,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help=(
             "Minimum induced cycle-graphlet order. Must be provided together "
-            "with --k-max and be at least 3."
+            "with --k-max and be at least 3. Molecular cycles distinguish "
+            "atomic numbers and bond types."
         ),
     )
     parser.add_argument(
@@ -1537,19 +1635,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             histogram_graphs,
             k_min=args.k_min,
             k_max=args.k_max,
+            molecular=molecular_dataset,
         )
         histogram_output.parent.mkdir(parents=True, exist_ok=True)
-        histogram = _render_cycle_graphlet_histogram(
-            histogram_rows,
-            dataset_label=f"{dataset_name}/all" + (" (valid molecules)" if molecular_dataset else ""),
-            graph_count=len(histogram_graphs),
-        )
-        if pdf_output:
-            _save_drawing(histogram, output, append=total_pages > 0)
-            print(f"Added cycle graphlet drawings to PDF: {output}", flush=True)
-        if histogram_output != output:
-            _save_drawing(histogram, histogram_output)
-        histogram.close()
+        graphlet_pages = max(1, math.ceil(len(histogram_rows) / GRAPHLETS_PER_PAGE))
+        for page_index in range(graphlet_pages):
+            start = page_index * GRAPHLETS_PER_PAGE
+            histogram = _render_cycle_graphlet_histogram(
+                histogram_rows[start:start + GRAPHLETS_PER_PAGE],
+                dataset_label=f"{dataset_name}/all" + (" (valid molecules)" if molecular_dataset else ""),
+                graph_count=len(histogram_graphs), molecular=molecular_dataset,
+                page_index=page_index, total_pages=graphlet_pages,
+            )
+            if pdf_output:
+                _save_drawing(histogram, output, append=total_pages + page_index > 0)
+                print(f"Added graphlet page {page_index + 1}/{graphlet_pages} to PDF: {output}", flush=True)
+            if histogram_output != output:
+                separate_pdf = histogram_output.suffix.lower() == ".pdf"
+                page_output = histogram_output if separate_pdf else _page_output_path(histogram_output, page_index, graphlet_pages)
+                _save_drawing(histogram, page_output, append=separate_pdf and page_index > 0)
+                print(f"Saved graphlet page {page_index + 1}/{graphlet_pages}: {page_output}", flush=True)
+            histogram.close()
         histogram_report = (
             output.with_name(f"{output.stem}_graphlet_histogram.json")
             if histogram_output == output
@@ -1571,30 +1677,43 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 ),
                 "drawn_split": args.split,
                 "drawn_graphs": len(indices),
-                "definition": "induced_simple_cycle_Ck",
+                "definition": "induced_atom_bond_typed_simple_cycle_Ck" if molecular_dataset else "induced_simple_cycle_Ck",
+                **({
+                    "node_type": "atomic_number",
+                    "edge_type": "bond_type",
+                    "edge_type_encoding": {str(number): BOND_LABELS[key] for number, key in BOND_TYPE_KEYS.items()},
+                    "canonicalization": "ATTR_CYCLE_V1; rotations and reflections",
+                    "type_sequence_order": "edge_types[i] connects node_types[i] to node_types[(i+1) % k]",
+                    "observed_types_only": True,
+                } if molecular_dataset else {}),
                 "normalization": (
                     "count / total induced-cycle count over all requested k"
                 ),
-                "sort": "frequency_descending_then_k_ascending",
+                "sort": "frequency_descending_then_k_then_canonical_key" if molecular_dataset else "frequency_descending_then_k_ascending",
                 "k_min": args.k_min,
                 "k_max": args.k_max,
                 "total_eligible_node_subsets": eligible_subsets,
                 "total_cycle_graphlets": total_cycle_graphlets,
+                "graphlet_pages": graphlet_pages,
                 "graphlets": [
                     {
-                        "graphlet": f"C{row.order}",
+                        "graphlet": row.canonical_key or f"C{row.order}",
+                        **({
+                            "rank": index + 1,
+                            "node_types": list(row.node_types),
+                            "edge_types": list(row.edge_types),
+                        } if molecular_dataset else {}),
                         "k": row.order,
                         "count": row.count,
                         "frequency": row.frequency,
                         "eligible_node_subsets": row.possible_subsets,
                         "induced_subset_rate": row.subset_rate,
                     }
-                    for row in histogram_rows
+                    for index, row in enumerate(histogram_rows)
                 ],
             },
             histogram_report,
         )
-        print(f"Saved graphlet drawings and frequencies: {histogram_output}")
         print(f"Saved graphlet counts: {histogram_report}")
 
     ok_count = sum(1 for item in loaded_items if item.error is None)

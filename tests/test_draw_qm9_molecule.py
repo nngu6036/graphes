@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 from pathlib import Path
 from typing import Any
@@ -961,3 +962,134 @@ def test_invalid_molecular_graphs_are_not_drawable(kind: str) -> None:
         graph.nodes[0]["atomic_num"] = 6.5
     with pytest.raises(ValueError):
         draw._load_from_prepared_graph(graph, 0, "molecules", "test")
+
+
+def test_molecular_cycle_histogram_separates_atom_and_bond_types() -> None:
+    carbon = _molecular_cycle(3)
+    oxygen = _molecular_cycle(3)
+    oxygen.nodes[0]["atomic_num"] = 8
+    double = _molecular_cycle(3)
+    double.edges[0, 1]["bond_type"] = 2
+    rows = draw._cycle_graphlet_histogram(
+        [carbon, carbon.copy(), oxygen, double], k_min=3, k_max=3, molecular=True,
+    )
+    assert len(rows) == 3
+    assert [row.count for row in rows] == [2, 1, 1]
+    assert [row.frequency for row in rows] == [0.5, 0.25, 0.25]
+    assert len({row.canonical_key for row in rows}) == 3
+    assert all(row.possible_subsets == 4 for row in rows)
+    assert {row.node_types for row in rows} == {(6, 6, 6), (6, 6, 8)}
+    assert {tuple(sorted(row.edge_types)) for row in rows} == {(1, 1, 1), (1, 1, 2)}
+
+
+def test_typed_cycle_keys_and_sequences_are_invariant_to_node_relabeling() -> None:
+    graph = _molecular_cycle(4)
+    graph.nodes[1]["atomic_num"] = 7
+    graph.nodes[3]["atomic_num"] = 8
+    graph.edges[0, 1]["bond_type"] = 2
+    graphs = []
+    for order in itertools.permutations(range(4)):
+        relabeled = nx.Graph()
+        relabeled.add_nodes_from((f"node-{node}", graph.nodes[order[node]]) for node in range(4))
+        inverse = {old: f"node-{new}" for new, old in enumerate(order)}
+        relabeled.add_edges_from((inverse[u], inverse[v], data) for u, v, data in graph.edges(data=True))
+        graphs.append(relabeled)
+    rows = draw._cycle_graphlet_histogram(graphs, k_min=4, k_max=4, molecular=True)
+    assert len(rows) == 1
+    assert rows[0].count == 24
+    row = rows[0]
+    # The exported sequences reconstruct exactly the canonical typed cycle.
+    reconstructed = nx.cycle_graph(4)
+    nx.set_node_attributes(reconstructed, dict(enumerate(row.node_types)), "atomic_num")
+    for index, edge_type in enumerate(row.edge_types):
+        reconstructed.edges[index, (index + 1) % row.order]["bond_type"] = edge_type
+    assert draw.canonicalize_attributed_simple_cycle(
+        reconstructed, node_label_attr="atomic_num", edge_label_attr="bond_type",
+    ) == row.canonical_key
+
+
+@pytest.mark.parametrize("different_nodes", [False, True])
+def test_typed_cycles_distinguish_arrangements_with_the_same_type_counts(different_nodes: bool) -> None:
+    adjacent, opposite = _molecular_cycle(4), _molecular_cycle(4)
+    if different_nodes:
+        for index in (0, 1):
+            adjacent.nodes[index]["atomic_num"] = 7
+        for index in (0, 2):
+            opposite.nodes[index]["atomic_num"] = 7
+    else:
+        adjacent.edges[0, 1]["bond_type"] = adjacent.edges[1, 2]["bond_type"] = 2
+        opposite.edges[0, 1]["bond_type"] = opposite.edges[2, 3]["bond_type"] = 2
+    rows = draw._cycle_graphlet_histogram([adjacent, opposite], k_min=4, k_max=4, molecular=True)
+    assert len(rows) == 2
+    assert rows[0].canonical_key != rows[1].canonical_key
+    assert sorted(rows[0].node_types) == sorted(rows[1].node_types)
+    assert sorted(rows[0].edge_types) == sorted(rows[1].edge_types)
+
+
+def test_typed_cycles_normalize_attribute_aliases_and_aromatic_bond_encoding() -> None:
+    aromatic = _molecular_cycle(6)
+    nx.set_edge_attributes(aromatic, 4, "bond_type")
+    alias = nx.cycle_graph(6)
+    nx.set_node_attributes(alias, 6.0, "atomic_number")
+    nx.set_edge_attributes(alias, 1.5, "bond_order")
+    rows = draw._cycle_graphlet_histogram(
+        [aromatic, alias, _molecular_cycle(6)], k_min=6, k_max=6, molecular=True,
+    )
+    assert len(rows) == 2
+    assert rows[0].count == 2
+    assert rows[0].edge_types == (4,) * 6
+    assert rows[1].edge_types == (1,) * 6
+
+
+def test_typed_cycles_exclude_chords_and_disconnected_subsets() -> None:
+    graph = _molecular_cycle(4)
+    graph.add_edge(0, 2, bond_type=1)
+    rows = draw._cycle_graphlet_histogram(
+        [nx.disjoint_union(graph, _molecular_cycle(3))], k_min=3, k_max=5, molecular=True,
+    )
+    assert [(row.order, row.count) for row in rows] == [(3, 3)]
+    assert draw._cycle_graphlet_histogram([graph], k_min=4, k_max=5, molecular=True) == []
+
+
+@pytest.mark.parametrize("graphlet_extension", [".pdf", ".png"])
+def test_typed_cycle_pages_and_report_cover_all_observed_types(tmp_path: Path, graphlet_extension: str) -> None:
+    pytest.importorskip("rdkit")
+    pytest.importorskip("PIL")
+    graphs = []
+    for atoms in list(itertools.combinations_with_replacement((6, 7, 8), 3))[:7]:
+        graph = _molecular_cycle(3)
+        nx.set_node_attributes(graph, dict(enumerate(atoms)), "atomic_num")
+        graphs.append(graph)
+    directory = tmp_path / "datasets" / "molecules"
+    directory.mkdir(parents=True)
+    save_pickle(graphs[:3], directory / "train.pkl")
+    save_pickle(graphs[3:5], directory / "val.pkl")
+    save_pickle(graphs[5:] + [graphs[0], _molecular_cycle(3, invalid=True)], directory / "test.pkl")
+    output = tmp_path / "molecules.pdf"
+    extra = tmp_path / f"cycles{graphlet_extension}"
+    assert draw.main([
+        "--dataset", "molecules", "--root", str(directory.parent),
+        "--count", "1", "--row", "1", "--col", "1",
+        "--k-min", "3", "--k-max", "5",
+        "--output", str(output), "--graphlet-output", str(extra),
+    ]) == 0
+    assert _pdf_page_count(output) == 3
+    if graphlet_extension == ".pdf":
+        assert _pdf_page_count(extra) == 2
+    else:
+        pages = sorted(tmp_path.glob("cycles_page_*.png"))
+        assert len(pages) == 2
+        assert all(page.read_bytes().startswith(b"\x89PNG\r\n\x1a\n") for page in pages)
+    report = json.loads(extra.with_suffix(".json").read_text())
+    assert report["definition"] == "induced_atom_bond_typed_simple_cycle_Ck"
+    assert report["graphlet_pages"] == 2
+    assert report["total_cycle_graphlets"] == 8
+    assert report["excluded_invalid_molecular_graphs"] == 1
+    assert report["selected_graphs"] == 8
+    rows = report["graphlets"]
+    assert len(rows) == 7
+    assert rows[0]["count"] == 2
+    assert sum(row["frequency"] for row in rows) == pytest.approx(1.0)
+    assert {tuple(row["node_types"]) for row in rows} == {
+        tuple(graph.nodes[i]["atomic_num"] for i in range(3)) for graph in graphs
+    }
