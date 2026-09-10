@@ -20,6 +20,7 @@ from grapher.rewiring_mlp.generic.data import (
 )
 from grapher.rewiring_mlp.generic.graphlets import TOPOLOGY_ORBIT_WIDTH
 from grapher.rewiring_mlp.generic.orbit import orbit_summary_width
+from grapher.rewiring_mlp.generic.cycle_graphlets import cycle_graphlet_k
 from grapher.rewiring_mlp.generic.model import (
     TOPOLOGY_CHECKPOINT_FORMAT,
     TopologyGraphletPredictor,
@@ -267,6 +268,10 @@ def main() -> None:
     clustering_histogram_enabled = histogram_bins is not None
     orbit_width = orbit_summary_width(structure_summary_cfg)
     orbit_summary_enabled = orbit_width is not None
+    cycle_k = cycle_graphlet_k(structure_summary_cfg)
+    cycle_enabled = cycle_k is not None
+    if cycle_enabled and not spectral_mode:
+        raise ValueError("Cycle graphlet histogram prediction currently requires the spectral_transformer family (not graphlet diffusion).")
     if clustering_histogram_enabled and not spectral_family_mode:
         raise ValueError("structure_summary_prediction.clustering_histogram requires a spectral-family predictor.")
     if orbit_summary_enabled and not spectral_family_mode:
@@ -585,6 +590,8 @@ def main() -> None:
             "clustering_histogram_bins": histogram_bins or 100,
             "predict_orbit_summary": orbit_summary_enabled,
             "orbit_summary_width": orbit_width or 15,
+            "predict_cycle_graphlet_histogram": cycle_enabled,
+            "cycle_graphlet_k": cycle_k or 3,
         }
         if spectral_graphlet_mode:
             assert graphlet_basis is not None
@@ -686,6 +693,9 @@ def main() -> None:
         for key in ("clustering_histogram", "clustering_histogram_ce"):
             if not clustering_histogram_enabled and float(loss_weights.get(key, 0.0)) != 0.0:
                 raise ValueError(f"loss_weights.{key} requires structure_summary_prediction.clustering_histogram=true.")
+        for key in ("cycle_graphlet_histogram", "cycle_graphlet_histogram_ce"):
+            if not cycle_enabled and float(loss_weights.get(key, 0.0)) != 0.0:
+                raise ValueError(f"loss_weights.{key} requires structure_summary_prediction.cycle_graphlet_histogram=true.")
         if not orbit_summary_enabled and float(loss_weights.get("orbit_summary", 0.0)) != 0.0:
             raise ValueError("loss_weights.orbit_summary requires structure_summary_prediction.orbit_summary=true.")
         active_loss_defaults = [
@@ -703,6 +713,8 @@ def main() -> None:
             active_loss_defaults.extend([("clustering_histogram", 1.0), ("clustering_histogram_ce", 0.0)])
         if orbit_summary_enabled:
             active_loss_defaults.append(("orbit_summary", 1.0))
+        if cycle_enabled:
+            active_loss_defaults.extend([("cycle_graphlet_histogram", 1.0), ("cycle_graphlet_histogram_ce", 0.0)])
         if not any(
             float(loss_weights.get(key, default)) != 0.0
             for key, default in active_loss_defaults
@@ -783,6 +795,8 @@ def main() -> None:
                 f"[GraphER/Spectral] clean local-clustering histogram: {histogram_bins} bins; "
                 "softmax head, CDF-MSE loss; histogram is NOT diffused.", flush=True,
             )
+        if cycle_enabled:
+            print("[GraphER/Spectral] clean cycle3 histogram: [triangle, other] / choose(n,3); softmax head, density-MSE loss; NOT diffused.", flush=True)
         if spectral_graphlet_mode:
             print(
                 "Graphlet-logit diffusion: each k-block is selected graphlet "
@@ -898,6 +912,11 @@ def main() -> None:
                         f" clustering_hist_w1={val_metrics['clustering_histogram_w1']:.5f}"
                         f" clustering_hist_tv={val_metrics['clustering_histogram_tv']:.5f}"
                     )
+                if cycle_enabled:
+                    extra += (
+                        f" cycle3_tv={val_metrics['cycle_graphlet_histogram_tv']:.5f}"
+                        f" triangle_count_mae={val_metrics['cycle_graphlet_count_mae']:.5f}"
+                    )
                 print(
                     f"epoch={epoch:04d} "
                     f"train={train_metrics['loss']:.5f} "
@@ -954,6 +973,12 @@ def main() -> None:
             "orbit_summary_representation": "mean_per_node_orca_0_14",
             "orbit_summary_is_diffused": False,
             "orbit_summary_loss": "smooth_l1_log1p" if orbit_summary_enabled else None,
+            "clean_cycle_graphlet_histogram": cycle_enabled,
+            "cycle_graphlet_k": cycle_k,
+            "cycle_graphlet_histogram_bins": ["cycle", "other"] if cycle_enabled else None,
+            "cycle_graphlet_histogram_normalization": "all_node_triples" if cycle_enabled else None,
+            "cycle_graphlet_histogram_is_diffused": False,
+            "cycle_graphlet_histogram_loss": "density_mse" if cycle_enabled else None,
         }
         graphlet_basis_report = (
             graphlet_basis.to_dict() if spectral_graphlet_mode and graphlet_basis is not None else None

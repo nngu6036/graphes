@@ -1219,3 +1219,196 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config "$CFG" \
   --generated-dir "$GEN_LARGER" \
   --output-dir "$GEN_LARGER/evaluation"
+
+
+
+CFG=configs/experiments/grapher/community_small_topology_spectral_clustering_histogram_orbit_dominant.yaml
+
+TRAIN=outputs/topology_grapher/community_small_spectral_clustering_histogram_orbit_dominant/seed_42
+
+GEN=outputs/topology_generation/community_small_spectral_clustering_histogram_orbit_dominant/seed_42
+
+# Reuse the joint checkpoint from your latest ablations.
+CKPT=outputs/topology_grapher/community_small_spectral_clustering_histogram_orbit/seed_42/checkpoint.pt
+
+
+
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --seed 42 \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$CKPT" \
+  --output-dir "$GEN" \
+  --num-generate 64 \
+  --seed 42 \
+  --device gpu
+
+  PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config "$CFG" \
+  --generated-dir "$GEN" \
+  --reference-split val \
+  --output-dir "$GEN/evaluation_val"
+
+Topology generation diagnostics
+  pipeline_mode: topology
+  guidance_mode: clustering_orbit
+  predictor_family: spectral
+  legacy_predictor_guidance_mode: spectral
+  degree_preservation_rate: 1.0
+  source_enrichment_degree_preservation_rate: 1.0
+  source_enrichment_connectedness_rate: 1.0
+  constructor_target_degree_match_rate: 1.0
+  final_target_degree_match_rate: 1.0
+  connectedness_rate: 1.0
+  mean_accepted_steps: 5.265625
+  all_accepted_moves_improve_frozen_energy: True
+  all_accepted_moves_pass_relative_threshold: True
+  prediction_horizon_mode: fixed
+  prediction_horizon_schedule: constant
+  prediction_horizon_initial_k: 1
+  prediction_horizon_final_k: 1
+  mean_realized_prediction_horizon: 1.0
+  mean_prediction_calls: 6.265625
+  mean_accepted_swaps_per_prediction_call: 0.8403990024937655
+  plateau_refresh_count: 0
+  mean_graph_runtime_seconds: 16.417077275281372
+  source_enrichment_enabled: False
+  mean_source_enrichment_accepted_steps: 0.0
+  runtime_seconds: 1052.2547263680026
+  inline_evaluation: False
+  rewiring_guidance_mode: clustering_orbit
+  clustering_guidance_statistic: histogram
+  clustering_histogram_bins: 100
+  predictor_clustering_histogram_w1: 0.02793719116016291
+  mean_accepted_clustering_gain: 0.01352483245304477
+  mean_accepted_clustering_discrepancy_before: 0.06794646938432786
+  mean_accepted_clustering_discrepancy_after: 0.054421636931283095
+  orbit_guidance_weight: 1.0
+  orbit_guidance_distance: log_rmse
+  predictor_orbit_summary_enabled: True
+  mean_accepted_orbit_gain: 0.040724214068327776
+  mean_accepted_orbit_discrepancy_before: 0.3131171852577432
+  mean_accepted_orbit_discrepancy_after: 0.2723929711894154
+  mean_accepted_spectral_gain: -9.44300139246638e-05
+  mean_accepted_clean_spectral_gain: -9.44300139246638e-05
+  mean_projection_residual: 0.05542773796851944
+  mean_bridge_clean_mix: 1.0
+  mean_bridge_expansions: 0.0
+  predictor_spectral_normalized_error: 0.05473754141712561
+  spectral_distance: rmse
+  spectral_normalization: mean_degree
+  spectral_bridge_schedule: linear
+  spectral_debug_enabled: False
+  spectral_guidance_weight: 0.0
+  clustering_guidance_weight: 0.25
+  scoring_components: ['clustering', 'orbit']
+  discrepancy_scope: same_step_frozen_prediction; accepted_moves_only
+  candidate_spectral_diagnostics_requested: False
+  accepted_spectral_diagnostics_computed: True
+  clustering_diagnostics_computed: True
+  accepted_clustering_measurements: 337
+  accepted_clustering_improved_fraction: 0.7091988130563798
+  accepted_clustering_worsened_fraction: 0.2551928783382789
+  orbit_diagnostics_computed: True
+  accepted_orbit_measurements: 337
+  accepted_orbit_improved_fraction: 0.9406528189910979
+  accepted_orbit_worsened_fraction: 0.05934718100890208
+  predictor_error_scope: checkpoint_validation_report
+  checkpoint_validation_metrics: {'val_clustering_histogram_ce': 2.701964447274804, 'val_clustering_histogram_loss': 0.0021824423483849387, 'val_clustering_histogram_tv': 0.37070821900852025, 'val_clustering_histogram_w1': 0.02793719116016291, 'val_loss': 0.010037439071311383, 'val_low_frequency_loss': 0.0, 'val_moment2_loss': 4.068922800648522e-05, 'val_orbit_summary_log_mae': 0.08085207702242769, 'val_orbit_summary_log_rmse': 0.09713759098667651, 'val_orbit_summary_loss': 0.006275424465457036, 'val_orbit_summary_raw_nrmse': 0.12651615065988153, 'val_spectral_lambda1_mae': 0.0, 'val_spectral_loss': 0.0015795723120390903, 'val_spectral_mae': 0.18234328227117658, 'val_spectral_moment2_relative_error': 0.007277826544850541, 'val_spectral_monotonic_violations': 0.0, 'val_spectral_normalized_mae': 0.042617097293259576, 'val_spectral_normalized_rmse': 0.05473754141712561, 'val_spectral_trace_mae': 2.6747584342956543e-06, 'val_spectrum_loss': 0.0015795723120390903}
+Saved results to: outputs/topology_generation/community_small_spectral_clustering_histogram_orbit_dominant/seed_42
+ORCA orbit evaluation enabled: /home/quang/orca/orca.out
+Generic MMD protocol: graphrnn (clustering_bins=100)
+Dataset: benchmark=community_small serialized=sbm protocol=graphes_community_small_spectre_v2
+Dataset splits: train=64 val=16 test=20
+Dataset fingerprint: 5d342c35939e49ac4e63b79d2c726292dae37539302199876036c9c2c8b43a4e
+  train SHA256: 29a487fc51d452cd503045befef320ca9c780f3d5299eaf3ba5d3aed1a11b76c
+  val SHA256: d14a369f3cbc2154b7e9b29c0797a99f4a61c318c600ca03df5149e91f325731
+  test SHA256: 02ae6b8dc2330e2efdf823edb15d1b38596500f694b3acb7d55eda13566e544c
+Generated graph input: outputs/topology_generation/community_small_spectral_clustering_histogram_orbit_dominant/seed_42/topology_refined_graphs.pkl
+Generated stage label: topology_final
+Evaluation counts: reference_val=16 generated=64 train_reference=64
+Graph-distribution MMD against held-out val graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_val                        0.064707          0.055468      0.004454
+hh_source_to_val                    0.068362          0.298500      0.136374
+topology_final_to_val               0.068362          0.064325      0.029401
+
+
+for NAME in \
+  community_small_orbit_checkpoint_clustering \
+  community_small_orbit_checkpoint_orbit \
+  community_small_spectral_clustering_histogram_orbit
+do
+  OLD_GEN="outputs/topology_generation/$NAME/seed_42"
+
+  PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+    --config "$CFG" \
+    --generated-dir "$OLD_GEN" \
+    --reference-split val \
+    --output-dir "$OLD_GEN/evaluation_val" \
+  || break
+done
+ORCA orbit evaluation enabled: /home/quang/orca/orca.out
+Generic MMD protocol: graphrnn (clustering_bins=100)
+Dataset: benchmark=community_small serialized=sbm protocol=graphes_community_small_spectre_v2
+Dataset splits: train=64 val=16 test=20
+Dataset fingerprint: 5d342c35939e49ac4e63b79d2c726292dae37539302199876036c9c2c8b43a4e
+  train SHA256: 29a487fc51d452cd503045befef320ca9c780f3d5299eaf3ba5d3aed1a11b76c
+  val SHA256: d14a369f3cbc2154b7e9b29c0797a99f4a61c318c600ca03df5149e91f325731
+  test SHA256: 02ae6b8dc2330e2efdf823edb15d1b38596500f694b3acb7d55eda13566e544c
+Generated graph input: outputs/topology_generation/community_small_orbit_checkpoint_clustering/seed_42/topology_refined_graphs.pkl
+Generated stage label: topology_final
+Evaluation counts: reference_val=16 generated=64 train_reference=64
+Graph-distribution MMD against held-out val graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_val                        0.064707          0.055468      0.004454
+hh_source_to_val                    0.068362          0.298500      0.136374
+topology_final_to_val               0.068362          0.026154      0.077414
+Saved metrics: outputs/topology_generation/community_small_orbit_checkpoint_clustering/seed_42/evaluation_val/graph_mmd_metrics.csv
+Saved report:  outputs/topology_generation/community_small_orbit_checkpoint_clustering/seed_42/evaluation_val/graph_evaluation_report.json
+Saved figure:  outputs/topology_generation/community_small_orbit_checkpoint_clustering/seed_42/evaluation_val/generated_graph_samples.png
+Saved figure:  outputs/topology_generation/community_small_orbit_checkpoint_clustering/seed_42/evaluation_val/generated_graph_samples.pdf
+ORCA orbit evaluation enabled: /home/quang/orca/orca.out
+Generic MMD protocol: graphrnn (clustering_bins=100)
+Dataset: benchmark=community_small serialized=sbm protocol=graphes_community_small_spectre_v2
+Dataset splits: train=64 val=16 test=20
+Dataset fingerprint: 5d342c35939e49ac4e63b79d2c726292dae37539302199876036c9c2c8b43a4e
+  train SHA256: 29a487fc51d452cd503045befef320ca9c780f3d5299eaf3ba5d3aed1a11b76c
+  val SHA256: d14a369f3cbc2154b7e9b29c0797a99f4a61c318c600ca03df5149e91f325731
+  test SHA256: 02ae6b8dc2330e2efdf823edb15d1b38596500f694b3acb7d55eda13566e544c
+Generated graph input: outputs/topology_generation/community_small_orbit_checkpoint_orbit/seed_42/topology_refined_graphs.pkl
+Generated stage label: topology_final
+Evaluation counts: reference_val=16 generated=64 train_reference=64
+Graph-distribution MMD against held-out val graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_val                        0.064707          0.055468      0.004454
+hh_source_to_val                    0.068362          0.298500      0.136374
+topology_final_to_val               0.068362          0.114725      0.007682
+Saved metrics: outputs/topology_generation/community_small_orbit_checkpoint_orbit/seed_42/evaluation_val/graph_mmd_metrics.csv
+Saved report:  outputs/topology_generation/community_small_orbit_checkpoint_orbit/seed_42/evaluation_val/graph_evaluation_report.json
+Saved figure:  outputs/topology_generation/community_small_orbit_checkpoint_orbit/seed_42/evaluation_val/generated_graph_samples.png
+Saved figure:  outputs/topology_generation/community_small_orbit_checkpoint_orbit/seed_42/evaluation_val/generated_graph_samples.pdf
+ORCA orbit evaluation enabled: /home/quang/orca/orca.out
+Generic MMD protocol: graphrnn (clustering_bins=100)
+Dataset: benchmark=community_small serialized=sbm protocol=graphes_community_small_spectre_v2
+Dataset splits: train=64 val=16 test=20
+Dataset fingerprint: 5d342c35939e49ac4e63b79d2c726292dae37539302199876036c9c2c8b43a4e
+  train SHA256: 29a487fc51d452cd503045befef320ca9c780f3d5299eaf3ba5d3aed1a11b76c
+  val SHA256: d14a369f3cbc2154b7e9b29c0797a99f4a61c318c600ca03df5149e91f325731
+  test SHA256: 02ae6b8dc2330e2efdf823edb15d1b38596500f694b3acb7d55eda13566e544c
+Generated graph input: outputs/topology_generation/community_small_spectral_clustering_histogram_orbit/seed_42/topology_refined_graphs.pkl
+Generated stage label: topology_final
+Evaluation counts: reference_val=16 generated=64 train_reference=64
+Graph-distribution MMD against held-out val graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_val                        0.064707          0.055468      0.004454
+hh_source_to_val                    0.068362          0.298500      0.136374
+topology_final_to_val               0.068362          0.042204      0.054210
+Saved metrics: outputs/topology_generation/community_small_spectral_clustering_histogram_orbit/seed_42/evaluation_val/graph_mmd_metrics.csv
+Saved report:  outputs/topology_generation/community_small_spectral_clustering_histogram_orbit/seed_42/evaluation_val/graph_evaluation_report.json
+Saved figure:  outputs/topology_generation/community_small_spectral_clustering_histogram_orbit/seed_42/evaluation_val/generated_graph_samples.png
+Saved figure:  outputs/topology_generation/community_small_spectral_clustering_histogram_orbit/seed_42/evaluation_val/generated_graph_samples.pdf

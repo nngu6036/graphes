@@ -667,3 +667,13 @@ The graph report evaluator now supports `--reference-split val|test`; use valida
 for guidance selection. See [GRAPHER_ORBIT_DOMINANT.md](GRAPHER_ORBIT_DOMINANT.md)
 for installation, checkpoint reuse, optional training, generation, evaluation,
 performance options, and reporting compatibility notes.
+
+### Cycle-only graphlet summary (k=3)
+
+The spectral-input debug predictor can additionally learn a two-bin triangle
+occurrence histogram and use it in degree-preserving rewiring, alongside the
+clustering histogram and orbit summary. See
+[GRAPHER_CYCLE3_SUMMARY.md](GRAPHER_CYCLE3_SUMMARY.md) for the exact normalization,
+limits, checkpoint requirements, diagnostics, and training/generation/evaluation
+commands. The new config is
+`configs/experiments/grapher/community_small_topology_spectral_clustering_orbit_cycle3.yaml`.

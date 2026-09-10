@@ -13,6 +13,10 @@ from grapher.rewiring_mlp.generic.clustering import (
     extract_clustering_histogram, validate_clustering_histogram,
     clustering_histogram_wasserstein,
 )
+from grapher.rewiring_mlp.generic.cycle_graphlets import (
+    validate_cycle_graphlet_k, extract_cycle_graphlet_histogram,
+    validate_cycle_graphlet_histogram, cycle_graphlet_histogram_distance,
+)
 from grapher.rewiring_mlp.generic.orbit import (
     extract_orbit_summary, orbit_summary_distance, validate_orbit_summary,
 )
@@ -46,6 +50,7 @@ class SpectralPrediction:
     clean_clustering_coefficient: float | None = None
     clean_clustering_histogram: np.ndarray | None = None
     clean_orbit_summary: np.ndarray | None = None
+    clean_cycle_graphlet_histogram: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +100,9 @@ class SpectralRefinerConfig:
     clustering_histogram_distance: str = "wasserstein1"
     orbit_weight: float = 1.0
     orbit_distance: str = "log_rmse"
+    cycle_weight: float = 1.0
+    cycle_k: int = 3
+    cycle_distance: str = "total_variation"
     # False avoids candidate eigensolves when spectrum is not scored. The
     # selected successor is still measured, preserving accepted-step diagnostics.
     compute_candidate_spectral_diagnostics: bool = True
@@ -229,6 +237,7 @@ class SpectralRefinerConfig:
         guidance = dict(values.get("spectral_guidance", {}) or {})
         clustering_guidance = dict(values.get("clustering_guidance", {}) or {})
         orbit_guidance = dict(values.get("orbit_guidance", {}) or {})
+        cycle_guidance = dict(values.get("cycle_guidance", {}) or {})
         bridge = SpectralBridgeSchedule.from_dict(guidance)
         legacy_refresh = int(values.get("refresh_prediction_every", 1))
         horizon_data = values.get("prediction_horizon")
@@ -330,6 +339,9 @@ class SpectralRefinerConfig:
             clustering_histogram_distance=str(clustering_guidance.get("distance", "wasserstein1")).lower(),
             orbit_weight=float(orbit_guidance.get("weight", 1.0)),
             orbit_distance=str(orbit_guidance.get("distance", "log_rmse")).lower(),
+            cycle_weight=float(cycle_guidance.get("weight", 1.0)),
+            cycle_k=validate_cycle_graphlet_k(cycle_guidance.get("k", 3)),
+            cycle_distance=str(cycle_guidance.get("distance", "total_variation")).lower(),
             compute_candidate_spectral_diagnostics=bool(
                 candidate_search.get("compute_spectral_diagnostics", True)
             ),
@@ -382,6 +394,9 @@ class SpectralRefinerConfig:
             "spectral_clustering", "spectral_orbit", "clustering_orbit",
             "spectral_clustering_orbit",
         }
+        # Canonical component order keeps existing modes stable and appends a
+        # cycle-only clean summary; this is not the legacy graphlet diffusion.
+        allowed_guidance_modes |= {"cycle"} | {mode + "_cycle" for mode in allowed_guidance_modes}
         if config.guidance_mode not in allowed_guidance_modes:
             raise ValueError(
                 "topology_refiner.guidance_mode must be one of "
@@ -392,6 +407,7 @@ class SpectralRefinerConfig:
             config.spectral_weight < 0.0
             or config.clustering_weight < 0.0
             or config.orbit_weight < 0.0
+            or config.cycle_weight < 0.0
         ):
             raise ValueError("Guidance weights must be nonnegative.")
         active_components = set(config.guidance_mode.split("_"))
@@ -401,6 +417,12 @@ class SpectralRefinerConfig:
             raise ValueError("clustering guidance requires clustering_guidance.weight > 0.")
         if "orbit" in active_components and config.orbit_weight <= 0.0:
             raise ValueError("orbit guidance requires orbit_guidance.weight > 0.")
+        if "cycle" in active_components and config.cycle_weight <= 0.0:
+            raise ValueError("cycle guidance requires cycle_guidance.weight > 0.")
+        if config.cycle_distance != "total_variation":
+            raise ValueError("cycle_guidance.distance must be total_variation.")
+        if not all(np.isfinite(w) for w in (config.spectral_weight, config.clustering_weight, config.orbit_weight, config.cycle_weight)):
+            raise ValueError("Guidance weights must be finite.")
         if config.orbit_distance not in {"log_rmse", "log1p_rmse", "rmse_log1p", "raw_rmse", "rmse"}:
             raise ValueError("orbit_guidance.distance must be log_rmse or raw_rmse.")
         if config.steps < 0:
@@ -568,6 +590,10 @@ def predict_clean_spectrum(
         clean_clustering_coefficient=clean_clustering,
         clean_clustering_histogram=clean_histogram,
         clean_orbit_summary=clean_orbit,
+        clean_cycle_graphlet_histogram=(
+            validate_cycle_graphlet_histogram(outputs["clean_cycle_graphlet_histogram"][0].detach().cpu().numpy())
+            if "clean_cycle_graphlet_histogram" in outputs else None
+        ),
     )
 
 
@@ -580,6 +606,7 @@ def score_spectral_candidates(
     clean_clustering_coefficient: float | None = None,
     clean_clustering_histogram: np.ndarray | None = None,
     clean_orbit_summary: np.ndarray | None = None,
+    clean_cycle_graphlet_histogram: np.ndarray | None = None,
     config: SpectralRefinerConfig,
     candidate_graphs: dict[Action, nx.Graph],
     device: torch.device | str = "cpu",
@@ -605,6 +632,7 @@ def score_spectral_candidates(
     active_components = set(config.guidance_mode.split("_"))
     needs_clustering = "clustering" in active_components
     needs_orbit = "orbit" in active_components
+    needs_cycle = "cycle" in active_components
     use_histogram = needs_clustering and config.clustering_statistic == "histogram"
     target_histogram = current_histogram = None
     if use_histogram:
@@ -632,6 +660,19 @@ def score_spectral_candidates(
         current_orbit = extract_orbit_summary(graph)
         current_orbit_discrepancy = orbit_summary_distance(
             current_orbit, target_orbit, distance=config.orbit_distance
+        )
+
+    target_cycle = current_cycle = None
+    current_cycle_discrepancy = None
+    cycle_valid = graph.number_of_nodes() >= config.cycle_k
+    if needs_cycle:
+        validate_cycle_graphlet_k(config.cycle_k)
+        if clean_cycle_graphlet_histogram is None:
+            raise ValueError("Cycle-guided rewiring requires a checkpoint with clean_cycle_graphlet_histogram prediction enabled.")
+        target_cycle = validate_cycle_graphlet_histogram(clean_cycle_graphlet_histogram)
+        current_cycle = extract_cycle_graphlet_histogram(graph, k=config.cycle_k)
+        current_cycle_discrepancy = (
+            cycle_graphlet_histogram_distance(current_cycle, target_cycle) if cycle_valid else 0.0
         )
 
     candidate_list = [candidate_graphs[action] for action in candidates]
@@ -730,6 +771,17 @@ def score_spectral_candidates(
                 )
             )
 
+        candidate_cycle = None
+        candidate_cycle_discrepancy = None
+        cycle_gain = cycle_relative = 0.0
+        if needs_cycle:
+            candidate_cycle = extract_cycle_graphlet_histogram(candidate, k=config.cycle_k)
+            candidate_cycle_discrepancy = (
+                cycle_graphlet_histogram_distance(candidate_cycle, target_cycle) if cycle_valid else 0.0
+            )
+            cycle_gain = float(current_cycle_discrepancy - candidate_cycle_discrepancy)
+            cycle_relative = cycle_gain / max(abs(current_cycle_discrepancy), config.relative_improvement_epsilon)
+
         components = set(config.guidance_mode.split("_"))
         energy_improvement = 0.0
         objective_residual = 0.0
@@ -754,6 +806,11 @@ def score_spectral_candidates(
             objective_residual += config.orbit_weight * float(candidate_orbit_discrepancy) / max(
                 abs(float(current_orbit_discrepancy)),
                 float(config.relative_improvement_epsilon),
+            )
+        if "cycle" in components:
+            energy_improvement += config.cycle_weight * cycle_relative
+            objective_residual += config.cycle_weight * candidate_cycle_discrepancy / max(
+                abs(current_cycle_discrepancy), config.relative_improvement_epsilon
             )
         relative = float(energy_improvement)
         if config.guidance_mode == "spectral":
@@ -791,6 +848,15 @@ def score_spectral_candidates(
                 "candidate_orbit_summary": candidate_orbit.tolist() if candidate_orbit is not None else None,
                 "current_orbit_discrepancy": current_orbit_discrepancy,
                 "candidate_orbit_discrepancy": candidate_orbit_discrepancy,
+                "target_cycle_graphlet_histogram": target_cycle.tolist() if target_cycle is not None else None,
+                "current_cycle_graphlet_histogram": current_cycle.tolist() if current_cycle is not None else None,
+                "candidate_cycle_graphlet_histogram": candidate_cycle.tolist() if candidate_cycle is not None else None,
+                "cycle_graphlet_k": config.cycle_k if needs_cycle else None,
+                "cycle_graphlet_valid": cycle_valid if needs_cycle else None,
+                "current_cycle_discrepancy": current_cycle_discrepancy,
+                "candidate_cycle_discrepancy": candidate_cycle_discrepancy,
+                "cycle_gain": cycle_gain,
+                "cycle_relative_improvement": cycle_relative,
                 "orbit_gain": float(orbit_gain),
                 "orbit_relative_improvement": float(orbit_relative),
                 "projection_residual": None if candidate_local is None else float(candidate_local),
@@ -1022,6 +1088,10 @@ def refine_graph_with_spectral_predictions(
                 if prediction.clean_orbit_summary is None:
                     raise ValueError("Orbit guidance requires structure_summary_prediction.orbit_summary=true in the trained checkpoint.")
                 validate_orbit_summary(prediction.clean_orbit_summary)
+            if "cycle" in active_components:
+                if prediction.clean_cycle_graphlet_histogram is None:
+                    raise ValueError("Cycle guidance requires structure_summary_prediction.cycle_graphlet_histogram=true in the trained checkpoint.")
+                validate_cycle_graphlet_histogram(prediction.clean_cycle_graphlet_histogram)
             prediction_calls += 1
             prediction_block += 1
             accepted_since_prediction = 0
@@ -1132,6 +1202,7 @@ def refine_graph_with_spectral_predictions(
                 clean_clustering_coefficient=prediction.clean_clustering_coefficient,
                 clean_clustering_histogram=prediction.clean_clustering_histogram,
                 clean_orbit_summary=prediction.clean_orbit_summary,
+                clean_cycle_graphlet_histogram=prediction.clean_cycle_graphlet_histogram,
                 config=cfg,
                 candidate_graphs=candidate_graphs,
                 device=device,
@@ -1408,8 +1479,11 @@ def refine_graph_with_spectral_predictions(
                 "candidate_spectral_diagnostics_eager": chosen["candidate_spectral_diagnostics_eager"],
                 "clustering_diagnostics_computed": chosen["current_clustering_discrepancy"] is not None,
                 "orbit_diagnostics_computed": chosen["current_orbit_discrepancy"] is not None,
+                "cycle_diagnostics_computed": chosen["current_cycle_discrepancy"] is not None,
                 "reason": (
-                    "orbit_summary_guided_swap"
+                    "cycle_graphlet_summary_guided_swap"
+                    if "cycle" in set(cfg.guidance_mode.split("_"))
+                    else "orbit_summary_guided_swap"
                     if "orbit" in set(cfg.guidance_mode.split("_"))
                     else "clustering_histogram_guided_swap"
                     if cfg.clustering_statistic == "histogram" and "clustering" in set(cfg.guidance_mode.split("_"))
@@ -1453,6 +1527,10 @@ def refine_graph_with_spectral_predictions(
                         "target_orbit_summary", "current_orbit_summary", "candidate_orbit_summary",
                         "current_orbit_discrepancy", "candidate_orbit_discrepancy",
                         "orbit_gain", "orbit_relative_improvement",
+                        "target_cycle_graphlet_histogram", "current_cycle_graphlet_histogram",
+                        "candidate_cycle_graphlet_histogram", "cycle_graphlet_k", "cycle_graphlet_valid",
+                        "current_cycle_discrepancy", "candidate_cycle_discrepancy",
+                        "cycle_gain", "cycle_relative_improvement",
                     )
                 },
                 "spectral_gain": float(chosen["spectral_gain"]),

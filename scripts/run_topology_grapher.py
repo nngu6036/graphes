@@ -158,12 +158,15 @@ def _guidance_diagnostic_summary(
         "spectral_guidance_weight": settings.spectral_weight if "spectral" in components else 0.0,
         "clustering_guidance_weight": settings.clustering_weight if "clustering" in components else 0.0,
         "orbit_guidance_weight": settings.orbit_weight if "orbit" in components else 0.0,
+        "cycle_guidance_weight": settings.cycle_weight if "cycle" in components else 0.0,
+        "cycle_guidance_k": settings.cycle_k if "cycle" in components else None,
+        "cycle_guidance_distance": settings.cycle_distance if "cycle" in components else None,
         "scoring_components": sorted(components),
         "discrepancy_scope": "same_step_frozen_prediction; accepted_moves_only",
         "candidate_spectral_diagnostics_requested": settings.compute_candidate_spectral_diagnostics,
         "accepted_spectral_diagnostics_computed": bool(accepted_rows),
     }
-    for component in ("clustering", "orbit"):
+    for component in ("clustering", "orbit", "cycle"):
         active = component in components
         measured = [r for r in accepted_rows if active and r.get(f"current_{component}_discrepancy") is not None]
         result[f"{component}_diagnostics_computed"] = bool(measured)
@@ -430,6 +433,11 @@ def main() -> None:
                         raise ValueError("clustering_guidance.histogram_bins disagrees with the checkpoint.")
                 elif not getattr(model, "predict_clustering_coefficient", False):
                     raise ValueError("Mean-clustering guidance requested, but checkpoint has no scalar clustering head.")
+            if "cycle" in active_components:
+                if not getattr(model, "predict_cycle_graphlet_histogram", False):
+                    raise ValueError("Cycle guidance requested, but checkpoint has no cycle graphlet histogram head. Train with structure_summary_prediction.cycle_graphlet_histogram=true.")
+                if refiner_settings.cycle_k != model.cycle_graphlet_k:
+                    raise ValueError("cycle_guidance.k does not match the checkpoint.")
             if "orbit" in active_components and not getattr(model, "predict_orbit_summary", False):
                 raise ValueError(
                     "Orbit guidance requested, but checkpoint has no orbit-summary head. "
@@ -892,6 +900,9 @@ def main() -> None:
                 "orbit_guidance_weight": refiner_settings.orbit_weight,
                 "orbit_guidance_distance": refiner_settings.orbit_distance,
                 "predictor_orbit_summary_enabled": bool(getattr(model, "predict_orbit_summary", False)),
+                "predictor_cycle_graphlet_histogram_enabled": bool(getattr(model, "predict_cycle_graphlet_histogram", False)),
+                "predictor_cycle_graphlet_histogram_tv": (checkpoint.get("report", {}) or {}).get("val_cycle_graphlet_histogram_tv"),
+                "cycle_graphlet_representation": "[triangle,other] / choose(n,3)" if getattr(model, "predict_cycle_graphlet_histogram", False) else None,
                 "mean_accepted_orbit_gain": _mean_or_zero(accepted_rows, "orbit_gain"),
                 "mean_accepted_orbit_discrepancy_before": _mean_or_zero(accepted_rows, "current_orbit_discrepancy"),
                 "mean_accepted_orbit_discrepancy_after": _mean_or_zero(accepted_rows, "candidate_orbit_discrepancy"),

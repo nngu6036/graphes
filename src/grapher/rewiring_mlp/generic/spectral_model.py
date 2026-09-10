@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from grapher.rewiring_mlp.generic.cycle_graphlets import validate_cycle_graphlet_k
 from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.layers import TopologyMPNNLayer
@@ -55,6 +56,8 @@ class TopologySpectralTransformerPredictor(nn.Module):
         clustering_histogram_bins: int = 100,
         predict_orbit_summary: bool = False,
         orbit_summary_width: int = 15,
+        predict_cycle_graphlet_histogram: bool = False,
+        cycle_graphlet_k: int = 3,
     ) -> None:
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -72,6 +75,8 @@ class TopologySpectralTransformerPredictor(nn.Module):
         self.predict_clustering_coefficient = bool(predict_clustering_coefficient)
         self.predict_clustering_histogram = bool(predict_clustering_histogram)
         self.predict_orbit_summary = bool(predict_orbit_summary)
+        self.predict_cycle_graphlet_histogram = bool(predict_cycle_graphlet_histogram)
+        self.cycle_graphlet_k = validate_cycle_graphlet_k(cycle_graphlet_k)
         if (
             isinstance(clustering_histogram_bins, bool)
             or int(clustering_histogram_bins) != clustering_histogram_bins
@@ -184,6 +189,14 @@ class TopologySpectralTransformerPredictor(nn.Module):
                 nn.Linear(clustering_hidden, self.orbit_summary_width),
             )
             if self.predict_orbit_summary else None
+        )
+
+        self.cycle_graphlet_histogram_head = (
+            nn.Sequential(
+                nn.Linear(self.spectral_dim, clustering_hidden),
+                nn.SiLU(),
+                nn.Linear(clustering_hidden, 2),
+            ) if self.predict_cycle_graphlet_histogram else None
         )
 
     @staticmethod
@@ -382,6 +395,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
             self.clustering_coefficient_head is not None
             or self.clustering_histogram_head is not None
             or self.orbit_summary_head is not None
+            or self.cycle_graphlet_histogram_head is not None
         ):
             weights = mask.unsqueeze(-1).to(encoded.dtype)
             pooled = (encoded * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
@@ -389,6 +403,16 @@ class TopologySpectralTransformerPredictor(nn.Module):
             logits = self.clustering_histogram_head(pooled)
             result["clean_clustering_histogram_logits"] = logits
             result["clean_clustering_histogram"] = torch.softmax(logits, dim=-1)
+        if self.cycle_graphlet_histogram_head is not None:
+            cycle_logits = self.cycle_graphlet_histogram_head(pooled)
+            cycle_histogram = torch.softmax(cycle_logits, dim=-1)
+            cycle_valid = batch.graph_size >= self.cycle_graphlet_k
+            empty_histogram = torch.zeros_like(cycle_histogram)
+            empty_histogram[:, 1] = 1.0
+            result["clean_cycle_graphlet_histogram_logits"] = cycle_logits
+            result["clean_cycle_graphlet_histogram"] = torch.where(
+                cycle_valid.unsqueeze(-1), cycle_histogram, empty_histogram
+            )
         if self.orbit_summary_head is not None:
             # Predict log1p(mean per-node orbit counts). Softplus keeps the
             # latent log-count target non-negative; expm1 maps it back to the
@@ -547,6 +571,38 @@ class TopologySpectralTransformerPredictor(nn.Module):
                     "orbit_summary_raw_nrmse": float(raw_nrmse.mean().detach().cpu()),
                 }
 
+        cycle_metrics: dict[str, float] = {}
+        if self.predict_cycle_graphlet_histogram:
+            cycle_prediction = outputs["clean_cycle_graphlet_histogram"]
+            cycle_target = batch.clean_cycle_graphlet_histogram_target
+            if cycle_target is None:
+                raise ValueError("Cycle graphlet prediction is enabled but the batch has no clean cycle target.")
+            cycle_target = cycle_target.to(cycle_prediction.dtype)
+            if cycle_target.shape != cycle_prediction.shape:
+                raise ValueError("Cycle graphlet targets must have shape [batch_size, 2].")
+            valid = (batch.graph_size >= self.cycle_graphlet_k).to(cycle_prediction.dtype)
+            denominator = valid.sum().clamp_min(1.0)
+            cycle_delta = cycle_prediction[:, 0] - cycle_target[:, 0]
+            # Two-bin MSE equals squared triangle-density error. Small graphs
+            # with no triples are excluded rather than taught fictitious trials.
+            cycle_loss = (cycle_delta.square() * valid).sum() / denominator
+            cycle_ce_per_graph = -(cycle_target * F.log_softmax(
+                outputs["clean_cycle_graphlet_histogram_logits"], dim=-1
+            )).sum(dim=-1)
+            cycle_ce = (cycle_ce_per_graph * valid).sum() / denominator
+            total = total + float(weights.get("cycle_graphlet_histogram", 1.0)) * cycle_loss
+            total = total + float(weights.get("cycle_graphlet_histogram_ce", 0.0)) * cycle_ce
+            with torch.no_grad():
+                n = batch.graph_size.to(cycle_prediction.dtype)
+                triples = (n * (n - 1) * (n - 2) / 6).clamp_min(0)
+                cycle_metrics = {
+                    "cycle_graphlet_histogram_loss": float(cycle_loss.detach().cpu()),
+                    "cycle_graphlet_histogram_ce": float(cycle_ce.detach().cpu()),
+                    "cycle_graphlet_histogram_tv": float(((cycle_delta.abs() * valid).sum() / denominator).cpu()),
+                    "cycle_graphlet_count_mae": float(((cycle_delta.abs() * triples * valid).sum() / denominator).cpu()),
+                    "cycle_graphlet_valid_fraction": float(valid.mean().cpu()),
+                }
+
         with torch.no_grad():
             abs_delta = torch.abs(predicted - target) * valid_weight
             spectral_mae = abs_delta.sum() / count
@@ -605,6 +661,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
             )
         metrics.update(histogram_metrics)
         metrics.update(orbit_metrics)
+        metrics.update(cycle_metrics)
         return total, metrics
 
 
@@ -640,6 +697,8 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "clustering_histogram_bins": self.clustering_histogram_bins,
             "predict_orbit_summary": self.predict_orbit_summary,
             "orbit_summary_width": self.orbit_summary_width,
+            "predict_cycle_graphlet_histogram": self.predict_cycle_graphlet_histogram,
+            "cycle_graphlet_k": self.cycle_graphlet_k,
         }
 
 
