@@ -305,6 +305,10 @@ def main() -> None:
 
     config = load_yaml(args.config)
     apply_config_overrides(config, args.config_overrides)
+    if bool((config.get("joint_typed_degree") or {}).get("enabled", False)):
+        from grapher.rewiring_mlp.attributed.joint_typed_edge_generation import generate_joint_typed_edge
+        generate_joint_typed_edge(config, args)
+        return
     stage = str((config.get("pipeline", {}) or {}).get("stage", "attributed")).lower()
     if stage not in {"attributed", "attributed_topology", "molecular"}:
         raise ValueError("run_attributed_grapher.py requires pipeline.stage: attributed.")

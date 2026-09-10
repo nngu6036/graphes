@@ -725,3 +725,11 @@ preserved, and new edge classes start with at most `1e-6` total probability per
 supported graph size. Empirical distributions still use only training graphs.
 The expansion is logged and saved in the training report and joint checkpoint;
 the training command and component checkpoint paths need no changes.
+
+## Joint typed prior and soft bond diffusion (new attributed family)
+
+See [GRAPHER_JOINT_TYPED_EDGE.md](GRAPHER_JOINT_TYPED_EDGE.md) for the new
+joint typed-DH-VAE + symmetric soft edge-logit bridge, indexed source/target
+alignment, independent checkpoint selections, and same-bond-type constrained
+realization. The new QM9/ZINC configs are `*_attributed_joint_typed_edge.yaml`.
+Legacy generic and attributed model families remain available unchanged.
