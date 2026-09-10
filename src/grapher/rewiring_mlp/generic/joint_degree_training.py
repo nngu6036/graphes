@@ -23,7 +23,7 @@ import torch
 from grapher.data.io import load_dataset_splits
 from grapher.models.dhvae_hh.degree_vae import (
     DegreeHistogramVAE, DegreeVectorizer, build_degree_vae,
-    load_degree_vae_checkpoint, save_degree_vae_checkpoint,
+    load_degree_vae_checkpoint,
 )
 from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.generic.joint_degree_model import (
@@ -34,10 +34,13 @@ from grapher.rewiring_mlp.generic.spectral_data import (
     collate_spectral_examples,
 )
 from grapher.rewiring_mlp.generic.spectral_model import (
-    load_topology_spectral_checkpoint, save_topology_spectral_checkpoint,
+    load_topology_spectral_checkpoint,
+)
+from grapher.rewiring_mlp.generic.joint_checkpointing import (
+    JointCheckpointManager, atomic_json, ensure_fresh_joint_output, resolve_checkpoint_policy,
 )
 from grapher.utils.device import resolve_torch_device
-from grapher.utils.io import ensure_dir, save_json
+from grapher.utils.io import ensure_dir
 
 
 def graph_fingerprint(graphs) -> str:
@@ -337,6 +340,7 @@ def train_joint_degree_grapher(config: dict[str, Any], args) -> None:
     config = deepcopy(config)
     joint = config["joint_degree"]
     pcfg = config.setdefault("topology_predictor", {})
+    joint["checkpointing"] = resolve_checkpoint_policy(config)
     if str(config.get("pipeline", {}).get("stage", "topology")) != "topology" or config.get("categorical_state") or config.get("molecular_generation"):
         raise ValueError("Joint degree integration currently supports simple unattributed topology graphs only.")
     degree_type = str(config.get("degree_generator", {}).get("type", "degree_histogram_vae"))
@@ -394,10 +398,14 @@ def train_joint_degree_grapher(config: dict[str, Any], args) -> None:
     config["topology_predictor"]["epochs"] = epochs
     output = ensure_dir(args.output_dir or Path(pcfg["checkpoint_path"]).parent)
     path = Path(output) / "checkpoint.pt"
-    if path.exists():
-        raise FileExistsError(f"Refusing to overwrite joint checkpoint {path}; use a new output directory.")
+    ensure_fresh_joint_output(Path(output))
     model, warm_report = build_joint_model(config, train_graphs, degree_provenance_graphs=list(splits["train"]))
     model.to(device)
+    checkpoints = JointCheckpointManager(
+        Path(output), config=config,
+        histogram_enabled=bool(model.predict_clustering_histogram),
+        orbit_enabled=bool(model.predict_orbit_summary),
+    )
     support = warm_report["degree_edge_support"]
     if support["expanded"]:
         print(f"[GraphER/JointDegree] expanded DH-VAE edge support "
@@ -408,7 +416,10 @@ def train_joint_degree_grapher(config: dict[str, Any], args) -> None:
     print("[GraphER/JointDegree] conditioning=actual degree histogram -> posterior mean -> decoder features; "
           "same path at train/inference; HH/swaps are not differentiated.", flush=True)
     print(f"[GraphER/JointDegree] orbit consistency={model.orbit_consistency}; "
-          f"selection=val_structure_loss + {joint.get('loss_weight',0.01)} * val_degree_loss", flush=True)
+          f"best_joint_selection=val_structure_loss + {joint.get('loss_weight',0.01)} * val_degree_loss", flush=True)
+    print(f"[GraphER/JointDegree] retained selections={list(checkpoints.criteria)}; "
+          f"save_last={checkpoints.policy['enabled'] and checkpoints.policy['save_last']}; "
+          "checkpoint.pt stays best_joint; best selections exclude warmup in joint runs.", flush=True)
     train_endpoints = _endpoints(train_graphs, config, seed)
     val_endpoints = _endpoints(val_graphs, config, seed + 1)
     # Check held-out sizes/degrees BEFORE training. Never clip unknown degrees.
@@ -429,7 +440,6 @@ def train_joint_degree_grapher(config: dict[str, Any], args) -> None:
     dataset_fingerprints = {name: graph_fingerprint(list(splits.get(name, []))) for name in ("train", "val", "test")}
     initial_degree_state = {k: v.detach().cpu().clone() for k, v in model.degree_model.state_dict().items()}
     history = []
-    best = float("inf"); best_epoch = 0
     progress = max(1, int(pcfg.get("progress_interval", 5)))
     cuda_devices = [device.index if device.index is not None else torch.cuda.current_device()] if device.type == "cuda" else []
     for epoch in range(1, epochs + 1):
@@ -449,28 +459,37 @@ def train_joint_degree_grapher(config: dict[str, Any], args) -> None:
         history.append(row)
         # A jointly fine-tuned run never silently returns a warm-up-only model.
         eligible = degree_active or not trainable
-        if eligible and val_metrics["joint_loss"] < best:
-            best = val_metrics["joint_loss"]; best_epoch = epoch
-            parameter_delta = math.sqrt(sum(float(((v.detach().cpu()-initial_degree_state[k]).double()**2).sum()) for k, v in model.degree_model.state_dict().items()))
-            saved_report = {
-                **row, "joint_degree_enabled": True,
-                "degree_conditioning": "reencoded_actual_histogram_posterior_mean_and_decoder_hidden",
-                "orbit_consistency": model.orbit_consistency,
-                "degree_parameter_l2_change_from_initialization": parameter_delta,
-                "warm_start": warm_report,
-                "dataset_graph_fingerprints": dataset_fingerprints,
-                "objective": "graph_balanced_structural_mean_plus_weighted_degree_mean",
-            }
-            temp = path.with_suffix(".pt.tmp")
-            save_topology_spectral_checkpoint(model, temp, summary_config=summary_config, config=config, report=saved_report)
-            temp.replace(path)
-            # Standalone export for the existing degree evaluator. Generation
-            # NEVER loads this file: it uses the embedded degree model above.
-            degree_export = Path(output) / "degree_checkpoint.pt"
-            temp_degree = degree_export.with_suffix(".pt.tmp")
-            save_degree_vae_checkpoint(temp_degree, model.degree_model, model.degree_vectorizer,
-                                      config=config, metrics={"joint_epoch": epoch, "joint_checkpoint": str(path), **val_metrics})
-            temp_degree.replace(degree_export)
+        parameter_delta = math.sqrt(sum(
+            float(((v.detach().cpu()-initial_degree_state[k]).double()**2).sum())
+            for k, v in model.degree_model.state_dict().items()
+        ))
+        saved_report = {
+            **row, "joint_degree_enabled": True,
+            "degree_conditioning": "reencoded_actual_histogram_posterior_mean_and_decoder_hidden",
+            "orbit_consistency": model.orbit_consistency,
+            "degree_parameter_l2_change_from_initialization": parameter_delta,
+            "warm_start": warm_report,
+            "dataset_graph_fingerprints": dataset_fingerprints,
+            "objective": "graph_balanced_structural_mean_plus_weighted_degree_mean",
+        }
+        updated = checkpoints.update(
+            model, epoch=epoch, eligible=eligible, report=saved_report,
+            val_metrics=val_metrics, summary_config=summary_config,
+        )
+        # Preserve history and selection metadata even if a later epoch is interrupted.
+        atomic_json(history, Path(output)/"history.json")
+        best_record = checkpoints.records.get("best_joint")
+        atomic_json({
+            "joint_degree_enabled": True, "config": config, "config_overrides": args.config_overrides,
+            "best_epoch": best_record["epoch"] if best_record else None,
+            "best_val_joint_loss": best_record["value"] if best_record else None,
+            "checkpoint": str(path), "degree_checkpoint": str(Path(output)/"degree_checkpoint.pt"),
+            "checkpoint_registry": "checkpoint_registry.json",
+            "checkpoint_selections": checkpoints.records,
+            "last_completed_epoch": epoch, "training_complete": False,
+            "warm_start": warm_report, "dataset_graph_fingerprints": dataset_fingerprints,
+            "history": history,
+        }, Path(output)/"report.json")
         if epoch == 1 or epoch % progress == 0 or epoch == epochs or epoch == freeze_epochs + 1:
             print(
                 f"[GraphER/JointDegree] epoch={epoch}/{epochs} degree_trainable={degree_active} "
@@ -480,13 +499,14 @@ def train_joint_degree_grapher(config: dict[str, Any], args) -> None:
                 f"orbit_log_rmse={val_metrics.get('orbit_summary_log_rmse',float('nan')):.6f} "
                 f"identity_max_abs={val_metrics.get('orbit_identity_max_abs',float('nan')):.3e}", flush=True,
             )
-        save_json(history, Path(output)/"history.json")
-    save_json({
-        "joint_degree_enabled": True, "config": config, "config_overrides": args.config_overrides,
-        "best_epoch": best_epoch, "best_val_joint_loss": best, "checkpoint": str(path),
-        "degree_checkpoint": str(Path(output)/"degree_checkpoint.pt"),
-        "warm_start": warm_report, "dataset_graph_fingerprints": dataset_fingerprints,
-        "history": history,
-    }, Path(output)/"report.json")
-    print(f"Saved joint checkpoint: {path}", flush=True)
-    print(f"Saved matching degree export: {Path(output)/'degree_checkpoint.pt'}", flush=True)
+        if updated and (epoch == 1 or epoch % progress == 0 or epoch == epochs):
+            print(f"[GraphER/JointDegree] checkpoint selections updated: {', '.join(updated)}", flush=True)
+    checkpoints.finish()
+    completed_report = json.loads((Path(output)/"report.json").read_text(encoding="utf-8"))
+    completed_report["training_complete"] = True
+    atomic_json(completed_report, Path(output)/"report.json")
+    print(f"Saved default best-joint checkpoint: {path}", flush=True)
+    for kind, record in checkpoints.records.items():
+        print(f"  {kind}: epoch={record['epoch']} checkpoint={Path(output)/record['checkpoint']} "
+              f"degree_export={Path(output)/record['degree_checkpoint']}", flush=True)
+    print(f"Saved checkpoint registry: {Path(output)/'checkpoint_registry.json'}", flush=True)

@@ -1,5 +1,13 @@
 # GraphER — Constraint-Preserving Graph Generation and Refinement
 
+## Joint-degree checkpoint selection
+
+Joint DH-VAE + GraphER training now retains **best joint, best clustering histogram,
+best orbit, and last** checkpoints with epoch-matched degree exports. The default
+`checkpoint.pt` remains best joint; losses and guidance weights are unchanged.
+See [setup, commands, integrity checks and comparisons](GRAPHER_JOINT_MULTICHECKPOINT.md).
+
+
 **GraphER** is a research and engineering project for **graph generative modeling**.
 
 It investigates a practical question:

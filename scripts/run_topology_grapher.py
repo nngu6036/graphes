@@ -346,7 +346,11 @@ def main() -> None:
     joint_degree_enabled = bool(getattr(model, "joint_degree_enabled", False))
     if bool((config.get("joint_degree", {}) or {}).get("enabled", False)) and not joint_degree_enabled:
         raise ValueError("Joint-degree config requires a joint checkpoint; train with this config first.")
+    checkpoint_selection = (checkpoint.get("report", {}) or {}).get("checkpoint_selection")
+    checkpoint_file_sha256 = None
     if joint_degree_enabled:
+        from grapher.rewiring_mlp.generic.joint_checkpointing import file_sha256
+        checkpoint_file_sha256 = file_sha256(checkpoint_path)
         from grapher.rewiring_mlp.generic.joint_degree_training import graph_fingerprint
         recorded = dict((checkpoint.get("report", {}) or {}).get("dataset_graph_fingerprints", {}) or {})
         for split_name, expected in recorded.items():
@@ -974,6 +978,8 @@ def main() -> None:
         report_format = "topology_structural_generation_v2"
 
     diagnostics.update({
+        "checkpoint_selection_kind": checkpoint_selection.get("kind") if checkpoint_selection else None,
+        "checkpoint_epoch": (checkpoint.get("report", {}) or {}).get("epoch"),
         "joint_degree_enabled": joint_degree_enabled,
         "degree_sampler_source": degree_sampler_source,
         "degree_conditioning": "actual_histogram_posterior_mean_decoder_features" if joint_degree_enabled else None,
@@ -990,6 +996,11 @@ def main() -> None:
         "degree_sampler_source": degree_sampler_source,
         "joint_degree_enabled": joint_degree_enabled,
         "checkpoint_path": str(checkpoint_path),
+        "checkpoint_sha256": checkpoint_file_sha256,
+        "checkpoint_selection": checkpoint_selection,
+        "checkpoint_epoch": (checkpoint.get("report", {}) or {}).get("epoch"),
+        "source_graph_fingerprint": graph_fingerprint(coarse_graphs) if joint_degree_enabled else None,
+        "final_graph_fingerprint": graph_fingerprint(refined_graphs) if joint_degree_enabled else None,
         "dataset_graph_fingerprints": (checkpoint.get("report", {}) or {}).get("dataset_graph_fingerprints"),
         "prediction_horizon": {
             "mode": refiner_settings.prediction_horizon_mode,

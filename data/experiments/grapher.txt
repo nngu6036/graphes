@@ -1506,3 +1506,37 @@ PYTHONPATH=src python scripts/diagnose_spectral_denoiser.py \
   --seed 42 \
   --device gpu \
   --json-out "$TRAIN/denoiser_hh_endpoint_val.json"
+
+  Spectral denoiser diagnostic (no rewiring)
+  split=val graphs=16 examples=16
+  use_graph_context=False
+  source -> clean NRMSE:    0.067658
+  noisy  -> clean NRMSE:    0.067658
+  pred   -> clean NRMSE:    0.063100
+  denoising gain:           0.004558
+  relative NRMSE reduction: 6.74%
+  trace abs error:          2.861023e-06
+  lambda1 abs:              0.000000e+00
+  HH -> clean histogram W1:   0.105741
+  pred -> clean histogram W1: 0.024750
+  pred -> clean histogram TV: 0.322784
+  HH -> clean orbit log-RMSE:   0.350841
+  pred -> clean orbit log-RMSE: 0.075362
+  pred -> clean orbit raw-NRMSE:0.105411
+  by diffusion time:
+    [0.00,0.25): noisy=0.067658 pred=0.063100 gain=0.004558 hist_w1=0.024750 orbit_log_rmse=0.075362
+
+
+    PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate 64 \
+  --seed 42 \
+  --device gpu
+
+  PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config "$CFG" \
+  --generated-dir "$GEN" \
+  --reference-split val \
+  --output-dir "$GEN/evaluation_val"

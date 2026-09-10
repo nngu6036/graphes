@@ -129,8 +129,14 @@ def test_generic_grapher_configs_are_decoupled_topology_configs() -> None:
         assert config["generation"]["max_attempts_per_graph"] > 0
         assert config["generation"]["write_legacy_hybrid_alias"] is False
         assert config["degree_generator"]["type"] == "degree_histogram_vae"
-        assert str(config["degree_generator"]["checkpoint_path"]).startswith(
-            "outputs/baselines/dhvae_hh/"
+        # Canonical DH-VAE paths supersede the old baseline-wrapper checkpoints.
+        canonical_path = (
+            REPOSITORY_ROOT / "configs" / "experiments" / "dhvae"
+            / f"{config['benchmark']}.yaml"
+        )
+        canonical = yaml.safe_load(canonical_path.read_text(encoding="utf-8"))
+        assert config["degree_generator"]["checkpoint_path"] == (
+            canonical["degree_generator"]["checkpoint_path"]
         )
         assert config["degree_generator"]["postprocess_policy"] == "reject_only"
         assert config["degree_generator"]["fallback"] == "error"

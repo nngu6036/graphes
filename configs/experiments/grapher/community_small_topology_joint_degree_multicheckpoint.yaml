@@ -1,3 +1,5 @@
+# Retain best_joint, best_histogram, best_orbit, and last with matching degree exports.
+# Only checkpoint retention/provenance changes; no loss/guidance weight tuning.
 # Joint DH-VAE + degree-conditioned GraphER. Simple, unattributed graphs only.
 # Warm-start paths must exist; null explicitly selects fresh initialization.
 # Generation samples from the DH-VAE EMBEDDED in checkpoint.pt, not the paths below.
@@ -7,7 +9,7 @@
 # Deterministic re-encoding of actual degrees conditions structure at train AND inference.
 # Nine necessary orbit equalities are enforced; full graph realizability is not guaranteed.
 # Degree-loss weight and conservative fine-tuning rates are starting values, not tuned optima.
-experiment: community_small_topology_joint_degree
+experiment: community_small_topology_joint_degree_multicheckpoint
 benchmark: community_small
 seed: 42
 pipeline:
@@ -78,7 +80,7 @@ summary_diffusion:
   cache_endpoints: true
 topology_predictor:
   type: spectral_transformer
-  checkpoint_path: outputs/topology_grapher/community_small_joint_degree/seed_42/checkpoint.pt
+  checkpoint_path: outputs/topology_grapher/community_small_joint_degree_multicheckpoint/seed_42/checkpoint.pt
   device: auto
   use_graph_context: false
   hidden_dim: 32
