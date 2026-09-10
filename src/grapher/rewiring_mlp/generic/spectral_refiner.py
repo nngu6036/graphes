@@ -13,6 +13,9 @@ from grapher.rewiring_mlp.generic.clustering import (
     extract_clustering_histogram, validate_clustering_histogram,
     clustering_histogram_wasserstein,
 )
+from grapher.rewiring_mlp.generic.orbit import (
+    extract_orbit_summary, orbit_summary_distance, validate_orbit_summary,
+)
 from grapher.rewiring_mlp.generic.rewiring import (
     propose_valid_topology_swaps,
     topology_state_key,
@@ -42,6 +45,7 @@ class SpectralPrediction:
     second_moment: float
     clean_clustering_coefficient: float | None = None
     clean_clustering_histogram: np.ndarray | None = None
+    clean_orbit_summary: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +93,8 @@ class SpectralRefinerConfig:
     clustering_statistic: str = "mean"
     clustering_histogram_bins: int | None = None
     clustering_histogram_distance: str = "wasserstein1"
+    orbit_weight: float = 1.0
+    orbit_distance: str = "log_rmse"
 
     distance: str = "rmse"
     normalization: str = "mean_degree"
@@ -219,6 +225,7 @@ class SpectralRefinerConfig:
 
         guidance = dict(values.get("spectral_guidance", {}) or {})
         clustering_guidance = dict(values.get("clustering_guidance", {}) or {})
+        orbit_guidance = dict(values.get("orbit_guidance", {}) or {})
         bridge = SpectralBridgeSchedule.from_dict(guidance)
         legacy_refresh = int(values.get("refresh_prediction_every", 1))
         horizon_data = values.get("prediction_horizon")
@@ -318,6 +325,8 @@ class SpectralRefinerConfig:
             clustering_statistic=str(clustering_guidance.get("statistic", "mean")).lower(),
             clustering_histogram_bins=clustering_guidance.get("histogram_bins"),
             clustering_histogram_distance=str(clustering_guidance.get("distance", "wasserstein1")).lower(),
+            orbit_weight=float(orbit_guidance.get("weight", 1.0)),
+            orbit_distance=str(orbit_guidance.get("distance", "log_rmse")).lower(),
             distance=str(guidance.get("distance", "rmse")).lower(),
             normalization=str(guidance.get("normalization", "mean_degree")).lower(),
             low_frequency_weight=float(
@@ -362,23 +371,32 @@ class SpectralRefinerConfig:
             raise ValueError("clustering_guidance.histogram_bins must be an integer >= 2.")
         if config.clustering_statistic == "histogram" and config.clustering_histogram_distance != "wasserstein1":
             raise ValueError("Histogram guidance currently supports only distance: wasserstein1.")
-        if config.guidance_mode not in {"spectral", "clustering", "spectral_clustering"}:
+        allowed_guidance_modes = {
+            "spectral", "clustering", "orbit",
+            "spectral_clustering", "spectral_orbit", "clustering_orbit",
+            "spectral_clustering_orbit",
+        }
+        if config.guidance_mode not in allowed_guidance_modes:
             raise ValueError(
-                "topology_refiner.guidance_mode must be spectral, clustering, "
-                "or spectral_clustering."
+                "topology_refiner.guidance_mode must be one of "
+                + ", ".join(sorted(allowed_guidance_modes))
+                + "."
             )
-        if config.spectral_weight < 0.0 or config.clustering_weight < 0.0:
-            raise ValueError("Guidance weights must be nonnegative.")
-        if config.guidance_mode == "spectral" and config.spectral_weight <= 0.0:
-            raise ValueError("spectral guidance requires spectral_guidance.weight > 0.")
-        if config.guidance_mode == "clustering" and config.clustering_weight <= 0.0:
-            raise ValueError("clustering guidance requires clustering_guidance.weight > 0.")
-        if config.guidance_mode == "spectral_clustering" and (
-            config.spectral_weight <= 0.0 or config.clustering_weight <= 0.0
+        if (
+            config.spectral_weight < 0.0
+            or config.clustering_weight < 0.0
+            or config.orbit_weight < 0.0
         ):
-            raise ValueError(
-                "spectral_clustering guidance requires both guidance weights > 0."
-            )
+            raise ValueError("Guidance weights must be nonnegative.")
+        active_components = set(config.guidance_mode.split("_"))
+        if "spectral" in active_components and config.spectral_weight <= 0.0:
+            raise ValueError("spectral guidance requires spectral_guidance.weight > 0.")
+        if "clustering" in active_components and config.clustering_weight <= 0.0:
+            raise ValueError("clustering guidance requires clustering_guidance.weight > 0.")
+        if "orbit" in active_components and config.orbit_weight <= 0.0:
+            raise ValueError("orbit guidance requires orbit_guidance.weight > 0.")
+        if config.orbit_distance not in {"log_rmse", "log1p_rmse", "rmse_log1p", "raw_rmse", "rmse"}:
+            raise ValueError("orbit_guidance.distance must be log_rmse or raw_rmse.")
         if config.steps < 0:
             raise ValueError("topology_refiner.steps must be non-negative.")
         if config.time_horizon is not None and config.time_horizon <= 0:
@@ -531,6 +549,11 @@ def predict_clean_spectrum(
         None if histogram_output is None else
         validate_clustering_histogram(histogram_output[0].detach().cpu().numpy())
     )
+    orbit_output = outputs.get("clean_orbit_summary")
+    clean_orbit = (
+        None if orbit_output is None else
+        validate_orbit_summary(orbit_output[0].detach().cpu().numpy())
+    )
     return SpectralPrediction(
         clean_spectrum=predicted,
         current_spectrum=current,
@@ -538,6 +561,7 @@ def predict_clean_spectrum(
         second_moment=second,
         clean_clustering_coefficient=clean_clustering,
         clean_clustering_histogram=clean_histogram,
+        clean_orbit_summary=clean_orbit,
     )
 
 
@@ -549,6 +573,7 @@ def score_spectral_candidates(
     next_spectrum_target: np.ndarray,
     clean_clustering_coefficient: float | None = None,
     clean_clustering_histogram: np.ndarray | None = None,
+    clean_orbit_summary: np.ndarray | None = None,
     config: SpectralRefinerConfig,
     candidate_graphs: dict[Action, nx.Graph],
     device: torch.device | str = "cpu",
@@ -571,7 +596,9 @@ def score_spectral_candidates(
         low_frequency_weight=config.low_frequency_weight,
         low_frequency_cutoff=config.low_frequency_cutoff,
     )
-    needs_clustering = config.guidance_mode in {"clustering", "spectral_clustering"}
+    active_components = set(config.guidance_mode.split("_"))
+    needs_clustering = "clustering" in active_components
+    needs_orbit = "orbit" in active_components
     use_histogram = needs_clustering and config.clustering_statistic == "histogram"
     target_histogram = current_histogram = None
     if use_histogram:
@@ -589,6 +616,17 @@ def score_spectral_candidates(
     else:
         current_clustering_discrepancy = None
     current_clustering = float(nx.average_clustering(graph)) if needs_clustering else None
+
+    target_orbit = current_orbit = None
+    current_orbit_discrepancy = None
+    if needs_orbit:
+        if clean_orbit_summary is None:
+            raise ValueError("Orbit-guided rewiring requires a checkpoint with clean_orbit_summary prediction enabled.")
+        target_orbit = validate_orbit_summary(clean_orbit_summary)
+        current_orbit = extract_orbit_summary(graph)
+        current_orbit_discrepancy = orbit_summary_distance(
+            current_orbit, target_orbit, distance=config.orbit_distance
+        )
 
     candidate_list = [candidate_graphs[action] for action in candidates]
     spectra = batched_laplacian_eigenvalues(
@@ -653,31 +691,55 @@ def score_spectral_candidates(
             else 0.0
         )
 
-        if config.guidance_mode == "spectral":
-            energy_improvement = local_gain
-            relative = spectral_relative
-            objective_residual = candidate_local
-        elif config.guidance_mode == "clustering":
-            energy_improvement = config.clustering_weight * clustering_relative
-            relative = energy_improvement
-            objective_residual = float(candidate_clustering_discrepancy)
-        else:
-            energy_improvement = (
-                config.spectral_weight * spectral_relative
-                + config.clustering_weight * clustering_relative
+        candidate_orbit = None
+        candidate_orbit_discrepancy = None
+        orbit_gain = 0.0
+        orbit_relative = 0.0
+        if needs_orbit:
+            assert target_orbit is not None
+            assert current_orbit_discrepancy is not None
+            candidate_orbit = extract_orbit_summary(candidate)
+            candidate_orbit_discrepancy = orbit_summary_distance(
+                candidate_orbit, target_orbit, distance=config.orbit_distance
             )
-            relative = energy_improvement
-            objective_residual = (
-                config.spectral_weight
-                * candidate_local
-                / max(abs(current_local), float(config.relative_improvement_epsilon))
-                + config.clustering_weight
-                * float(candidate_clustering_discrepancy)
+            orbit_gain = float(current_orbit_discrepancy - candidate_orbit_discrepancy)
+            orbit_relative = float(
+                orbit_gain
                 / max(
-                    abs(float(current_clustering_discrepancy)),
+                    abs(float(current_orbit_discrepancy)),
                     float(config.relative_improvement_epsilon),
                 )
             )
+
+        components = set(config.guidance_mode.split("_"))
+        energy_improvement = 0.0
+        objective_residual = 0.0
+        if "spectral" in components:
+            spectral_term = local_gain if len(components) == 1 else spectral_relative
+            energy_improvement += config.spectral_weight * spectral_term
+            objective_residual += config.spectral_weight * candidate_local / max(
+                abs(current_local), float(config.relative_improvement_epsilon)
+            )
+        if "clustering" in components:
+            assert candidate_clustering_discrepancy is not None
+            assert current_clustering_discrepancy is not None
+            energy_improvement += config.clustering_weight * clustering_relative
+            objective_residual += config.clustering_weight * float(candidate_clustering_discrepancy) / max(
+                abs(float(current_clustering_discrepancy)),
+                float(config.relative_improvement_epsilon),
+            )
+        if "orbit" in components:
+            assert candidate_orbit_discrepancy is not None
+            assert current_orbit_discrepancy is not None
+            energy_improvement += config.orbit_weight * orbit_relative
+            objective_residual += config.orbit_weight * float(candidate_orbit_discrepancy) / max(
+                abs(float(current_orbit_discrepancy)),
+                float(config.relative_improvement_epsilon),
+            )
+        relative = float(energy_improvement)
+        if config.guidance_mode == "spectral":
+            objective_residual = candidate_local
+            relative = spectral_relative
 
         rows.append(
             {
@@ -703,6 +765,13 @@ def score_spectral_candidates(
                 "candidate_clustering_discrepancy": candidate_clustering_discrepancy,
                 "clustering_gain": clustering_gain,
                 "clustering_relative_improvement": clustering_relative,
+                "target_orbit_summary": target_orbit.tolist() if target_orbit is not None else None,
+                "current_orbit_summary": current_orbit.tolist() if current_orbit is not None else None,
+                "candidate_orbit_summary": candidate_orbit.tolist() if candidate_orbit is not None else None,
+                "current_orbit_discrepancy": current_orbit_discrepancy,
+                "candidate_orbit_discrepancy": candidate_orbit_discrepancy,
+                "orbit_gain": float(orbit_gain),
+                "orbit_relative_improvement": float(orbit_relative),
                 "projection_residual": float(candidate_local),
                 "objective_residual": float(objective_residual),
                 "energy_improvement": float(energy_improvement),
@@ -886,13 +955,18 @@ def refine_graph_with_spectral_predictions(
                 raise ValueError(
                     "Spectral predictor returned the wrong number of eigenvalues."
                 )
-            if cfg.guidance_mode in {"clustering", "spectral_clustering"}:
+            active_components = set(cfg.guidance_mode.split("_"))
+            if "clustering" in active_components:
                 if cfg.clustering_statistic == "histogram":
                     if prediction.clean_clustering_histogram is None:
                         raise ValueError("Histogram guidance requires structure_summary_prediction.clustering_histogram=true in the trained checkpoint.")
                     validate_clustering_histogram(prediction.clean_clustering_histogram, bins=cfg.clustering_histogram_bins)
                 elif prediction.clean_clustering_coefficient is None:
                     raise ValueError("Mean-clustering guidance requires structure_summary_prediction.clustering_coefficient=true in the trained checkpoint.")
+            if "orbit" in active_components:
+                if prediction.clean_orbit_summary is None:
+                    raise ValueError("Orbit guidance requires structure_summary_prediction.orbit_summary=true in the trained checkpoint.")
+                validate_orbit_summary(prediction.clean_orbit_summary)
             prediction_calls += 1
             prediction_block += 1
             accepted_since_prediction = 0
@@ -1002,6 +1076,7 @@ def refine_graph_with_spectral_predictions(
                 next_spectrum_target=next_target,
                 clean_clustering_coefficient=prediction.clean_clustering_coefficient,
                 clean_clustering_histogram=prediction.clean_clustering_histogram,
+                clean_orbit_summary=prediction.clean_orbit_summary,
                 config=cfg,
                 candidate_graphs=candidate_graphs,
                 device=device,
@@ -1264,8 +1339,10 @@ def refine_graph_with_spectral_predictions(
                 "accepted_step": accepted_steps,
                 "accepted": True,
                 "reason": (
-                    "clustering_histogram_guided_swap"
-                    if cfg.clustering_statistic == "histogram" and cfg.guidance_mode != "spectral"
+                    "orbit_summary_guided_swap"
+                    if "orbit" in set(cfg.guidance_mode.split("_"))
+                    else "clustering_histogram_guided_swap"
+                    if cfg.clustering_statistic == "histogram" and "clustering" in set(cfg.guidance_mode.split("_"))
                     else "spectral_denoising_swap"
                 ),
                 "move_kind": move_kind,
@@ -1303,6 +1380,9 @@ def refine_graph_with_spectral_predictions(
                         "current_clustering_coefficient", "candidate_clustering_coefficient",
                         "target_clustering_coefficient", "target_clustering_histogram",
                         "current_clustering_histogram", "candidate_clustering_histogram",
+                        "target_orbit_summary", "current_orbit_summary", "candidate_orbit_summary",
+                        "current_orbit_discrepancy", "candidate_orbit_discrepancy",
+                        "orbit_gain", "orbit_relative_improvement",
                     )
                 },
                 "spectral_gain": float(chosen["spectral_gain"]),

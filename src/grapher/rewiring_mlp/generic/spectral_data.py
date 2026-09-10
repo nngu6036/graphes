@@ -12,6 +12,9 @@ from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.clustering import (
     clustering_histogram_bins, extract_clustering_histogram, validate_clustering_histogram,
 )
+from grapher.rewiring_mlp.generic.orbit import (
+    extract_orbit_summary, orbit_summary_width, validate_orbit_summary,
+)
 from grapher.rewiring_mlp.generic.data import (
     TopologyTrainingPair,
     _construct_source_from_degree_sequence,
@@ -75,6 +78,9 @@ class TopologySpectralExample:
     teacher_distribution: np.ndarray | None = None
     teacher_selected_index: int = -1
     clean_clustering_histogram_target: np.ndarray | None = None
+    # Optional evaluator-compatible mean per-node ORCA orbit vector (0--14).
+    # Like clustering summaries, it is a clean x0 target and is not diffused.
+    clean_orbit_summary_target: np.ndarray | None = None
 
 
 @dataclass
@@ -99,6 +105,7 @@ class TopologySpectralBatch:
     graphlet_coordinate_mask: torch.Tensor | None = None
 
     clean_clustering_histogram_target: torch.Tensor | None = None
+    clean_orbit_summary_target: torch.Tensor | None = None
 
     def to(self, device: torch.device | str) -> "TopologySpectralBatch":
         return TopologySpectralBatch(
@@ -152,6 +159,14 @@ def collate_spectral_examples(
         if len({value.size for value in histograms}) != 1:
             raise ValueError("Clustering histogram targets in a batch must share one bin count.")
         clean_clustering_histogram = np.stack(histograms).astype(np.float32)
+
+    orbit_targets = [example.clean_orbit_summary_target for example in examples]
+    clean_orbit_summary = None
+    if any(value is not None for value in orbit_targets):
+        if any(value is None for value in orbit_targets):
+            raise ValueError("Cannot mix examples with and without clean orbit-summary targets.")
+        orbit_vectors = [validate_orbit_summary(value) for value in orbit_targets]
+        clean_orbit_summary = np.stack(orbit_vectors).astype(np.float32)
 
     graphlet_widths = {
         int(np.asarray(example.current_graphlet_logits).size)
@@ -299,6 +314,10 @@ def collate_spectral_examples(
         clean_clustering_histogram_target=(
             torch.from_numpy(clean_clustering_histogram)
             if clean_clustering_histogram is not None else None
+        ),
+        clean_orbit_summary_target=(
+            torch.from_numpy(clean_orbit_summary)
+            if clean_orbit_summary is not None else None
         ),
         clean_clustering_coefficient_target=(
             torch.from_numpy(clean_clustering) if clean_clustering is not None else None
@@ -1094,6 +1113,7 @@ class TopologySpectralDiffusionEndpoint:
     clean_clustering_coefficient: float = 0.0
     spectral_endpoint_distance: float = 0.0
     clean_clustering_histogram: np.ndarray | None = None
+    clean_orbit_summary: np.ndarray | None = None
 
 
 def _prepare_spectral_diffusion_endpoint(
@@ -1149,6 +1169,7 @@ def _prepare_spectral_diffusion_endpoint(
         )
 
     histogram_bins = clustering_histogram_bins(structure_summary_config)
+    orbit_width = orbit_summary_width(structure_summary_config)
     return TopologySpectralDiffusionEndpoint(
         source=source,
         target=target,
@@ -1165,6 +1186,9 @@ def _prepare_spectral_diffusion_endpoint(
         clean_clustering_histogram=(
             extract_clustering_histogram(target, histogram_bins)
             if histogram_bins is not None else None
+        ),
+        clean_orbit_summary=(
+            extract_orbit_summary(target) if orbit_width is not None else None
         ),
         spectral_endpoint_distance=spectral_distance(
             source_spectrum,
@@ -1245,6 +1269,10 @@ def _sample_spectral_diffusion_endpoint_examples(
                     clean_clustering_histogram_target=(
                         None if endpoint.clean_clustering_histogram is None
                         else endpoint.clean_clustering_histogram.astype(np.float32)
+                    ),
+                    clean_orbit_summary_target=(
+                        None if endpoint.clean_orbit_summary is None
+                        else endpoint.clean_orbit_summary.astype(np.float32)
                     ),
                     clean_clustering_coefficient_target=float(
                         endpoint.clean_clustering_coefficient
@@ -1338,6 +1366,7 @@ def build_spectral_diffusion_examples(
     source_cfg = dict(source_config or {})
     spec_cfg = dict(spectral_config or {})
     histogram_bins = clustering_histogram_bins(structure_summary_config)
+    orbit_width = orbit_summary_width(structure_summary_config)
     rng = np.random.default_rng(int(seed))
     require_same_degree_sequence = bool(
         spec_cfg.get("require_same_degree_sequence", True)
@@ -1364,6 +1393,9 @@ def build_spectral_diffusion_examples(
         clean_histogram = (
             extract_clustering_histogram(target, histogram_bins)
             if histogram_bins is not None else None
+        )
+        clean_orbit_summary = (
+            extract_orbit_summary(target) if orbit_width is not None else None
         )
         scale = spectral_scale(source, mode=str(spec_cfg.get("normalization", "mean_degree")))
 
@@ -1461,6 +1493,9 @@ def build_spectral_diffusion_examples(
                         clean_clustering_histogram_target=(
                             None if clean_histogram is None else clean_histogram.astype(np.float32)
                         ),
+                        clean_orbit_summary_target=(
+                            None if clean_orbit_summary is None else clean_orbit_summary.astype(np.float32)
+                        ),
                         current_graphlet_probabilities=(
                             None if current_prob is None else current_prob.astype(np.float32)
                         ),
@@ -1546,6 +1581,7 @@ class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset)
         self.spectral_config = dict(spectral_config or {})
         self.structure_summary_config = dict(structure_summary_config or {})
         clustering_histogram_bins(self.structure_summary_config)
+        orbit_summary_width(self.structure_summary_config)
         self.graphlet_basis = graphlet_basis
         self.graphlet_logit_epsilon = float(graphlet_logit_epsilon)
         self.seed = int(seed)

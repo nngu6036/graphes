@@ -378,7 +378,8 @@ def main() -> None:
             )
         else:
             refiner_settings = SpectralRefinerConfig.from_dict(refiner_cfg)
-            if refiner_settings.guidance_mode in {"clustering", "spectral_clustering"}:
+            active_components = set(refiner_settings.guidance_mode.split("_"))
+            if "clustering" in active_components:
                 if refiner_settings.clustering_statistic == "histogram":
                     if not getattr(model, "predict_clustering_histogram", False):
                         raise ValueError("Histogram guidance requested, but checkpoint has no histogram head. Train with structure_summary_prediction.clustering_histogram=true.")
@@ -387,10 +388,16 @@ def main() -> None:
                         raise ValueError("clustering_guidance.histogram_bins disagrees with the checkpoint.")
                 elif not getattr(model, "predict_clustering_coefficient", False):
                     raise ValueError("Mean-clustering guidance requested, but checkpoint has no scalar clustering head.")
+            if "orbit" in active_components and not getattr(model, "predict_orbit_summary", False):
+                raise ValueError(
+                    "Orbit guidance requested, but checkpoint has no orbit-summary head. "
+                    "Train with structure_summary_prediction.orbit_summary=true."
+                )
             print(
                 f"[GraphER/Spectral] rewiring_guidance={refiner_settings.guidance_mode} "
                 f"clustering_statistic={refiner_settings.clustering_statistic} "
-                f"histogram_bins={getattr(model, 'clustering_histogram_bins', None) if getattr(model, 'predict_clustering_histogram', False) else None}",
+                f"histogram_bins={getattr(model, 'clustering_histogram_bins', None) if getattr(model, 'predict_clustering_histogram', False) else None} "
+                f"orbit_summary={getattr(model, 'predict_orbit_summary', False)}",
                 flush=True,
             )
             print(
@@ -832,6 +839,12 @@ def main() -> None:
                 "mean_accepted_clustering_gain": _mean_or_zero(accepted_rows, "clustering_gain"),
                 "mean_accepted_clustering_discrepancy_before": _mean_or_zero(accepted_rows, "current_clustering_discrepancy"),
                 "mean_accepted_clustering_discrepancy_after": _mean_or_zero(accepted_rows, "candidate_clustering_discrepancy"),
+                "orbit_guidance_weight": refiner_settings.orbit_weight,
+                "orbit_guidance_distance": refiner_settings.orbit_distance,
+                "predictor_orbit_summary_enabled": bool(getattr(model, "predict_orbit_summary", False)),
+                "mean_accepted_orbit_gain": _mean_or_zero(accepted_rows, "orbit_gain"),
+                "mean_accepted_orbit_discrepancy_before": _mean_or_zero(accepted_rows, "current_orbit_discrepancy"),
+                "mean_accepted_orbit_discrepancy_after": _mean_or_zero(accepted_rows, "candidate_orbit_discrepancy"),
                 "mean_accepted_spectral_gain": _mean_or_zero(accepted_rows, "spectral_gain"),
                 "mean_accepted_clean_spectral_gain": _mean_or_zero(
                     accepted_rows,

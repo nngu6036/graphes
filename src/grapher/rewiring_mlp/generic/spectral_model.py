@@ -53,6 +53,8 @@ class TopologySpectralTransformerPredictor(nn.Module):
         predict_clustering_coefficient: bool = False,
         predict_clustering_histogram: bool = False,
         clustering_histogram_bins: int = 100,
+        predict_orbit_summary: bool = False,
+        orbit_summary_width: int = 15,
     ) -> None:
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -69,6 +71,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
         self.use_graph_context = bool(use_graph_context)
         self.predict_clustering_coefficient = bool(predict_clustering_coefficient)
         self.predict_clustering_histogram = bool(predict_clustering_histogram)
+        self.predict_orbit_summary = bool(predict_orbit_summary)
         if (
             isinstance(clustering_histogram_bins, bool)
             or int(clustering_histogram_bins) != clustering_histogram_bins
@@ -76,6 +79,11 @@ class TopologySpectralTransformerPredictor(nn.Module):
         ):
             raise ValueError("clustering_histogram_bins must be an integer >= 2.")
         self.clustering_histogram_bins = int(clustering_histogram_bins)
+        if isinstance(orbit_summary_width, bool) or int(orbit_summary_width) != orbit_summary_width:
+            raise ValueError("orbit_summary_width must be an integer.")
+        self.orbit_summary_width = int(orbit_summary_width)
+        if self.predict_orbit_summary and self.orbit_summary_width != 15:
+            raise ValueError("The spectral debug model supports the standard 15-D ORCA orbit summary only.")
 
         if self.spectral_dim <= 0 or self.spectral_heads <= 0:
             raise ValueError("spectral_dim and spectral_heads must be positive.")
@@ -168,6 +176,14 @@ class TopologySpectralTransformerPredictor(nn.Module):
                 nn.Linear(clustering_hidden, self.clustering_histogram_bins),
             )
             if self.predict_clustering_histogram else None
+        )
+        self.orbit_summary_head = (
+            nn.Sequential(
+                nn.Linear(self.spectral_dim, clustering_hidden),
+                nn.SiLU(),
+                nn.Linear(clustering_hidden, self.orbit_summary_width),
+            )
+            if self.predict_orbit_summary else None
         )
 
     @staticmethod
@@ -362,13 +378,24 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "raw_gap_scores": raw_gap_scores,
             "spectral_mask": mask,
         }
-        if self.clustering_coefficient_head is not None or self.clustering_histogram_head is not None:
+        if (
+            self.clustering_coefficient_head is not None
+            or self.clustering_histogram_head is not None
+            or self.orbit_summary_head is not None
+        ):
             weights = mask.unsqueeze(-1).to(encoded.dtype)
             pooled = (encoded * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
         if self.clustering_histogram_head is not None:
             logits = self.clustering_histogram_head(pooled)
             result["clean_clustering_histogram_logits"] = logits
             result["clean_clustering_histogram"] = torch.softmax(logits, dim=-1)
+        if self.orbit_summary_head is not None:
+            # Predict log1p(mean per-node orbit counts). Softplus keeps the
+            # latent log-count target non-negative; expm1 maps it back to the
+            # evaluator-compatible raw 15-D orbit descriptor.
+            orbit_log_mean = F.softplus(self.orbit_summary_head(pooled))
+            result["clean_orbit_log_mean"] = orbit_log_mean
+            result["clean_orbit_summary"] = torch.expm1(orbit_log_mean).clamp_min(0.0)
         if self.clustering_coefficient_head is not None:
             result["clean_clustering_coefficient"] = torch.sigmoid(
                 self.clustering_coefficient_head(pooled).squeeze(-1)
@@ -494,6 +521,32 @@ class TopologySpectralTransformerPredictor(nn.Module):
                     "clustering_histogram_tv": float(histogram_tv.detach().cpu()),
                 }
 
+        orbit_metrics: dict[str, float] = {}
+        if self.predict_orbit_summary:
+            orbit_target = batch.clean_orbit_summary_target
+            if orbit_target is None:
+                raise ValueError("Orbit-summary prediction is enabled but the batch has no orbit target.")
+            orbit_prediction = outputs["clean_orbit_summary"]
+            orbit_log_prediction = outputs["clean_orbit_log_mean"]
+            orbit_target = orbit_target.to(orbit_prediction.dtype)
+            if orbit_target.shape != orbit_prediction.shape:
+                raise ValueError("Orbit summary target width does not match the checkpoint orbit width.")
+            orbit_log_target = torch.log1p(orbit_target.clamp_min(0.0))
+            orbit_loss = F.smooth_l1_loss(orbit_log_prediction, orbit_log_target)
+            total = total + float(weights.get("orbit_summary", 1.0)) * orbit_loss
+            with torch.no_grad():
+                log_delta = orbit_log_prediction - orbit_log_target
+                orbit_log_rmse = torch.sqrt(torch.mean(log_delta.square()))
+                orbit_log_mae = torch.mean(torch.abs(log_delta))
+                raw_scale = torch.sqrt(torch.mean(orbit_target.square(), dim=-1)).clamp_min(1.0)
+                raw_nrmse = torch.sqrt(torch.mean((orbit_prediction - orbit_target).square(), dim=-1)) / raw_scale
+                orbit_metrics = {
+                    "orbit_summary_loss": float(orbit_loss.detach().cpu()),
+                    "orbit_summary_log_rmse": float(orbit_log_rmse.detach().cpu()),
+                    "orbit_summary_log_mae": float(orbit_log_mae.detach().cpu()),
+                    "orbit_summary_raw_nrmse": float(raw_nrmse.mean().detach().cpu()),
+                }
+
         with torch.no_grad():
             abs_delta = torch.abs(predicted - target) * valid_weight
             spectral_mae = abs_delta.sum() / count
@@ -551,6 +604,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
                 }
             )
         metrics.update(histogram_metrics)
+        metrics.update(orbit_metrics)
         return total, metrics
 
 
@@ -584,6 +638,8 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "predict_clustering_coefficient": self.predict_clustering_coefficient,
             "predict_clustering_histogram": self.predict_clustering_histogram,
             "clustering_histogram_bins": self.clustering_histogram_bins,
+            "predict_orbit_summary": self.predict_orbit_summary,
+            "orbit_summary_width": self.orbit_summary_width,
         }
 
 

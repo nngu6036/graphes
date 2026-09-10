@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 
 from grapher.data.io import load_dataset_splits
 from grapher.rewiring_mlp.generic.clustering import extract_clustering_histogram
+from grapher.rewiring_mlp.generic.orbit import extract_orbit_summary
 from grapher.rewiring_mlp.generic.spectral_data import (
     build_spectral_diffusion_examples,
     collate_spectral_examples,
@@ -140,6 +141,8 @@ def main() -> None:
         structure_summary_config={
             "clustering_histogram": bool(getattr(model, "predict_clustering_histogram", False)),
             "clustering_bins": int(getattr(model, "clustering_histogram_bins", 100)),
+            "orbit_summary": bool(getattr(model, "predict_orbit_summary", False)),
+            "orbit_width": int(getattr(model, "orbit_summary_width", 15)),
         },
         seed=int(args.seed),
     )
@@ -150,6 +153,10 @@ def main() -> None:
     source_histograms = (
         [extract_clustering_histogram(example.current_graph, model.clustering_histogram_bins) for example in examples]
         if getattr(model, "predict_clustering_histogram", False) else None
+    )
+    source_orbits = (
+        [extract_orbit_summary(example.current_graph) for example in examples]
+        if getattr(model, "predict_orbit_summary", False) else None
     )
     example_offset = 0
     loader = DataLoader(
@@ -190,7 +197,10 @@ def main() -> None:
             target_clustering = batch.clean_clustering_coefficient_target
             predicted_histogram = outputs.get("clean_clustering_histogram")
             target_histogram = batch.clean_clustering_histogram_target
+            predicted_orbit = outputs.get("clean_orbit_summary")
+            target_orbit = batch.clean_orbit_summary_target
             hist_w1 = hist_tv = source_hist_w1 = None
+            orbit_log_rmse = orbit_raw_nrmse = source_orbit_log_rmse = None
             if predicted_histogram is not None and target_histogram is not None:
                 cdf_delta = torch.cumsum(predicted_histogram - target_histogram, dim=-1)[..., :-1]
                 hist_w1 = cdf_delta.abs().sum(dim=-1) / model.clustering_histogram_bins
@@ -200,6 +210,18 @@ def main() -> None:
                     dtype=predicted_histogram.dtype, device=predicted_histogram.device,
                 )
                 source_hist_w1 = torch.cumsum(source_histogram - target_histogram, dim=-1)[..., :-1].abs().sum(dim=-1) / model.clustering_histogram_bins
+            if predicted_orbit is not None and target_orbit is not None:
+                orbit_log_delta = torch.log1p(predicted_orbit.clamp_min(0.0)) - torch.log1p(target_orbit.clamp_min(0.0))
+                orbit_log_rmse = torch.sqrt(torch.mean(orbit_log_delta.square(), dim=-1))
+                orbit_scale = torch.sqrt(torch.mean(target_orbit.square(), dim=-1)).clamp_min(1.0)
+                orbit_raw_nrmse = torch.sqrt(torch.mean((predicted_orbit - target_orbit).square(), dim=-1)) / orbit_scale
+                source_orbit = torch.as_tensor(
+                    np.stack(source_orbits[example_offset:example_offset + predicted.shape[0]]),
+                    dtype=predicted_orbit.dtype, device=predicted_orbit.device,
+                )
+                source_orbit_log_rmse = torch.sqrt(
+                    torch.mean((torch.log1p(source_orbit) - torch.log1p(target_orbit.clamp_min(0.0))).square(), dim=-1)
+                )
             example_offset += predicted.shape[0]
 
             for i in range(predicted.shape[0]):
@@ -230,6 +252,10 @@ def main() -> None:
                     row["clustering_histogram_w1"] = float(hist_w1[i].detach().cpu())
                     row["clustering_histogram_tv"] = float(hist_tv[i].detach().cpu())
                     row["source_clustering_histogram_w1"] = float(source_hist_w1[i].detach().cpu())
+                if orbit_log_rmse is not None:
+                    row["orbit_summary_log_rmse"] = float(orbit_log_rmse[i].detach().cpu())
+                    row["orbit_summary_raw_nrmse"] = float(orbit_raw_nrmse[i].detach().cpu())
+                    row["source_orbit_summary_log_rmse"] = float(source_orbit_log_rmse[i].detach().cpu())
                 all_rows.append(row)
                 if t < 0.25:
                     label = "[0.00,0.25)"
@@ -261,7 +287,11 @@ def main() -> None:
             result["clustering_coefficient_mae"] = _mean(
                 [row["clustering_abs_error"] for row in clustering_rows]
             )
-        for key in ("clustering_histogram_w1", "clustering_histogram_tv", "source_clustering_histogram_w1"):
+        for key in (
+            "clustering_histogram_w1", "clustering_histogram_tv",
+            "source_clustering_histogram_w1", "orbit_summary_log_rmse",
+            "orbit_summary_raw_nrmse", "source_orbit_summary_log_rmse",
+        ):
             values = [row[key] for row in rows if key in row]
             if values:
                 result[key] = _mean(values)
@@ -285,6 +315,7 @@ def main() -> None:
         "diffusion": diffusion_report,
         "source_endpoint_only": bool(args.source_endpoint_only),
         "clustering_histogram_bins": model.clustering_histogram_bins if getattr(model, "predict_clustering_histogram", False) else None,
+        "orbit_summary_width": model.orbit_summary_width if getattr(model, "predict_orbit_summary", False) else None,
         "overall": summarize(all_rows),
         "by_time": {key: summarize(rows) for key, rows in sorted(bins.items())},
     }
@@ -312,6 +343,10 @@ def main() -> None:
         print(f"  HH -> clean histogram W1:   {overall['source_clustering_histogram_w1']:.6f}")
         print(f"  pred -> clean histogram W1: {overall['clustering_histogram_w1']:.6f}")
         print(f"  pred -> clean histogram TV: {overall['clustering_histogram_tv']:.6f}")
+    if "orbit_summary_log_rmse" in overall:
+        print(f"  HH -> clean orbit log-RMSE:   {overall['source_orbit_summary_log_rmse']:.6f}")
+        print(f"  pred -> clean orbit log-RMSE: {overall['orbit_summary_log_rmse']:.6f}")
+        print(f"  pred -> clean orbit raw-NRMSE:{overall['orbit_summary_raw_nrmse']:.6f}")
     print("  by diffusion time:")
     for label, row in report["by_time"].items():
         print(
@@ -319,6 +354,7 @@ def main() -> None:
             f"pred={row['predicted_nrmse']:.6f} "
             f"gain={row['denoising_gain_vs_noisy']:.6f}"
             + (f" hist_w1={row['clustering_histogram_w1']:.6f}" if "clustering_histogram_w1" in row else "")
+            + (f" orbit_log_rmse={row['orbit_summary_log_rmse']:.6f}" if "orbit_summary_log_rmse" in row else "")
         )
 
     if args.json_out:

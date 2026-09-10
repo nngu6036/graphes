@@ -19,6 +19,7 @@ from grapher.rewiring_mlp.generic.data import (
     collate_topology_examples,
 )
 from grapher.rewiring_mlp.generic.graphlets import TOPOLOGY_ORBIT_WIDTH
+from grapher.rewiring_mlp.generic.orbit import orbit_summary_width
 from grapher.rewiring_mlp.generic.model import (
     TOPOLOGY_CHECKPOINT_FORMAT,
     TopologyGraphletPredictor,
@@ -264,8 +265,12 @@ def main() -> None:
     from grapher.rewiring_mlp.generic.clustering import clustering_histogram_bins
     histogram_bins = clustering_histogram_bins(structure_summary_cfg)
     clustering_histogram_enabled = histogram_bins is not None
+    orbit_width = orbit_summary_width(structure_summary_cfg)
+    orbit_summary_enabled = orbit_width is not None
     if clustering_histogram_enabled and not spectral_family_mode:
         raise ValueError("structure_summary_prediction.clustering_histogram requires a spectral-family predictor.")
+    if orbit_summary_enabled and not spectral_family_mode:
+        raise ValueError("structure_summary_prediction.orbit_summary requires a spectral-family predictor.")
 
     graphlet_basis: TopologyGraphletBasis | None = None
     if not spectral_mode:
@@ -578,6 +583,8 @@ def main() -> None:
             "predict_clustering_coefficient": clustering_coefficient_enabled,
             "predict_clustering_histogram": clustering_histogram_enabled,
             "clustering_histogram_bins": histogram_bins or 100,
+            "predict_orbit_summary": orbit_summary_enabled,
+            "orbit_summary_width": orbit_width or 15,
         }
         if spectral_graphlet_mode:
             assert graphlet_basis is not None
@@ -679,6 +686,8 @@ def main() -> None:
         for key in ("clustering_histogram", "clustering_histogram_ce"):
             if not clustering_histogram_enabled and float(loss_weights.get(key, 0.0)) != 0.0:
                 raise ValueError(f"loss_weights.{key} requires structure_summary_prediction.clustering_histogram=true.")
+        if not orbit_summary_enabled and float(loss_weights.get("orbit_summary", 0.0)) != 0.0:
+            raise ValueError("loss_weights.orbit_summary requires structure_summary_prediction.orbit_summary=true.")
         active_loss_defaults = [
             ("spectrum", 1.0),
             ("moment2", 0.1),
@@ -692,6 +701,8 @@ def main() -> None:
             active_loss_defaults.append(("clustering_coefficient", 1.0))
         if clustering_histogram_enabled:
             active_loss_defaults.extend([("clustering_histogram", 1.0), ("clustering_histogram_ce", 0.0)])
+        if orbit_summary_enabled:
+            active_loss_defaults.append(("orbit_summary", 1.0))
         if not any(
             float(loss_weights.get(key, default)) != 0.0
             for key, default in active_loss_defaults
@@ -938,6 +949,11 @@ def main() -> None:
             "clustering_histogram_bins": histogram_bins,
             "clustering_histogram_is_diffused": False,
             "clustering_histogram_loss": "cdf_mse" if clustering_histogram_enabled else None,
+            "clean_orbit_summary": orbit_summary_enabled,
+            "orbit_summary_width": orbit_width,
+            "orbit_summary_representation": "mean_per_node_orca_0_14",
+            "orbit_summary_is_diffused": False,
+            "orbit_summary_loss": "smooth_l1_log1p" if orbit_summary_enabled else None,
         }
         graphlet_basis_report = (
             graphlet_basis.to_dict() if spectral_graphlet_mode and graphlet_basis is not None else None
