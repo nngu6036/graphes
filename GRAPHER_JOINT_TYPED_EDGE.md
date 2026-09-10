@@ -88,6 +88,17 @@ shared random node permutation to both graphs before forming each training
 batch. The source/target labels are never independently relabeled. We never
 sample a different invariant and pair it with the old target adjacency.
 
+Target-derived endpoint construction preserves the prepared bond labels and
+does not apply `constructor.max_weighted_valence`. Canonical QM9 preparation uses
+`sanitize_sdf: false`, so a stored graph can exceed that generation envelope
+(for example, nitrogen with a bond-order sum of five). Sanitizing or changing
+bonds here would change the supervised typed signatures. Training and paired
+diagnostics therefore reconstruct those records as stored, enforcing simple
+connected topology, exact indexed typed degrees, and the configured ordinary
+degree limit. The endpoint policy is logged and recorded in `run_config.json`,
+`report.json`, and endpoint cache diagnostics. Learned/empirical unconditional
+generation still applies its configured valence caps and RDKit validity filters.
+
 Vocabulary support comes only from training or from an explicitly supplied
 pretrained typed prior. Unknown validation signatures fail with a split/index
 message. They are not remapped, silently dropped, or added to vocabulary from

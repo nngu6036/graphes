@@ -16,7 +16,9 @@ from grapher.models.dhvae_hh.typed_degree_vae import (
     TypedSignatureVectorizer,TypedSignatureHistogramVAE,build_typed_signature_vae,
     typed_signature_vae_loss,save_typed_signature_checkpoint,TYPED_CHECKPOINT_FORMAT,
 )
-from grapher.rewiring_mlp.attributed.joint_typed_edge_data import EndpointStore,collate,load_splits,validate_graph
+from grapher.rewiring_mlp.attributed.joint_typed_edge_data import (
+    ENDPOINT_VALENCE_POLICY, EndpointStore, collate, load_splits, validate_graph,
+)
 from grapher.rewiring_mlp.attributed.joint_typed_edge_model import (
     JointTypedEdgePredictor,noisy_batch,structural_loss,save_checkpoint,
 )
@@ -241,8 +243,11 @@ def train_joint_typed_edge(config,args):
     dataset_info={'train_graphs':len(train),'val_graphs':len(val),'provenance':provenance,
                   'typed_initializer_sha256':file_sha256(j['initialize_degree_checkpoint']) if j.get('initialize_degree_checkpoint') else None,
                   'source_alignment':'indexed_typed_signatures_shared_node_permutation',
+                  'endpoint_valence_policy':ENDPOINT_VALENCE_POLICY,
                   'validation_vocabulary_policy':'strict_training_support_no_refit'}
     atomic_json({'config':config,**dataset_info},output/'run_config.json')
+    print('[JointTypedEdge] endpoints preserve prepared target bond types; '
+          'chemical valence caps apply to generation.', flush=True)
     cache=config.get('training_sources',{}).get('endpoint_cache_path')
     training=EndpointStore(train,model.vectorizer,model.atom_types,config,seed=seed,cache_path=cache)
     validation=EndpointStore(val,model.vectorizer,model.atom_types,config,seed=seed+1,cache_path=cache)

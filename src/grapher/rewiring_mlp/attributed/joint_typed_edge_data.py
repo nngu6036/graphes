@@ -22,6 +22,24 @@ from grapher.rewiring_mlp.molecular.typed_invariants import extract_typed_invari
 from grapher.utils.io import load_pickle
 
 
+ENDPOINT_VALENCE_POLICY = 'preserve_prepared_target_bond_types'
+
+
+def endpoint_constructor_config(config: dict) -> dict:
+    """Reconstruct observed typed graphs without applying generation valence caps.
+
+    Canonical QM9 is loaded with sanitize=False and may contain stored bond-order
+    sums beyond the generation envelope (for example, raw pentavalent nitrogen).
+    Sanitizing or repairing that target would change its indexed signatures.
+    The target itself witnesses a simple connected realization, so retain its
+    labels exactly and leave chemical acceptance to unconditional generation.
+    """
+    constructor = deepcopy(config.get('constructor', {}))
+    constructor['randomize_assignment'] = False
+    constructor['max_weighted_valence'] = None
+    return constructor
+
+
 def graph_record(graph: nx.Graph, node_attribute='atomic_num', edge_attribute='bond_type') -> dict:
     g = normalize_attributed_graph(graph)
     return {'nodes': [int(g.nodes[i][node_attribute]) for i in range(len(g))],
@@ -113,10 +131,11 @@ class EndpointStore:
             self.memory.move_to_end(index); return self.memory[index]
         v = self.vectorizer; vocab=v.vocabulary
         target=validate_graph(self.graphs[index],v,self.atom_types)
-        constructor=dict(self.config.get('constructor',{})); constructor['randomize_assignment']=False
+        constructor=endpoint_constructor_config(self.config)
         ss=self.config.get('structure_summary_prediction',{})
         rec=graph_record(target,vocab.node_attribute,vocab.edge_attribute)
-        key=record_hash({'version':1,'graph':rec,'seed':self.seed+index*1009,
+        key=record_hash({'version':2,'graph':rec,'seed':self.seed+index*1009,
+                         'valence_policy':ENDPOINT_VALENCE_POLICY,
                          'constructor':constructor,'summaries':ss,'edges':list(vocab.edge_types)})
         stored=self.db.execute('SELECT value FROM endpoints WHERE key=?',(key,)).fetchone() if self.db else None
         if stored:
@@ -127,6 +146,7 @@ class EndpointStore:
             # No arbitrary rematching: retain indexed target signatures throughout.
             source,diag=construct_typed_graph(invariant,constructor,np.random.default_rng(self.seed+index*1009))
             if not typed_invariant_matches_graph(source,invariant): raise AssertionError('Training endpoint misalignment.')
+            diag['valence_policy']=ENDPOINT_VALENCE_POLICY
             raw={'source':graph_record(source,vocab.node_attribute,vocab.edge_attribute),'constructor':diag,
                  'source_spectra':attributed_laplacian_spectra(source,edge_attribute=vocab.edge_attribute).tolist(),
                  'target_spectra':attributed_laplacian_spectra(target,edge_attribute=vocab.edge_attribute).tolist()}

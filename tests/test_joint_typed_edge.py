@@ -16,8 +16,14 @@ import torch.nn.functional as F
 from grapher.rewiring_mlp.attributed.soft_edge_bridge import (
     labels_to_logits,center_edges,edge_noise,bridge_edges,advance_edges,pair_mask,bridge_spectra,
 )
-from grapher.models.dhvae_hh.typed_degree_vae import TypedSignatureVectorizer,build_typed_signature_vae,load_typed_signature_checkpoint
-from grapher.rewiring_mlp.attributed.joint_typed_edge_data import EndpointStore,collate,graph_record,graph_from_record,load_splits
+from grapher.models.dhvae_hh.typed_degree_vae import (
+    TypedSignatureVectorizer, build_typed_signature_vae,
+    load_typed_signature_checkpoint, save_typed_signature_checkpoint,
+)
+from grapher.models.dhvae_hh.typed_constructor import TypedConstructionError, construct_typed_graph
+from grapher.rewiring_mlp.attributed.joint_typed_edge_data import (
+    ENDPOINT_VALENCE_POLICY, EndpointStore, collate, graph_record, graph_from_record, load_splits,
+)
 from grapher.rewiring_mlp.attributed.joint_typed_edge_model import (
     JointTypedEdgePredictor,noisy_batch,structural_loss,save_checkpoint,load_checkpoint,
 )
@@ -116,6 +122,93 @@ def test_joint_endpoint_alignment_cache_and_relabel(tmp_path):
     assert torch.equal(b['typed_features'],batch['typed_features'])
     assert torch.equal((b['source_labels'][...,None]==torch.tensor([1,2,3])).sum(2),b['typed_degrees'])
     assert torch.equal((b['target_labels'][...,None]==torch.tensor([1,2,3])).sum(2),b['typed_degrees'])
+
+
+def raw_qm9_target():
+    # Raw SDF nitro representation: C-N(=O)=O. Sanitization would change bonds.
+    graph = nx.Graph()
+    graph.add_nodes_from((i, {'atomic_num': z}) for i, z in enumerate([6, 7, 8, 8]))
+    graph.add_edges_from([(0, 1, {'bond_type': 1}), (1, 2, {'bond_type': 2}),
+                          (1, 3, {'bond_type': 2})])
+    return graph
+
+
+def raw_qm9_config(root=None):
+    cfg = tiny_config(root)
+    cfg['categorical_state']['node_categories'] = [6, 7, 8]
+    for section in ('typed_signature', 'constructor'):
+        cfg[section]['max_weighted_valence'] = {6: 4., 7: 4., 8: 3.}
+        cfg[section]['max_ordinary_degree'] = 4
+    return cfg
+
+
+def test_raw_target_endpoints_preserve_signatures_and_keep_generation_valence_caps(tmp_path):
+    cfg = raw_qm9_config()
+    before_cfg = deepcopy(cfg)
+    target = raw_qm9_target()
+    before_target = graph_record(target)
+    invariant = extract_typed_invariant(target, edge_types=(1, 2, 3))
+    with pytest.raises(TypedConstructionError, match='weighted degree 5 exceeds 4'):
+        construct_typed_graph(invariant, cfg['constructor'])
+    model = build_model(cfg, [target], torch.device('cpu'))
+    cache = tmp_path / 'endpoints.sqlite'
+    for _ in range(2):  # Exercise construction and SQLite replay.
+        store = EndpointStore([target], model.vectorizer, model.atom_types, cfg, seed=42, cache_path=cache)
+        try:
+            item = store[0]
+            assert typed_invariant_matches_graph(item['source'], invariant)
+            assert graph_record(item['target']) == before_target
+            assert item['constructor']['valence_policy'] == ENDPOINT_VALENCE_POLICY
+            batch = collate([item], model.vectorizer, model.atom_types)
+            assert batch['typed_degrees'][0, 1].tolist() == [1., 2., 0.]
+            assert batch['spectral_trace'][0].tolist() == [6., 10.]
+        finally:
+            store.close()
+    assert cfg == before_cfg
+    assert graph_record(target) == before_target
+    assert model.vectorizer.max_weighted_valence[7] == 4.
+    # Unconditional empirical generation must still reject this stored encoding.
+    cfg['generation'].update(invariant_source='train_empirical', max_attempts_per_graph=1,
+                             require_rdkit_source_validity=False)
+    cfg['attributed_refiner']['rdkit_candidate_filter'] = False
+    with pytest.raises(RuntimeError, match="constructor_failures.*1"):
+        list(generation_sources(model, [target], cfg, seed=42, num_generate=1))
+
+
+@pytest.mark.parametrize('warm_start', [False, True])
+def test_raw_qm9_targets_train_and_diagnose(tmp_path, monkeypatch, warm_start):
+    from scripts import diagnose_joint_typed_edge as diagnose
+
+    cfg = raw_qm9_config(tmp_path / 'data')
+    dataset = tmp_path / 'data' / 'toy'
+    dataset.mkdir(parents=True)
+    for split in ('train', 'val', 'test'):
+        save_pickle([raw_qm9_target()] * 2, dataset / f'{split}.pkl')
+    if warm_start:
+        initial = build_model(cfg, [raw_qm9_target()], torch.device('cpu'))
+        component = tmp_path / 'typed_degree.pt'
+        save_typed_signature_checkpoint(component, initial.degree_model, initial.vectorizer)
+        cfg['joint_typed_degree']['initialize_degree_checkpoint'] = str(component)
+    output = tmp_path / 'training'
+    args = Namespace(seed=42, epochs=1, batch_size=2, device='cpu', output_dir=str(output),
+                     max_train_graphs=None, max_val_graphs=None)
+    train_joint_typed_edge(cfg, args)
+    report = json.loads((output / 'report.json').read_text())
+    assert report['train_graphs'] == report['val_graphs'] == 2
+    assert report['endpoint_valence_policy'] == ENDPOINT_VALENCE_POLICY
+    assert json.loads((output / 'run_config.json').read_text())['endpoint_valence_policy'] == ENDPOINT_VALENCE_POLICY
+    model, _ = load_checkpoint(output / 'checkpoint.pt', 'cpu')
+    assert model.vectorizer.max_weighted_valence[7] == 4.
+    config_path = tmp_path / 'config.yaml'
+    save_yaml(cfg, config_path)
+    diagnostic = tmp_path / 'diagnostic.json'
+    monkeypatch.setattr(sys, 'argv', ['diagnose', '--config', str(config_path),
+        '--checkpoint', str(output / 'checkpoint.pt'), '--split', 'val', '--device', 'cpu',
+        '--max-graphs', '2', '--json-out', str(diagnostic)])
+    diagnose.main()
+    result = json.loads(diagnostic.read_text())
+    assert result['graphs'] == result['examples'] == 2
+    assert all(np.isfinite(value) for value in result['means'].values())
 
 
 def test_structure_gradients_reach_typed_encoder_and_decoder():
@@ -306,14 +399,14 @@ def test_warmstart_frozen_and_registry_cli(tmp_path):
     out=tmp_path/'frozen';args=Namespace(seed=42,epochs=1,batch_size=2,device='cpu',output_dir=str(out),max_train_graphs=None,max_val_graphs=None)
     train_joint_typed_edge(cfg,args);loaded,_=load_checkpoint(out/'checkpoint.pt')
     for k,v in loaded.degree_model.state_dict().items():assert torch.equal(v,m.degree_model.state_dict()[k])
-    env=dict(os.environ,PYTHONPATH='src:.',OMP_NUM_THREADS='1',MKL_NUM_THREADS='1')
+    env=dict(os.environ,PYTHONPATH=os.pathsep.join(('src', '.')),OMP_NUM_THREADS='1',MKL_NUM_THREADS='1')
     result=subprocess.run([sys.executable,'scripts/inspect_joint_typed_checkpoints.py','--training-dir',str(out),'--verify'],check=True,env=env,capture_output=True,text=True)
     assert 'verified' in result.stdout
 
 
 def test_original_cli_dispatches_new_family(tmp_path):
     cfg=prepare_dataset(tmp_path);path=tmp_path/'cfg.yaml';save_yaml(cfg,path)
-    env=dict(os.environ,PYTHONPATH='src:.',OMP_NUM_THREADS='1',MKL_NUM_THREADS='1')
+    env=dict(os.environ,PYTHONPATH=os.pathsep.join(('src', '.')),OMP_NUM_THREADS='1',MKL_NUM_THREADS='1')
     train=tmp_path/'cli_train';gen=tmp_path/'cli_gen'
     subprocess.run([sys.executable,'scripts/train_attributed_grapher.py','--config',str(path),'--output-dir',str(train),
         '--epochs','1','--batch-size','2','--device','cpu','--seed','42'],check=True,env=env,capture_output=True,text=True)

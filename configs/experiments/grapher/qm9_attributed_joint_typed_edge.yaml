@@ -141,6 +141,9 @@ structure_summary_prediction:
   orbit_width: 15
   cycle_graphlet_histogram: false
 training_sources:
+  # Known targets retain raw QM9 bond types (sanitize_sdf=false), including
+  # bond-order sums outside generation limits. Endpoint construction ignores
+  # constructor.max_weighted_valence; generated sources still enforce it.
   mode: target_indexed_typed_constructor
   shared_relabel_augmentation: true
   memory_cache_graphs: 256

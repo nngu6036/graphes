@@ -1540,3 +1540,200 @@ PYTHONPATH=src python scripts/diagnose_spectral_denoiser.py \
   --generated-dir "$GEN" \
   --reference-split val \
   --output-dir "$GEN/evaluation_val"
+
+  Topology generation diagnostics
+  pipeline_mode: topology
+  guidance_mode: clustering_orbit
+  predictor_family: spectral
+  legacy_predictor_guidance_mode: spectral
+  degree_preservation_rate: 1.0
+  source_enrichment_degree_preservation_rate: 1.0
+  source_enrichment_connectedness_rate: 1.0
+  constructor_target_degree_match_rate: 1.0
+  final_target_degree_match_rate: 1.0
+  connectedness_rate: 1.0
+  mean_accepted_steps: 4.671875
+  all_accepted_moves_improve_frozen_energy: True
+  all_accepted_moves_pass_relative_threshold: True
+  prediction_horizon_mode: fixed
+  prediction_horizon_schedule: constant
+  prediction_horizon_initial_k: 1
+  prediction_horizon_final_k: 1
+  mean_realized_prediction_horizon: 1.0
+  mean_prediction_calls: 5.671875
+  mean_accepted_swaps_per_prediction_call: 0.8236914600550964
+  plateau_refresh_count: 0
+  mean_graph_runtime_seconds: 16.767112995984917
+  source_enrichment_enabled: False
+  mean_source_enrichment_accepted_steps: 0.0
+  runtime_seconds: 1074.7141592359985
+  inline_evaluation: False
+  rewiring_guidance_mode: clustering_orbit
+  clustering_guidance_statistic: histogram
+  clustering_histogram_bins: 100
+  predictor_clustering_histogram_w1: 0.025425573578104377
+  mean_accepted_clustering_gain: 0.015670892433837073
+  mean_accepted_clustering_discrepancy_before: 0.07332181703703128
+  mean_accepted_clustering_discrepancy_after: 0.0576509246031942
+  orbit_guidance_weight: 1.0
+  orbit_guidance_distance: log_rmse
+  predictor_orbit_summary_enabled: True
+  predictor_cycle_graphlet_histogram_enabled: False
+  predictor_cycle_graphlet_histogram_tv: None
+  cycle_graphlet_representation: None
+  mean_accepted_orbit_gain: 0.04739090455261595
+  mean_accepted_orbit_discrepancy_before: 0.2990433427901934
+  mean_accepted_orbit_discrepancy_after: 0.25165243823757744
+  mean_accepted_spectral_gain: 0.0007947234578907027
+  mean_accepted_clean_spectral_gain: 0.0007947234578907027
+  mean_projection_residual: 0.07369305525355328
+  mean_bridge_clean_mix: 1.0
+  mean_bridge_expansions: 0.0
+  predictor_spectral_normalized_error: 0.06316671683453023
+  spectral_distance: rmse
+  spectral_normalization: mean_degree
+  spectral_bridge_schedule: linear
+  spectral_debug_enabled: False
+  spectral_guidance_weight: 0.0
+  clustering_guidance_weight: 0.25
+  cycle_guidance_weight: 0.0
+  cycle_guidance_k: None
+  cycle_guidance_distance: None
+  scoring_components: ['clustering', 'orbit']
+  discrepancy_scope: same_step_frozen_prediction; accepted_moves_only
+  candidate_spectral_diagnostics_requested: False
+  accepted_spectral_diagnostics_computed: True
+  clustering_diagnostics_computed: True
+  accepted_clustering_measurements: 299
+  accepted_clustering_improved_fraction: 0.6989966555183946
+  accepted_clustering_worsened_fraction: 0.23076923076923078
+  orbit_diagnostics_computed: True
+  accepted_orbit_measurements: 299
+  accepted_orbit_improved_fraction: 0.9130434782608695
+  accepted_orbit_worsened_fraction: 0.0802675585284281
+  cycle_diagnostics_computed: False
+  accepted_cycle_measurements: 0
+  mean_accepted_cycle_gain: None
+  mean_accepted_cycle_discrepancy_before: None
+  mean_accepted_cycle_discrepancy_after: None
+  accepted_cycle_improved_fraction: None
+  accepted_cycle_worsened_fraction: None
+  predictor_error_scope: checkpoint_validation_report
+  checkpoint_validation_metrics: {'val_clustering_histogram_ce': 2.551991753280163, 'val_clustering_histogram_loss': 0.0017816728686739225, 'val_clustering_histogram_tv': 0.3185804281383753, 'val_clustering_histogram_w1': 0.025425573578104377, 'val_degree_aggregate_prior_moment_loss': 0.05228726752102375, 'val_degree_degree_loss': 1.329535961151123, 'val_degree_degree_moment_loss': 3.5475286495056935e-05, 'val_degree_kl_loss': 4.683124303817749, 'val_degree_loss': 13.708335399627686, 'val_degree_num_edges_loss': 3.480537459254265, 'val_degree_num_nodes_loss': 0.00014968197865528055, 'val_degree_prior_distribution_loss': 0.07339292764663696, 'val_joint_loss': 0.14583457421162166, 'val_loss': 0.14583457421162166, 'val_low_frequency_loss': 0.0, 'val_moment2_loss': 7.032924585814726e-05, 'val_orbit_identity_max_abs': 5.802139639854431e-07, 'val_orbit_summary_log_mae': 0.05800475541036576, 'val_orbit_summary_log_rmse': 0.07654495351016521, 'val_orbit_summary_loss': 0.0049096518887381535, 'val_orbit_summary_raw_nrmse': 0.10736787714995444, 'val_spectral_lambda1_mae': 0.0, 'val_spectral_loss': 0.002059895356069319, 'val_spectral_mae': 0.20846541412174702, 'val_spectral_moment2_relative_error': 0.010227015256532468, 'val_spectral_monotonic_violations': 0.0, 'val_spectral_normalized_mae': 0.048502441961318254, 'val_spectral_normalized_rmse': 0.06316671683453023, 'val_spectral_trace_mae': 2.771615982055664e-06, 'val_spectrum_loss': 0.002059895356069319, 'val_structure_loss': 0.008751220215344802, 'val_unconstrained_orbit_identity_max_abs': 0.8623026609420776, 'val_num_graphs': 16, 'val_num_bridge_views': 512, 'val_degree_loss_evaluations': 16, 'val_num_graph_minibatches': 2, 'val_optimizer_steps': 0}
+  joint_degree_enabled: True
+  degree_sampler_source: joint_checkpoint_embedded
+  degree_conditioning: actual_histogram_posterior_mean_decoder_features
+  orbit_consistency: degree_identities
+Saved results to: outputs/topology_generation/community_small_joint_degree/seed_42
+ORCA orbit evaluation enabled: /home/quang/orca/orca.out
+Generic MMD protocol: graphrnn (clustering_bins=100)
+Dataset: benchmark=community_small serialized=sbm protocol=graphes_community_small_spectre_v2
+Dataset splits: train=64 val=16 test=20
+Dataset fingerprint: 5d342c35939e49ac4e63b79d2c726292dae37539302199876036c9c2c8b43a4e
+  train SHA256: 29a487fc51d452cd503045befef320ca9c780f3d5299eaf3ba5d3aed1a11b76c
+  val SHA256: d14a369f3cbc2154b7e9b29c0797a99f4a61c318c600ca03df5149e91f325731
+  test SHA256: 02ae6b8dc2330e2efdf823edb15d1b38596500f694b3acb7d55eda13566e544c
+Generated graph input: outputs/topology_generation/community_small_joint_degree/seed_42/topology_refined_graphs.pkl
+Generated stage label: topology_final
+Evaluation counts: reference_val=16 generated=64 train_reference=64
+Graph-distribution MMD against held-out val graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_val                        0.064707          0.055468      0.004454
+hh_source_to_val                    0.050677          0.097695      0.094554
+topology_final_to_val               0.050677          0.043481      0.037516
+
+
+
+CFG=configs/experiments/grapher/community_small_topology_joint_degree_multicheckpoint.yaml
+
+TRAIN=outputs/topology_grapher/community_small_joint_degree_multicheckpoint/seed_42
+
+GENROOT=outputs/topology_generation/community_small_joint_degree_multicheckpoint/seed_42
+
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --seed 42 \
+  --device gpu
+
+
+  (
+set -euo pipefail
+
+for KIND in best_joint best_histogram best_orbit last; do
+  CKPT="$TRAIN/checkpoints/$KIND/checkpoint.pt"
+  OUT="$GENROOT/$KIND"
+
+  echo "===== $KIND ====="
+
+  # Check predictions from the HH endpoint.
+  PYTHONPATH=src python scripts/diagnose_spectral_denoiser.py \
+    --config "$CFG" \
+    --checkpoint "$CKPT" \
+    --split val \
+    --source-endpoint-only \
+    --samples-per-graph 1 \
+    --paths-per-graph 1 \
+    --seed 42 \
+    --device gpu \
+    --json-out "$TRAIN/checkpoints/$KIND/denoiser_hh_endpoint_val.json"
+
+  # Generate using this checkpoint's embedded DH-VAE.
+  PYTHONPATH=src python scripts/run_topology_grapher.py \
+    --config "$CFG" \
+    --checkpoint "$CKPT" \
+    --output-dir "$OUT" \
+    --num-generate 64 \
+    --seed 42 \
+    --device gpu \
+    --set generation.degree_source=learned
+
+  # Evaluate every candidate against the same validation reference.
+  PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+    --config "$CFG" \
+    --generated-dir "$OUT" \
+    --reference-split val \
+    --output-dir "$OUT/evaluation_val"
+done
+
+)
+
+PYTHONPATH=src python scripts/summarize_joint_checkpoint_evaluations.py \
+  --generation-root "$GENROOT" \
+  --reference-split val \
+  --json-out "$GENROOT/checkpoint_comparison_val.json"
+
+
+  # Molecular
+
+  CFG=configs/experiments/grapher/qm9_attributed_joint_typed_edge.yaml
+
+TRAIN=outputs/attributed_grapher/qm9_joint_typed_edge/seed_42
+
+GEN=outputs/attributed_generation/qm9_joint_typed_edge/seed_42
+
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/qm9_typed.yaml
+
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --seed 42 \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate 64 \
+  --seed 42 \
+  --device gpu
+
+  PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN/molecular_graphs.pkl" \
+  --dataset qm9_attributed \
+  --reference-split val \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --output-dir "$GEN/evaluation_val" \
+  --require-fcd
