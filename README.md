@@ -574,8 +574,10 @@ PYTHONPATH=src python scripts/draw_dataset.py \
   --col 4 \
   --output outputs/qm9_test_random_16.png
 
-# One PDF containing 64 pages of random molecules, followed by the C3-C5
-# graphlet drawings. Graphlet counts use the full train+val+test dataset.
+# One PDF containing 64 pages of random valid molecules, followed by the C3-C5
+# graphlet drawings. Graphlet counts use valid molecules from train+val+test.
+# Molecular graphs must pass RDKit sanitization; exclusions are reported.
+# --count must not exceed the valid pool. --all draws every valid molecule.
 # Counts are also saved to outputs/qm9_random_1024_graphlet_histogram.json.
 PYTHONPATH=src python scripts/draw_dataset.py \
   --dataset qm9_attributed \

@@ -843,3 +843,121 @@ def test_invalid_output_format_rejected_before_loading_dataset(option: str) -> N
             "--dataset", "missing", "--k-min", "3", "--k-max", "5",
             option, "unsupported.svg",
         ])
+
+
+def _molecular_cycle(order: int, *, invalid: bool = False) -> nx.Graph:
+    graph = nx.cycle_graph(order)
+    nx.set_node_attributes(graph, 6, "atomic_num")
+    nx.set_edge_attributes(graph, 1, "bond_type")
+    if invalid:
+        graph.nodes[0]["atomic_num"] = 9  # Fluorine cannot have these two bonds.
+    return graph
+
+
+@pytest.mark.parametrize("split", ["test", "all"])
+@pytest.mark.parametrize("draw_all", [False, True])
+def test_molecular_sampling_and_graphlets_share_valid_pool(
+    tmp_path: Path, monkeypatch, split: str, draw_all: bool,
+) -> None:
+    pytest.importorskip("rdkit")
+    pytest.importorskip("PIL")
+    directory = tmp_path / "datasets" / "molecules"
+    directory.mkdir(parents=True)
+    missing_bond = _molecular_cycle(3)
+    del missing_bond.edges[0, 1]["bond_type"]
+    splits = {
+        "train": [_molecular_cycle(3), _molecular_cycle(3, invalid=True), nx.Graph()],
+        "val": [_molecular_cycle(4), missing_bond],
+        "test": [_molecular_cycle(3, invalid=True), _molecular_cycle(5),
+                 _molecular_cycle(3), nx.cycle_graph(3)],
+    }
+    for name, graphs in splits.items():
+        for index, graph in enumerate(graphs):
+            graph.graph["source_index"] = 100 + index
+        save_pickle(graphs, directory / f"{name}.pkl")
+    rendered = []
+    compose = draw._compose_page
+
+    def capture(items, **kwargs):
+        rendered.extend(items)
+        return compose(items, **kwargs)
+
+    monkeypatch.setattr(draw, "_compose_page", capture)
+    output = tmp_path / "valid.pdf"
+    assert draw.main([
+        "--dataset", "molecules", "--root", str(directory.parent), "--split", split,
+        *( ["--all"] if draw_all else ["--count", "1"] ),
+        "--seed", "42", "--row", "1", "--col", "2",
+        "--k-min", "3", "--k-max", "5", "--output", str(output),
+    ]) == 0
+    allowed = {"molecules/test[1]", "molecules/test[2]"}
+    if split == "all":
+        allowed.update({"molecules/train[0]", "molecules/val[0]"})
+    assert len(rendered) == (len(allowed) if draw_all else 1)
+    assert {item.info.index_label for item in rendered} <= allowed
+    assert all(item.render_mode == "molecule" and item.error is None for item in rendered)
+    assert all(item.info.source_index == 100 + item.info.dataset_index for item in rendered)
+    assert _pdf_page_count(output) == (len(rendered) + 1) // 2 + 1
+    report = json.loads((tmp_path / "valid_graphlet_histogram.json").read_text())
+    assert report["valid_molecular_graphs_only"] is True
+    assert report["total_dataset_graphs"] == 9
+    assert report["selected_graphs"] == 4
+    assert report["excluded_invalid_molecular_graphs"] == 5
+    assert report["total_cycle_graphlets"] == 4
+    assert report["total_eligible_node_subsets"] == 23
+    assert [(row["k"], row["count"], row["frequency"]) for row in report["graphlets"]] == [
+        (3, 2, 0.5), (4, 1, 0.25), (5, 1, 0.25),
+    ]
+
+
+@pytest.mark.parametrize("empty_pool", [False, True])
+def test_molecular_sampling_rejects_insufficient_valid_pool(tmp_path: Path, empty_pool: bool) -> None:
+    pytest.importorskip("rdkit")
+    graphs = [_molecular_cycle(3, invalid=True)]
+    if not empty_pool:
+        graphs.append(_molecular_cycle(3))
+    root = tmp_path / "datasets"
+    _write_split_files(root, "qm9_attributed", selected_split="test", selected_graphs=graphs)
+    output = tmp_path / "not_written.pdf"
+    message = "No valid molecular graphs" if empty_pool else "exceeds the 1 valid molecular"
+    with pytest.raises(ValueError, match=message):
+        draw.main([
+            "--dataset", "qm9_attributed", "--root", str(root),
+            *( ["--all"] if empty_pool else ["--count", "2"] ),
+            "--output", str(output),
+        ])
+    assert not output.exists()
+
+
+def test_molecular_validation_preserves_explicit_and_projected_formal_charges() -> None:
+    pytest.importorskip("rdkit")
+    charged = _molecular_graph()
+    charged.nodes[1]["formal_charge"] = -1
+    charged.edges[0, 1].update(bond_type=1, bond_order=1.0)
+    molecule = draw._validated_molecule(charged, label="charged")
+    assert molecule.GetAtomWithIdx(1).GetFormalCharge() == -1
+
+    projected = nx.star_graph(4)
+    nx.set_node_attributes(projected, 6, "atomic_num")
+    nx.set_edge_attributes(projected, 1, "bond_type")
+    projected.nodes[0]["atomic_num"] = 7
+    molecule = draw._validated_molecule(projected, label="projected")
+    assert molecule.GetAtomWithIdx(0).GetFormalCharge() == 1
+
+
+@pytest.mark.parametrize("kind", ["empty", "directed", "multi", "self_loop", "fractional_atom", "valence"])
+def test_invalid_molecular_graphs_are_not_drawable(kind: str) -> None:
+    pytest.importorskip("rdkit")
+    graph = _molecular_cycle(3, invalid=kind == "valence")
+    if kind == "empty":
+        graph.clear()
+    elif kind == "directed":
+        graph = nx.DiGraph(graph)
+    elif kind == "multi":
+        graph = nx.MultiGraph(graph)
+    elif kind == "self_loop":
+        graph.add_edge(0, 0, bond_type=1)
+    elif kind == "fractional_atom":
+        graph.nodes[0]["atomic_num"] = 6.5
+    with pytest.raises(ValueError):
+        draw._load_from_prepared_graph(graph, 0, "molecules", "test")

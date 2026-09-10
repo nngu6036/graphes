@@ -1459,8 +1459,24 @@ hh_source_to_val                    0.068362          0.298500      0.136374
 topology_final_to_val               0.068362          0.057220      0.038329
 
 
-
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_val                        0.064707          0.055468      0.004454
-hh_source_to_val                    0.068362          0.298500      0.136374
-topology_final_to_val               0.068362          0.058990      0.018475
+Spectral denoiser diagnostic (no rewiring)
+  split=val graphs=16 examples=16
+  use_graph_context=False
+  source -> clean NRMSE:    0.067658
+  noisy  -> clean NRMSE:    0.067658
+  pred   -> clean NRMSE:    0.056376
+  denoising gain:           0.011282
+  relative NRMSE reduction: 16.67%
+  trace abs error:          5.006790e-06
+  lambda1 abs:              0.000000e+00
+  HH -> clean histogram W1:   0.105741
+  pred -> clean histogram W1: 0.031197
+  pred -> clean histogram TV: 0.412687
+  HH -> clean orbit log-RMSE:   0.350841
+  pred -> clean orbit log-RMSE: 0.106374
+  pred -> clean orbit raw-NRMSE:0.123882
+  HH -> clean C5 histogram TV:   0.001290
+  pred -> clean C5 histogram TV: 0.000586
+  pred -> clean C5 count MAE:    1.519777
+  by diffusion time:
+    [0.00,0.25): noisy=0.067658 pred=0.056376 gain=0.011282 hist_w1=0.031197 orbit_log_rmse=0.106374 cycle5_tv=0.000586
