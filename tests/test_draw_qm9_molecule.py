@@ -757,3 +757,89 @@ def test_cli_draws_a_prepared_molecule_end_to_end(tmp_path: Path) -> None:
 
     assert result == 0
     assert output.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def _pdf_page_count(path: Path) -> int:
+    pytest.importorskip("PIL")
+    from PIL import PdfParser
+
+    assert path.read_bytes().startswith(b"%PDF-")
+    with PdfParser.PdfParser(filename=str(path)) as document:
+        return len(document.pages)
+
+
+def test_pdf_includes_all_graph_pages_and_full_dataset_graphlets(tmp_path: Path) -> None:
+    pytest.importorskip("PIL")
+    directory = tmp_path / "datasets" / "generic"
+    directory.mkdir(parents=True)
+    save_pickle([nx.cycle_graph(3), nx.cycle_graph(3)], directory / "train.pkl")
+    save_pickle([nx.cycle_graph(4)], directory / "val.pkl")
+    save_pickle([nx.cycle_graph(5), nx.path_graph(3), nx.path_graph(4)], directory / "test.pkl")
+    output = tmp_path / "drawings.pdf"
+    args = [
+        "--dataset", "generic", "--root", str(directory.parent),
+        "--split", "test", "--count", "3", "--seed", "42",
+        "--row", "1", "--col", "2", "--k-min", "3", "--k-max", "5",
+        "--output", str(output),
+    ]
+    # Rerunning replaces the document instead of appending a second copy.
+    for _ in range(2):
+        assert draw.main(args) == 0
+        assert _pdf_page_count(output) == 3  # two graph pages, then graphlets
+    assert list(tmp_path.glob("*.pdf")) == [output]
+    assert not list(tmp_path.glob("*.png"))
+    report = json.loads((tmp_path / "drawings_graphlet_histogram.json").read_text())
+    assert report["split"] == "all"
+    assert report["selected_graphs"] == 6
+    assert report["drawn_graphs"] == 3
+    assert report["total_cycle_graphlets"] == 4
+    assert [(row["k"], row["count"]) for row in report["graphlets"]] == [(3, 2), (4, 1), (5, 1)]
+
+
+@pytest.mark.parametrize("graphlet_filename", ["drawings.pdf", "cycles.pdf", "cycles.png"])
+def test_pdf_can_also_export_separate_graphlet_drawing(tmp_path: Path, graphlet_filename: str) -> None:
+    pytest.importorskip("PIL")
+    directory = tmp_path / "datasets" / "generic"
+    directory.mkdir(parents=True)
+    for split in ("train", "val", "test"):
+        save_pickle([nx.cycle_graph(3)], directory / f"{split}.pkl")
+    output = tmp_path / "drawings.pdf"
+    graphlet_output = tmp_path / graphlet_filename
+    assert draw.main([
+        "--dataset", "generic", "--root", str(directory.parent),
+        "--count", "1", "--row", "1", "--col", "1",
+        "--k-min", "3", "--k-max", "3", "--output", str(output),
+        "--graphlet-output", str(graphlet_output),
+    ]) == 0
+    assert _pdf_page_count(output) == 2
+    if graphlet_output != output:
+        if graphlet_output.suffix == ".pdf":
+            assert _pdf_page_count(graphlet_output) == 1
+        else:
+            assert graphlet_output.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_pdf_draws_molecules_without_graphlet_page(tmp_path: Path) -> None:
+    pytest.importorskip("PIL")
+    pytest.importorskip("rdkit")
+    root = tmp_path / "datasets"
+    _write_split_files(
+        root, "molecules", selected_split="test",
+        selected_graphs=[_molecular_graph(source_index=42)],
+    )
+    output = tmp_path / "molecule.PDF"
+    assert draw.main([
+        "--dataset", "molecules", "--root", str(root),
+        "--row", "1", "--col", "1", "--output", str(output),
+    ]) == 0
+    assert _pdf_page_count(output) == 1
+    assert not list(tmp_path.glob("*.json"))
+
+
+@pytest.mark.parametrize("option", ["--output", "--graphlet-output"])
+def test_invalid_output_format_rejected_before_loading_dataset(option: str) -> None:
+    with pytest.raises(ValueError, match=r"must use a .png or .pdf extension"):
+        draw.main([
+            "--dataset", "missing", "--k-min", "3", "--k-max", "5",
+            option, "unsupported.svg",
+        ])

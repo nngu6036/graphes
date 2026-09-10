@@ -19,6 +19,7 @@ Main features
 - if the range is larger than row * col, continue on the next figure/page
 - automatically use molecular rendering when atom/bond attributes are present
 - otherwise draw a deterministic generic node-link diagram
+- write one multipage PDF, including graphlet drawings, with ``--output file.pdf``
 
 Examples
 --------
@@ -59,12 +60,24 @@ Draw the complete Community-small dataset across all prepared splits::
       --k-min 3 --k-max 5 \
       --output outputs/community_small_all.png
 
-When both ``--k-min`` and ``--k-max`` are supplied, the script also writes a
+When both ``--k-min`` and ``--k-max`` are supplied, the script also writes
 frequency-sorted drawings of induced simple-cycle graphlets, counted across
 the full train/validation/test dataset regardless of the drawing selection.
 For example, the
 command above creates ``outputs/community_small_all_graphlet_histogram.png``
 and a JSON sidecar containing the raw counts and normalization details.
+
+To collect 1,024 random molecules and the full-dataset cycle graphlet drawings
+in one PDF::
+
+    PYTHONPATH=src python scripts/draw_dataset.py \
+      --dataset qm9_attributed --split all --count 1024 --seed 42 \
+      --row 4 --col 4 --k-min 3 --k-max 5 \
+      --output outputs/qm9_random_1024.pdf
+
+PDF output appends the graphlet drawings after the graph pages and writes
+``outputs/qm9_random_1024_graphlet_histogram.json`` with the counts. An explicit
+``--graphlet-output`` additionally exports the graphlet page as PNG or PDF.
 """
 
 from __future__ import annotations
@@ -1041,7 +1054,18 @@ def _graphlet_histogram_output_path(
 ) -> Path:
     if configured is not None:
         return configured.expanduser().resolve()
+    if graph_output.suffix.lower() == ".pdf":
+        return graph_output
     return graph_output.with_name(f"{graph_output.stem}_graphlet_histogram.png")
+
+
+def _save_drawing(canvas: Any, output: Path, *, append: bool = False) -> None:
+    """Write one drawing, appending PDF pages without retaining all canvases."""
+
+    if output.suffix.lower() == ".pdf":
+        canvas.save(output, format="PDF", append=append, resolution=144.0, quality=95)
+    else:
+        canvas.save(output)
 
 
 def _compose_page(
@@ -1207,8 +1231,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         help=(
-            "Output PNG path. If multiple pages are needed, numbered files "
-            "are created."
+            "Output .pdf or .png path. PDF collects all graph pages and any "
+            "cycle graphlet drawings in one document; PNG creates numbered "
+            "files when multiple graph pages are needed."
         ),
     )
     parser.add_argument(
@@ -1235,8 +1260,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--graphlet-output",
         type=Path,
         help=(
-            "Optional PNG path for cycle drawings with full-dataset frequencies. By default, "
-            "_graphlet_histogram is appended to the --output stem."
+            "Optional PNG or PDF path for cycle drawings with full-dataset "
+            "frequencies. By default they are included in the main PDF, or "
+            "saved as <output-stem>_graphlet_histogram.png for PNG output."
         ),
     )
     parser.add_argument(
@@ -1276,6 +1302,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             raise ValueError("Cycle graphlets require --k-min >= 3")
         if args.k_max < args.k_min:
             raise ValueError("--k-max must be >= --k-min")
+    for option, path in (("--output", args.output), ("--graphlet-output", args.graphlet_output)):
+        if path is not None and path.suffix.lower() not in {".png", ".pdf"}:
+            raise ValueError(f"{option} must use a .png or .pdf extension")
 
     print(
         f"Resolving prepared dataset {args.dataset!r} under {args.root}...",
@@ -1318,11 +1347,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             else _default_output(args.count, args.seed, output_prefix)
         )
     ).expanduser().resolve()
-    if output.suffix.lower() != ".png":
-        raise ValueError(
-            "This grid script currently writes PNG output only; please use a "
-            ".png output path."
-        )
+    pdf_output = output.suffix.lower() == ".pdf"
+    histogram_output = _graphlet_histogram_output_path(output, args.graphlet_output)
+    if graphlet_requested and not pdf_output and histogram_output == output:
+        raise ValueError("--graphlet-output must differ from the graph PNG output")
     output.parent.mkdir(parents=True, exist_ok=True)
 
     loaded_items: list[LoadedItem] = []
@@ -1399,9 +1427,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 else None
             ),
         )
-        page_output = _page_output_path(output, page_index, total_pages)
-        canvas.save(page_output)
-        print(f"Saved: {page_output}")
+        page_output = output if pdf_output else _page_output_path(output, page_index, total_pages)
+        _save_drawing(canvas, page_output, append=pdf_output and page_index > 0)
+        if pdf_output:
+            canvas.close()
+            print(f"Saved PDF graph page {page_index + 1}/{total_pages}: {page_output}", flush=True)
+        else:
+            print(f"Saved: {page_output}")
 
     if graphlet_requested:
         if args.split == "all":
@@ -1429,20 +1461,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             k_min=args.k_min,
             k_max=args.k_max,
         )
-        histogram_output = _graphlet_histogram_output_path(
-            output,
-            args.graphlet_output,
-        )
-        if histogram_output.suffix.lower() != ".png":
-            raise ValueError("--graphlet-output must use a .png extension")
         histogram_output.parent.mkdir(parents=True, exist_ok=True)
         histogram = _render_cycle_graphlet_histogram(
             histogram_rows,
             dataset_label=f"{dataset_name}/all",
             graph_count=len(histogram_graphs),
         )
-        histogram.save(histogram_output)
-        histogram_report = histogram_output.with_suffix(".json")
+        if pdf_output:
+            _save_drawing(histogram, output, append=total_pages > 0)
+            print(f"Added cycle graphlet drawings to PDF: {output}", flush=True)
+        if histogram_output != output:
+            _save_drawing(histogram, histogram_output)
+        histogram.close()
+        histogram_report = (
+            output.with_name(f"{output.stem}_graphlet_histogram.json")
+            if histogram_output == output
+            else histogram_output.with_suffix(".json")
+        )
         total_cycle_graphlets = sum(row.count for row in histogram_rows)
         save_json(
             {

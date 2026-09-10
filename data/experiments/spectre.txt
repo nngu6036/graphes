@@ -67,3 +67,8 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-stage spectre \
   --output-dir "$GEN_DIR/evaluation_report"
 
+  Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+spectre_to_test                     0.025153          0.097951      0.008820
+
