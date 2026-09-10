@@ -796,7 +796,7 @@ def main() -> None:
                 "softmax head, CDF-MSE loss; histogram is NOT diffused.", flush=True,
             )
         if cycle_enabled:
-            print("[GraphER/Spectral] clean cycle3 histogram: [triangle, other] / choose(n,3); softmax head, density-MSE loss; NOT diffused.", flush=True)
+            print(f"[GraphER/Spectral] clean C{cycle_k} histogram: [cycle, other] / choose(n,{cycle_k}); softmax head, density-MSE loss; NOT diffused.", flush=True)
         if spectral_graphlet_mode:
             print(
                 "Graphlet-logit diffusion: each k-block is selected graphlet "
@@ -914,8 +914,8 @@ def main() -> None:
                     )
                 if cycle_enabled:
                     extra += (
-                        f" cycle3_tv={val_metrics['cycle_graphlet_histogram_tv']:.5f}"
-                        f" triangle_count_mae={val_metrics['cycle_graphlet_count_mae']:.5f}"
+                        f" cycle{cycle_k}_tv={val_metrics['cycle_graphlet_histogram_tv']:.5f}"
+                        f" cycle{cycle_k}_count_mae={val_metrics['cycle_graphlet_count_mae']:.5f}"
                     )
                 print(
                     f"epoch={epoch:04d} "
@@ -976,7 +976,7 @@ def main() -> None:
             "clean_cycle_graphlet_histogram": cycle_enabled,
             "cycle_graphlet_k": cycle_k,
             "cycle_graphlet_histogram_bins": ["cycle", "other"] if cycle_enabled else None,
-            "cycle_graphlet_histogram_normalization": "all_node_triples" if cycle_enabled else None,
+            "cycle_graphlet_histogram_normalization": (f"all_node_{cycle_k}_subsets" if cycle_enabled else None),
             "cycle_graphlet_histogram_is_diffused": False,
             "cycle_graphlet_histogram_loss": "density_mse" if cycle_enabled else None,
         }

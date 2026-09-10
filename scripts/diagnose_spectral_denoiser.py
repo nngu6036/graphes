@@ -162,7 +162,7 @@ def main() -> None:
         if getattr(model, "predict_orbit_summary", False) else None
     )
     source_cycles = (
-        [extract_cycle_graphlet_histogram(example.current_graph) for example in examples]
+        [extract_cycle_graphlet_histogram(example.current_graph, k=model.cycle_graphlet_k) for example in examples]
         if getattr(model, "predict_cycle_graphlet_histogram", False) else None
     )
     example_offset = 0
@@ -240,12 +240,17 @@ def main() -> None:
                 )
                 source_cycle_tv = (source_cycle[:, 0] - cycle_target[:, 0]).abs()
                 n = batch.graph_size
-                triples = (n * (n - 1) * (n - 2) / 6).clamp_min(0)
-                cycle_count_mae = cycle_tv * triples
-                if predicted_orbit is not None:
-                    # ORCA orbit 3 is triangle participation per node. These
-                    # independent heads need not be mutually consistent.
-                    cycle_orbit_count_gap = (cycle_prediction[:, 0] * triples - predicted_orbit[:, 3] * n / 3).abs()
+                subsets = torch.ones_like(n)
+                for offset in range(model.cycle_graphlet_k):
+                    subsets = subsets * (n - float(offset)).clamp_min(0.0)
+                for divisor in range(2, model.cycle_graphlet_k + 1):
+                    subsets = subsets / float(divisor)
+                cycle_count_mae = cycle_tv * subsets
+                if predicted_orbit is not None and model.cycle_graphlet_k == 3:
+                    # ORCA orbit 3 is triangle participation per node. This
+                    # identity applies only to C3; the 15-D orbit summary does
+                    # not cover C5.
+                    cycle_orbit_count_gap = (cycle_prediction[:, 0] * subsets - predicted_orbit[:, 3] * n / 3).abs()
             example_offset += predicted.shape[0]
 
             for i in range(predicted.shape[0]):
@@ -280,7 +285,7 @@ def main() -> None:
                     row["orbit_summary_log_rmse"] = float(orbit_log_rmse[i].detach().cpu())
                     row["orbit_summary_raw_nrmse"] = float(orbit_raw_nrmse[i].detach().cpu())
                     row["source_orbit_summary_log_rmse"] = float(source_orbit_log_rmse[i].detach().cpu())
-                if cycle_tv is not None and float(batch.graph_size[i]) >= 3:
+                if cycle_tv is not None and float(batch.graph_size[i]) >= model.cycle_graphlet_k:
                     row["cycle_graphlet_histogram_tv"] = float(cycle_tv[i].cpu())
                     row["source_cycle_graphlet_histogram_tv"] = float(source_cycle_tv[i].cpu())
                     row["cycle_graphlet_count_mae"] = float(cycle_count_mae[i].cpu())
@@ -349,7 +354,7 @@ def main() -> None:
         "clustering_histogram_bins": model.clustering_histogram_bins if getattr(model, "predict_clustering_histogram", False) else None,
         "orbit_summary_width": model.orbit_summary_width if getattr(model, "predict_orbit_summary", False) else None,
         "cycle_graphlet_k": model.cycle_graphlet_k if getattr(model, "predict_cycle_graphlet_histogram", False) else None,
-        "cycle_graphlet_representation": "[triangle, other] / choose(n,3)" if source_cycles is not None else None,
+        "cycle_graphlet_representation": (f"[C{model.cycle_graphlet_k}, other] / choose(n,{model.cycle_graphlet_k})" if source_cycles is not None else None),
         "overall": summarize(all_rows),
         "by_time": {key: summarize(rows) for key, rows in sorted(bins.items())},
     }
@@ -382,9 +387,9 @@ def main() -> None:
         print(f"  pred -> clean orbit log-RMSE: {overall['orbit_summary_log_rmse']:.6f}")
         print(f"  pred -> clean orbit raw-NRMSE:{overall['orbit_summary_raw_nrmse']:.6f}")
     if "cycle_graphlet_histogram_tv" in overall:
-        print(f"  HH -> clean cycle3 histogram TV:   {overall['source_cycle_graphlet_histogram_tv']:.6f}")
-        print(f"  pred -> clean cycle3 histogram TV: {overall['cycle_graphlet_histogram_tv']:.6f}")
-        print(f"  pred -> clean triangle count MAE:  {overall['cycle_graphlet_count_mae']:.6f}")
+        print(f"  HH -> clean C{model.cycle_graphlet_k} histogram TV:   {overall['source_cycle_graphlet_histogram_tv']:.6f}")
+        print(f"  pred -> clean C{model.cycle_graphlet_k} histogram TV: {overall['cycle_graphlet_histogram_tv']:.6f}")
+        print(f"  pred -> clean C{model.cycle_graphlet_k} count MAE:    {overall['cycle_graphlet_count_mae']:.6f}")
         if "cycle_orbit_triangle_count_gap" in overall:
             print(f"  cycle/orbit predicted triangle-count gap: {overall['cycle_orbit_triangle_count_gap']:.6f}")
     print("  by diffusion time:")
@@ -395,7 +400,7 @@ def main() -> None:
             f"gain={row['denoising_gain_vs_noisy']:.6f}"
             + (f" hist_w1={row['clustering_histogram_w1']:.6f}" if "clustering_histogram_w1" in row else "")
             + (f" orbit_log_rmse={row['orbit_summary_log_rmse']:.6f}" if "orbit_summary_log_rmse" in row else "")
-            + (f" cycle3_tv={row['cycle_graphlet_histogram_tv']:.6f}" if "cycle_graphlet_histogram_tv" in row else "")
+            + (f" cycle{model.cycle_graphlet_k}_tv={row['cycle_graphlet_histogram_tv']:.6f}" if "cycle_graphlet_histogram_tv" in row else "")
         )
 
     if args.json_out:

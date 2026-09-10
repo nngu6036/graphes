@@ -1426,41 +1426,6 @@ PYTHONPATH=src python scripts/train_topology_grapher.py \
   --seed 42 \
   --device gpu
 
-
-Spectral denoiser diagnostic (no rewiring)
-  split=val graphs=16 examples=16
-  use_graph_context=False
-  source -> clean NRMSE:    0.067658
-  noisy  -> clean NRMSE:    0.067658
-  pred   -> clean NRMSE:    0.064871
-  denoising gain:           0.002786
-  relative NRMSE reduction: 4.12%
-  trace abs error:          1.668930e-06
-  lambda1 abs:              0.000000e+00
-  HH -> clean histogram W1:   0.105741
-  pred -> clean histogram W1: 0.039673
-  pred -> clean histogram TV: 0.359487
-  HH -> clean orbit log-RMSE:   0.350841
-  pred -> clean orbit log-RMSE: 0.117026
-  pred -> clean orbit raw-NRMSE:0.156808
-  HH -> clean cycle3 histogram TV:   0.006321
-  pred -> clean cycle3 histogram TV: 0.003200
-  pred -> clean triangle count MAE:  1.586458
-  cycle/orbit predicted triangle-count gap: 1.510831
-  by diffusion time:
-    [0.00,0.25): noisy=0.067658 pred=0.064871 gain=0.002786 hist_w1=0.039673 orbit_log_rmse=0.117026 cycle3_tv=0.003200
-
-PYTHONPATH=src python scripts/diagnose_spectral_denoiser.py \
-  --config "$CFG" \
-  --checkpoint "$TRAIN/checkpoint.pt" \
-  --split val \
-  --source-endpoint-only \
-  --samples-per-graph 1 \
-  --paths-per-graph 1 \
-  --seed 42 \
-  --device gpu \
-  --json-out "$TRAIN/denoiser_hh_endpoint_val.json"
-
 PYTHONPATH=src python scripts/run_topology_grapher.py \
   --config "$CFG" \
   --checkpoint "$TRAIN/checkpoint.pt" \
@@ -1492,3 +1457,10 @@ Comparison                        Degree MMD    Clustering MMD     Orbit MMD
 train_to_val                        0.064707          0.055468      0.004454
 hh_source_to_val                    0.068362          0.298500      0.136374
 topology_final_to_val               0.068362          0.057220      0.038329
+
+
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_val                        0.064707          0.055468      0.004454
+hh_source_to_val                    0.068362          0.298500      0.136374
+topology_final_to_val               0.068362          0.058990      0.018475

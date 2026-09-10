@@ -583,8 +583,8 @@ class TopologySpectralTransformerPredictor(nn.Module):
             valid = (batch.graph_size >= self.cycle_graphlet_k).to(cycle_prediction.dtype)
             denominator = valid.sum().clamp_min(1.0)
             cycle_delta = cycle_prediction[:, 0] - cycle_target[:, 0]
-            # Two-bin MSE equals squared triangle-density error. Small graphs
-            # with no triples are excluded rather than taught fictitious trials.
+            # Two-bin MSE equals squared induced-C_k-density error. Graphs
+            # with fewer than k nodes are excluded rather than taught fictitious trials.
             cycle_loss = (cycle_delta.square() * valid).sum() / denominator
             cycle_ce_per_graph = -(cycle_target * F.log_softmax(
                 outputs["clean_cycle_graphlet_histogram_logits"], dim=-1
@@ -594,12 +594,16 @@ class TopologySpectralTransformerPredictor(nn.Module):
             total = total + float(weights.get("cycle_graphlet_histogram_ce", 0.0)) * cycle_ce
             with torch.no_grad():
                 n = batch.graph_size.to(cycle_prediction.dtype)
-                triples = (n * (n - 1) * (n - 2) / 6).clamp_min(0)
+                subsets = torch.ones_like(n)
+                for offset in range(self.cycle_graphlet_k):
+                    subsets = subsets * (n - float(offset)).clamp_min(0.0)
+                for divisor in range(2, self.cycle_graphlet_k + 1):
+                    subsets = subsets / float(divisor)
                 cycle_metrics = {
                     "cycle_graphlet_histogram_loss": float(cycle_loss.detach().cpu()),
                     "cycle_graphlet_histogram_ce": float(cycle_ce.detach().cpu()),
                     "cycle_graphlet_histogram_tv": float(((cycle_delta.abs() * valid).sum() / denominator).cpu()),
-                    "cycle_graphlet_count_mae": float(((cycle_delta.abs() * triples * valid).sum() / denominator).cpu()),
+                    "cycle_graphlet_count_mae": float(((cycle_delta.abs() * subsets * valid).sum() / denominator).cpu()),
                     "cycle_graphlet_valid_fraction": float(valid.mean().cpu()),
                 }
 

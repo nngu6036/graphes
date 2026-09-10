@@ -902,7 +902,7 @@ def main() -> None:
                 "predictor_orbit_summary_enabled": bool(getattr(model, "predict_orbit_summary", False)),
                 "predictor_cycle_graphlet_histogram_enabled": bool(getattr(model, "predict_cycle_graphlet_histogram", False)),
                 "predictor_cycle_graphlet_histogram_tv": (checkpoint.get("report", {}) or {}).get("val_cycle_graphlet_histogram_tv"),
-                "cycle_graphlet_representation": "[triangle,other] / choose(n,3)" if getattr(model, "predict_cycle_graphlet_histogram", False) else None,
+                "cycle_graphlet_representation": (f"[C{model.cycle_graphlet_k},other] / choose(n,{model.cycle_graphlet_k})" if getattr(model, "predict_cycle_graphlet_histogram", False) else None),
                 "mean_accepted_orbit_gain": _mean_or_zero(accepted_rows, "orbit_gain"),
                 "mean_accepted_orbit_discrepancy_before": _mean_or_zero(accepted_rows, "current_orbit_discrepancy"),
                 "mean_accepted_orbit_discrepancy_after": _mean_or_zero(accepted_rows, "candidate_orbit_discrepancy"),

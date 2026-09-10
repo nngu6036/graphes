@@ -65,6 +65,37 @@ def test_exact_triangle_counts_and_nondegenerate_histogram(g,count):
     assert hist.sum()==pytest.approx(1)
 
 
+
+def test_c4_c5_count_induced_chordless_cycles():
+    for k in (4, 5):
+        cycle = nx.cycle_graph(k)
+        assert count_cycle_graphlets(cycle, k=k) == 1
+        np.testing.assert_allclose(extract_cycle_graphlet_histogram(cycle, k=k), [1.0, 0.0])
+
+        chorded = cycle.copy()
+        chorded.add_edge(0, 2)
+        assert count_cycle_graphlets(chorded, k=k) == 0
+        np.testing.assert_allclose(extract_cycle_graphlet_histogram(chorded, k=k), [0.0, 1.0])
+
+    c5_plus_isolate = nx.cycle_graph(5)
+    c5_plus_isolate.add_node(5)
+    assert count_cycle_graphlets(c5_plus_isolate, k=5) == 1
+    np.testing.assert_allclose(
+        extract_cycle_graphlet_histogram(c5_plus_isolate, k=5),
+        [1 / comb(6, 5), 1 - 1 / comb(6, 5)],
+    )
+
+
+def test_c5_relabel_invariance():
+    g = nx.Graph([(0,1),(0,3),(0,4),(1,5),(2,3),(2,5)])
+    renamed = nx.relabel_nodes(g, {v: f"v{v}" for v in g})
+    assert count_cycle_graphlets(g, k=5) == 1
+    assert count_cycle_graphlets(renamed, k=5) == 1
+    np.testing.assert_array_equal(
+        extract_cycle_graphlet_histogram(g, k=5),
+        extract_cycle_graphlet_histogram(renamed, k=5),
+    )
+
 def test_c3_counts_all_triangles_not_cycle_basis_and_residual_includes_paths():
     g=nx.complete_graph(4)
     assert count_cycle_graphlets(g)==4  # basis has only 3 cycles
@@ -82,9 +113,14 @@ def test_relabel_invariance_and_orbit_triangle_identity():
         assert len(g)*extract_orbit_summary(g)[3]/3==pytest.approx(count_cycle_graphlets(g))
 
 
-@pytest.mark.parametrize('k',[2,4,5,3.0,True,'3',None])
+@pytest.mark.parametrize('k',[3,4,5])
+def test_accept_supported_cycle_sizes(k):
+    assert validate_cycle_graphlet_k(k) == k
+
+
+@pytest.mark.parametrize('k',[2,6,3.0,True,'3',None])
 def test_reject_unsupported_sizes(k):
-    with pytest.raises(ValueError,match='integer 3'):
+    with pytest.raises(ValueError,match=r'\{3,4,5\}'):
         validate_cycle_graphlet_k(k)
 
 
@@ -220,6 +256,37 @@ def test_cycle_oracle_rewiring_preserves_degrees_and_connectivity():
     assert all(r['scoring_components']==['cycle'] for r in accepted)
 
 
+
+def test_c5_cycle_guidance_scores_induced_five_cycles():
+    g = nx.Graph([(0,1),(0,3),(0,4),(1,5),(2,3),(2,5)])
+    candidates, candidate_graphs, _ = propose_valid_topology_swaps(
+        g, proposal_budget=-1, valid_candidate_budget=-1, preserve_connectivity=True,
+        rng=np.random.default_rng(1),
+    )
+    current_count = count_cycle_graphlets(g, k=5)
+    target = next(
+        candidate for candidate in candidate_graphs.values()
+        if count_cycle_graphlets(candidate, k=5) != current_count
+    )
+    spectrum = laplacian_eigenvalues(target)
+    cfg = SpectralRefinerConfig.from_dict({
+        'steps': 2, 'proposal_budget': -1, 'valid_candidate_budget': -1,
+        'guidance_mode': 'cycle',
+        'cycle_guidance': {'k': 5, 'distance': 'total_variation', 'weight': .1},
+        'spectral_guidance': {'weight': 0, 'min_clean_mix': 1, 'max_clean_mix': 1, 'expand_on_plateau': False},
+        'candidate_search': {'compute_spectral_diagnostics': False},
+        'prediction_horizon': {'mode': 'fixed', 'k': 1, 'refresh_on_plateau': False},
+    })
+    rows = score_spectral_candidates(
+        g, candidates, clean_spectrum=spectrum, next_spectrum_target=spectrum,
+        clean_cycle_graphlet_histogram=extract_cycle_graphlet_histogram(target, k=5),
+        config=cfg, candidate_graphs=candidate_graphs,
+    )
+    assert rows
+    assert any(abs(row['cycle_gain']) > 0 for row in rows)
+    assert all(row['cycle_graphlet_k'] == 5 for row in rows)
+
+
 def test_missing_cycle_checkpoint_head_fails_in_scoring():
     g,actions,cfg,kwargs=fixture_guidance()
     kwargs.pop('clean_cycle_graphlet_histogram')
@@ -228,7 +295,7 @@ def test_missing_cycle_checkpoint_head_fails_in_scoring():
 
 
 def test_invalid_cycle_config_fails():
-    for spec in ({'k':4},{'distance':'rmse'},{'weight':0},{'weight':float('nan')}):
+    for spec in ({'k':6},{'distance':'rmse'},{'weight':0},{'weight':float('nan')}):
         with pytest.raises(ValueError):SpectralRefinerConfig.from_dict({'guidance_mode':'cycle','cycle_guidance':spec})
 
 
@@ -322,3 +389,88 @@ def test_generation_rejects_old_checkpoint_for_cycle_guidance_before_sampling(tm
     monkeypatch.setattr(sys,'argv',['generate','--config',str(path),'--checkpoint',str(checkpoint),'--output-dir',str(tmp_path/'bad_gen'),'--num-generate','1','--device','cpu'])
     with pytest.raises(ValueError,match='no cycle graphlet histogram head'):
         generate.main()
+
+
+def test_cycle5_train_generate_and_diagnose_smoke(tmp_path, monkeypatch):
+    import json
+    import sys
+    from pathlib import Path
+
+    from grapher.data.io import save_dataset_splits
+    from grapher.utils.io import load_pickle, load_yaml, save_yaml
+    from scripts import diagnose_spectral_denoiser as diagnose
+    from scripts import run_topology_grapher as generate
+    from scripts import train_topology_grapher as train
+
+    repo = Path(__file__).resolve().parents[1]
+    config = load_yaml(
+        repo / "configs/experiments/grapher/community_small_topology_spectral_clustering_orbit_cycle5.yaml"
+    )
+    # All graphs contain at least five nodes so the C5 target is active.
+    g0 = nx.Graph([(0,1),(0,3),(0,4),(1,5),(2,3),(2,5)])
+    g1 = nx.cycle_graph(6)
+    g2 = nx.complete_bipartite_graph(3, 3)
+    dataset = tmp_path / "datasets"
+    save_dataset_splits(
+        "tinycycle5",
+        {"train": [g0, g1, g2], "val": [g0, g1], "test": [g0, g2]},
+        {},
+        dataset,
+    )
+    config["benchmark"] = "tinycycle5"
+    config["dataset"] = {"name": "tinycycle5", "root": str(dataset), "build_if_missing": False}
+    config["summary_diffusion"].update(samples_per_graph=1, paths_per_graph=1, storage="streaming")
+    config["topology_predictor"].update(
+        epochs=1, batch_size=2, hidden_dim=8, edge_dim=8, graph_dim=8,
+        spectral_dim=16, spectral_layers=1, spectral_heads=4, spectral_ff_dim=32,
+    )
+    config["topology_refiner"].update(steps=1, proposal_budget=16, valid_candidate_budget=4)
+    path = tmp_path / "cycle5.yaml"
+    save_yaml(config, path)
+
+    train_dir = tmp_path / "train"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["train", "--config", str(path), "--output-dir", str(train_dir), "--seed", "42", "--device", "cpu"],
+    )
+    train.main()
+    report = json.loads((train_dir / "training_report.json").read_text())
+    assert report["predictor_targets"]["cycle_graphlet_k"] == 5
+    assert report["predictor_targets"]["cycle_graphlet_histogram_normalization"] == "all_node_5_subsets"
+
+    ckpt = train_dir / "checkpoint.pt"
+    gen = tmp_path / "gen"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["generate", "--config", str(path), "--checkpoint", str(ckpt), "--output-dir", str(gen),
+         "--num-generate", "1", "--seed", "42", "--device", "cpu"],
+    )
+    generate.main()
+    generated = json.loads((gen / "report.json").read_text())
+    diag = generated["diagnostics"]
+    assert diag["guidance_mode"] == "clustering_orbit_cycle"
+    assert diag["cycle_guidance_k"] == 5
+    assert diag["cycle_guidance_weight"] == pytest.approx(.1)
+    assert "cycle" in diag["scoring_components"]
+    source = load_pickle(gen / "coarse_graphs.pkl")
+    final = load_pickle(gen / "topology_refined_graphs.pkl")
+    assert dict(source[0].degree()) == dict(final[0].degree())
+
+    out = tmp_path / "diagnose.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["diagnose", "--config", str(path), "--checkpoint", str(ckpt), "--split", "val",
+         "--source-endpoint-only", "--samples-per-graph", "1", "--paths-per-graph", "1",
+         "--device", "cpu", "--json-out", str(out)],
+    )
+    diagnose.main()
+    diagnostic = json.loads(out.read_text())
+    assert diagnostic["cycle_graphlet_k"] == 5
+    assert diagnostic["cycle_graphlet_representation"] == "[C5, other] / choose(n,5)"
+    assert np.isfinite(diagnostic["overall"]["cycle_graphlet_histogram_tv"])
+    # 15-D ORCA only covers graphlets up to four nodes, so there is no C5/orbit
+    # triangle-equivalence diagnostic.
+    assert "cycle_orbit_triangle_count_gap" not in diagnostic["overall"]
