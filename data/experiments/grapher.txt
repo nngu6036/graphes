@@ -299,15 +299,22 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --require-fcd \
   --hogdiff-compatible-metrics
 
-GEN = outputs/attributed_generation/qm9_spectral_graphlet/seed_44
+GEN=outputs/attributed_generation/qm9_spectral_graphlet/seed_44
 PYTHONPATH=src python scripts/draw_generated_dataset.py \
   --generated-graphs "$GEN/molecular_graphs.pkl" \
   --dataset qm9_attributed \
   --all \
   --seed 42 \
-  --row 4 --col 4 \
+  --row 8 --col 8 \
   --k-min 3 --k-max 5 \
   --output "$GEN/generated_drawings.pdf"
+
+PYTHONPATH=src python scripts/draw_generated_qm9_outliers.py \
+      --generated-dir "$GEN" \
+      --dataset qm9_attributed --split train \
+      --count 16 --row 4 --col 4 \
+      --fcd-device gpu \
+      --output outputs/qm9_generated_outliers.png
 
 Molecular evaluation
   validity: 1.0
