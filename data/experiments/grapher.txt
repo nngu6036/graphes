@@ -299,6 +299,16 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --require-fcd \
   --hogdiff-compatible-metrics
 
+GEN = outputs/attributed_generation/qm9_spectral_graphlet/seed_44
+PYTHONPATH=src python scripts/draw_generated_dataset.py \
+  --generated-graphs "$GEN/molecular_graphs.pkl" \
+  --dataset qm9_attributed \
+  --all \
+  --seed 42 \
+  --row 4 --col 4 \
+  --k-min 3 --k-max 5 \
+  --output "$GEN/generated_drawings.pdf"
+
 Molecular evaluation
   validity: 1.0
   validity_with_correction: 1.0

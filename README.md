@@ -602,6 +602,26 @@ PYTHONPATH=src python scripts/draw_dataset.py \
   --k-max 5 \
   --output outputs/qm9_random_1024.pdf
 
+# Draw generated graphs directly from the same pickle passed to evaluation.
+# Molecular panels and typed C3-C5 counts use raw-valid molecules from the full
+# generated file: direct RDKit sanitization, without inferred charges or bond
+# correction. No prepared reference dataset or evaluation run is needed.
+# Replace --all with --count 1024 for a random sample (if 1024 are valid).
+# Graphlet counts always cover the full valid input pool, regardless of --count.
+PYTHONPATH=src python scripts/draw_generated_dataset.py \
+  --generated-graphs "$GEN/molecular_graphs.pkl" \
+  --dataset qm9_attributed \
+  --all \
+  --seed 42 \
+  --row 4 --col 4 \
+  --k-min 3 --k-max 5 \
+  --output "$GEN/generated_drawings.pdf"
+
+# --dataset is an optional label/hint; generic graphs also work automatically.
+# A *_drawing.json file records selected original file indices and exclusions;
+# *_graphlet_histogram.json records typed-cycle counts and frequencies.
+# PNG and separate --graphlet-output exports work as in draw_dataset.py.
+
 # Draw valid generated molecules that are farthest from the training set in
 # both ChemNet (FCD mean term) and NSPDK feature space. Higher panel scores
 # mean farther; the adjacent JSON file records full-precision scores.

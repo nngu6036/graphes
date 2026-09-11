@@ -100,9 +100,9 @@ import json
 import math
 import random
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 
 import networkx as nx
 
@@ -470,15 +470,34 @@ def _validated_molecule(graph: Any, *, label: str) -> Any:
     )
 
 
+def _raw_valid_molecule(graph: nx.Graph, *, label: str) -> Any:
+    """Use the generated evaluator's raw_valid conversion, without corrections."""
+    from rdkit import Chem
+
+    # Require the producer's simple molecular graph schema before conversion.
+    # In particular, int(1.5) in the raw RDKit converter would become SINGLE,
+    # whereas the prepared-dataset alias normalizer interprets 1.5 as AROMATIC.
+    _normalized_molecular_graph(graph, label=label)
+    for u, v, data in graph.edges(data=True):
+        value = data.get("bond_type")
+        if value is not None and float(value) != int(value):
+            raise ValueError(f"Edge {(u, v)!r} in {label} must use an integer bond_type category.")
+    mol = nx_to_rdkit_mol(graph, sanitize=True, infer_projected_formal_charges=False)
+    Chem.MolToSmiles(mol, canonical=True, isomericSmiles=False)
+    return mol
+
+
 def _load_from_prepared_graph(
     graph: Any,
     index: int,
     dataset_name: str,
     split: str,
+    *,
+    molecule_loader: Callable[..., Any] = _validated_molecule,
 ) -> Tuple[Any, MoleculeInfo]:
     """Convert one valid prepared molecular graph and retain its original indices."""
     index_label = f"{dataset_name}/{split}[{index}]"
-    mol = _validated_molecule(graph, label=index_label)
+    mol = molecule_loader(graph, label=index_label)
     name = str(graph.graph.get("name", index_label))
     return mol, MoleculeInfo(
         source=f"prepared dataset {dataset_name}/{split}",
@@ -508,7 +527,10 @@ def _is_molecular_dataset(graphs: Sequence[Any], dataset_name: str) -> bool:
     return False
 
 
-def _valid_molecular_indices(graphs: Sequence[Any], *, dataset_label: str) -> list[int]:
+def _valid_molecular_indices(
+    graphs: Sequence[Any], *, dataset_label: str,
+    molecule_loader: Callable[..., Any] = _validated_molecule,
+) -> list[int]:
     # Import before filtering so missing RDKit is an environment error, not an
     # apparent dataset containing no valid molecules. Suppress per-record RDKit
     # diagnostics while reporting the aggregate result below.
@@ -519,7 +541,7 @@ def _valid_molecular_indices(graphs: Sequence[Any], *, dataset_label: str) -> li
     with rdBase.BlockLogs():
         for index, graph in enumerate(graphs):
             try:
-                _validated_molecule(graph, label=f"{dataset_label}[{index}]")
+                molecule_loader(graph, label=f"{dataset_label}[{index}]")
             except (ValueError, TypeError, RuntimeError, OverflowError):
                 pass
             else:
@@ -1318,35 +1340,41 @@ def _default_all_output(prefix: str) -> Path:
     return Path(f"outputs/{prefix}_all.png")
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(*, generated: bool = False) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Draw a sample or every molecular/generic graph from a named "
-            "prepared dataset."
+            "Draw generated graphs from a pickle file; molecular drawings and "
+            "graphlets use raw-valid molecules from the full file."
+            if generated else
+            "Draw a sample or every molecular/generic graph from a named prepared dataset."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "--dataset",
-        required=True,
+        required=not generated,
         help=(
-            "Prepared dataset name or configs/datasets/<name>.yaml stem, for "
-            "example qm9_attributed."
+            "Optional dataset label and molecular hint, e.g. qm9_attributed. "
+            "No reference dataset is loaded; omitted labels use the input filename."
+            if generated else
+            "Prepared dataset name or configs/datasets/<name>.yaml stem, for example qm9_attributed."
         ),
     )
-    parser.add_argument(
-        "--root",
-        "--dataset-root",
-        dest="root",
-        default="outputs/datasets",
-        help="Root containing <dataset>/{train,val,test}.pkl.",
-    )
-    parser.add_argument(
-        "--split",
-        choices=("train", "val", "test", "all"),
-        default="test",
-        help="Prepared dataset split to draw, or all for train+val+test.",
-    )
+    if generated:
+        parser.add_argument(
+            "--generated-graphs", type=Path, required=True,
+            help="Generated NetworkX graph pickle, as passed to evaluate_generated_molecules.py.",
+        )
+        parser.set_defaults(split="generated")
+    else:
+        parser.add_argument(
+            "--root", "--dataset-root", dest="root", default="outputs/datasets",
+            help="Root containing <dataset>/{train,val,test}.pkl.",
+        )
+        parser.add_argument(
+            "--split", choices=("train", "val", "test", "all"), default="test",
+            help="Prepared dataset split to draw, or all for train+val+test.",
+        )
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument(
         "--count",
@@ -1357,7 +1385,7 @@ def build_parser() -> argparse.ArgumentParser:
     selection.add_argument(
         "--all",
         action="store_true",
-        help="Draw every eligible graph in the selected splits (valid molecules for molecular data).",
+        help="Draw every eligible graph (valid molecules for molecular data).",
     )
     parser.add_argument(
         "--seed",
@@ -1440,9 +1468,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
-
+def _validate_drawing_args(args: argparse.Namespace) -> None:
     if args.row <= 0 or args.col <= 0:
         raise ValueError("--row and --col must be positive")
     if args.count <= 0:
@@ -1463,6 +1489,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if path is not None and path.suffix.lower() not in {".png", ".pdf"}:
             raise ValueError(f"{option} must use a .png or .pdf extension")
 
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = build_parser().parse_args(argv)
+    _validate_drawing_args(args)
+    graphlet_requested = args.k_min is not None
     print(
         f"Resolving prepared dataset {args.dataset!r} under {args.root}...",
         flush=True,
@@ -1477,9 +1508,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             loaded_split,
         )
     )
+    return _draw_graph_collection(
+        args, prepared_graphs, dataset_path, dataset_name, graph_locations, loaded_split,
+    )
+
+
+def _draw_graph_collection(
+    args: argparse.Namespace,
+    prepared_graphs: Sequence[nx.Graph],
+    dataset_path: Path,
+    dataset_name: str,
+    graph_locations: Sequence[tuple[str, int]],
+    loaded_split: str,
+    *,
+    generated: bool = False,
+) -> int:
+    """Shared drawing/counting pipeline for prepared splits or one generated file."""
+    graphlet_requested = args.k_min is not None
+    molecule_options = {"molecule_loader": _raw_valid_molecule} if generated else {}
     molecular_dataset = _is_molecular_dataset(prepared_graphs, dataset_name)
     eligible_indices = (
-        _valid_molecular_indices(prepared_graphs, dataset_label=f"{dataset_name}/{loaded_split}")
+        _valid_molecular_indices(
+            prepared_graphs, dataset_label=f"{dataset_name}/{loaded_split}", **molecule_options,
+        )
         if molecular_dataset else list(range(len(prepared_graphs)))
     )
     candidate_indices = [
@@ -1506,7 +1557,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         dataset_path = dataset_path / f"{args.split}.pkl"
     output_prefix = f"{dataset_name}_{args.split}"
     print(
-        f"Using prepared dataset: {dataset_name} split={args.split} "
+        f"Using {'generated graphs' if generated else 'prepared dataset'}: {dataset_name} split={args.split} "
         f"eligible_graphs={len(candidate_indices)} path={dataset_path}",
         flush=True,
     )
@@ -1519,14 +1570,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ]
         print(f"Selected graph indices: {selected_labels}", flush=True)
 
-    output = (
-        args.output
-        or (
+    if generated:
+        suffix = "all" if args.all else f"sample_n{args.count}_seed{args.seed}"
+        default_output = dataset_path.with_name(f"{dataset_path.stem}_{suffix}.pdf")
+    else:
+        default_output = (
             _default_all_output(output_prefix)
             if args.all
             else _default_output(args.count, args.seed, output_prefix)
         )
-    ).expanduser().resolve()
+    output = (args.output or default_output).expanduser().resolve()
     pdf_output = output.suffix.lower() == ".pdf"
     histogram_output = _graphlet_histogram_output_path(output, args.graphlet_output)
     if graphlet_requested and not pdf_output and histogram_output == output:
@@ -1544,7 +1597,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     split_index,
                     dataset_name,
                     selected_split,
+                    **molecule_options,
                 )
+                if generated:
+                    info = replace(info, source=str(dataset_path))
                 mol = _prepare_molecule(
                     mol,
                     show_hydrogens=args.show_hydrogens,
@@ -1561,6 +1617,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     dataset_name,
                     selected_split,
                 )
+                if generated:
+                    info = replace(info, source=str(dataset_path))
                 loaded_items.append(
                     LoadedItem(info=info, graph=graph, render_mode="generic")
                 )
@@ -1627,7 +1685,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(
             "Counting exact induced cycle graphlets "
             f"C{args.k_min}..C{args.k_max} over "
-            f"all {len(histogram_graphs)} graphs (train+val+test), "
+            f"all {len(histogram_graphs)} graphs "
+            f"({'generated file' if generated else 'train+val+test'}), "
             f"{eligible_subsets:,} eligible node subsets...",
             flush=True,
         )
@@ -1643,7 +1702,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             start = page_index * GRAPHLETS_PER_PAGE
             histogram = _render_cycle_graphlet_histogram(
                 histogram_rows[start:start + GRAPHLETS_PER_PAGE],
-                dataset_label=f"{dataset_name}/all" + (" (valid molecules)" if molecular_dataset else ""),
+                dataset_label=f"{dataset_name}/{loaded_split}" + (" (valid molecules)" if molecular_dataset else ""),
                 graph_count=len(histogram_graphs), molecular=molecular_dataset,
                 page_index=page_index, total_pages=graphlet_pages,
             )
@@ -1665,14 +1724,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         save_json(
             {
                 "dataset": dataset_name,
-                "split": "all",
+                "split": loaded_split,
+                **({
+                    "generated_graphs": str(dataset_path),
+                    "drawn_indices": indices,
+                    "metric_molecule_source": "raw_valid" if molecular_dataset else None,
+                } if generated else {}),
                 "selected_graphs": len(histogram_graphs),
                 "total_dataset_graphs": len(prepared_graphs),
                 "valid_molecular_graphs_only": molecular_dataset,
                 "excluded_invalid_molecular_graphs": len(prepared_graphs) - len(eligible_indices),
                 "molecular_validity_criterion": (
                     "nonempty simple graph; complete atom/bond attributes; RDKit "
-                    "sanitization with projected formal-charge inference"
+                    + ("sanitization without projected formal-charge inference or bond correction"
+                       if generated else "sanitization with projected formal-charge inference")
                     if molecular_dataset else None
                 ),
                 "drawn_split": args.split,
@@ -1733,6 +1798,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"Rendered generic graphs: {generic_count}")
     print(f"Rendered successfully: {ok_count}")
     print(f"Failed to render: {fail_count}")
+    if generated:
+        drawing_report = output.with_name(f"{output.stem}_drawing.json")
+        save_json({
+            "generated_graphs": str(dataset_path),
+            "dataset": dataset_name,
+            "total_graphs": len(prepared_graphs),
+            "eligible_graphs": len(eligible_indices),
+            "excluded_invalid_molecular_graphs": len(prepared_graphs) - len(eligible_indices),
+            "metric_molecule_source": "raw_valid" if molecular_dataset else None,
+            "selected_indices": indices,
+            "seed": args.seed,
+            "all": args.all,
+            "graph_pages": total_pages,
+            "rendered_graphs": ok_count,
+            "failed_to_render": fail_count,
+        }, drawing_report)
+        print(f"Saved drawing selection: {drawing_report}")
     return 0
 
 
