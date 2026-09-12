@@ -12,6 +12,10 @@ from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.clustering import (
     clustering_histogram_bins, extract_clustering_histogram, validate_clustering_histogram,
 )
+from grapher.rewiring_mlp.generic.induced_graphlets import (
+    InducedGraphletSpec, extract_histogram as extract_induced_histogram,
+    validate_histogram as validate_induced_histogram,
+)
 from grapher.rewiring_mlp.generic.cycle_graphlets import (
     cycle_graphlet_k, extract_cycle_graphlet_histogram, validate_cycle_graphlet_histogram,
 )
@@ -85,6 +89,7 @@ class TopologySpectralExample:
     # Like clustering summaries, it is a clean x0 target and is not diffused.
     clean_orbit_summary_target: np.ndarray | None = None
     clean_cycle_graphlet_histogram_target: np.ndarray | None = None
+    clean_induced_graphlet_histogram_target: np.ndarray | None = None
 
 
 @dataclass
@@ -111,6 +116,7 @@ class TopologySpectralBatch:
     clean_clustering_histogram_target: torch.Tensor | None = None
     clean_orbit_summary_target: torch.Tensor | None = None
     clean_cycle_graphlet_histogram_target: torch.Tensor | None = None
+    clean_induced_graphlet_histogram_target: torch.Tensor | None = None
 
     def to(self, device: torch.device | str) -> "TopologySpectralBatch":
         return TopologySpectralBatch(
@@ -180,6 +186,15 @@ def collate_spectral_examples(
             raise ValueError("Cannot mix examples with and without cycle graphlet histogram targets.")
         clean_cycle_histogram = np.stack([
             validate_cycle_graphlet_histogram(value) for value in cycle_targets
+        ]).astype(np.float32)
+
+    induced_targets = [example.clean_induced_graphlet_histogram_target for example in examples]
+    clean_induced_histogram = None
+    if any(value is not None for value in induced_targets):
+        if any(value is None for value in induced_targets):
+            raise ValueError("Cannot mix examples with and without induced graphlet targets.")
+        clean_induced_histogram = np.stack([
+            validate_induced_histogram(value) for value in induced_targets
         ]).astype(np.float32)
 
     graphlet_widths = {
@@ -332,6 +347,9 @@ def collate_spectral_examples(
         clean_orbit_summary_target=(
             torch.from_numpy(clean_orbit_summary)
             if clean_orbit_summary is not None else None
+        ),
+        clean_induced_graphlet_histogram_target=(
+            torch.from_numpy(clean_induced_histogram) if clean_induced_histogram is not None else None
         ),
         clean_cycle_graphlet_histogram_target=(
             torch.from_numpy(clean_cycle_histogram)
@@ -1133,6 +1151,7 @@ class TopologySpectralDiffusionEndpoint:
     clean_clustering_histogram: np.ndarray | None = None
     clean_orbit_summary: np.ndarray | None = None
     clean_cycle_graphlet_histogram: np.ndarray | None = None
+    clean_induced_graphlet_histogram: np.ndarray | None = None
 
 
 def _prepare_spectral_diffusion_endpoint(
@@ -1190,6 +1209,7 @@ def _prepare_spectral_diffusion_endpoint(
     histogram_bins = clustering_histogram_bins(structure_summary_config)
     orbit_width = orbit_summary_width(structure_summary_config)
     cycle_k = cycle_graphlet_k(structure_summary_config)
+    induced_spec = InducedGraphletSpec.from_config(structure_summary_config)
     return TopologySpectralDiffusionEndpoint(
         source=source,
         target=target,
@@ -1209,6 +1229,9 @@ def _prepare_spectral_diffusion_endpoint(
         ),
         clean_orbit_summary=(
             extract_orbit_summary(target) if orbit_width is not None else None
+        ),
+        clean_induced_graphlet_histogram=(
+            extract_induced_histogram(target, induced_spec) if induced_spec is not None else None
         ),
         clean_cycle_graphlet_histogram=(
             extract_cycle_graphlet_histogram(target, k=cycle_k) if cycle_k is not None else None
@@ -1296,6 +1319,10 @@ def _sample_spectral_diffusion_endpoint_examples(
                     clean_orbit_summary_target=(
                         None if endpoint.clean_orbit_summary is None
                         else endpoint.clean_orbit_summary.astype(np.float32)
+                    ),
+                    clean_induced_graphlet_histogram_target=(
+                        None if endpoint.clean_induced_graphlet_histogram is None
+                        else endpoint.clean_induced_graphlet_histogram.astype(np.float32)
                     ),
                     clean_cycle_graphlet_histogram_target=(
                         None if endpoint.clean_cycle_graphlet_histogram is None
@@ -1395,6 +1422,7 @@ def build_spectral_diffusion_examples(
     histogram_bins = clustering_histogram_bins(structure_summary_config)
     orbit_width = orbit_summary_width(structure_summary_config)
     cycle_k = cycle_graphlet_k(structure_summary_config)
+    induced_spec = InducedGraphletSpec.from_config(structure_summary_config)
     rng = np.random.default_rng(int(seed))
     require_same_degree_sequence = bool(
         spec_cfg.get("require_same_degree_sequence", True)
@@ -1424,6 +1452,9 @@ def build_spectral_diffusion_examples(
         )
         clean_orbit_summary = (
             extract_orbit_summary(target) if orbit_width is not None else None
+        )
+        clean_induced_histogram = (
+            extract_induced_histogram(target, induced_spec) if induced_spec is not None else None
         )
         clean_cycle_histogram = (
             extract_cycle_graphlet_histogram(target, k=cycle_k) if cycle_k is not None else None
@@ -1527,6 +1558,9 @@ def build_spectral_diffusion_examples(
                         clean_orbit_summary_target=(
                             None if clean_orbit_summary is None else clean_orbit_summary.astype(np.float32)
                         ),
+                        clean_induced_graphlet_histogram_target=(
+                            None if clean_induced_histogram is None else clean_induced_histogram.astype(np.float32)
+                        ),
                         clean_cycle_graphlet_histogram_target=(
                             None if clean_cycle_histogram is None else clean_cycle_histogram.astype(np.float32)
                         ),
@@ -1617,6 +1651,7 @@ class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset)
         clustering_histogram_bins(self.structure_summary_config)
         orbit_summary_width(self.structure_summary_config)
         cycle_graphlet_k(self.structure_summary_config)
+        InducedGraphletSpec.from_config(self.structure_summary_config)
         self.graphlet_basis = graphlet_basis
         self.graphlet_logit_epsilon = float(graphlet_logit_epsilon)
         self.seed = int(seed)

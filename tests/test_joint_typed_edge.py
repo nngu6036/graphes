@@ -73,7 +73,7 @@ def tiny_config(root=None):
 def model_and_batch(config=None):
     cfg=config or tiny_config();graphs=[carbon_cycle(5),carbon_cycle(6)]
     model=build_model(cfg,graphs,torch.device('cpu'))
-    store=EndpointStore(graphs,model.vectorizer,model.atom_types,cfg,seed=7)
+    store=EndpointStore(graphs,model.vectorizer,model.atom_types,cfg,seed=7,graphlet_basis=model.induced_graphlet_basis)
     items=[store[0],store[1]]
     return cfg,model,items,collate(items,model.vectorizer,model.atom_types)
 
@@ -114,9 +114,9 @@ def test_spectral_bridge_preserves_trace_and_zero_mode():
 
 def test_joint_endpoint_alignment_cache_and_relabel(tmp_path):
     cfg,model,items,batch=model_and_batch()
-    store=EndpointStore([carbon_cycle(5)],model.vectorizer,model.atom_types,cfg,seed=6,cache_path=tmp_path/'cache.sqlite')
+    store=EndpointStore([carbon_cycle(5)],model.vectorizer,model.atom_types,cfg,seed=6,cache_path=tmp_path/'cache.sqlite',graphlet_basis=model.induced_graphlet_basis)
     x=store[0];store.close()
-    store2=EndpointStore([carbon_cycle(5)],model.vectorizer,model.atom_types,cfg,seed=6,cache_path=tmp_path/'cache.sqlite')
+    store2=EndpointStore([carbon_cycle(5)],model.vectorizer,model.atom_types,cfg,seed=6,cache_path=tmp_path/'cache.sqlite',graphlet_basis=model.induced_graphlet_basis)
     assert graph_record(x['source'])==graph_record(store2[0]['source']);store2.close()
     b=collate(items,model.vectorizer,model.atom_types,rng=np.random.default_rng(5))
     assert torch.equal(b['typed_features'],batch['typed_features'])
@@ -236,7 +236,7 @@ def test_structure_gradients_reach_typed_encoder_and_decoder():
     cfg=tiny_config();graphs=[carbon_cycle(5),carbon_cycle(6)]
     graphs[1].nodes[0]['atomic_num']=8
     model=build_model(cfg,graphs,torch.device('cpu'))
-    store=EndpointStore(graphs,model.vectorizer,model.atom_types,cfg,seed=7)
+    store=EndpointStore(graphs,model.vectorizer,model.atom_types,cfg,seed=7,graphlet_basis=model.induced_graphlet_basis)
     batch=collate([store[0],store[1]],model.vectorizer,model.atom_types)
     model.train();model.set_degree_trainable(True)
     noisy=noisy_batch(batch,model,cfg,generator=torch.Generator().manual_seed(6));pred=model(noisy)

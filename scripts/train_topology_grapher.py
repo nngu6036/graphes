@@ -21,6 +21,7 @@ from grapher.rewiring_mlp.generic.data import (
 from grapher.rewiring_mlp.generic.graphlets import TOPOLOGY_ORBIT_WIDTH
 from grapher.rewiring_mlp.generic.orbit import orbit_summary_width
 from grapher.rewiring_mlp.generic.cycle_graphlets import cycle_graphlet_k
+from grapher.rewiring_mlp.generic.induced_graphlets import InducedGraphletSpec
 from grapher.rewiring_mlp.generic.model import (
     TOPOLOGY_CHECKPOINT_FORMAT,
     TopologyGraphletPredictor,
@@ -273,6 +274,9 @@ def main() -> None:
     orbit_width = orbit_summary_width(structure_summary_cfg)
     orbit_summary_enabled = orbit_width is not None
     cycle_k = cycle_graphlet_k(structure_summary_cfg)
+    induced_spec = InducedGraphletSpec.from_config(structure_summary_cfg)
+    if induced_spec is not None and not spectral_mode:
+        raise ValueError("Induced graphlet supervision requires the spectral predictor family.")
     cycle_enabled = cycle_k is not None
     if cycle_enabled and not spectral_mode:
         raise ValueError("Cycle graphlet histogram prediction currently requires the spectral_transformer family (not graphlet diffusion).")
@@ -596,6 +600,9 @@ def main() -> None:
             "orbit_summary_width": orbit_width or 15,
             "predict_cycle_graphlet_histogram": cycle_enabled,
             "cycle_graphlet_k": cycle_k or 3,
+            "predict_induced_graphlet_histogram": induced_spec is not None,
+            "induced_graphlet_k": induced_spec.k if induced_spec else 5,
+            "induced_graphlet_scope": induced_spec.scope if induced_spec else "all",
         }
         if spectral_graphlet_mode:
             assert graphlet_basis is not None
@@ -717,6 +724,10 @@ def main() -> None:
             active_loss_defaults.extend([("clustering_histogram", 1.0), ("clustering_histogram_ce", 0.0)])
         if orbit_summary_enabled:
             active_loss_defaults.append(("orbit_summary", 1.0))
+        if induced_spec is not None:
+            active_loss_defaults.extend([("induced_graphlet_histogram", 1.0), ("induced_graphlet_histogram_ce", 0.0)])
+        elif any(float(loss_weights.get(key, 0)) != 0 for key in ("induced_graphlet_histogram", "induced_graphlet_histogram_ce")):
+            raise ValueError("Induced graphlet losses require the induced graphlet head.")
         if cycle_enabled:
             active_loss_defaults.extend([("cycle_graphlet_histogram", 1.0), ("cycle_graphlet_histogram_ce", 0.0)])
         if not any(
@@ -977,6 +988,7 @@ def main() -> None:
             "orbit_summary_representation": "mean_per_node_orca_0_14",
             "orbit_summary_is_diffused": False,
             "orbit_summary_loss": "smooth_l1_log1p" if orbit_summary_enabled else None,
+            "induced_graphlet_summary": induced_spec.metadata() if induced_spec else None,
             "clean_cycle_graphlet_histogram": cycle_enabled,
             "cycle_graphlet_k": cycle_k,
             "cycle_graphlet_histogram_bins": ["cycle", "other"] if cycle_enabled else None,

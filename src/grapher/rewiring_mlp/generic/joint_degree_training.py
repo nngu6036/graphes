@@ -177,6 +177,9 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
         orbit_summary_width=int(summaries.get("orbit_width", 15)),
         predict_cycle_graphlet_histogram=bool(summaries.get("cycle_graphlet_histogram", False)),
         cycle_graphlet_k=int(summaries.get("cycle_graphlet_k", 3)),
+        predict_induced_graphlet_histogram=bool(summaries.get("induced_graphlet_histogram", False)),
+        induced_graphlet_k=summaries.get("induced_graphlet_k", 5),
+        induced_graphlet_scope=summaries.get("induced_graphlet_scope", "all"),
     )
     model = JointDegreeSpectralPredictor(
         joint_degree_config={
@@ -212,7 +215,7 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
             raise ValueError("Initialization expects an ordinary spectral checkpoint, not a joint model/resume checkpoint.")
         for key in architecture_names - {"self"}:
             # Predict-head booleans may differ (the new default disables cycles).
-            if key.startswith("predict_") or key in {"cycle_graphlet_k", "clustering_histogram_bins", "orbit_summary_width"}:
+            if key.startswith("predict_") or key in {"cycle_graphlet_k", "clustering_histogram_bins", "orbit_summary_width", "induced_graphlet_k", "induced_graphlet_scope", "induced_graphlet_catalogue_fingerprint"}:
                 continue
             if source.model_config().get(key) != model.model_config().get(key):
                 raise ValueError(f"Warm-start topology architecture mismatch for {key}; use the matching config or disable initialization.")
@@ -220,6 +223,8 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
             raise ValueError("Warm-start histogram bin count differs.")
         if model.predict_cycle_graphlet_histogram and source.predict_cycle_graphlet_histogram and model.cycle_graphlet_k != source.cycle_graphlet_k:
             raise ValueError("Cannot warm-start a different cycle class despite its identical two-bin tensor shape.")
+        if model.predict_induced_graphlet_histogram and source.predict_induced_graphlet_histogram and model.induced_graphlet_spec != source.induced_graphlet_spec:
+            raise ValueError("Cannot warm-start different induced graphlet catalogues.")
         destination = model.state_dict()
         weights = {}
         for key, value in source.state_dict().items():
@@ -231,7 +236,7 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
             weights[key] = value
         result = model.load_state_dict(weights, strict=False)
         allowed_missing = ("degree_model.", "degree_conditioner.", "cycle_graphlet_histogram_head.",
-                           "clustering_coefficient_head.", "clustering_histogram_head.", "orbit_summary_head.")
+                           "clustering_coefficient_head.", "clustering_histogram_head.", "orbit_summary_head.", "induced_graphlet_histogram_head.")
         unexpected_missing = [key for key in result.missing_keys if not key.startswith(allowed_missing)]
         if result.unexpected_keys or unexpected_missing:
             raise ValueError(f"Unexpected warm-start state mismatch: {unexpected_missing}, {result.unexpected_keys}")

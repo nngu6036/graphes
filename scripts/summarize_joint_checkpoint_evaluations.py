@@ -73,7 +73,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--generation-root", required=True)
     parser.add_argument("--reference-split", choices=("val", "test"), default="val")
-    parser.add_argument("--selections", nargs="+", choices=SELECTIONS, default=list(SELECTIONS))
+    parser.add_argument("--selections", nargs="+", choices=(*SELECTIONS, "best_graphlet"), default=list(SELECTIONS))
     parser.add_argument("--require-same-sources", action="store_true")
     parser.add_argument("--json-out", default=None)
     args = parser.parse_args()

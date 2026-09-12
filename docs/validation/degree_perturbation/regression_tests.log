@@ -1,0 +1,55 @@
+........................................................................ [ 37%]
+........................F............................................... [ 75%]
+..............................................                     [100%]
+=================================== FAILURES ===================================
+_ test_warm_start_expands_edge_support_preserving_conditioning_and_roundtrips[True-False] _
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-5/test_warm_start_expands_edge_s1')
+edge_conditioning = True, edge_prior = False
+
+    @pytest.mark.parametrize('edge_conditioning,edge_prior', [(False, False), (True, False), (True, True)])
+    def test_warm_start_expands_edge_support_preserving_conditioning_and_roundtrips(
+        tmp_path, edge_conditioning, edge_prior,
+    ):
+        cfg = configuration()
+        vectorizer = DegreeVectorizer.fit(graphs(), max_degree=5, require_connected=True)
+        prior_cfg = dict(cfg['joint_degree']['degree_model'])
+        prior_cfg.update(use_edge_count_conditioning=edge_conditioning, prior_condition_on_edges=edge_prior)
+        source = build_degree_vae(vectorizer, **prior_cfg).eval()
+        # A nontrivial learned prior exposes errors in edge-feature rescaling.
+        with torch.no_grad():
+            source.conditional_prior.net[-1].weight.normal_(0, 0.1)
+        source_path = tmp_path / 'component.pt'
+        save_degree_vae_checkpoint(source_path, source, vectorizer)
+        cfg['joint_degree']['initialize_degree_checkpoint'] = str(source_path)
+        model, report = build_joint_model(cfg, graphs())
+        model.eval()
+        expanded = model.degree_model
+        assert expanded.max_edges == model.degree_vectorizer.max_edges == 15
+        assert report['degree_edge_support']['expanded']
+        assert model.degree_vectorizer.empirical_degree_sequences == vectorizer.empirical_degree_sequences
+        z, n, m = torch.randn(2, source.latent_dim), torch.tensor([5, 6]), torch.tensor([5, 7])
+        with torch.no_grad():
+            before = source.decode(z, n, m, return_hidden=True)
+            after = expanded.decode(z, n, m, return_hidden=True)
+            for key in ('degree_hidden', 'degree_logits', 'num_nodes_logits'):
+                torch.testing.assert_close(after[key], before[key])
+            before_prior, after_prior = source.prior_parameters(n, m), expanded.prior_parameters(n, m)
+            for key in before_prior:
+                torch.testing.assert_close(after_prior[key], before_prior[key])
+            if edge_conditioning:
+>               torch.testing.assert_close(after['num_edges_logits'][:, :8], before['num_edges_logits'], atol=0, rtol=0)
+E               AssertionError: Tensor-likes are not equal!
+E               
+E               Mismatched elements: 1 / 16 (6.2%)
+E               Greatest absolute difference: 2.9802322387695312e-08 at index (1, 5)
+E               Greatest relative difference: 1.412035430803371e-07 at index (1, 5)
+
+tests/test_joint_degree_grapher.py:265: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_joint_degree_grapher.py::test_warm_start_expands_edge_support_preserving_conditioning_and_roundtrips[True-False] - AssertionError: Tensor-likes are not equal!
+
+Mismatched elements: 1 / 16 (6.2%)
+Greatest absolute difference: 2.9802322387695312e-08 at index (1, 5)
+Greatest relative difference: 1.412035430803371e-07 at index (1, 5)
+1 failed, 189 passed, 870 subtests passed in 24.21s

@@ -8,6 +8,9 @@ from torch import nn
 from torch.nn import functional as F
 
 from grapher.rewiring_mlp.generic.cycle_graphlets import validate_cycle_graphlet_k
+from grapher.rewiring_mlp.generic.induced_graphlets import (
+    InducedGraphletSpec, prediction_and_loss as induced_prediction_loss, mask_prediction,
+)
 from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.layers import TopologyMPNNLayer
@@ -58,6 +61,10 @@ class TopologySpectralTransformerPredictor(nn.Module):
         orbit_summary_width: int = 15,
         predict_cycle_graphlet_histogram: bool = False,
         cycle_graphlet_k: int = 3,
+        predict_induced_graphlet_histogram: bool = False,
+        induced_graphlet_k: int = 5,
+        induced_graphlet_scope: str = "all",
+        induced_graphlet_catalogue_fingerprint: str | None = None,
     ) -> None:
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -77,6 +84,13 @@ class TopologySpectralTransformerPredictor(nn.Module):
         self.predict_orbit_summary = bool(predict_orbit_summary)
         self.predict_cycle_graphlet_histogram = bool(predict_cycle_graphlet_histogram)
         self.cycle_graphlet_k = validate_cycle_graphlet_k(cycle_graphlet_k)
+        self.predict_induced_graphlet_histogram = bool(predict_induced_graphlet_histogram)
+        self.induced_graphlet_spec = InducedGraphletSpec(induced_graphlet_k, induced_graphlet_scope)
+        self.induced_graphlet_k = self.induced_graphlet_spec.k
+        self.induced_graphlet_scope = self.induced_graphlet_spec.scope
+        fingerprint = self.induced_graphlet_spec.metadata()["fingerprint"]
+        if induced_graphlet_catalogue_fingerprint not in (None, fingerprint):
+            raise ValueError("Induced graphlet checkpoint catalogue fingerprint mismatch.")
         if (
             isinstance(clustering_histogram_bins, bool)
             or int(clustering_histogram_bins) != clustering_histogram_bins
@@ -197,6 +211,12 @@ class TopologySpectralTransformerPredictor(nn.Module):
                 nn.SiLU(),
                 nn.Linear(clustering_hidden, 2),
             ) if self.predict_cycle_graphlet_histogram else None
+        )
+
+        self.induced_graphlet_histogram_head = (
+            nn.Sequential(nn.Linear(self.spectral_dim, clustering_hidden), nn.SiLU(),
+                          nn.Linear(clustering_hidden, self.induced_graphlet_spec.width))
+            if self.predict_induced_graphlet_histogram else None
         )
 
     @staticmethod
@@ -399,6 +419,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
             or self.clustering_histogram_head is not None
             or self.orbit_summary_head is not None
             or self.cycle_graphlet_histogram_head is not None
+            or self.induced_graphlet_histogram_head is not None
         ):
             weights = mask.unsqueeze(-1).to(encoded.dtype)
             pooled = (encoded * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
@@ -406,6 +427,11 @@ class TopologySpectralTransformerPredictor(nn.Module):
             logits = self.clustering_histogram_head(pooled)
             result["clean_clustering_histogram_logits"] = logits
             result["clean_clustering_histogram"] = torch.softmax(logits, dim=-1)
+        if self.induced_graphlet_histogram_head is not None:
+            logits = self.induced_graphlet_histogram_head(pooled)
+            result["clean_induced_graphlet_histogram_logits"] = logits
+            result["clean_induced_graphlet_histogram"] = mask_prediction(
+                logits.softmax(-1), batch.graph_size, self.induced_graphlet_spec)
         if self.cycle_graphlet_histogram_head is not None:
             cycle_logits = self.cycle_graphlet_histogram_head(pooled)
             cycle_histogram = torch.softmax(cycle_logits, dim=-1)
@@ -574,6 +600,17 @@ class TopologySpectralTransformerPredictor(nn.Module):
                     "orbit_summary_raw_nrmse": float(raw_nrmse.mean().detach().cpu()),
                 }
 
+        induced_metrics: dict[str, float] = {}
+        if self.predict_induced_graphlet_histogram:
+            if batch.clean_induced_graphlet_histogram_target is None:
+                raise ValueError("Induced graphlet head enabled but batch has no target.")
+            loss_brier, loss_ce, measured = induced_prediction_loss(
+                outputs["clean_induced_graphlet_histogram_logits"],
+                batch.clean_induced_graphlet_histogram_target, batch.graph_size,
+                self.induced_graphlet_spec)
+            total = total + float(weights.get("induced_graphlet_histogram", 1.0)) * loss_brier
+            total = total + float(weights.get("induced_graphlet_histogram_ce", 0.0)) * loss_ce
+            induced_metrics = {key: float(value.detach().cpu()) for key, value in measured.items()}
         cycle_metrics: dict[str, float] = {}
         if self.predict_cycle_graphlet_histogram:
             cycle_prediction = outputs["clean_cycle_graphlet_histogram"]
@@ -669,6 +706,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
         metrics.update(histogram_metrics)
         metrics.update(orbit_metrics)
         metrics.update(cycle_metrics)
+        metrics.update(induced_metrics)
         return total, metrics
 
 
@@ -706,6 +744,10 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "orbit_summary_width": self.orbit_summary_width,
             "predict_cycle_graphlet_histogram": self.predict_cycle_graphlet_histogram,
             "cycle_graphlet_k": self.cycle_graphlet_k,
+            "predict_induced_graphlet_histogram": self.predict_induced_graphlet_histogram,
+            "induced_graphlet_k": self.induced_graphlet_k,
+            "induced_graphlet_scope": self.induced_graphlet_scope,
+            "induced_graphlet_catalogue_fingerprint": self.induced_graphlet_spec.metadata()["fingerprint"],
         }
 
 

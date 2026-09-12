@@ -753,3 +753,18 @@ joint typed-DH-VAE + symmetric soft edge-logit bridge, indexed source/target
 alignment, independent checkpoint selections, and same-bond-type constrained
 realization. The new QM9/ZINC configs are `*_attributed_joint_typed_edge.yaml`.
 Legacy generic and attributed model families remain available unchanged.
+
+## Full induced-graphlet summaries
+
+See [GRAPHER_INDUCED_GRAPHLETS.md](GRAPHER_INDUCED_GRAPHLETS.md) for exact k=3/4/5 topology histograms, prediction and guidance in generic/joint-degree and joint typed-edge GraphER, catalogue definitions, compatibility requirements, and commands. The new default k=5 experiment uses all 34 connected and disconnected classes; cycle experiments remain unchanged.
+
+
+## Empirical degree perturbations (Community-small)
+
+Generation-only options `unit_transfer`, `moment_preserving`, `edge_relocation`,
+and `interpolation` are available through
+`generation.degree_source=train_empirical_perturbed`. All preserve node/edge
+counts; moment-preserving blocks also preserve the squared-degree sum.
+See [the protocol and per-option commands](docs/degree_perturbation_community_small.md).
+A new independently seeded empirical control, prior-only coverage diagnostic,
+three-seed runner, and provenance-checked metric summarizer are included.

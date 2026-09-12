@@ -11,6 +11,10 @@ from grapher.rewiring_mlp.attributed.joint_typed_edge_data import load_splits,En
 from grapher.rewiring_mlp.attributed.joint_typed_edge_generation import sample_soft_endpoint,refine_typed_graph
 from grapher.rewiring_mlp.attributed.soft_edge_bridge import labels_to_logits,center_edges
 from grapher.rewiring_mlp.generic.joint_checkpointing import atomic_json
+from grapher.rewiring_mlp.attributed.induced_graphlets import (
+    validate_model_graphlets, extract_histogram as attributed_histogram,
+    histogram_distance as attributed_distance,
+)
 
 
 def main():
@@ -28,9 +32,11 @@ def main():
     model,ckpt=load_checkpoint(args.checkpoint,args.device);splits,prov=load_splits(cfg)
     if ckpt.get('dataset_provenance',{}).get('fingerprint')!=prov['fingerprint']:
         raise ValueError('Dataset/checkpoint provenance mismatch.')
+    from grapher.rewiring_mlp.generic.induced_graphlets import InducedGraphletSpec, extract_histogram, histogram_distance
+    validate_model_graphlets(model, cfg)
     device=next(model.parameters()).device;graphs=splits[args.split][:args.max_graphs]
     # Match the training validation-source convention; not a held-out source prior.
-    store=EndpointStore(graphs,model.vectorizer,model.atom_types,cfg,seed=int(ckpt['config']['seed'])+(args.split!='train'))
+    store=EndpointStore(graphs,model.vectorizer,model.atom_types,cfg,seed=int(ckpt['config']['seed'])+(args.split!='train'),graphlet_basis=model.induced_graphlet_basis)
     generator=torch.Generator(device=device).manual_seed(args.seed)
     rows=[]
     try:
@@ -44,7 +50,7 @@ def main():
                         pred={'clean_edge_logits':torch.tensor(np.log(np.maximum(targets['edge_probabilities'],1e-30)),device=device)[None].float()}
                         pred['clean_edge_logits']=center_edges(pred['clean_edge_logits'],batch['mask'])
                         pred['clean_edge_probabilities']=pred['clean_edge_logits'].softmax(-1)
-                        for src,dst in [('histogram','clean_clustering_histogram'),('orbit','clean_orbit_summary'),('spectra','clean_spectra')]:
+                        for src,dst in [('histogram','clean_clustering_histogram'),('orbit','clean_orbit_summary'),('spectra','clean_spectra'),('induced_histogram','clean_induced_graphlet_histogram')]:
                             if src in targets: pred[dst]=torch.tensor(targets[src],device=device)[None].float()
                         inp=batch
                     else:
@@ -53,6 +59,15 @@ def main():
                     baseline={**pred,'clean_edge_logits':baselogits,'clean_edge_probabilities':baselogits.softmax(-1)}
                     _,base=structural_loss(baseline,inp,model,cfg['attributed_predictor']['loss_weights'])
                     row={'graph_index':i,'sample':sample,'source_edge_ce':base['edge_ce_loss'],**metrics}
+                    if model.induced_graphlet_basis is not None:
+                        basis = model.induced_graphlet_basis
+                        row['source_induced_graphlet_histogram_tv'] = (attributed_distance(
+                            attributed_histogram(item['source'], basis), item['induced_histogram'], basis)
+                            if len(item['source']) >= int(basis.sizes[0]) else 0.0)
+                    elif model.induced_graphlet_spec is not None:
+                        row['source_induced_graphlet_histogram_tv'] = (histogram_distance(
+                            extract_histogram(item['source'], model.induced_graphlet_spec), item['induced_histogram'],
+                            model.induced_graphlet_spec) if len(item['source']) >= model.induced_graphlet_spec.k else 0.0)
                     if args.rewire:
                         final,r=refine_typed_graph(item['source'],targets,model,cfg,seed=args.seed+i*1009+sample)
                         from grapher.rewiring_mlp.attributed.joint_typed_edge_generation import edge_energy
@@ -67,9 +82,13 @@ def main():
     finally: store.close()
     means={k:float(np.mean([r[k] for r in rows])) for k in rows[0] if k not in ('graph_index','sample')}
     report={'split':args.split,'mode':args.mode,'graphs':len(graphs),'examples':len(rows),
+            'induced_graphlet_metadata':model.induced_graphlet_metadata(),
             'scope':'paired_known_targets_not_unconditional_generation','means':means,'rows':rows,'dataset_provenance':prov}
     atomic_json(report,Path(args.json_out))
     print(f'Joint typed edge diagnostic: mode={args.mode} split={args.split} graphs={len(graphs)} examples={len(rows)}')
+    if model.induced_graphlet_metadata() is not None:
+        m = model.induced_graphlet_metadata()
+        print(f"  graphlet attributed={m['attributed']} k={m['k']} bins={m['width']}")
     for k,v in means.items(): print(f'  {k}: {v:.6f}')
 
 if __name__=='__main__': main()

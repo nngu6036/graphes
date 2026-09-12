@@ -16,6 +16,11 @@ from grapher.models.dhvae_hh.degree_sampler import (
     EmpiricalDegreeSampler,
     build_degree_sampler,
 )
+from grapher.models.dhvae_hh.degree_perturbation import (
+    DegreePerturbationError,
+    PerturbedEmpiricalDegreeSampler,
+    sequence_fingerprint,
+)
 from grapher.models.dhvae_hh.havel_hakimi import (
     assert_constructor_validity,
     construct_coarse_graph,
@@ -86,6 +91,8 @@ def _build_generation_degree_sampler(
     train_graphs: list[nx.Graph],
     reference_graphs: list[nx.Graph],
     seed: int,
+    perturbation_cfg: dict[str, Any] | None = None,
+    support_max_degree: int | None = None,
 ):
     """Build the configured ordinary-degree sampler for generic generation.
 
@@ -115,6 +122,12 @@ def _build_generation_degree_sampler(
             )
         cfg["enabled"] = True
         return build_degree_sampler(cfg, train_graphs, seed=seed)
+
+    if source == "train_empirical_perturbed":
+        return PerturbedEmpiricalDegreeSampler.fit_from_graphs(
+            train_graphs, perturbation_cfg, seed=seed,
+            support_max_degree=support_max_degree,
+        )
 
     if source in {"empirical", "train_empirical"}:
         return EmpiricalDegreeSampler.fit_from_graphs(train_graphs, seed=seed)
@@ -158,6 +171,10 @@ def _guidance_diagnostic_summary(
         "spectral_guidance_weight": settings.spectral_weight if "spectral" in components else 0.0,
         "clustering_guidance_weight": settings.clustering_weight if "clustering" in components else 0.0,
         "orbit_guidance_weight": settings.orbit_weight if "orbit" in components else 0.0,
+        "induced_graphlet_guidance_weight": settings.induced_graphlet_weight if "graphlet" in components else 0.0,
+        "induced_graphlet_guidance_k": settings.induced_graphlet_k if "graphlet" in components else None,
+        "induced_graphlet_guidance_scope": settings.induced_graphlet_scope if "graphlet" in components else None,
+        "induced_graphlet_guidance_distance": settings.induced_graphlet_distance if "graphlet" in components else None,
         "cycle_guidance_weight": settings.cycle_weight if "cycle" in components else 0.0,
         "cycle_guidance_k": settings.cycle_k if "cycle" in components else None,
         "cycle_guidance_distance": settings.cycle_distance if "cycle" in components else None,
@@ -166,7 +183,7 @@ def _guidance_diagnostic_summary(
         "candidate_spectral_diagnostics_requested": settings.compute_candidate_spectral_diagnostics,
         "accepted_spectral_diagnostics_computed": bool(accepted_rows),
     }
-    for component in ("clustering", "orbit", "cycle"):
+    for component in ("clustering", "orbit", "cycle", "graphlet"):
         active = component in components
         measured = [r for r in accepted_rows if active and r.get(f"current_{component}_discrepancy") is not None]
         result[f"{component}_diagnostics_computed"] = bool(measured)
@@ -342,6 +359,20 @@ def main() -> None:
     model_device = next(model.parameters()).device
 
     degree_source = str(generation_cfg.get("degree_source", "learned")).lower()
+    perturbation_cfg = dict(generation_cfg.get("degree_perturbation", {}) or {})
+    if perturbation_cfg and degree_source != "train_empirical_perturbed":
+        raise ValueError("generation.degree_perturbation requires degree_source=train_empirical_perturbed.")
+    degree_rng_mode = str(generation_cfg.get(
+        "degree_rng_mode", "independent" if degree_source == "train_empirical_perturbed" else "legacy"
+    )).lower()
+    if degree_rng_mode not in {"legacy", "independent"}:
+        raise ValueError("generation.degree_rng_mode must be legacy or independent.")
+    if degree_source == "train_empirical_perturbed" and degree_rng_mode != "independent":
+        raise ValueError("Perturbed empirical degrees require degree_rng_mode=independent for parent pairing.")
+    # The old first-three construction/refinement/enrichment streams are untouched.
+    # The new control and all perturbation variants share this separate parent RNG.
+    degree_rng = (np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(3,)))
+                  if degree_rng_mode == "independent" else source_rng)
     degree_cfg = dict(config.get("degree_generator", {}) or {})
     joint_degree_enabled = bool(getattr(model, "joint_degree_enabled", False))
     if bool((config.get("joint_degree", {}) or {}).get("enabled", False)) and not joint_degree_enabled:
@@ -364,11 +395,19 @@ def main() -> None:
         degree_sampler = _build_generation_degree_sampler(
             degree_source, degree_cfg, train_graphs=train_graphs,
             reference_graphs=reference_graphs, seed=seed,
+            perturbation_cfg=perturbation_cfg,
+            support_max_degree=(int(model.degree_vectorizer.max_degree) if joint_degree_enabled else None),
         )
         degree_sampler_source = "external_checkpoint" if degree_source in {"learned", "degree_vae"} else degree_source
     if joint_degree_enabled:
         print(f"[GraphER/JointDegree] degree_source={degree_source} sampler={degree_sampler_source}; "
               f"conditioning=realized_degree_histogram; orbit_consistency={model.orbit_consistency}", flush=True)
+
+    if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
+        print(f"[GraphER/DegreePerturbation] method={degree_sampler.config.method} "
+              f"probability={degree_sampler.config.probability} steps={degree_sampler.config.steps} "
+              f"failure_policy={degree_sampler.config.failure_policy}; "
+              "training degrees only; n,m preserved; actual changed degrees condition predictor", flush=True)
 
     constructor_cfg = dict(config.get("constructor", {}) or {})
     if str(constructor_cfg.get("type", "havel_hakimi")).lower() != "havel_hakimi":
@@ -452,6 +491,12 @@ def main() -> None:
                         raise ValueError("clustering_guidance.histogram_bins disagrees with the checkpoint.")
                 elif not getattr(model, "predict_clustering_coefficient", False):
                     raise ValueError("Mean-clustering guidance requested, but checkpoint has no scalar clustering head.")
+            if "graphlet" in active_components:
+                from grapher.rewiring_mlp.generic.induced_graphlets import InducedGraphletSpec
+                if not getattr(model, "predict_induced_graphlet_histogram", False):
+                    raise ValueError("Graphlet guidance requested but checkpoint has no induced graphlet head; train a new checkpoint.")
+                if InducedGraphletSpec(refiner_settings.induced_graphlet_k, refiner_settings.induced_graphlet_scope) != model.induced_graphlet_spec:
+                    raise ValueError("Induced graphlet guidance catalogue differs from the checkpoint.")
             if "cycle" in active_components:
                 if not getattr(model, "predict_cycle_graphlet_histogram", False):
                     raise ValueError("Cycle guidance requested, but checkpoint has no cycle graphlet histogram head. Train with structure_summary_prediction.cycle_graphlet_histogram=true.")
@@ -523,6 +568,7 @@ def main() -> None:
     enriched_base_graphs: list[nx.Graph] = []
     refined_graphs: list[nx.Graph] = []
     target_degree_sequences: list[list[int]] = []
+    degree_sampling_records: list[dict[str, Any]] = []
     traces: list[list[dict[str, Any]]] = []
     enrichment_traces: list[list[dict[str, Any]]] = []
     graph_runtimes: list[float] = []
@@ -545,7 +591,15 @@ def main() -> None:
                 else:
                     if degree_sampler is None:
                         raise RuntimeError("Degree sampler was not initialized.")
-                    degree_summary = degree_sampler.sample(source_rng)
+                    degree_summary = degree_sampler.sample(degree_rng)
+            except DegreePerturbationError:
+                # Strict failures are not permission to sample a different parent.
+                output_dir = ensure_dir(args.output_dir)
+                if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
+                    failed_report = degree_sampler.report()
+                    failed_report["generation_aborted"] = True
+                    save_json(failed_report, output_dir / "degree_prior_report.json")
+                raise
             except RuntimeError:
                 generation_rejections["degree_prior_rejected"] += 1
                 continue
@@ -564,6 +618,8 @@ def main() -> None:
                 f"rejections={dict(generation_rejections)}."
             )
 
+        if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
+            degree_summary["sampling_diagnostics"]["returned_generation_index"] = index
         base_graph = coarse
         enrichment_trace: list[dict[str, Any]] = []
         if source_enrichment_enabled:
@@ -637,6 +693,12 @@ def main() -> None:
         enrichment_traces.append(enrichment_trace)
         graph_runtimes.append(runtime)
         sampling_diagnostics = dict(degree_summary.get("sampling_diagnostics", {}) or {})
+        degree_sampling_records.append({
+            "generation_index": index,
+            "degree_sequence": list(degree_summary["degree_sequence"]),
+            "parent_degree_sequence": list(sampling_diagnostics.get("parent_degree_sequence", degree_summary["degree_sequence"])),
+            "sampling_diagnostics": sampling_diagnostics,
+        })
 
         decision_rows = [row for row in trace if "num_proposals" in row]
         proposals = sum(int(row.get("num_proposals", 0)) for row in decision_rows)
@@ -919,6 +981,9 @@ def main() -> None:
                 "orbit_guidance_weight": refiner_settings.orbit_weight,
                 "orbit_guidance_distance": refiner_settings.orbit_distance,
                 "predictor_orbit_summary_enabled": bool(getattr(model, "predict_orbit_summary", False)),
+                "predictor_induced_graphlet_histogram_enabled": bool(getattr(model, "predict_induced_graphlet_histogram", False)),
+                "induced_graphlet_metadata": model.induced_graphlet_spec.metadata() if getattr(model, "predict_induced_graphlet_histogram", False) else None,
+                "predictor_induced_graphlet_histogram_tv": (checkpoint.get("report", {}) or {}).get("val_induced_graphlet_histogram_tv"),
                 "predictor_cycle_graphlet_histogram_enabled": bool(getattr(model, "predict_cycle_graphlet_histogram", False)),
                 "predictor_cycle_graphlet_histogram_tv": (checkpoint.get("report", {}) or {}).get("val_cycle_graphlet_histogram_tv"),
                 "cycle_graphlet_representation": (f"[C{model.cycle_graphlet_k},other] / choose(n,{model.cycle_graphlet_k})" if getattr(model, "predict_cycle_graphlet_histogram", False) else None),
@@ -985,6 +1050,31 @@ def main() -> None:
         "degree_conditioning": "actual_histogram_posterior_mean_decoder_features" if joint_degree_enabled else None,
         "orbit_consistency": model.orbit_consistency if joint_degree_enabled else None,
     })
+    if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
+        degree_prior_report = degree_sampler.report()
+        degree_prior_report["sampling_scope"] = "all_prior_attempts_including_constructor_rejections"
+        diagnostics.update({
+            "degree_perturbation_method": degree_prior_report["method"],
+            "degree_perturbation_requested_fraction": degree_prior_report["requested_fraction"],
+            "degree_perturbation_changed_fraction": degree_prior_report["changed_fraction"],
+            "degree_perturbation_success_given_requested": degree_prior_report["success_given_requested"],
+            "degree_perturbation_identity_fallbacks": degree_prior_report["num_identity_fallbacks"],
+            "degree_perturbation_failure_reasons": degree_prior_report["failure_reasons"],
+            "degree_prior_novel_fraction": degree_prior_report["novel_degree_fraction"],
+            "degree_perturbation_mean_distance_half_l1": degree_prior_report["mean_distance_half_l1"],
+            "degree_perturbation_preserves_n_m": degree_prior_report["all_preserve_n_m"],
+            "degree_perturbation_preserves_second_moment": degree_prior_report["all_preserve_second_moment"],
+        })
+    else:
+        degree_prior_report = {"format": "degree_prior_audit_v1", "degree_source": degree_source,
+                               "num_samples": len(degree_sampling_records)}
+    degree_prior_report.update({
+        "degree_source": degree_source, "seed": seed, "degree_rng_mode": degree_rng_mode,
+        "num_returned": len(degree_sampling_records),
+        "returned_parent_degree_fingerprint": sequence_fingerprint(r["parent_degree_sequence"] for r in degree_sampling_records),
+        "returned_degree_fingerprint": sequence_fingerprint(target_degree_sequences),
+        "returned_records": degree_sampling_records,
+    })
     report = {
         "format": report_format,
         "pipeline_mode": "topology",
@@ -993,6 +1083,11 @@ def main() -> None:
         "legacy_predictor_guidance_mode": guidance_mode,
         "checkpoint_format": checkpoint.get("format"),
         "degree_source": degree_source,
+        "degree_rng_mode": degree_rng_mode,
+        "degree_prior_report_file": "degree_prior_report.json",
+        "parent_degree_fingerprint": degree_prior_report["returned_parent_degree_fingerprint"],
+        "sampled_degree_fingerprint": degree_prior_report["returned_degree_fingerprint"],
+        "degree_sampling_records": degree_sampling_records,
         "degree_sampler_source": degree_sampler_source,
         "joint_degree_enabled": joint_degree_enabled,
         "checkpoint_path": str(checkpoint_path),
@@ -1030,6 +1125,8 @@ def main() -> None:
             "refiner_rng_per_graph": True,
             "source_enrichment_decoupled": True,
             "source_enrichment_rng_per_graph": True,
+            "degree_sampling_independent": degree_rng_mode == "independent",
+            "degree_perturbation_rng_per_sample": isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler),
         },
         "config": config,
     }
@@ -1040,6 +1137,8 @@ def main() -> None:
     save_pickle(refined_graphs, output_dir / "topology_refined_graphs.pkl")
     if bool(generation_cfg.get("write_legacy_hybrid_alias", False)):
         save_pickle(refined_graphs, output_dir / "hybrid_refined_graphs.pkl")
+    save_json(degree_prior_report, output_dir / "degree_prior_report.json")
+    save_json(target_degree_sequences, output_dir / "sampled_degree_sequences.json")
     save_json(report, output_dir / "report.json")
     print("Topology generation diagnostics", flush=True)
     for key, value in diagnostics.items():

@@ -14,6 +14,8 @@ from grapher.data.io import load_dataset_splits
 from grapher.rewiring_mlp.generic.clustering import extract_clustering_histogram
 from grapher.rewiring_mlp.generic.orbit import extract_orbit_summary
 from grapher.rewiring_mlp.generic.cycle_graphlets import extract_cycle_graphlet_histogram
+from grapher.rewiring_mlp.generic.induced_graphlets import extract_histogram as extract_induced_histogram
+from math import comb
 from grapher.rewiring_mlp.generic.spectral_data import (
     build_spectral_diffusion_examples,
     collate_spectral_examples,
@@ -146,6 +148,9 @@ def main() -> None:
             "orbit_width": int(getattr(model, "orbit_summary_width", 15)),
             "cycle_graphlet_histogram": bool(getattr(model, "predict_cycle_graphlet_histogram", False)),
             "cycle_graphlet_k": int(getattr(model, "cycle_graphlet_k", 3)),
+            "induced_graphlet_histogram": bool(getattr(model, "predict_induced_graphlet_histogram", False)),
+            "induced_graphlet_k": getattr(model, "induced_graphlet_k", 5),
+            "induced_graphlet_scope": getattr(model, "induced_graphlet_scope", "all"),
         },
         seed=int(args.seed),
     )
@@ -165,6 +170,17 @@ def main() -> None:
         [extract_cycle_graphlet_histogram(example.current_graph, k=model.cycle_graphlet_k) for example in examples]
         if getattr(model, "predict_cycle_graphlet_histogram", False) else None
     )
+    induced_spec = model.induced_graphlet_spec if getattr(model, "predict_induced_graphlet_histogram", False) else None
+    source_induced_histograms = None
+    if induced_spec is not None:
+        cache = {}
+        source_induced_histograms = []
+        for example in examples:
+            graph = example.current_graph
+            key = (len(graph), tuple(sorted(tuple(sorted(e)) for e in graph.edges())))
+            if key not in cache:
+                cache[key] = extract_induced_histogram(graph, induced_spec)
+            source_induced_histograms.append(cache[key])
     example_offset = 0
     loader = DataLoader(
         examples,
@@ -251,6 +267,15 @@ def main() -> None:
                     # identity applies only to C3; the 15-D orbit summary does
                     # not cover C5.
                     cycle_orbit_count_gap = (cycle_prediction[:, 0] * subsets - predicted_orbit[:, 3] * n / 3).abs()
+            induced_tv = source_induced_tv = induced_count_mae = None
+            if induced_spec is not None:
+                gp = outputs["clean_induced_graphlet_histogram"]
+                gt = batch.clean_induced_graphlet_histogram_target.to(gp)
+                gs = torch.as_tensor(np.stack(source_induced_histograms[example_offset:example_offset+len(gp)]), device=gp.device, dtype=gp.dtype)
+                induced_tv = 0.5 * (gp-gt).abs().sum(-1)
+                source_induced_tv = 0.5 * (gs-gt).abs().sum(-1)
+                totals = torch.tensor([comb(int(n), induced_spec.k) if n >= induced_spec.k else 0 for n in batch.graph_size.cpu().tolist()], device=gp.device, dtype=gp.dtype)
+                induced_count_mae = (gp-gt).abs().mean(-1) * totals
             example_offset += predicted.shape[0]
 
             for i in range(predicted.shape[0]):
@@ -291,6 +316,10 @@ def main() -> None:
                     row["cycle_graphlet_count_mae"] = float(cycle_count_mae[i].cpu())
                     if cycle_orbit_count_gap is not None:
                         row["cycle_orbit_triangle_count_gap"] = float(cycle_orbit_count_gap[i].cpu())
+                if induced_tv is not None and float(batch.graph_size[i]) >= induced_spec.k:
+                    row["induced_graphlet_histogram_tv"] = float(induced_tv[i].cpu())
+                    row["source_induced_graphlet_histogram_tv"] = float(source_induced_tv[i].cpu())
+                    row["induced_graphlet_count_mae"] = float(induced_count_mae[i].cpu())
                 all_rows.append(row)
                 if t < 0.25:
                     label = "[0.00,0.25)"
@@ -328,6 +357,7 @@ def main() -> None:
             "orbit_summary_raw_nrmse", "source_orbit_summary_log_rmse",
             "cycle_graphlet_histogram_tv", "source_cycle_graphlet_histogram_tv",
             "cycle_graphlet_count_mae", "cycle_orbit_triangle_count_gap",
+            "induced_graphlet_histogram_tv", "source_induced_graphlet_histogram_tv", "induced_graphlet_count_mae",
         ):
             values = [row[key] for row in rows if key in row]
             if values:
@@ -355,6 +385,7 @@ def main() -> None:
         "orbit_summary_width": model.orbit_summary_width if getattr(model, "predict_orbit_summary", False) else None,
         "cycle_graphlet_k": model.cycle_graphlet_k if getattr(model, "predict_cycle_graphlet_histogram", False) else None,
         "cycle_graphlet_representation": (f"[C{model.cycle_graphlet_k}, other] / choose(n,{model.cycle_graphlet_k})" if source_cycles is not None else None),
+        "induced_graphlet_metadata": induced_spec.metadata() if induced_spec else None,
         "overall": summarize(all_rows),
         "by_time": {key: summarize(rows) for key, rows in sorted(bins.items())},
     }
@@ -392,6 +423,11 @@ def main() -> None:
         print(f"  pred -> clean C{model.cycle_graphlet_k} count MAE:    {overall['cycle_graphlet_count_mae']:.6f}")
         if "cycle_orbit_triangle_count_gap" in overall:
             print(f"  cycle/orbit predicted triangle-count gap: {overall['cycle_orbit_triangle_count_gap']:.6f}")
+    if "induced_graphlet_histogram_tv" in overall:
+        print(f"  Induced graphlets: k={induced_spec.k} scope={induced_spec.scope} bins={induced_spec.width}")
+        print(f"  HH -> clean induced graphlet TV:   {overall['source_induced_graphlet_histogram_tv']:.6f}")
+        print(f"  pred -> clean induced graphlet TV: {overall['induced_graphlet_histogram_tv']:.6f}")
+        print(f"  pred -> clean count MAE per bin:   {overall['induced_graphlet_count_mae']:.6f}")
     print("  by diffusion time:")
     for label, row in report["by_time"].items():
         print(
@@ -400,6 +436,7 @@ def main() -> None:
             f"gain={row['denoising_gain_vs_noisy']:.6f}"
             + (f" hist_w1={row['clustering_histogram_w1']:.6f}" if "clustering_histogram_w1" in row else "")
             + (f" orbit_log_rmse={row['orbit_summary_log_rmse']:.6f}" if "orbit_summary_log_rmse" in row else "")
+            + (f" induced_graphlet_tv={row['induced_graphlet_histogram_tv']:.6f}" if "induced_graphlet_histogram_tv" in row else "")
             + (f" cycle{model.cycle_graphlet_k}_tv={row['cycle_graphlet_histogram_tv']:.6f}" if "cycle_graphlet_histogram_tv" in row else "")
         )
 

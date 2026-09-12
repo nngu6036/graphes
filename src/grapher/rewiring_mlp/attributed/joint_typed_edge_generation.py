@@ -28,6 +28,16 @@ from grapher.rewiring_mlp.molecular.typed_invariants import (
 from grapher.rewiring_mlp.molecular.graph_io import is_valid_molecular_graph,require_rdkit
 from grapher.rewiring_mlp.generic.joint_checkpointing import atomic_json,file_sha256
 from grapher.utils.io import save_pickle
+from grapher.rewiring_mlp.generic.induced_graphlets import (
+    InducedGraphletSpec, InducedGraphletCounter, extract_histogram as extract_induced_histogram,
+    histogram_distance as induced_histogram_distance, validate_histogram as validate_induced_histogram,
+)
+from grapher.rewiring_mlp.attributed.induced_graphlets import (
+    AttributedInducedGraphletCounter,
+    histogram_distance as attributed_histogram_distance,
+    metadata as attributed_graphlet_metadata,
+    validate_histogram as validate_attributed_histogram, validate_model_graphlets,
+)
 
 
 @torch.no_grad()
@@ -64,6 +74,9 @@ def sample_soft_endpoint(model,source,config,*,seed):
     targets={'edge_probabilities':edge_probabilities(state,mask)[0,:n,:n].cpu().numpy()}
     if model.histogram_bins: targets['histogram']=final['clean_clustering_histogram'][0].cpu().numpy()
     if model.orbit_enabled: targets['orbit']=final['clean_orbit_summary'][0].cpu().numpy()
+    if model.induced_graphlet_basis is not None or model.induced_graphlet_spec is not None:
+        targets['induced_histogram'] = final['clean_induced_graphlet_histogram'][0].cpu().numpy()
+        targets['induced_graphlet_metadata'] = model.induced_graphlet_metadata()
     if model.spectral_enabled: targets['spectra']=final['clean_spectra'][0,:,:n].cpu().numpy()
     return targets,{'prediction_calls':steps+1,'sampling_steps':steps,'trajectory':trace}
 
@@ -76,11 +89,12 @@ def validate_refiner(cfg,model):
     if not cfg.get('preserve_connectivity',True) or not cfg.get('strict_same_bond',True):
         raise ValueError('Joint typed edge generation requires connected same-bond-type rewiring.')
     weights=dict(cfg.get('weights',{'edge':1.0}))
-    if set(weights)-{'edge','clustering','orbit'}: raise ValueError('Only edge, clustering and orbit scoring are implemented.')
+    if set(weights)-{'edge','clustering','orbit','graphlet'}: raise ValueError('Only edge, clustering, orbit, and graphlet scoring are implemented.')
     if not weights or any(not math.isfinite(float(x)) or float(x)<0 for x in weights.values()) or sum(weights.values())<=0:
         raise ValueError('Need finite nonnegative guidance weights with at least one positive.')
     if weights.get('clustering',0)>0 and not model.histogram_bins: raise ValueError('Clustering guidance needs a histogram head.')
     if weights.get('orbit',0)>0 and not model.orbit_enabled: raise ValueError('Orbit guidance needs an orbit head.')
+    if weights.get('graphlet',0)>0 and model.induced_graphlet_basis is None and model.induced_graphlet_spec is None: raise ValueError('Graphlet guidance needs a trained induced graphlet head.')
     for k in ('proposal_budget','valid_candidate_budget'):
         if int(cfg.get(k,256))<=0: raise ValueError(f'{k} must be positive.')
     if int(cfg.get('steps',32))<0: raise ValueError('steps must be nonnegative.')
@@ -135,12 +149,36 @@ def refine_typed_graph(source,targets,model,config,*,seed):
     if np.any(probs<0) or not np.allclose(probs.sum(-1),1,atol=1e-5) or not np.allclose(probs,probs.transpose(1,0,2),atol=1e-6):
         raise ValueError('Endpoint edge probabilities must be symmetric distributions.')
 
-    def discrepancies(g):
+    graphlet_counter = None
+    graphlet_basis = model.induced_graphlet_basis
+    graphlet_spec = model.induced_graphlet_spec
+    if 'graphlet' in weights:
+        if targets.get('induced_graphlet_metadata') != model.induced_graphlet_metadata():
+            raise ValueError('Soft endpoint induced graphlet catalogue differs from the model.')
+        if graphlet_basis is not None:
+            validate_attributed_histogram(targets.get('induced_histogram'), graphlet_basis)
+            graphlet_counter = AttributedInducedGraphletCounter(current, graphlet_basis)
+        else:
+            validate_induced_histogram(targets.get('induced_histogram'), graphlet_spec)
+            graphlet_counter = InducedGraphletCounter(current, graphlet_spec)
+    def discrepancies(g, *, action=None, graphlet_histogram=None):
         out={}
         if 'edge' in weights: out['edge']=edge_energy(g,probs,edge_types)
         if 'clustering' in weights:
             out['clustering']=clustering_histogram_wasserstein(extract_clustering_histogram(g,model.histogram_bins),targets['histogram'])
         if 'orbit' in weights: out['orbit']=orbit_summary_distance(extract_orbit_summary(g),targets['orbit'],distance='log_rmse')
+        if graphlet_counter is not None:
+            if graphlet_histogram is None:
+                if graphlet_basis is not None:
+                    graphlet_histogram = graphlet_counter.histogram() if g is current else graphlet_counter.candidate_histogram(g, action)
+                else:
+                    graphlet_histogram = graphlet_counter.histogram() if g is current else graphlet_counter.candidate_histogram(g)
+            if graphlet_basis is not None:
+                out['graphlet'] = (attributed_histogram_distance(graphlet_histogram, targets['induced_histogram'], graphlet_basis)
+                    if len(g) >= graphlet_counter.k else 0.0)
+            else:
+                out['graphlet'] = (induced_histogram_distance(graphlet_histogram, targets['induced_histogram'], graphlet_spec)
+                    if len(g) >= graphlet_spec.k else 0.0)
         return out
     initial=discrepancies(current); eps=float(cfg.get('epsilon',1e-6))
     scales={k:max(v,eps) if cfg.get('normalization','initial')=='initial' else 1.0 for k,v in initial.items()}
@@ -150,7 +188,13 @@ def refine_typed_graph(source,targets,model,config,*,seed):
     for step in range(int(cfg.get('steps',32))):
         best=None; valid=0; search_step=Counter()
         for action,candidate,key in candidate_graphs(current,edge_types,cfg,rng,seen,search_step):
-            valid+=1; distances=discrepancies(candidate); e=energy(distances)
+            valid+=1
+            candidate_histogram = None
+            if graphlet_counter is not None and graphlet_basis is not None:
+                candidate_histogram = graphlet_counter.candidate_histogram(candidate, action)
+            elif graphlet_counter is not None:
+                candidate_histogram = graphlet_counter.candidate_histogram(candidate)
+            distances=discrepancies(candidate, action=action, graphlet_histogram=candidate_histogram); e=energy(distances)
             if best is None or e<best[0]: best=(e,candidate,key,action,distances)
         search_totals.update(search_step)
         if best is None: stop='no_sampled_valid_same_type_swap'; break
@@ -164,6 +208,11 @@ def refine_typed_graph(source,targets,model,config,*,seed):
                       'energy_after':e,'gain':gain,'discrepancies_before':before,'discrepancies_after':distances,
                       'removed':action[0],'added':action[1],'candidate_search':dict(search_step)})
         current=candidate; before=distances; current_energy=e; seen.add(key)
+        if graphlet_counter is not None:
+            if graphlet_basis is not None:
+                graphlet_counter.accept(current, action)
+            else:
+                graphlet_counter = InducedGraphletCounter(current, model.induced_graphlet_spec)
     return current,{'accepted_steps':len(trace),'stop_reason':stop,'trace':trace,'initial_discrepancies':initial,
                     'final_discrepancies':before,'normalization_scales':scales,'weights':weights,
                     'typed_degree_preserved':typed_invariant_matches_graph(current,invariant),
@@ -230,6 +279,7 @@ def generate_joint_typed_edge(config,args):
     checkpoint=args.checkpoint or config['attributed_predictor'].get('checkpoint_path')
     if not checkpoint: raise ValueError('Supply the trained joint attributed checkpoint.')
     model,ckpt=load_checkpoint(checkpoint,args.device or 'auto'); validate_refiner(config['attributed_refiner'],model)
+    validate_model_graphlets(model, config)
     cat=config['categorical_state']
     if tuple(cat['edge_categories'])!=model.edge_types or tuple(cat['node_categories'])!=model.atom_types:
         raise ValueError('Checkpoint/config atom or bond categories differ.')
@@ -256,7 +306,8 @@ def generate_joint_typed_edge(config,args):
       'dataset_provenance':provenance,'degree_sampler_source':'joint_checkpoint_embedded',
       'invariant_source':config['generation'].get('invariant_source','learned'),
       'strategy':'bridge_then_rewire','node_diffusion':False,'edge_diffusion':True,
-      'summaries':'topology-only clustering and orbits; attributed pair predictions',
+      'summaries':'topology-only clustering and orbits; induced graphlets use node-type and edge-type labels for attributed checkpoints',
+      'induced_graphlet_metadata': model.induced_graphlet_metadata(),
       'target_scope':'fixed_endpoint_per_graph','raw_graphs_no_posthoc_repair':True}
     def flush(complete=False):
         for name,obj in [('coarse_graphs.pkl',sources),('molecular_graphs.pkl',finals),('soft_endpoints.pkl',targets_saved)]:

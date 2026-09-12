@@ -28,6 +28,7 @@ SELECTION_METRICS = {
     "best_joint": "val_joint_loss",
     "best_histogram": "val_clustering_histogram_w1",
     "best_orbit": "val_orbit_summary_log_rmse",
+    "best_graphlet": "val_induced_graphlet_histogram_tv",
 }
 
 
@@ -118,6 +119,8 @@ class JointCheckpointManager:
                     self.criteria[kind] = SELECTION_METRICS[kind]
                 else:
                     self.unavailable[kind] = "corresponding prediction head is disabled"
+        if self.policy["enabled"] and config.get("structure_summary_prediction", {}).get("induced_graphlet_histogram", False):
+            self.criteria["best_graphlet"] = SELECTION_METRICS["best_graphlet"]
         self.records: dict[str, dict[str, Any]] = {}
         self.last_completed_epoch = 0
         self.training_complete = False

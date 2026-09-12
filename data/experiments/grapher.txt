@@ -1742,7 +1742,7 @@ PYTHONPATH=src python scripts/run_attributed_grapher.py \
   --config "$CFG" \
   --checkpoint "$TRAIN/checkpoint.pt" \
   --output-dir "$GEN" \
-  --num-generate 64 \
+  --num-generate 1024 \
   --seed 42 \
   --device gpu
 

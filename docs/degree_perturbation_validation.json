@@ -1,0 +1,51 @@
+{
+  "source_archive": "graphes(20260912-001739).zip",
+  "source_archive_sha256": "e556e6bc2e6d6bf7dd42688b06be85dafef8cf050980e955ba2892f23e328966",
+  "scope": "generation-only ordinary degree perturbation; Community-small configs",
+  "implemented_methods": [
+    "unit_transfer",
+    "moment_preserving",
+    "edge_relocation",
+    "interpolation"
+  ],
+  "default_perturbation_probability": 0.25,
+  "default_requested_steps": 1,
+  "explicit_experiment_failure_policy": "keep_original",
+  "focused_tests": {
+    "passed": 76,
+    "failed": 0,
+    "new_tests": 73,
+    "existing_degree_dispatch_tests": 3
+  },
+  "regression_suite": {
+    "passed": 189,
+    "failed": 1,
+    "subtests_passed": 870
+  },
+  "unmodified_archive_comparison": {
+    "passed": 116,
+    "failed": 1,
+    "subtests_passed": 847
+  },
+  "inherited_failure": {
+    "test": "tests/test_joint_degree_grapher.py::test_warm_start_expands_edge_support_preserving_conditioning_and_roundtrips[True-False]",
+    "assertion": "num_edges_logits exact equality with atol=rtol=0",
+    "max_absolute_difference": 2.9802322387695312e-08,
+    "reproduced_identically_on_unmodified_source": true,
+    "test_or_unrelated_model_code_modified": false
+  },
+  "cli_integration": "all four methods plus independent empirical and probability-zero control generated and evaluated with a random fixture joint checkpoint; parent pairing and source/final degree MMD equality asserted",
+  "summary_cli_tested": true,
+  "prior_diagnostic_cli_tested_without_checkpoint": true,
+  "strict_failure_audit_tested": true,
+  "bash_syntax_check": "passed",
+  "environment": {
+    "python": "3.13.5",
+    "torch": "2.10.0+cpu",
+    "numpy": "2.3.5",
+    "networkx": "3.6.1",
+    "device": "cpu"
+  },
+  "actual_user_checkpoint_or_community_small_quality_evaluation_run": false,
+  "reason": "Uploaded archive contains code/configs, not trained weights or prepared dataset split pickles."
+}

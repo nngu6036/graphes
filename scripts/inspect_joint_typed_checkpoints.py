@@ -33,6 +33,12 @@ def main():
         hist=m.get('val_clustering_histogram_w1');orbit=m.get('val_orbit_summary_log_rmse')
         print(f"{kind:18s} {row['epoch']:5d} {m['val_joint_loss']:10.6f} {m['val_edge_ce_loss']:10.6f} "
               f"{f'{hist:.6f}' if hist is not None else '-':>10s} {f'{orbit:.6f}' if orbit is not None else '-':>14s}")
+        if 'val_induced_graphlet_histogram_tv' in m:
+            print(f"  induced graphlet TV: {m['val_induced_graphlet_histogram_tv']:.6f}")
+            if args.verify and model.induced_graphlet_metadata() is not None:
+                info = model.induced_graphlet_metadata()
+                print(f"  attributed={info['attributed']} k={info['k']} bins={info['width']} "
+                      f"fingerprint={info['fingerprint']}")
     if args.verify:print('All selected joint/typed checkpoints verified.')
 
 if __name__=='__main__':main()

@@ -27,7 +27,7 @@ def main() -> None:
     print("Joint checkpoint selections (fixed-bridge validation, not generated MMD)")
     print(f"Training complete: {registry['training_complete']}; last completed epoch: {registry['last_completed_epoch']}")
     print(f"{'Selection':18s} {'Epoch':>6s} {'Joint loss':>12s} {'Structure':>12s} {'Hist W1':>12s} {'Orbit logRMSE':>14s}")
-    for kind in ("best_joint", "best_histogram", "best_orbit", "last"):
+    for kind in ("best_joint", "best_histogram", "best_orbit", "best_graphlet", "last"):
         row = registry["selections"].get(kind)
         if row is None:
             if kind in registry.get("unavailable", {}):
@@ -39,6 +39,8 @@ def main() -> None:
             return "n/a" if result is None else f"{float(result):.6f}"
         print(f"{kind:18s} {row['epoch']:6d} {value('val_joint_loss'):>12s} {value('val_structure_loss'):>12s} "
               f"{value('val_clustering_histogram_w1'):>12s} {value('val_orbit_summary_log_rmse'):>14s}")
+        if 'val_induced_graphlet_histogram_tv' in metrics:
+            print(f"  induced graphlet TV: {value('val_induced_graphlet_histogram_tv')}")
         print(f"  joint:  {root / row['checkpoint']}")
         print(f"  degree: {root / row['degree_checkpoint']}")
     print("Default checkpoint.pt / degree_checkpoint.pt: best_joint")

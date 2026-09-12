@@ -20,6 +20,12 @@ from grapher.rewiring_mlp.generic.clustering import extract_clustering_histogram
 from grapher.rewiring_mlp.generic.orbit import extract_orbit_summary
 from grapher.rewiring_mlp.molecular.typed_invariants import extract_typed_invariant, typed_invariant_matches_graph
 from grapher.utils.io import load_pickle
+from grapher.rewiring_mlp.generic.induced_graphlets import InducedGraphletSpec, extract_histogram as extract_induced_histogram
+from grapher.rewiring_mlp.attributed.data import GraphletBasis
+from grapher.rewiring_mlp.attributed.induced_graphlets import (
+    extract_histogram as extract_attributed_induced_histogram,
+    metadata as attributed_graphlet_metadata, wants_attributed_histogram,
+)
 
 
 ENDPOINT_VALENCE_POLICY = 'preserve_prepared_target_bond_types'
@@ -110,9 +116,18 @@ class EndpointStore:
     seed, and summary definition. Validation never fits a vocabulary. Data
     workers are intentionally not used by the graph-balanced trainer.
     """
-    def __init__(self, graphs, vectorizer, atom_types, config, *, seed, cache_path=None):
+    def __init__(self, graphs, vectorizer, atom_types, config, *, seed, cache_path=None, graphlet_basis=None):
         self.graphs = graphs; self.vectorizer = vectorizer; self.atom_types = tuple(atom_types)
         self.config = deepcopy(config); self.seed = int(seed)
+        self.graphlet_basis = graphlet_basis
+        if wants_attributed_histogram(config) and graphlet_basis is None:
+            raise ValueError("Attributed endpoint extraction requires the checkpoint/training graphlet basis; "
+                             "never fit from validation or fall back to topology.")
+        if graphlet_basis is not None:
+            requested = InducedGraphletSpec.from_config(config.get('structure_summary_prediction'))
+            info = attributed_graphlet_metadata(graphlet_basis)
+            if requested is None or requested.k != info['k'] or requested.scope != info['scope']:
+                raise ValueError("Endpoint config and attributed vocabulary differ.")
         self.memory = OrderedDict()
         self.capacity = int(config.get('training_sources',{}).get('memory_cache_graphs',256))
         self.db = None
@@ -134,8 +149,14 @@ class EndpointStore:
         target=validate_graph(self.graphs[index],v,self.atom_types)
         constructor=endpoint_constructor_config(self.config)
         ss=self.config.get('structure_summary_prediction',{})
+        induced_spec = InducedGraphletSpec.from_config(ss)
+        induced_metadata = (
+            attributed_graphlet_metadata(self.graphlet_basis)
+            if self.graphlet_basis is not None else
+            (induced_spec.metadata() if induced_spec else None)
+        )
         rec=graph_record(target,vocab.node_attribute,vocab.edge_attribute)
-        key=record_hash({'version':2,'graph':rec,'seed':self.seed+index*1009,
+        key=record_hash({'version':3,'induced_catalogue':induced_metadata,'graph':rec,'seed':self.seed+index*1009,
                          'valence_policy':ENDPOINT_VALENCE_POLICY,
                          'constructor':constructor,'summaries':ss,'edges':list(vocab.edge_types)})
         stored=self.db.execute('SELECT value FROM endpoints WHERE key=?',(key,)).fetchone() if self.db else None
@@ -154,6 +175,10 @@ class EndpointStore:
             if ss.get('clustering_histogram',True):
                 raw['histogram']=extract_clustering_histogram(target,int(ss.get('clustering_bins',100))).tolist()
             if ss.get('orbit_summary',True): raw['orbit']=extract_orbit_summary(target).tolist()
+            if self.graphlet_basis is not None:
+                raw['induced_histogram'] = extract_attributed_induced_histogram(target, self.graphlet_basis).tolist()
+            elif induced_spec is not None:
+                raw['induced_histogram'] = extract_induced_histogram(target, induced_spec).tolist()
             if self.db:
                 self.db.execute('INSERT OR REPLACE INTO endpoints VALUES (?,?)',(key,json.dumps(raw)))
                 self.db.commit()
@@ -183,7 +208,7 @@ def collate(items: list[dict], vectorizer, atom_types, *, device='cpu', rng=None
     if has_targets:
         out['target_labels']=torch.zeros(B,N,N,dtype=torch.long)
         out['target_spectra']=torch.zeros(B,2,N)
-        for key in ('histogram','orbit'):
+        for key in ('histogram','orbit','induced_histogram'):
             if key in items[0]: out[key]=torch.tensor(np.asarray([x[key] for x in items]),dtype=torch.float32)
     degree_graphs=[]
     for b,item in enumerate(items):

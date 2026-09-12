@@ -15,6 +15,16 @@ from grapher.rewiring_mlp.attributed.soft_edge_bridge import (
 )
 from grapher.utils.device import resolve_torch_device
 
+from grapher.rewiring_mlp.generic.induced_graphlets import (
+    InducedGraphletSpec, prediction_and_loss as induced_prediction_loss, mask_prediction,
+)
+from grapher.rewiring_mlp.attributed.data import GraphletBasis
+from grapher.rewiring_mlp.attributed.induced_graphlets import (
+    prediction_and_loss as attributed_induced_prediction_loss,
+    mask_prediction as attributed_mask_prediction,
+    metadata as attributed_graphlet_metadata,
+)
+
 FORMAT='joint_typed_soft_edge_grapher_v1'
 
 
@@ -45,7 +55,10 @@ class JointTypedEdgePredictor(nn.Module):
     def __init__(self, *, typed_model_config: dict, vectorizer: dict,
                  atom_types: list[int], hidden_dim=128, num_layers=4,
                  spectral_layers=2, spectral_heads=4, spectral_enabled=True,
-                 histogram_bins=100, orbit_enabled=True, smoothing=0.01):
+                 histogram_bins=100, orbit_enabled=True, smoothing=0.01,
+                 induced_graphlet_k=None, induced_graphlet_scope="all",
+                 induced_graphlet_catalogue_fingerprint=None,
+                 induced_graphlet_basis=None):
         super().__init__()
         self.model_config=deepcopy(dict(typed_model_config=typed_model_config,vectorizer=vectorizer,
             atom_types=list(atom_types),hidden_dim=int(hidden_dim),num_layers=int(num_layers),
@@ -82,7 +95,39 @@ class JointTypedEdgePredictor(nn.Module):
         self.edge_head=mlp(3*d,2*d,self.categories)
         if self.histogram_bins: self.histogram_head=mlp(d,d,self.histogram_bins)
         if self.orbit_enabled: self.orbit_head=mlp(d,d,15)
+        self.induced_graphlet_basis = (
+            None if induced_graphlet_basis is None else GraphletBasis.from_dict(induced_graphlet_basis)
+        )
+        self.induced_graphlet_spec = (
+            None
+            if (self.induced_graphlet_basis is not None or induced_graphlet_k is None)
+            else InducedGraphletSpec(induced_graphlet_k, induced_graphlet_scope)
+        )
+        if self.induced_graphlet_basis is not None:
+            fingerprint = attributed_graphlet_metadata(self.induced_graphlet_basis)["fingerprint"]
+            if induced_graphlet_catalogue_fingerprint not in (None, fingerprint):
+                raise ValueError("Induced graphlet checkpoint catalogue fingerprint mismatch.")
+            self.induced_graphlet_head = mlp(d, d, self.induced_graphlet_basis.width)
+            self.model_config.update(
+                induced_graphlet_basis=self.induced_graphlet_basis.to_dict(),
+                induced_graphlet_catalogue_fingerprint=fingerprint,
+            )
+        elif self.induced_graphlet_spec is not None:
+            fingerprint = self.induced_graphlet_spec.metadata()["fingerprint"]
+            if induced_graphlet_catalogue_fingerprint not in (None, fingerprint):
+                raise ValueError("Induced graphlet checkpoint catalogue fingerprint mismatch.")
+            self.induced_graphlet_head = mlp(d, d, self.induced_graphlet_spec.width)
+            self.model_config.update(induced_graphlet_k=self.induced_graphlet_spec.k,
+                induced_graphlet_scope=self.induced_graphlet_spec.scope,
+                induced_graphlet_catalogue_fingerprint=fingerprint)
         self._degree_frozen=False
+
+    def induced_graphlet_metadata(self):
+        if self.induced_graphlet_basis is not None:
+            return attributed_graphlet_metadata(self.induced_graphlet_basis)
+        if self.induced_graphlet_spec is not None:
+            return self.induced_graphlet_spec.metadata()
+        return None
 
     def set_degree_trainable(self,enabled:bool):
         self._degree_frozen=not enabled
@@ -132,6 +177,15 @@ class JointTypedEdgePredictor(nn.Module):
         if self.spectral_enabled:
             raw=self.spectrum_head(torch.cat([tokens,pooled[:,None,:].expand(B,N,-1)],-1)).transpose(1,2)
             out['clean_spectra']=project_spectra(raw,batch['spectral_trace'],mask)
+        if self.induced_graphlet_basis is not None or self.induced_graphlet_spec is not None:
+            graphlet_logits = self.induced_graphlet_head(pooled)
+            out['clean_induced_graphlet_histogram_logits'] = graphlet_logits
+            if self.induced_graphlet_basis is not None:
+                out['clean_induced_graphlet_histogram'] = attributed_mask_prediction(
+                    graphlet_logits.softmax(-1), batch['n'], self.induced_graphlet_basis)
+            else:
+                out['clean_induced_graphlet_histogram'] = mask_prediction(
+                    graphlet_logits.softmax(-1), batch['n'], self.induced_graphlet_spec)
         if self.histogram_bins: out['clean_clustering_histogram']=self.histogram_head(pooled).softmax(-1)
         if self.orbit_enabled:
             raw=F.softplus(self.orbit_head(pooled)).clamp_max(15).expm1()
@@ -198,6 +252,20 @@ def structural_loss(outputs,batch,model,weights):
         losses['orbit_summary']=F.smooth_l1_loss(log_delta,torch.zeros_like(log_delta))
         metrics['orbit_summary_log_rmse']=log_delta.square().mean(-1).sqrt().mean()
         metrics['orbit_identity_max_abs']=orbit_identity_residual(outputs['clean_orbit_summary'],batch['orbit_totals']).max()
+    if model.induced_graphlet_basis is not None or model.induced_graphlet_spec is not None:
+        if 'induced_histogram' not in batch:
+            raise ValueError('Induced graphlet supervision enabled but target is missing.')
+        logits = outputs.get('clean_induced_graphlet_histogram_logits')
+        if logits is None:
+            logits = outputs['clean_induced_graphlet_histogram'].clamp_min(1e-30).log()
+        if model.induced_graphlet_basis is not None:
+            brier, ce, measured = attributed_induced_prediction_loss(
+                logits, batch['induced_histogram'], batch['n'], model.induced_graphlet_basis)
+        else:
+            brier, ce, measured = induced_prediction_loss(logits, batch['induced_histogram'], batch['n'], model.induced_graphlet_spec)
+        losses['induced_graphlet_histogram'] = brier
+        losses['induced_graphlet_histogram_ce'] = ce
+        metrics.update(measured)
     total=sum(float(weights.get(k,0))*value for k,value in losses.items())
     metrics.update({k+'_loss':v for k,v in losses.items()}); metrics['structure_loss']=total
     return total,{k:float(v.detach().cpu()) for k,v in metrics.items()}

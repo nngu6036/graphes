@@ -24,6 +24,9 @@ from grapher.rewiring_mlp.attributed.joint_typed_edge_model import (
 )
 from grapher.rewiring_mlp.generic.joint_checkpointing import atomic_json,file_sha256,state_dict_sha256
 from grapher.utils.device import resolve_torch_device
+from grapher.rewiring_mlp.generic.induced_graphlets import InducedGraphletSpec
+from grapher.rewiring_mlp.attributed.data import GraphletBasis
+from grapher.rewiring_mlp.attributed.induced_graphlets import (fit_training_basis, wants_attributed_histogram)
 
 
 def validate_config(config):
@@ -51,12 +54,15 @@ def validate_config(config):
         raise ValueError('Only bridge_then_rewire is implemented; soft state is NOT reset from a rewired graph.')
     weights=config.get('attributed_predictor',{}).get('loss_weights',{})
     for key,val in weights.items():
-        if key not in {'edge_ce','edge_logit','typed_consistency','spectrum','clustering_histogram','orbit_summary'}:
+        if key not in {'edge_ce','edge_logit','typed_consistency','spectrum','clustering_histogram','orbit_summary','induced_graphlet_histogram','induced_graphlet_histogram_ce'}:
             raise ValueError(f'Unknown new-family loss {key}.')
         if not math.isfinite(float(val)) or float(val)<0: raise ValueError(f'Invalid weight {key}.')
     if float(weights.get('edge_logit',0))<=0 or float(weights.get('edge_ce',0))<=0:
         raise ValueError('Positive edge_logit and edge_ce losses are required for this continuous bridge.')
     ss=config.get('structure_summary_prediction',{})
+    induced_spec = InducedGraphletSpec.from_config(ss)
+    if induced_spec is not None and wants_attributed_histogram(config) and induced_spec.scope != 'all':
+        raise ValueError('Attributed induced graphlet histograms currently support induced_graphlet_scope=all only.')
     if ss.get('orbit_summary', True) and int(ss.get('orbit_width',15))!=15:
         raise ValueError('Only the topology ORCA-15 auxiliary orbit summary is supported.')
     if not diff.get('spectral_enabled',True) and float(weights.get('spectrum',0))>0:
@@ -65,6 +71,8 @@ def validate_config(config):
         raise ValueError('Histogram loss requires the histogram head.')
     if not ss.get('orbit_summary',True) and float(weights.get('orbit_summary',0))>0:
         raise ValueError('Orbit loss requires the orbit head.')
+    if induced_spec is None and any(float(weights.get(key, 0)) > 0 for key in ('induced_graphlet_histogram', 'induced_graphlet_histogram_ce')):
+        raise ValueError('Induced graphlet loss requires its prediction head.')
     if ss.get('cycle_graphlet_histogram',False) or config.get('graphlet_diffusion',{}).get('enabled',False):
         raise ValueError('Cycle/attributed graphlet diffusion is not part of this focused edge experiment.')
     jc=config['joint_typed_degree']
@@ -116,12 +124,19 @@ def build_model(config,train_graphs,device):
         dims={k:joint[k] for k in ('latent_dim','hidden_dim','size_condition_dim','prior_type','prior_components','num_layers','dropout') if k in joint}
         prior=build_typed_signature_vae(vectorizer,**dict({'latent_dim':64,'hidden_dim':128},**dims))
     ss=config.get('structure_summary_prediction',{})
+    induced_spec = InducedGraphletSpec.from_config(ss)
+    if induced_spec is not None and wants_attributed_histogram(config) and induced_spec.scope != 'all':
+        raise ValueError('Attributed induced graphlet histograms currently support induced_graphlet_scope=all only.')
+    induced_basis = fit_training_basis(config, train_graphs)
     model=JointTypedEdgePredictor(typed_model_config=prior.model_config(),vectorizer=vectorizer.to_dict(),
         atom_types=list(atoms), hidden_dim=int(pc.get('hidden_dim',128)),num_layers=int(pc.get('num_layers',4)),
         spectral_layers=int(pc.get('spectral_layers',2)),spectral_heads=int(pc.get('spectral_heads',4)),
         spectral_enabled=bool(config['edge_diffusion'].get('spectral_enabled',True)),
         histogram_bins=int(ss.get('clustering_bins',100)) if ss.get('clustering_histogram',True) else 0,
-        orbit_enabled=bool(ss.get('orbit_summary',True)),smoothing=float(config['edge_diffusion'].get('smoothing',0.01)))
+        orbit_enabled=bool(ss.get('orbit_summary',True)),smoothing=float(config['edge_diffusion'].get('smoothing',0.01)),
+        induced_graphlet_basis=induced_basis.to_dict() if induced_basis is not None else None,
+        induced_graphlet_k=induced_spec.k if induced_spec is not None and induced_basis is None else None,
+        induced_graphlet_scope=induced_spec.scope if induced_spec else 'all')
     model.degree_model.load_state_dict(prior.state_dict()); return model.to(device)
 
 
@@ -132,6 +147,7 @@ class TypedCheckpointManager:
         self.criteria={'best_joint':'val_joint_loss','best_edges':'val_edge_ce_loss'}
         if model.histogram_bins: self.criteria['best_histogram']='val_clustering_histogram_w1'
         if model.orbit_enabled: self.criteria['best_orbit']='val_orbit_summary_log_rmse'
+        if model.induced_graphlet_metadata() is not None: self.criteria['best_graphlet']='val_induced_graphlet_histogram_tv'
 
     def save(self,kind,model,epoch,metrics,eligible):
         dest=self.output/'checkpoints'/kind; dest.mkdir(parents=True,exist_ok=True)
@@ -244,13 +260,19 @@ def train_joint_typed_edge(config,args):
                   'typed_initializer_sha256':file_sha256(j['initialize_degree_checkpoint']) if j.get('initialize_degree_checkpoint') else None,
                   'source_alignment':'indexed_typed_signatures_shared_node_permutation',
                   'endpoint_valence_policy':ENDPOINT_VALENCE_POLICY,
-                  'validation_vocabulary_policy':'strict_training_support_no_refit'}
+                  'validation_vocabulary_policy':'strict_typed_support; graphlet_vocabulary_fitted_train_only_with_overflow',
+                  'induced_graphlet_metadata':model.induced_graphlet_metadata()}
+    if model.induced_graphlet_basis is not None:
+        atomic_json({'basis':model.induced_graphlet_basis.to_dict(),
+                     'metadata':model.induced_graphlet_metadata(),
+                     'training_graphs':len(train), 'dataset_provenance':provenance},
+                    output/'attributed_graphlet_basis.json')
     atomic_json({'config':config,**dataset_info},output/'run_config.json')
     print('[JointTypedEdge] endpoints preserve prepared target bond types; '
           'degree and chemical valence caps apply to generation.', flush=True)
     cache=config.get('training_sources',{}).get('endpoint_cache_path')
-    training=EndpointStore(train,model.vectorizer,model.atom_types,config,seed=seed,cache_path=cache)
-    validation=EndpointStore(val,model.vectorizer,model.atom_types,config,seed=seed+1,cache_path=cache)
+    training=EndpointStore(train,model.vectorizer,model.atom_types,config,seed=seed,cache_path=cache,graphlet_basis=model.induced_graphlet_basis)
+    validation=EndpointStore(val,model.vectorizer,model.atom_types,config,seed=seed+1,cache_path=cache,graphlet_basis=model.induced_graphlet_basis)
     degree_params=list(model.degree_model.parameters()); ids={id(p) for p in degree_params}
     optimizer=torch.optim.AdamW([
         {'params':[p for p in model.parameters() if id(p) not in ids],'lr':float(pc.get('learning_rate',1e-4))},
