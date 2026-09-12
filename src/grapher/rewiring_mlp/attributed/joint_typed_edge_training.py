@@ -29,11 +29,16 @@ from grapher.rewiring_mlp.attributed.data import GraphletBasis
 from grapher.rewiring_mlp.attributed.induced_graphlets import (fit_training_basis, wants_attributed_histogram)
 
 
+from .adjacency_diffusion import (
+    resolve_mode, settings as adjacency_settings, ADJACENCY_MODE, LEGACY_MODE,
+    ADJACENCY_TYPE, LEGACY_TYPE,
+)
+
+
 def validate_config(config):
     if config.get('pipeline', {}).get('stage', 'attributed') not in ('attributed', 'attributed_topology', 'molecular'):
         raise ValueError('Joint typed edge training/generation requires an attributed pipeline.')
-    if config.get('attributed_predictor', {}).get('type') != 'joint_typed_soft_edge':
-        raise ValueError('attributed_predictor.type must be joint_typed_soft_edge.')
+    mode = resolve_mode(config)
     if not config.get('joint_typed_degree',{}).get('enabled',False):
         raise ValueError('joint_typed_degree.enabled must be true.')
     if config.get('source_enrichment',{}).get('enabled',False):
@@ -45,7 +50,7 @@ def validate_config(config):
     if not 0<float(diff.get('smoothing',0.01))<1: raise ValueError('Bad edge smoothing.')
     if not 0<=float(diff.get('endpoint_fraction',0.1))<=1: raise ValueError('Bad endpoint_fraction.')
     for key in ('sigma','spectral_sigma'):
-        val=float(diff.get(key,1.0 if key=='sigma' else 0.15))
+        val=float(diff.get(key,1.0 if key=='sigma' else (0.0 if mode == ADJACENCY_MODE else 0.15)))
         if not math.isfinite(val) or val<0: raise ValueError(f'Bad edge_diffusion.{key}.')
     if int(diff.get('sampling_steps',32))<2: raise ValueError('Use at least two soft bridge sampling steps.')
     if not isinstance(diff.get('spectral_enabled',True), bool): raise ValueError('spectral_enabled must be boolean.')
@@ -54,11 +59,19 @@ def validate_config(config):
         raise ValueError('Only bridge_then_rewire is implemented; soft state is NOT reset from a rewired graph.')
     weights=config.get('attributed_predictor',{}).get('loss_weights',{})
     for key,val in weights.items():
-        if key not in {'edge_ce','edge_logit','typed_consistency','spectrum','clustering_histogram','orbit_summary','induced_graphlet_histogram','induced_graphlet_histogram_ce'}:
+        if key not in {'edge_ce','edge_logit','typed_consistency','spectrum','clustering_histogram','orbit_summary','induced_graphlet_histogram','induced_graphlet_histogram_ce','adjacency_spectrum'}:
             raise ValueError(f'Unknown new-family loss {key}.')
         if not math.isfinite(float(val)) or float(val)<0: raise ValueError(f'Invalid weight {key}.')
     if float(weights.get('edge_logit',0))<=0 or float(weights.get('edge_ce',0))<=0:
         raise ValueError('Positive edge_logit and edge_ce losses are required for this continuous bridge.')
+    if mode == ADJACENCY_MODE:
+        adjacency_settings(config, config['categorical_state']['edge_categories'])
+        if float(diff.get('spectral_sigma',0)) != 0:
+            raise ValueError('Unified adjacency has no independent spectral diffusion; spectral_sigma must be 0.')
+        if float(weights.get('spectrum',0)) != 0:
+            raise ValueError('Use adjacency_spectrum, not the old Laplacian spectrum loss.')
+    elif float(weights.get('adjacency_spectrum',0)) != 0:
+        raise ValueError('adjacency_spectrum loss requires joint_typed_adjacency mode.')
     ss=config.get('structure_summary_prediction',{})
     induced_spec = InducedGraphletSpec.from_config(ss)
     if induced_spec is not None and wants_attributed_histogram(config) and induced_spec.scope != 'all':
@@ -128,7 +141,16 @@ def build_model(config,train_graphs,device):
     if induced_spec is not None and wants_attributed_histogram(config) and induced_spec.scope != 'all':
         raise ValueError('Attributed induced graphlet histograms currently support induced_graphlet_scope=all only.')
     induced_basis = fit_training_basis(config, train_graphs)
-    model=JointTypedEdgePredictor(typed_model_config=prior.model_config(),vectorizer=vectorizer.to_dict(),
+    mode=resolve_mode(config)
+    adjacency_options={}
+    if mode == ADJACENCY_MODE:
+        resolved=adjacency_settings(config,edge_types)
+        adjacency_options=dict(spectral_mode=mode, adjacency_views=resolved['views'],
+            adjacency_bond_weights=resolved['bond_weights'],
+            adjacency_normalization=resolved['normalization'],
+            adjacency_output_spectra=(bool(config['edge_diffusion'].get('spectral_enabled',True))
+                or float(pc['loss_weights'].get('adjacency_spectrum',0))>0))
+    model=JointTypedEdgePredictor(**adjacency_options,typed_model_config=prior.model_config(),vectorizer=vectorizer.to_dict(),
         atom_types=list(atoms), hidden_dim=int(pc.get('hidden_dim',128)),num_layers=int(pc.get('num_layers',4)),
         spectral_layers=int(pc.get('spectral_layers',2)),spectral_heads=int(pc.get('spectral_heads',4)),
         spectral_enabled=bool(config['edge_diffusion'].get('spectral_enabled',True)),
@@ -261,7 +283,8 @@ def train_joint_typed_edge(config,args):
                   'source_alignment':'indexed_typed_signatures_shared_node_permutation',
                   'endpoint_valence_policy':ENDPOINT_VALENCE_POLICY,
                   'validation_vocabulary_policy':'strict_typed_support; graphlet_vocabulary_fitted_train_only_with_overflow',
-                  'induced_graphlet_metadata':model.induced_graphlet_metadata()}
+                  'induced_graphlet_metadata':model.induced_graphlet_metadata(),
+                  'diffusion':model.diffusion_metadata()}
     if model.induced_graphlet_basis is not None:
         atomic_json({'basis':model.induced_graphlet_basis.to_dict(),
                      'metadata':model.induced_graphlet_metadata(),
@@ -270,6 +293,11 @@ def train_joint_typed_edge(config,args):
     atomic_json({'config':config,**dataset_info},output/'run_config.json')
     print('[JointTypedEdge] endpoints preserve prepared target bond types; '
           'degree and chemical valence caps apply to generation.', flush=True)
+    if model.spectral_mode == ADJACENCY_MODE:
+        print('[AdjacencyDiffusion] one centered categorical adjacency state; '
+              'spectra are derived from the SAME soft probabilities; no independent '
+              'spectral noise/head or eigenvector decoder.', flush=True)
+        print(f'[AdjacencyDiffusion] {model.diffusion_metadata()}', flush=True)
     cache=config.get('training_sources',{}).get('endpoint_cache_path')
     training=EndpointStore(train,model.vectorizer,model.atom_types,config,seed=seed,cache_path=cache,graphlet_basis=model.induced_graphlet_basis)
     validation=EndpointStore(val,model.vectorizer,model.atom_types,config,seed=seed+1,cache_path=cache,graphlet_basis=model.induced_graphlet_basis)

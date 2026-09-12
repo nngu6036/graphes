@@ -25,7 +25,14 @@ from grapher.rewiring_mlp.attributed.induced_graphlets import (
     metadata as attributed_graphlet_metadata,
 )
 
+from .adjacency_diffusion import (
+    LEGACY_MODE, ADJACENCY_MODE, validate_views, validate_weights, NORMALIZATIONS,
+    spectral_features as adjacency_features, features_from_logits, view_names,
+    state_metadata, validate_model_config,
+)
+
 FORMAT='joint_typed_soft_edge_grapher_v1'
+ADJACENCY_FORMAT='joint_typed_adjacency_grapher_v1' 
 
 
 def mlp(in_dim, hidden, out_dim):
@@ -58,7 +65,10 @@ class JointTypedEdgePredictor(nn.Module):
                  histogram_bins=100, orbit_enabled=True, smoothing=0.01,
                  induced_graphlet_k=None, induced_graphlet_scope="all",
                  induced_graphlet_catalogue_fingerprint=None,
-                 induced_graphlet_basis=None):
+                 induced_graphlet_basis=None,
+                 spectral_mode=LEGACY_MODE, adjacency_views=None,
+                 adjacency_bond_weights=None, adjacency_normalization="size_bound",
+                 adjacency_output_spectra=True):
         super().__init__()
         self.model_config=deepcopy(dict(typed_model_config=typed_model_config,vectorizer=vectorizer,
             atom_types=list(atom_types),hidden_dim=int(hidden_dim),num_layers=int(num_layers),
@@ -79,6 +89,24 @@ class JointTypedEdgePredictor(nn.Module):
         if (dm.min_nodes,dm.max_nodes)!=(v.min_nodes,v.max_nodes): raise ValueError('Size support mismatch.')
         self.smoothing=float(smoothing); self.histogram_bins=int(histogram_bins)
         self.orbit_enabled=bool(orbit_enabled); self.spectral_enabled=bool(spectral_enabled)
+        if spectral_mode not in (LEGACY_MODE, ADJACENCY_MODE):
+            raise ValueError(f"Unknown spectral_mode: {spectral_mode!r}.")
+        self.spectral_mode = spectral_mode
+        self.adjacency_output_spectra = bool(adjacency_output_spectra) if spectral_mode == ADJACENCY_MODE else False
+        if spectral_mode == ADJACENCY_MODE:
+            self.adjacency_views = validate_views(adjacency_views or ["topology", "bond_weighted"])
+            self.adjacency_bond_weights = validate_weights(adjacency_bond_weights or [])
+            if len(self.adjacency_bond_weights) != len(self.edge_types):
+                raise ValueError("Adjacency bond weights must follow the typed vocabulary's edge ordering.")
+            if adjacency_normalization not in NORMALIZATIONS:
+                raise ValueError("Invalid adjacency normalization.")
+            self.adjacency_normalization = adjacency_normalization
+            self.adjacency_channels = len(view_names(self.adjacency_views, self.edge_types))
+            self.model_config.update(spectral_mode=spectral_mode,
+                adjacency_views=list(self.adjacency_views),
+                adjacency_bond_weights=list(self.adjacency_bond_weights),
+                adjacency_normalization=self.adjacency_normalization,
+                adjacency_output_spectra=self.adjacency_output_spectra)
         self.typed_condition=mlp(2*dm.hidden_dim+dm.latent_dim+v.signature_dim+len(self.edge_types)+1,d,d)
         self.atom_embed=nn.Embedding(len(atom_types),d)
         self.degree_embed=nn.Linear(len(self.edge_types),d)
@@ -87,11 +115,13 @@ class JointTypedEdgePredictor(nn.Module):
         self.layers=nn.ModuleList([DenseTypedEdgeLayer(d) for _ in range(num_layers)])
         if self.spectral_enabled:
             if d % spectral_heads: raise ValueError('hidden_dim must divide spectral_heads.')
-            self.spec_embed=mlp(6,d,d)
+            spectral_inputs = 2*self.adjacency_channels + 2 if self.spectral_mode == ADJACENCY_MODE else 6
+            self.spec_embed=mlp(spectral_inputs,d,d)
             layer=nn.TransformerEncoderLayer(d,spectral_heads,4*d,dropout=0.0,
                                              batch_first=True,activation='gelu')
             self.spec_encoder=nn.TransformerEncoder(layer,spectral_layers,enable_nested_tensor=False)
-            self.spectrum_head=mlp(2*d,d,2)
+            if self.spectral_mode == LEGACY_MODE:
+                self.spectrum_head=mlp(2*d,d,2)
         self.edge_head=mlp(3*d,2*d,self.categories)
         if self.histogram_bins: self.histogram_head=mlp(d,d,self.histogram_bins)
         if self.orbit_enabled: self.orbit_head=mlp(d,d,15)
@@ -121,6 +151,15 @@ class JointTypedEdgePredictor(nn.Module):
                 induced_graphlet_scope=self.induced_graphlet_spec.scope,
                 induced_graphlet_catalogue_fingerprint=fingerprint)
         self._degree_frozen=False
+
+    def adjacency_features(self, probabilities, mask):
+        if self.spectral_mode != ADJACENCY_MODE:
+            raise ValueError("Adjacency features requested from a Laplacian model.")
+        return adjacency_features(probabilities, mask, self.adjacency_bond_weights,
+                                  self.adjacency_views, self.adjacency_normalization)
+
+    def diffusion_metadata(self):
+        return state_metadata(self)
 
     def induced_graphlet_metadata(self):
         if self.induced_graphlet_basis is not None:
@@ -158,13 +197,28 @@ class JointTypedEdgePredictor(nn.Module):
         t=batch['time']; time=self.time_embed(torch.stack([t,torch.sin(torch.pi*t),torch.cos(torch.pi*t)],-1))
         global_cond=cond+time
         tokens=None
+        input_adjacency = None
         if self.spectral_enabled:
             rank=torch.arange(N,device=mask.device)[None,:]/(batch['n'][:,None]-1).clamp_min(1)
-            spec_in=torch.cat([batch['spectral_state'].transpose(1,2),
-               (batch['source_spectra']/batch['spectral_scale'][...,None]).transpose(1,2),
+            if self.spectral_mode == ADJACENCY_MODE:
+                # Recompute from the actual categorical state. Never accept an
+                # independently supplied spectral_state as an adjacency view.
+                input_adjacency = self.adjacency_features(edge_probabilities(batch['edge_state'], mask), mask)
+                source_logits = labels_to_logits(batch['source_labels'], self.categories, mask, self.smoothing)
+                source_adjacency = self.adjacency_features(edge_probabilities(source_logits, mask), mask)
+                state_spectrum = input_adjacency['normalized']
+                source_spectrum = source_adjacency['normalized']
+                spectrum_mask = input_adjacency['mask']
+            else:
+                state_spectrum = batch['spectral_state']
+                source_spectrum = batch['source_spectra']/batch['spectral_scale'][...,None]
+                spectrum_mask = mask
+            spec_in=torch.cat([state_spectrum.transpose(1,2), source_spectrum.transpose(1,2),
                rank[...,None].expand(B,N,1), t[:,None,None].expand(B,N,1)],-1)
-            tokens=self.spec_encoder(self.spec_embed(spec_in)+global_cond[:,None,:],src_key_padding_mask=~mask)
-            global_cond=global_cond+(tokens*mask[...,None]).sum(1)/batch['n'][:,None]
+            tokens=self.spec_encoder(self.spec_embed(spec_in)+global_cond[:,None,:],src_key_padding_mask=~spectrum_mask)
+            # Spectral ranks are not node identities: only pooled spectral
+            # information is broadcast to the permutation-equivariant node path.
+            global_cond=global_cond+(tokens*spectrum_mask[...,None]).sum(1)/batch['n'][:,None]
         h=self.atom_embed(batch['atom'])+self.degree_embed(batch['typed_degrees']/max(self.vectorizer.max_nodes-1,1))
         h=(h+global_cond[:,None,:])*mask[...,None]
         source_logits=labels_to_logits(batch['source_labels'],self.categories,mask,self.smoothing)
@@ -174,9 +228,15 @@ class JointTypedEdgePredictor(nn.Module):
         logits=center_edges(self.edge_head(torch.cat([e,left+right,(left-right).abs()],-1)),mask)
         pooled=(h*mask[...,None]).sum(1)/batch['n'][:,None]
         out={'clean_edge_logits':logits,'clean_edge_probabilities':edge_probabilities(logits,mask)}
-        if self.spectral_enabled:
+        if self.spectral_enabled and self.spectral_mode == LEGACY_MODE:
             raw=self.spectrum_head(torch.cat([tokens,pooled[:,None,:].expand(B,N,-1)],-1)).transpose(1,2)
             out['clean_spectra']=project_spectra(raw,batch['spectral_trace'],mask)
+        if input_adjacency is not None:
+            out['input_adjacency_spectra'] = input_adjacency['spectra']
+        if self.spectral_mode == ADJACENCY_MODE and self.adjacency_output_spectra:
+            # A derived output, not a second trainable spectral head.
+            clean_views = self.adjacency_features(out['clean_edge_probabilities'], mask)
+            out['clean_adjacency_spectra'] = clean_views['spectra']
         if self.induced_graphlet_basis is not None or self.induced_graphlet_spec is not None:
             graphlet_logits = self.induced_graphlet_head(pooled)
             out['clean_induced_graphlet_histogram_logits'] = graphlet_logits
@@ -197,6 +257,7 @@ class JointTypedEdgePredictor(nn.Module):
 def noisy_batch(batch,model,config,*,generator=None,endpoint_only=False):
     out=dict(batch); B=len(batch['n']); dev=batch['n'].device
     diff=config['edge_diffusion']
+    validate_model_config(model, config)
     if endpoint_only: t=torch.zeros(B,device=dev)
     else:
         t=torch.rand(B,device=dev,generator=generator)
@@ -207,10 +268,12 @@ def noisy_batch(batch,model,config,*,generator=None,endpoint_only=False):
     s=labels_to_logits(batch['source_labels'],model.categories,batch['mask'],model.smoothing)
     target=labels_to_logits(batch['target_labels'],model.categories,batch['mask'],model.smoothing)
     out['edge_state']=bridge_edges(s,target,t,batch['mask'],float(diff.get('sigma',1)),generator=generator)
-    if model.spectral_enabled:
+    if model.spectral_enabled and model.spectral_mode == LEGACY_MODE:
         scale=batch['spectral_scale'][...,None]
         out['spectral_state']=bridge_spectra(batch['source_spectra']/scale,batch['target_spectra']/scale,
             t,batch['mask'],float(diff.get('spectral_sigma',0.15)),generator=generator)
+    elif model.spectral_mode == ADJACENCY_MODE:
+        out.pop('spectral_state', None)  # No separate stochastic spectral state.
     out['time']=t
     return out
 
@@ -239,10 +302,31 @@ def structural_loss(outputs,batch,model,weights):
              'edge_bond_accuracy':mean_per_graph((logits.argmax(-1)==batch['target_labels']).float(),
                                                 pm & (batch['target_labels']>0)).mean(),
              'soft_typed_degree_rmse':mean_per_graph((expected-batch['typed_degrees']).square().mean(-1),batch['mask']).sqrt().mean()}
-    if model.spectral_enabled:
+    if model.spectral_enabled and model.spectral_mode == LEGACY_MODE:
         delta=(outputs['clean_spectra']-batch['target_spectra'])/batch['spectral_scale'][...,None]
         losses['spectrum']=mean_per_graph(F.smooth_l1_loss(delta,torch.zeros_like(delta),reduction='none').mean(1),batch['mask']).mean()
         metrics['spectral_nrmse']=mean_per_graph(delta.square().mean(1),batch['mask']).sqrt().mean()
+    if model.spectral_mode == ADJACENCY_MODE:
+        if float(weights.get('spectrum', 0)) != 0:
+            raise ValueError("The Laplacian spectrum loss is inactive; use adjacency_spectrum.")
+        if float(weights.get('adjacency_spectrum', 0)) > 0 and not model.adjacency_output_spectra:
+            raise ValueError("Enable adjacency spectral outputs before using the spectral loss.")
+        if model.adjacency_output_spectra:
+            # Reference has precisely the same smoothing and category semantics
+            # as the clean edge-logit target, not the hard graph's Laplacian.
+            target = model.adjacency_features(edge_probabilities(target_logits, batch['mask']), batch['mask'])
+            predicted = outputs.get('clean_adjacency_spectra')
+            if predicted is None:
+                predicted = model.adjacency_features(outputs['clean_edge_probabilities'], batch['mask'])['spectra']
+            delta=(predicted-target['spectra'])/target['scale'][...,None]
+            sm=target['mask']
+            losses['adjacency_spectrum']=mean_per_graph(
+                F.smooth_l1_loss(delta,torch.zeros_like(delta),reduction='none').mean(1),sm).mean()
+            metrics['adjacency_spectral_nrmse']=mean_per_graph(delta.square().mean(1),sm).sqrt().mean()
+            metrics['adjacency_spectral_trace_max_abs']=predicted.sum(-1).abs().max()
+            names=view_names(model.adjacency_views, model.edge_types)
+            for c,name in enumerate(names):
+                metrics['adjacency_'+name+'_nrmse']=mean_per_graph(delta[:,c].square(),sm).sqrt().mean()
     if model.histogram_bins:
         cdf=(outputs['clean_clustering_histogram']-batch['histogram']).cumsum(-1)[:,:-1]
         losses['clustering_histogram']=cdf.square().sum(-1).mean()/model.histogram_bins
@@ -273,7 +357,8 @@ def structural_loss(outputs,batch,model,weights):
 
 def save_checkpoint(path,model,config,metrics,**metadata):
     path=Path(path); path.parent.mkdir(parents=True,exist_ok=True)
-    payload={'format':FORMAT,'model_config':model.model_config,'model_state_dict':model.state_dict(),
+    checkpoint_format = ADJACENCY_FORMAT if model.spectral_mode == ADJACENCY_MODE else FORMAT
+    payload={'format':checkpoint_format,'model_config':model.model_config,'model_state_dict':model.state_dict(),
              'config':deepcopy(config),'metrics':metrics,**metadata}
     temp=path.with_name(path.name+'.tmp'); torch.save(payload,temp); temp.replace(path)
 
@@ -282,7 +367,12 @@ def load_checkpoint(path,device='cpu'):
     dev=resolve_torch_device(device)
     # Payloads contain tensors + primitive metadata; no Python model pickles.
     ckpt=torch.load(Path(path),map_location=dev,weights_only=True)
-    if ckpt.get('format')!=FORMAT: raise ValueError('Not a joint typed soft-edge checkpoint.')
+    if ckpt.get('format') not in (FORMAT, ADJACENCY_FORMAT):
+        raise ValueError('Not a joint typed soft-edge/adjacency checkpoint.')
+    mode=ckpt['model_config'].get('spectral_mode',LEGACY_MODE)
+    expected=ADJACENCY_FORMAT if mode == ADJACENCY_MODE else FORMAT
+    if ckpt['format'] != expected:
+        raise ValueError('Checkpoint format and spectral semantics disagree.')
     model=JointTypedEdgePredictor(**ckpt['model_config']).to(dev)
     model.load_state_dict(ckpt['model_state_dict'],strict=True); model.eval()
     return model,ckpt

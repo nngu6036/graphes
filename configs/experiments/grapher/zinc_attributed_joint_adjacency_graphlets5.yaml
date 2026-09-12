@@ -1,0 +1,198 @@
+# One diffusion state: symmetric centered all-pairs categorical adjacency logits.
+# Adjacency eigenvalues are DERIVED from the same soft state at every prediction.
+# No independent Laplacian/eigenvalue bridge and no eigenvector decoder.
+# Signed ascending eigenvalues; valid submatrices only; no fixed zero mode.
+# Attributed induced graphlets retain atomic_num + bond_type labels (TRAIN-only).
+# Train a NEW joint checkpoint. The existing typed-DH-VAE initializer is reusable.
+# Optional spectral-loss ablation: set loss_weights.adjacency_spectrum=0.1 in TRAINING.
+# Edge-only ablation: set edge_diffusion.spectral_enabled=false and adjacency_spectrum loss=0.
+experiment: zinc_attributed_joint_adjacency_graphlets5
+benchmark: zinc250k_hogdiff_gdss
+seed: 42
+dataset:
+  name: zinc
+  config_path: configs/datasets/zinc.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+  max_val_graphs: 2000
+typed_signature:
+  node_attribute: atomic_num
+  node_categories:
+  - 6
+  - 7
+  - 8
+  - 9
+  - 15
+  - 16
+  - 17
+  - 35
+  - 53
+  edge_attribute: bond_type
+  edge_categories:
+  - 1
+  - 2
+  - 3
+  fields:
+  - atomic_num
+  - single_degree
+  - double_degree
+  - triple_degree
+  hydrogens: implicit
+  max_ordinary_degree: 6
+  bond_orders:
+    1: 1.0
+    2: 2.0
+    3: 3.0
+  size_mask: true
+  domain_mask: true
+constructor:
+  type: typed_backtracking
+  ensure_connected: true
+  randomize_assignment: true
+  max_restarts: 32
+  max_backtracks: 50000
+  candidate_ranking: uniform
+  max_ordinary_degree: 6
+pipeline:
+  stage: attributed
+  factorization: joint_typed_vae_then_unified_categorical_adjacency_bridge_with_derived_adjacency_spectra_then_same_bond_rewiring
+protocol:
+  evaluation_seeds:
+  - 42
+  - 43
+  - 44
+  generated_graphs_per_seed: 64
+  tune_on_split: val
+  final_split: test
+categorical_state:
+  node_attribute: atomic_num
+  node_categories:
+  - 6
+  - 7
+  - 8
+  - 9
+  - 15
+  - 16
+  - 17
+  - 35
+  - 53
+  edge_attribute: bond_type
+  edge_categories:
+  - 1
+  - 2
+  - 3
+degree_generator:
+  enabled: true
+  type: typed_degree_histogram_vae
+  checkpoint_path: null
+joint_typed_degree:
+  enabled: true
+  initialize_degree_checkpoint: outputs/degree_generators/zinc_typed/seed_42/checkpoint.pt
+  trainable: true
+  freeze_epochs: 10
+  learning_rate: 2.0e-05
+  loss_weight: 0.01
+  kl_loss_weight: 0.005
+  latent_dim: 64
+  hidden_dim: 256
+  size_condition_dim: 32
+  prior_type: conditional_gmm
+  prior_components: 8
+  num_layers: 3
+  dropout: 0.0
+  loss_weights:
+    num_nodes: 1.0
+    signature: 5.0
+    incidence: 0.1
+attributed_predictor:
+  type: joint_typed_adjacency
+  checkpoint_path: outputs/attributed_grapher/zinc_attributed_joint_adjacency_graphlets5/seed_42/checkpoint.pt
+  device: auto
+  hidden_dim: 128
+  num_layers: 4
+  spectral_layers: 2
+  spectral_heads: 4
+  epochs: 100
+  batch_size: 16
+  learning_rate: 0.0001
+  weight_decay: 1.0e-05
+  grad_clip: 1.0
+  loss_weights:
+    edge_ce: 1.0
+    edge_logit: 0.1
+    typed_consistency: 0.1
+    spectrum: 0.0
+    clustering_histogram: 0.25
+    orbit_summary: 0.5
+    induced_graphlet_histogram: 1.0
+    induced_graphlet_histogram_ce: 0.0
+    adjacency_spectrum: 0.0
+  batch_progress_interval: 50
+  progress_interval_seconds: 60
+edge_diffusion:
+  enabled: true
+  bridge: centered_logit_brownian
+  smoothing: 0.01
+  sigma: 1.0
+  spectral_enabled: true
+  spectral_sigma: 0.0
+  endpoint_fraction: 0.1
+  views_per_graph: 2
+  sampling_steps: 32
+  generation_strategy: bridge_then_rewire
+  spectral_mode: adjacency_derived
+structure_summary_prediction:
+  clustering_histogram: true
+  clustering_bins: 100
+  orbit_summary: true
+  orbit_width: 15
+  cycle_graphlet_histogram: false
+  induced_graphlet_histogram: true
+  induced_graphlet_attributed: true
+  induced_graphlet_k: 5
+  induced_graphlet_scope: all
+training_sources:
+  mode: target_indexed_typed_constructor
+  shared_relabel_augmentation: true
+  memory_cache_graphs: 256
+  endpoint_cache_path: outputs/cache/zinc_attributed_joint_adjacency_graphlets5/endpoints.sqlite
+source_enrichment:
+  enabled: false
+generation:
+  invariant_source: learned
+  sample_num_nodes: empirical
+  num_generate: 64
+  max_attempts_per_graph: 128
+  max_invariant_resample: 1000
+  require_rdkit_source_validity: true
+  checkpoint_every: 16
+attributed_refiner:
+  steps: 32
+  proposal_budget: 1024
+  valid_candidate_budget: 256
+  strict_same_bond: true
+  preserve_connectivity: true
+  rdkit_candidate_filter: true
+  normalization: initial
+  epsilon: 1.0e-06
+  min_improvement: 1.0e-08
+  weights:
+    edge: 1.0
+    clustering: 0.25
+    orbit: 1.0
+    graphlet: 0.1
+evaluation:
+  reference_split: val
+  metric_molecule_source: raw_valid
+  nspdk_backend: eden
+  require_fcd: true
+adjacency_spectrum:
+  views:
+  - topology
+  - bond_weighted
+  bond_weights:
+    1: 1.0
+    2: 2.0
+    3: 3.0
+  normalization: size_bound

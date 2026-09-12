@@ -28,6 +28,8 @@ from grapher.rewiring_mlp.attributed.induced_graphlets import (
 )
 
 
+from .adjacency_diffusion import resolve_mode, LEGACY_MODE
+
 ENDPOINT_VALENCE_POLICY = 'preserve_prepared_target_bond_types'
 
 
@@ -119,6 +121,7 @@ class EndpointStore:
     def __init__(self, graphs, vectorizer, atom_types, config, *, seed, cache_path=None, graphlet_basis=None):
         self.graphs = graphs; self.vectorizer = vectorizer; self.atom_types = tuple(atom_types)
         self.config = deepcopy(config); self.seed = int(seed)
+        self.include_spectra = resolve_mode(config) == LEGACY_MODE
         self.graphlet_basis = graphlet_basis
         if wants_attributed_histogram(config) and graphlet_basis is None:
             raise ValueError("Attributed endpoint extraction requires the checkpoint/training graphlet basis; "
@@ -156,7 +159,7 @@ class EndpointStore:
             (induced_spec.metadata() if induced_spec else None)
         )
         rec=graph_record(target,vocab.node_attribute,vocab.edge_attribute)
-        key=record_hash({'version':3,'induced_catalogue':induced_metadata,'graph':rec,'seed':self.seed+index*1009,
+        key=record_hash({'version':4,'laplacian_cache':self.include_spectra,'induced_catalogue':induced_metadata,'graph':rec,'seed':self.seed+index*1009,
                          'valence_policy':ENDPOINT_VALENCE_POLICY,
                          'constructor':constructor,'summaries':ss,'edges':list(vocab.edge_types)})
         stored=self.db.execute('SELECT value FROM endpoints WHERE key=?',(key,)).fetchone() if self.db else None
@@ -169,9 +172,10 @@ class EndpointStore:
             source,diag=construct_typed_graph(invariant,constructor,np.random.default_rng(self.seed+index*1009))
             if not typed_invariant_matches_graph(source,invariant): raise AssertionError('Training endpoint misalignment.')
             diag['valence_policy']=ENDPOINT_VALENCE_POLICY
-            raw={'source':graph_record(source,vocab.node_attribute,vocab.edge_attribute),'constructor':diag,
-                 'source_spectra':attributed_laplacian_spectra(source,edge_attribute=vocab.edge_attribute).tolist(),
-                 'target_spectra':attributed_laplacian_spectra(target,edge_attribute=vocab.edge_attribute).tolist()}
+            raw={'source':graph_record(source,vocab.node_attribute,vocab.edge_attribute),'constructor':diag}
+            if self.include_spectra:
+                raw['source_spectra']=attributed_laplacian_spectra(source,edge_attribute=vocab.edge_attribute).tolist()
+                raw['target_spectra']=attributed_laplacian_spectra(target,edge_attribute=vocab.edge_attribute).tolist()
             if ss.get('clustering_histogram',True):
                 raw['histogram']=extract_clustering_histogram(target,int(ss.get('clustering_bins',100))).tolist()
             if ss.get('orbit_summary',True): raw['orbit']=extract_orbit_summary(target).tolist()
@@ -188,10 +192,13 @@ class EndpointStore:
         return item
 
 
-def inference_item(source: nx.Graph, vectorizer, atom_types) -> dict:
+def inference_item(source: nx.Graph, vectorizer, atom_types, *, include_spectra=True) -> dict:
     source=validate_graph(source,vectorizer,tuple(atom_types))
-    return {'source':source,'source_spectra':attributed_laplacian_spectra(source,
-             edge_attribute=vectorizer.vocabulary.edge_attribute).tolist()}
+    item={'source':source}
+    if include_spectra:
+        item['source_spectra']=attributed_laplacian_spectra(source,
+             edge_attribute=vectorizer.vocabulary.edge_attribute).tolist()
+    return item
 
 
 def collate(items: list[dict], vectorizer, atom_types, *, device='cpu', rng=None) -> dict[str,torch.Tensor]:
@@ -202,12 +209,17 @@ def collate(items: list[dict], vectorizer, atom_types, *, device='cpu', rng=None
          'atom':torch.zeros(B,N,dtype=torch.long),
          'typed_degrees':torch.zeros(B,N,R),
          'source_labels':torch.zeros(B,N,N,dtype=torch.long),
-         'source_spectra':torch.zeros(B,2,N), 'n':torch.zeros(B,dtype=torch.long)}
+         'n':torch.zeros(B,dtype=torch.long)}
+    has_spectra=all('source_spectra' in x for x in items)
+    if any('source_spectra' in x for x in items) and not has_spectra:
+        raise ValueError('Do not mix adjacency and legacy Laplacian endpoint caches in a batch.')
+    if has_spectra:
+        out['source_spectra']=torch.zeros(B,2,N)
     has_targets=all('target' in x for x in items)
     if any('target' in x for x in items) and not has_targets: raise ValueError('Mixed train/inference batch.')
     if has_targets:
         out['target_labels']=torch.zeros(B,N,N,dtype=torch.long)
-        out['target_spectra']=torch.zeros(B,2,N)
+        if has_spectra: out['target_spectra']=torch.zeros(B,2,N)
         for key in ('histogram','orbit','induced_histogram'):
             if key in items[0]: out[key]=torch.tensor(np.asarray([x[key] for x in items]),dtype=torch.float32)
     degree_graphs=[]
@@ -234,8 +246,9 @@ def collate(items: list[dict], vectorizer, atom_types, *, device='cpu', rng=None
                 for u,w,data in graph.edges(data=True):
                     r=vocab.edge_types.index(data[vocab.edge_attribute])+1
                     out[key][b,u,w]=out[key][b,w,u]=r
-        out['source_spectra'][b,:,:n]=torch.as_tensor(np.asarray(item['source_spectra']))
-        if target is not None: out['target_spectra'][b,:,:n]=torch.as_tensor(np.asarray(item['target_spectra']))
+        if has_spectra:
+            out['source_spectra'][b,:,:n]=torch.as_tensor(np.asarray(item['source_spectra']))
+            if target is not None: out['target_spectra'][b,:,:n]=torch.as_tensor(np.asarray(item['target_spectra']))
     features,targets=v.to_training_arrays(degree_graphs)
     out['typed_features']=torch.from_numpy(features)
     for key,val in targets.items(): out['degree_'+key]=torch.from_numpy(val)

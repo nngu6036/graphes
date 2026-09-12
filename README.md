@@ -1,3 +1,7 @@
+# Unified adjacency-diffusion extension
+
+See [GRAPHER_ADJACENCY_DIFFUSION.md](GRAPHER_ADJACENCY_DIFFUSION.md) for the new joint typed molecular mode, configs, and commands. Existing spectral experiments remain available.
+
 # GraphER — Constraint-Preserving Graph Generation and Refinement
 
 ## Joint-degree checkpoint selection

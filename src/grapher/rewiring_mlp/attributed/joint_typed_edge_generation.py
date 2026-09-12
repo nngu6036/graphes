@@ -40,6 +40,9 @@ from grapher.rewiring_mlp.attributed.induced_graphlets import (
 )
 
 
+from .adjacency_diffusion import ADJACENCY_MODE, LEGACY_MODE, validate_model_config
+
+
 @torch.no_grad()
 def sample_soft_endpoint(model,source,config,*,seed):
     """Maintain an independent SOFT trajectory; never overwrite it with hard edits.
@@ -49,19 +52,24 @@ def sample_soft_endpoint(model,source,config,*,seed):
     explicit approximation; the final hard graph is produced by the rewirer.
     """
     model.eval(); device=next(model.parameters()).device
-    batch=collate([inference_item(source,model.vectorizer,model.atom_types)],model.vectorizer,model.atom_types,device=device)
+    validate_model_config(model, config)
+    legacy_spectral = model.spectral_mode == LEGACY_MODE and model.spectral_enabled
+    batch=collate([inference_item(source,model.vectorizer,model.atom_types,
+                  include_spectra=(model.spectral_mode==LEGACY_MODE))],
+                  model.vectorizer,model.atom_types,device=device)
     mask=batch['mask']; cfg=config['edge_diffusion']; steps=int(cfg.get('sampling_steps',32))
     if steps<2: raise ValueError('At least two bridge sampling steps are required.')
     gen=torch.Generator(device=device).manual_seed(int(seed))
     state=labels_to_logits(batch['source_labels'],model.categories,mask,model.smoothing)
-    spectral=batch['source_spectra']/batch['spectral_scale'][...,None]
+    spectral=(batch['source_spectra']/batch['spectral_scale'][...,None]) if legacy_spectral else None
     trace=[]
     for i in range(steps):
         t=i/steps; s=(i+1)/steps
-        inp={**batch,'time':torch.full((1,),t,device=device),'edge_state':state,'spectral_state':spectral}
+        inp={**batch,'time':torch.full((1,),t,device=device),'edge_state':state}
+        if legacy_spectral: inp['spectral_state']=spectral
         prediction=model(inp)
         state=advance_edges(state,prediction['clean_edge_logits'],t,s,mask,float(cfg.get('sigma',1)),generator=gen)
-        if model.spectral_enabled:
+        if legacy_spectral:
             end=prediction['clean_spectra']/batch['spectral_scale'][...,None]
             a=(s-t)/(1-t); sd=float(cfg.get('spectral_sigma',0.15))*math.sqrt((s-t)*(1-s)/(1-t))
             spectral=spectral+a*(end-spectral)+sd*spectral_noise(spectral,mask,generator=gen)
@@ -69,7 +77,9 @@ def sample_soft_endpoint(model,source,config,*,seed):
         trace.append({'step':i+1,'time':s,'edge_logit_rms':float(state.square().mean().sqrt().cpu())})
     # Predict summaries on the sampled clean state; pair probabilities come from
     # that sampled endpoint, NOT a new independent argmax/categorical graph draw.
-    final=model({**batch,'time':torch.ones(1,device=device),'edge_state':state,'spectral_state':spectral})
+    final_input={**batch,'time':torch.ones(1,device=device),'edge_state':state}
+    if legacy_spectral: final_input['spectral_state']=spectral
+    final=model(final_input)
     n=len(source)
     targets={'edge_probabilities':edge_probabilities(state,mask)[0,:n,:n].cpu().numpy()}
     if model.histogram_bins: targets['histogram']=final['clean_clustering_histogram'][0].cpu().numpy()
@@ -77,8 +87,16 @@ def sample_soft_endpoint(model,source,config,*,seed):
     if model.induced_graphlet_basis is not None or model.induced_graphlet_spec is not None:
         targets['induced_histogram'] = final['clean_induced_graphlet_histogram'][0].cpu().numpy()
         targets['induced_graphlet_metadata'] = model.induced_graphlet_metadata()
-    if model.spectral_enabled: targets['spectra']=final['clean_spectra'][0,:,:n].cpu().numpy()
-    return targets,{'prediction_calls':steps+1,'sampling_steps':steps,'trajectory':trace}
+    if legacy_spectral: targets['spectra']=final['clean_spectra'][0,:,:n].cpu().numpy()
+    if model.spectral_mode == ADJACENCY_MODE:
+        targets['adjacency_metadata']=model.diffusion_metadata()
+        if model.adjacency_output_spectra:
+            # Crucial: use the SAMPLED endpoint whose bond probabilities are
+            # passed to the rewirer, not an additional t=1 denoising prediction.
+            realized=model.adjacency_features(edge_probabilities(state,mask),mask)
+            targets['adjacency_spectra']=realized['spectra'][0,:,:n].cpu().numpy()
+    return targets,{'prediction_calls':steps+1,'sampling_steps':steps,'trajectory':trace,
+                    'diffusion':model.diffusion_metadata()}
 
 
 def validate_refiner(cfg,model):
@@ -279,6 +297,7 @@ def generate_joint_typed_edge(config,args):
     checkpoint=args.checkpoint or config['attributed_predictor'].get('checkpoint_path')
     if not checkpoint: raise ValueError('Supply the trained joint attributed checkpoint.')
     model,ckpt=load_checkpoint(checkpoint,args.device or 'auto'); validate_refiner(config['attributed_refiner'],model)
+    validate_model_config(model,config)
     validate_model_graphlets(model, config)
     cat=config['categorical_state']
     if tuple(cat['edge_categories'])!=model.edge_types or tuple(cat['node_categories'])!=model.atom_types:
@@ -287,7 +306,9 @@ def generate_joint_typed_edge(config,args):
         raise ValueError('Endpoint smoothing is a training/checkpoint semantic and cannot change during sampling.')
     trained_diff=ckpt['config']['edge_diffusion']
     for key in ('sigma','spectral_sigma','spectral_enabled','bridge'):
-        if config['edge_diffusion'].get(key)!=trained_diff.get(key):
+        default={'sigma':1.0,'spectral_sigma':0.0 if model.spectral_mode==ADJACENCY_MODE else 0.15,
+                 'spectral_enabled':True,'bridge':'centered_logit_brownian'}[key]
+        if config['edge_diffusion'].get(key,default)!=trained_diff.get(key,default):
             raise ValueError(f'edge_diffusion.{key} differs from training. Use the matching config.')
     splits,provenance=load_splits(config)
     if ckpt.get('dataset_provenance',{}).get('fingerprint')!=provenance['fingerprint']:
@@ -298,6 +319,10 @@ def generate_joint_typed_edge(config,args):
     if output.exists() and any(output.iterdir()): raise FileExistsError(f'Use a fresh generation directory: {output}')
     output.mkdir(parents=True,exist_ok=True)
     sources=[]; finals=[]; records=[]; targets_saved=[]; sampling_counts={}; start=time.perf_counter()
+    if model.spectral_mode == ADJACENCY_MODE:
+        print('[AdjacencyDiffusion] sampling one soft categorical adjacency; signed spectra derived each step. '
+              'No independent Laplacian/eigenvalue process.',flush=True)
+
     # Empirical conditioning must use the SAME training subset used for fitting.
     effective_limit=ckpt['config']['dataset'].get('max_train_graphs')
     train_graphs=splits['train'][:int(effective_limit)] if effective_limit else splits['train']
@@ -306,6 +331,7 @@ def generate_joint_typed_edge(config,args):
       'dataset_provenance':provenance,'degree_sampler_source':'joint_checkpoint_embedded',
       'invariant_source':config['generation'].get('invariant_source','learned'),
       'strategy':'bridge_then_rewire','node_diffusion':False,'edge_diffusion':True,
+      'diffusion':model.diffusion_metadata(),'checkpoint_format':ckpt['format'],
       'summaries':'topology-only clustering and orbits; induced graphlets use node-type and edge-type labels for attributed checkpoints',
       'induced_graphlet_metadata': model.induced_graphlet_metadata(),
       'target_scope':'fixed_endpoint_per_graph','raw_graphs_no_posthoc_repair':True}
@@ -344,5 +370,6 @@ def generate_joint_typed_edge(config,args):
         'connectedness_rate':float(np.mean([r['connected'] for r in records])),
         'mean_accepted_steps':float(np.mean([r['accepted_steps'] for r in records])),
         'mean_bridge_prediction_calls':float(np.mean([r['bridge']['prediction_calls'] for r in records])),
-        'scoring_weights':config['attributed_refiner']['weights']}
+        'scoring_weights':config['attributed_refiner']['weights'],
+        'diffusion':model.diffusion_metadata()}
     flush(True); print(f'Saved molecular graphs: {output}/molecular_graphs.pkl',flush=True)

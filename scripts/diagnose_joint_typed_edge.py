@@ -9,7 +9,9 @@ from grapher.utils.io import load_yaml,apply_config_overrides
 from grapher.rewiring_mlp.attributed.joint_typed_edge_model import load_checkpoint,noisy_batch,structural_loss
 from grapher.rewiring_mlp.attributed.joint_typed_edge_data import load_splits,EndpointStore,collate
 from grapher.rewiring_mlp.attributed.joint_typed_edge_generation import sample_soft_endpoint,refine_typed_graph
-from grapher.rewiring_mlp.attributed.soft_edge_bridge import labels_to_logits,center_edges
+from grapher.rewiring_mlp.attributed.soft_edge_bridge import labels_to_logits,center_edges,edge_probabilities
+from grapher.rewiring_mlp.attributed.adjacency_diffusion import ADJACENCY_MODE,validate_model_config
+from grapher.rewiring_mlp.attributed.joint_typed_edge_training import validate_config
 from grapher.rewiring_mlp.generic.joint_checkpointing import atomic_json
 from grapher.rewiring_mlp.attributed.induced_graphlets import (
     validate_model_graphlets, extract_histogram as attributed_histogram,
@@ -29,7 +31,9 @@ def main():
     args=p.parse_args();cfg=load_yaml(args.config);apply_config_overrides(cfg,args.set)
     if args.rewire and args.mode!='rollout': p.error('--rewire requires --mode rollout')
     if args.max_graphs<1 or args.samples_per_graph<1: p.error('Counts must be positive.')
-    model,ckpt=load_checkpoint(args.checkpoint,args.device);splits,prov=load_splits(cfg)
+    validate_config(cfg)
+    model,ckpt=load_checkpoint(args.checkpoint,args.device);validate_model_config(model,cfg)
+    splits,prov=load_splits(cfg)
     if ckpt.get('dataset_provenance',{}).get('fingerprint')!=prov['fingerprint']:
         raise ValueError('Dataset/checkpoint provenance mismatch.')
     from grapher.rewiring_mlp.generic.induced_graphlets import InducedGraphletSpec, extract_histogram, histogram_distance
@@ -49,16 +53,23 @@ def main():
                         targets,stats=sample_soft_endpoint(model,item['source'],cfg,seed=args.seed+i*1009+sample)
                         pred={'clean_edge_logits':torch.tensor(np.log(np.maximum(targets['edge_probabilities'],1e-30)),device=device)[None].float()}
                         pred['clean_edge_logits']=center_edges(pred['clean_edge_logits'],batch['mask'])
-                        pred['clean_edge_probabilities']=pred['clean_edge_logits'].softmax(-1)
-                        for src,dst in [('histogram','clean_clustering_histogram'),('orbit','clean_orbit_summary'),('spectra','clean_spectra'),('induced_histogram','clean_induced_graphlet_histogram')]:
+                        pred['clean_edge_probabilities']=edge_probabilities(pred['clean_edge_logits'],batch['mask'])
+                        for src,dst in [('histogram','clean_clustering_histogram'),('orbit','clean_orbit_summary'),('spectra','clean_spectra'),('adjacency_spectra','clean_adjacency_spectra'),('induced_histogram','clean_induced_graphlet_histogram')]:
                             if src in targets: pred[dst]=torch.tensor(targets[src],device=device)[None].float()
                         inp=batch
                     else:
                         inp=noisy_batch(batch,model,cfg,generator=generator,endpoint_only=args.mode=='source');pred=model(inp)
                     _,metrics=structural_loss(pred,inp,model,cfg['attributed_predictor']['loss_weights'])
-                    baseline={**pred,'clean_edge_logits':baselogits,'clean_edge_probabilities':baselogits.softmax(-1)}
+                    baseline={**pred,'clean_edge_logits':baselogits,'clean_edge_probabilities':edge_probabilities(baselogits,batch['mask'])}
+                    if model.spectral_mode == ADJACENCY_MODE and model.adjacency_output_spectra:
+                        baseline['clean_adjacency_spectra']=model.adjacency_features(baseline['clean_edge_probabilities'],batch['mask'])['spectra']
                     _,base=structural_loss(baseline,inp,model,cfg['attributed_predictor']['loss_weights'])
                     row={'graph_index':i,'sample':sample,'source_edge_ce':base['edge_ce_loss'],**metrics}
+                    if model.spectral_mode == ADJACENCY_MODE and model.adjacency_output_spectra:
+                        row['source_adjacency_spectral_nrmse']=base['adjacency_spectral_nrmse']
+                        actual=model.adjacency_features(pred['clean_edge_probabilities'],batch['mask'])['spectra']
+                        reported=pred.get('clean_adjacency_spectra',actual)
+                        row['adjacency_prediction_spectrum_consistency_max_abs']=float((actual-reported).abs().max().cpu())
                     if model.induced_graphlet_basis is not None:
                         basis = model.induced_graphlet_basis
                         row['source_induced_graphlet_histogram_tv'] = (attributed_distance(
@@ -81,11 +92,14 @@ def main():
                     rows.append(row)
     finally: store.close()
     means={k:float(np.mean([r[k] for r in rows])) for k in rows[0] if k not in ('graph_index','sample')}
+    maxima={k:float(max(r[k] for r in rows)) for k in rows[0] if k.endswith('_max_abs')}
     report={'split':args.split,'mode':args.mode,'graphs':len(graphs),'examples':len(rows),
             'induced_graphlet_metadata':model.induced_graphlet_metadata(),
-            'scope':'paired_known_targets_not_unconditional_generation','means':means,'rows':rows,'dataset_provenance':prov}
+            'diffusion':model.diffusion_metadata(),
+            'scope':'paired_known_targets_not_unconditional_generation','means':means,'maxima':maxima,'rows':rows,'dataset_provenance':prov}
     atomic_json(report,Path(args.json_out))
     print(f'Joint typed edge diagnostic: mode={args.mode} split={args.split} graphs={len(graphs)} examples={len(rows)}')
+    print(f'  diffusion: {model.diffusion_metadata()}')
     if model.induced_graphlet_metadata() is not None:
         m = model.induced_graphlet_metadata()
         print(f"  graphlet attributed={m['attributed']} k={m['k']} bins={m['width']}")

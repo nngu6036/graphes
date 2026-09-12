@@ -23,6 +23,7 @@ def main():
             for file,key in [('checkpoint.pt','checkpoint_sha256'),('degree_checkpoint.pt','degree_checkpoint_sha256')]:
                 if file_sha256(folder/file)!=row[key]:raise ValueError(f'Hash mismatch: {folder/file}')
             model,joint=load_checkpoint(folder/'checkpoint.pt','cpu')
+            print(f"  diffusion mode={model.spectral_mode}; independent_spectral_diffusion={model.diffusion_metadata()['independent_spectral_diffusion']}")
             prior=torch.load(folder/'degree_checkpoint.pt',map_location='cpu',weights_only=True)
             if prior.get('format')!=TYPED_CHECKPOINT_FORMAT:raise ValueError('Wrong exported typed prior format.')
             expected=row['embedded_typed_state_sha256']
