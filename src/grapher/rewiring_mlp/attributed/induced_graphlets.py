@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import time
 from math import comb
 from typing import Any
 
 import networkx as nx
 import numpy as np
 
+from grapher.utils.motifs import _canonicalize_attributed_tokens
 from grapher.rewiring_mlp.attributed.data import GraphletBasis
 from grapher.rewiring_mlp.generic.induced_graphlets import InducedGraphletSpec, validate_k
 from grapher.rewiring_mlp.attributed.graphlet_diffusion import (
@@ -289,8 +291,66 @@ def fit_training_basis(config: dict, train_graphs) -> GraphletBasis | None:
     print(f"[AttributedGraphlets] fitting TRAIN-only labeled vocabulary: "
           f"graphs={len(train_graphs)} k={requested.k} scope=all; "
           f"labels={settings['node_attribute']}/{settings['edge_attribute']}", flush=True)
+    node_counts = [graph.number_of_nodes() for graph in train_graphs]
+    subset_counts = [comb(n, requested.k) if n >= requested.k else 0 for n in node_counts]
+    total_subsets = sum(subset_counts)
+    pc = config.get("attributed_predictor", {})
+    seconds = float(pc.get("progress_interval_seconds", 60))
+    graph_interval = int(pc.get("graphlet_progress_interval", 1000))
+    print(f"[AttributedGraphlets] CPU preprocessing: induced_subsets={total_subsets:,} "
+          f"(including disconnected graphlets); progress_interval_seconds={seconds:g} "
+          f"graphlet_progress_interval={graph_interval}", flush=True)
+    print(f"[AttributedGraphlets] workload nodes_min={min(node_counts, default=0)} "
+          f"nodes_max={max(node_counts, default=0)} "
+          f"nodes_mean={sum(node_counts) / max(len(node_counts), 1):.2f} "
+          f"graphs_with_no_k_subsets={sum(count == 0 for count in subset_counts)} "
+          f"max_subsets_per_graph={max(subset_counts, default=0):,}", flush=True)
+    initial_cache = _canonicalize_attributed_tokens.cache_info()
+    print(f"[AttributedGraphlets] enumeration starting backend=python "
+          f"cache_entries={initial_cache.currsize}/{initial_cache.maxsize}; "
+          "bins exclude overflow until finalization", flush=True)
+    started = last_progress = time.perf_counter()
+    completed_subsets = last_subsets = last_bins = 0
+    previous_graph_finished = started
+
+    def progress(k: int, done: int, total: int, bins: int) -> None:
+        nonlocal last_progress, completed_subsets, last_subsets, last_bins, previous_graph_finished
+        if done:
+            completed_subsets += subset_counts[done - 1]
+        now = time.perf_counter()
+        graph_seconds = now - previous_graph_finished
+        previous_graph_finished = now
+        by_graph = graph_interval > 0 and done % graph_interval == 0
+        by_time = seconds > 0 and now - last_progress >= seconds
+        if done not in (0, 1, total) and not by_graph and not by_time:
+            return
+        elapsed = now - started
+        rate = completed_subsets / elapsed if elapsed > 0 else 0.0
+        recent_seconds = now - last_progress
+        recent_rate = (completed_subsets - last_subsets) / recent_seconds if recent_seconds > 0 else 0.0
+        eta = f"{(total_subsets - completed_subsets) / rate:.1f}s" if rate > 0 else "unknown"
+        print(f"[AttributedGraphlets] vocabulary progress k={k} graphs={done}/{total} "
+              f"subsets={completed_subsets:,}/{total_subsets:,} bins={bins} "
+              f"elapsed={elapsed:.1f}s subsets_per_second={rate:.1f} eta={eta} "
+              f"new_bins_since_report={bins - last_bins} "
+              f"recent_subsets_per_second={recent_rate:.1f}", flush=True)
+        if done:
+            current = train_graphs[done - 1]
+            print(f"[AttributedGraphlets] last_graph_index={done - 1} "
+                  f"nodes={node_counts[done - 1]} edges={current.number_of_edges()} "
+                  f"subsets={subset_counts[done - 1]:,} wall_seconds={graph_seconds:.4f}", flush=True)
+        cache = _canonicalize_attributed_tokens.cache_info()
+        hits, misses = cache.hits - initial_cache.hits, cache.misses - initial_cache.misses
+        hit_rate = hits / max(hits + misses, 1)
+        print(f"[AttributedGraphlets] canonical_cache entries={cache.currsize}/{cache.maxsize} "
+              f"fit_hits={hits:,} fit_misses={misses:,} hit_rate={hit_rate:.1%}", flush=True)
+        last_progress = now
+        last_subsets, last_bins = completed_subsets, bins
+
     basis = GraphletBasis.fit_from_graphs(train_graphs, settings, attributed=True,
-                                         seed=int(config.get("seed", 42)))
+                                         seed=int(config.get("seed", 42)),
+                                         progress_callback=progress)
+    print("[AttributedGraphlets] enumeration complete; validating and fingerprinting vocabulary", flush=True)
     info = metadata(basis)
     print(f"[AttributedGraphlets] attributed=True bins={info['width']} "
           f"including one overflow bin; fingerprint={info['fingerprint']}", flush=True)

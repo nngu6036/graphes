@@ -99,3 +99,46 @@ def test_training_model_requires_fixed_basis_on_endpoints(tmp_path):
     assert old.induced_graphlet_basis is None
     with pytest.raises(ValueError,match='topology-only'):
         validate_model_graphlets(old,cfg)
+
+
+@pytest.mark.parametrize('interval,expected_middle', [(10, True), (60, False), (0, False)])
+def test_vocabulary_reports_progress_without_changing_bins(monkeypatch, capsys, interval, expected_middle):
+    from grapher.rewiring_mlp.attributed import induced_graphlets
+
+    cfg = config(3)
+    graphs = [graph(5), graph(4), graph(2)]
+    baseline = fit_training_basis(cfg, graphs)
+    capsys.readouterr()
+    cfg['attributed_predictor']['progress_interval_seconds'] = interval
+    ticks = iter([0.0, 1.0, 12.0, 13.0])
+    monkeypatch.setattr(induced_graphlets.time, 'perf_counter', lambda: next(ticks))
+    basis = fit_training_basis(cfg, graphs)
+    output = capsys.readouterr().out
+
+    assert 'CPU preprocessing: induced_subsets=14' in output
+    assert 'graphs=1/3 subsets=10/14' in output
+    assert ('graphs=2/3 subsets=14/14' in output) == expected_middle
+    assert 'graphs=3/3 subsets=14/14' in output
+    assert 'elapsed=13.0s' in output and 'eta=0.0s' in output
+    assert metadata(basis) == metadata(baseline)
+    assert basis.to_dict() == baseline.to_dict()
+
+
+def test_local_counts_share_exact_label_tokens_with_vocabulary():
+    a = graph(7)
+    a.nodes[0]['atomic_num'] = True
+    a.nodes[1]['atomic_num'] = 1
+    a.nodes[2]['atomic_num'] = 1.0
+    a.nodes[3]['atomic_num'] = [6]
+    a.edges[0, 1]['bond_type'] = None
+    a.edges[3, 4]['bond_type'] = None
+    action = (((0, 1), (3, 4)), ((0, 3), (1, 4)))
+    b = a.copy()
+    b.remove_edges_from(action[0])
+    b.add_edges_from(action[1], bond_type=None)
+    basis = fit_training_basis(config(3), [a, b])
+    counter = AttributedInducedGraphletCounter(a, basis)
+    np.testing.assert_array_equal(counter.candidate_histogram(b, action), extract_histogram(b, basis))
+    counter.accept(b, action)
+    np.testing.assert_array_equal(counter.histogram(), extract_histogram(b, basis))
+    assert sum(counter.counts_by_size['3'].values()) == comb(7, 3)

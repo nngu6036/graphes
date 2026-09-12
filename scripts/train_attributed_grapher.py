@@ -386,7 +386,13 @@ def main() -> None:
         "--progress-interval-seconds",
         type=float,
         default=None,
-        help="Emit a heartbeat at this maximum silence interval; 0 disables.",
+        help="Report vocabulary fitting and training progress at this time interval; 0 disables periodic reports.",
+    )
+    parser.add_argument(
+        "--graphlet-progress-interval",
+        type=int,
+        default=None,
+        help="Report joint typed vocabulary fitting every N graphs (default: 1000); 1 prints every graph, 0 disables this trigger.",
     )
     parser.add_argument("--max-train-graphs", type=int, default=None)
     parser.add_argument("--max-val-graphs", type=int, default=None)

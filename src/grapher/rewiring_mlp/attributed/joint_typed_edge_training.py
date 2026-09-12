@@ -111,6 +111,10 @@ def build_model(config,train_graphs,device):
     if cat.get('node_attribute','atomic_num')!='atomic_num' or cat.get('edge_attribute','bond_type')!='bond_type':
         raise ValueError('This molecular family uses atomic_num/bond_type (no-bond is separate category 0).')
     path=joint.get('initialize_degree_checkpoint')
+    prior_started=time.perf_counter()
+    prior_stage='typed_prior_load' if path else 'typed_prior_fit'
+    print(f'[JointTypedEdge] stage={prior_stage} start graphs={len(train_graphs)} '
+          f'checkpoint={path or "none"}', flush=True)
     if path:
         path=Path(path)
         if not path.is_file(): raise FileNotFoundError(f'Typed warm-start missing: {path}. Train typed-DH-VAE first, or explicitly set initialization=null and freeze_epochs=0.')
@@ -123,7 +127,12 @@ def build_model(config,train_graphs,device):
             raise ValueError('Typed initializer attribute convention differs.')
         # Empirical size sampling must reflect CURRENT training data, not an old
         # vectorizer's cached split. Existing signature vocabulary is frozen.
+        checked_started=time.perf_counter()
+        print(f'[JointTypedEdge] stage=initializer_support_validation start split=train '
+              f'graphs={len(train_graphs)}', flush=True)
         for g in train_graphs: validate_graph(g,vectorizer,atoms)
+        print(f'[JointTypedEdge] stage=initializer_support_validation complete split=train '
+              f'graphs={len(train_graphs)} wall_seconds={time.perf_counter()-checked_started:.2f}', flush=True)
         vectorizer.empirical_node_counts=[len(g) for g in train_graphs]
         vectorizer.empirical_invariants=[]  # fallback is disabled; avoid duplicating whole datasets in each checkpoint
     else:
@@ -136,6 +145,10 @@ def build_model(config,train_graphs,device):
         vectorizer.empirical_invariants=[]
         dims={k:joint[k] for k in ('latent_dim','hidden_dim','size_condition_dim','prior_type','prior_components','num_layers','dropout') if k in joint}
         prior=build_typed_signature_vae(vectorizer,**dict({'latent_dim':64,'hidden_dim':128},**dims))
+    print(f'[JointTypedEdge] stage={prior_stage} complete '
+          f'parameters={sum(parameter.numel() for parameter in prior.parameters()):,} '
+          f'node_support={vectorizer.min_nodes}..{vectorizer.max_nodes} '
+          f'wall_seconds={time.perf_counter()-prior_started:.2f}', flush=True)
     ss=config.get('structure_summary_prediction',{})
     induced_spec = InducedGraphletSpec.from_config(ss)
     if induced_spec is not None and wants_attributed_histogram(config) and induced_spec.scope != 'all':
@@ -150,6 +163,9 @@ def build_model(config,train_graphs,device):
             adjacency_normalization=resolved['normalization'],
             adjacency_output_spectra=(bool(config['edge_diffusion'].get('spectral_enabled',True))
                 or float(pc['loss_weights'].get('adjacency_spectrum',0))>0))
+    predictor_started=time.perf_counter()
+    print(f'[JointTypedEdge] stage=predictor_build start mode={mode} '
+          f'graphlet_bins={induced_basis.width if induced_basis is not None else 0}', flush=True)
     model=JointTypedEdgePredictor(**adjacency_options,typed_model_config=prior.model_config(),vectorizer=vectorizer.to_dict(),
         atom_types=list(atoms), hidden_dim=int(pc.get('hidden_dim',128)),num_layers=int(pc.get('num_layers',4)),
         spectral_layers=int(pc.get('spectral_layers',2)),spectral_heads=int(pc.get('spectral_heads',4)),
@@ -159,7 +175,17 @@ def build_model(config,train_graphs,device):
         induced_graphlet_basis=induced_basis.to_dict() if induced_basis is not None else None,
         induced_graphlet_k=induced_spec.k if induced_spec is not None and induced_basis is None else None,
         induced_graphlet_scope=induced_spec.scope if induced_spec else 'all')
-    model.degree_model.load_state_dict(prior.state_dict()); return model.to(device)
+    model.degree_model.load_state_dict(prior.state_dict())
+    print(f'[JointTypedEdge] stage=predictor_build complete '
+          f'parameters={sum(parameter.numel() for parameter in model.parameters()):,} '
+          f'trainable_parameters={sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad):,} '
+          f'wall_seconds={time.perf_counter()-predictor_started:.2f}', flush=True)
+    transfer_started=time.perf_counter()
+    print(f'[JointTypedEdge] stage=device_transfer start device={device}', flush=True)
+    model=model.to(device)
+    print(f'[JointTypedEdge] stage=device_transfer complete device={device} '
+          f'wall_seconds={time.perf_counter()-transfer_started:.2f}', flush=True)
+    return model
 
 
 class TypedCheckpointManager:
@@ -172,6 +198,9 @@ class TypedCheckpointManager:
         if model.induced_graphlet_metadata() is not None: self.criteria['best_graphlet']='val_induced_graphlet_histogram_tv'
 
     def save(self,kind,model,epoch,metrics,eligible):
+        save_started=time.perf_counter()
+        print(f'[JointTypedEdge] stage=checkpoint_save start epoch={epoch} kind={kind} '
+              f'path={self.output / "checkpoints" / kind}', flush=True)
         dest=self.output/'checkpoints'/kind; dest.mkdir(parents=True,exist_ok=True)
         degree_hash=state_dict_sha256(model.degree_model.state_dict())
         marker={'kind':kind,'epoch':epoch,'criterion':self.criteria.get(kind),
@@ -189,6 +218,8 @@ class TypedCheckpointManager:
         if kind=='best_joint':
             for name in ('checkpoint.pt','degree_checkpoint.pt'):
                 tmp=self.output/(name+'.tmp'); shutil.copyfile(dest/name,tmp); tmp.replace(self.output/name)
+        print(f'[JointTypedEdge] stage=checkpoint_save complete epoch={epoch} kind={kind} '
+              f'wall_seconds={time.perf_counter()-save_started:.2f}', flush=True)
 
     def update(self,model,epoch,metrics,eligible):
         for kind,key in self.criteria.items():
@@ -207,12 +238,31 @@ def run_epoch(model,store,config,*,batch_size,device,optimizer=None,seed=0,beta=
     if training: rng.shuffle(indices)
     # Fixed validation random stream, independent of both training and generation.
     generator=torch.Generator(device=device).manual_seed(seed)
-    rows=[]; total_graphs=0; last_progress=time.perf_counter(); views=int(config['edge_diffusion'].get('views_per_graph',2))
+    rows=[]; total_graphs=0; epoch_started=last_progress=time.perf_counter(); views=int(config['edge_diffusion'].get('views_per_graph',2))
+    phase='train' if training else 'val'; total_batches=math.ceil(len(indices)/batch_size)
+    total_load_seconds=total_compute_seconds=0.0
+    pc=config['attributed_predictor']; interval=int(pc.get('batch_progress_interval',50))
+    seconds=float(pc.get('progress_interval_seconds',60))
+    print(f'[JointTypedEdge] phase={phase} start graphs={len(store)} batches={total_batches} '
+          f'batch_size={batch_size} views_per_graph={views}; timings=wall_seconds', flush=True)
     j=config['joint_typed_degree']; weights=config['attributed_predictor']['loss_weights']
     for start in range(0,len(indices),batch_size):
+        batch_started=time.perf_counter()
+        batch_index=start//batch_size+1
+        report_batch=(batch_index in (1,total_batches)
+                      or (interval>0 and batch_index%interval==0)
+                      or (seconds>0 and batch_started-last_progress>=seconds))
+        if report_batch:
+            print(f'[JointTypedEdge] phase={phase} status=loading_batch '
+                  f'batch={batch_index}/{total_batches} graphs={total_graphs}/{len(store)}', flush=True)
         items=[store[int(i)] for i in indices[start:start+batch_size]]
         batch=collate(items,model.vectorizer,model.atom_types,device=device,
                       rng=rng if training and config.get('training_sources',{}).get('shared_relabel_augmentation',True) else None)
+        compute_started=time.perf_counter()
+        load_seconds=compute_started-batch_started
+        if report_batch:
+            print(f'[JointTypedEdge] phase={phase} status=computing_batch '
+                  f'batch={batch_index}/{total_batches} load_collate_wall_seconds={load_seconds:.3f}', flush=True)
         count=len(items)
         if training: optimizer.zero_grad(set_to_none=True)
         with torch.set_grad_enabled(training):
@@ -238,12 +288,18 @@ def run_epoch(model,store,config,*,batch_size,device,optimizer=None,seed=0,beta=
         accum.update({'degree_'+k:v for k,v in degree_metrics.items() if k!='loss'})
         if not all(math.isfinite(v) for v in accum.values()): raise FloatingPointError('Nonfinite training metrics.')
         rows.append((count,accum)); total_graphs+=count
-        pc=config['attributed_predictor']; interval=int(pc.get('batch_progress_interval',50))
-        seconds=float(pc.get('progress_interval_seconds',60))
-        if (interval>0 and len(rows)%interval==0) or (seconds>0 and time.perf_counter()-last_progress>=seconds):
-            print(f"[JointTypedEdge] phase={'train' if training else 'val'} graphs={total_graphs}/{len(store)} "
-                  f"joint_loss={accum['joint_loss']:.6f}",flush=True)
-            last_progress=time.perf_counter()
+        now=time.perf_counter(); compute_seconds=now-compute_started
+        total_load_seconds+=load_seconds; total_compute_seconds+=compute_seconds
+        if report_batch or (seconds>0 and now-last_progress>=seconds):
+            elapsed=now-epoch_started
+            print(f"[JointTypedEdge] phase={phase} status=batch_complete batch={len(rows)}/{total_batches} graphs={total_graphs}/{len(store)} "
+                  f"joint_loss={accum['joint_loss']:.6f} load_collate_wall_seconds={load_seconds:.3f} "
+                  f"compute_wall_seconds={compute_seconds:.3f} elapsed={elapsed:.1f}s "
+                  f"graphs_per_second={total_graphs/max(elapsed,1.0e-12):.2f}",flush=True)
+            last_progress=now
+    print(f'[JointTypedEdge] phase={phase} complete graphs={total_graphs} batches={len(rows)} '
+          f'load_collate_wall_seconds={total_load_seconds:.2f} compute_wall_seconds={total_compute_seconds:.2f} '
+          f'wall_seconds={time.perf_counter()-epoch_started:.2f}', flush=True)
     return {k:(max(r[k] for _,r in rows) if k.endswith('_max_abs') else
                sum(n*r[k] for n,r in rows)/total_graphs) for k in rows[0][1]}
 
@@ -253,7 +309,7 @@ def train_joint_typed_edge(config,args):
     seed=int(args.seed if args.seed is not None else config.get('seed',42)); config['seed']=seed
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
     pc=config['attributed_predictor']; j=config['joint_typed_degree']
-    for k in ('batch_progress_interval','progress_interval_seconds'):
+    for k in ('batch_progress_interval','progress_interval_seconds','graphlet_progress_interval'):
         if getattr(args,k,None) is not None: pc[k]=getattr(args,k)
     epochs=int(args.epochs if args.epochs is not None else pc.get('epochs',100))
     batch_size=int(args.batch_size if args.batch_size is not None else pc.get('batch_size',16))
@@ -264,18 +320,30 @@ def train_joint_typed_edge(config,args):
     if args.output_dir is None: output=output.parent
     if output.exists() and any(output.iterdir()): raise FileExistsError(f'Use a fresh output directory: {output}')
     output.mkdir(parents=True,exist_ok=True)
+    load_started=time.perf_counter()
+    print(f'[JointTypedEdge] stage=dataset_load start dataset={config["dataset"]}', flush=True)
     splits,provenance=load_splits(config)
+    print(f'[JointTypedEdge] stage=dataset_load complete '
+          f'split_graphs={ {name: len(graphs) for name,graphs in splits.items()} } '
+          f'wall_seconds={time.perf_counter()-load_started:.2f}', flush=True)
     train_limit=args.max_train_graphs if args.max_train_graphs is not None else config['dataset'].get('max_train_graphs')
     val_limit=args.max_val_graphs if args.max_val_graphs is not None else config['dataset'].get('max_val_graphs')
     train=splits['train'][:int(train_limit)] if train_limit else splits['train']
     val=splits['val'][:int(val_limit)] if val_limit else splits['val']
     device=resolve_torch_device(args.device or pc.get('device','auto'))
+    print(f'[JointTypedEdge] effective_graphs train={len(train)} val={len(val)} '
+          f'train_limit={train_limit} val_limit={val_limit} device={device} '
+          f'epochs={epochs} batch_size={batch_size}', flush=True)
     model=build_model(config,train,device)
     # Fail with split/index before training if held-out typed support is unknown.
     for split,graphs in [('train',train),('val',val)]:
+        validation_started=time.perf_counter()
+        print(f'[JointTypedEdge] stage=typed_support_validation start split={split} graphs={len(graphs)}', flush=True)
         for i,g in enumerate(graphs):
             try: validate_graph(g,model.vectorizer,model.atom_types)
             except ValueError as e: raise ValueError(f'{split}[{i}]: {e}') from e
+        print(f'[JointTypedEdge] stage=typed_support_validation complete split={split} graphs={len(graphs)} '
+              f'wall_seconds={time.perf_counter()-validation_started:.2f}', flush=True)
     config['attributed_predictor'].update(epochs=epochs,batch_size=batch_size)
     config['dataset'].update(max_train_graphs=train_limit,max_val_graphs=val_limit)
     dataset_info={'train_graphs':len(train),'val_graphs':len(val),'provenance':provenance,
@@ -299,8 +367,14 @@ def train_joint_typed_edge(config,args):
               'spectral noise/head or eigenvector decoder.', flush=True)
         print(f'[AdjacencyDiffusion] {model.diffusion_metadata()}', flush=True)
     cache=config.get('training_sources',{}).get('endpoint_cache_path')
+    endpoints_started=time.perf_counter()
+    print(f'[JointTypedEdge] stage=endpoint_store_setup start train={len(train)} val={len(val)} '
+          f'disk_cache={cache or "disabled"} '
+          f'memory_cache_graphs={config.get("training_sources",{}).get("memory_cache_graphs",256)}', flush=True)
     training=EndpointStore(train,model.vectorizer,model.atom_types,config,seed=seed,cache_path=cache,graphlet_basis=model.induced_graphlet_basis)
     validation=EndpointStore(val,model.vectorizer,model.atom_types,config,seed=seed+1,cache_path=cache,graphlet_basis=model.induced_graphlet_basis)
+    print(f'[JointTypedEdge] stage=endpoint_store_setup complete '
+          f'wall_seconds={time.perf_counter()-endpoints_started:.2f}; endpoints are loaded or constructed per batch', flush=True)
     degree_params=list(model.degree_model.parameters()); ids={id(p) for p in degree_params}
     optimizer=torch.optim.AdamW([
         {'params':[p for p in model.parameters() if id(p) not in ids],'lr':float(pc.get('learning_rate',1e-4))},
@@ -309,9 +383,11 @@ def train_joint_typed_edge(config,args):
     try:
         for epoch in range(1,epochs+1):
             unfrozen=trainable and epoch>freeze; model.set_degree_trainable(unfrozen)
+            print(f'[JointTypedEdge] epoch={epoch}/{epochs} phase=train start degree_trainable={unfrozen}', flush=True)
             metrics=run_epoch(model,training,config,batch_size=batch_size,device=device,
                               optimizer=optimizer,seed=seed+epoch*101)
             cuda_devices=[device.index or 0] if device.type=='cuda' else []
+            print(f'[JointTypedEdge] epoch={epoch}/{epochs} phase=val start', flush=True)
             # Fork/reset also protects stochastic VAE validation from changing optimizer RNG.
             with torch.random.fork_rng(devices=cuda_devices):
                 torch.manual_seed(seed+991)

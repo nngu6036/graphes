@@ -762,6 +762,22 @@ Legacy generic and attributed model families remain available unchanged.
 
 See [GRAPHER_INDUCED_GRAPHLETS.md](GRAPHER_INDUCED_GRAPHLETS.md) for exact k=3/4/5 topology histograms, prediction and guidance in generic/joint-degree and joint typed-edge GraphER, catalogue definitions, compatibility requirements, and commands. The new default k=5 experiment uses all 34 connected and disconnected classes; cycle experiments remain unchanged.
 
+Joint typed-edge runs with `induced_graphlet_attributed: true` first fit an exact
+atom-and-bond-labeled vocabulary on the training split. This is CPU preprocessing;
+`--device gpu` selects the device for model training. With `scope: all`, fitting
+includes every induced k-node subset, including disconnected ones. Canonical
+patterns are cached in memory during the process. Add
+`--progress-interval-seconds 10` to `scripts/train_attributed_grapher.py` to report
+graphs/subsets processed, observed bins, elapsed time, and estimated time remaining
+during fitting. This also controls training progress reports. Fitting additionally
+reports every 1,000 graphs; use `--graphlet-progress-interval 1` for every graph.
+Reports include the last graph's index, size, time, new bins, recent throughput,
+and canonicalization cache hits/misses. Workload and training stage logs identify
+dataset loading, model initialization, split validation, endpoint setup, batch
+loading/computation, and checkpoint writing. Vocabulary fitting always reports
+the first and final graph; set both progress intervals to zero to disable periodic
+fitting reports.
+
 
 ## Empirical degree perturbations (Community-small)
 

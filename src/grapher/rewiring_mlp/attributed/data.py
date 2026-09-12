@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 from math import comb
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import networkx as nx
 import numpy as np
@@ -223,8 +224,13 @@ class GraphletBasis:
         vocabulary: GraphCategoryVocabulary | None = None,
         attributed: bool | None = None,
         seed: int = 0,
+        progress_callback: Callable[[int, int, int, int], None] | None = None,
     ) -> "GraphletBasis":
-        """Build a training-only vocabulary with one unseen overflow class."""
+        """Build a training-only vocabulary with one unseen overflow class.
+
+        The optional callback receives (k, graphs_done, graphs_total, bins_seen)
+        after each graph. Bins seen excludes the unseen overflow class.
+        """
 
         cfg = (
             config
@@ -261,7 +267,7 @@ class GraphletBasis:
         rng = np.random.default_rng(int(seed))
         for k in range(cfg.graphlet_k_min, cfg.graphlet_k_max + 1):
             keys: set[str] = set()
-            for graph in graphs:
+            for graph_index, graph in enumerate(graphs, start=1):
                 if attributed:
                     counts = attributed_graphlet_count_dict(
                         graph,
@@ -284,6 +290,10 @@ class GraphletBasis:
                         rng=rng,
                     )
                 keys.update(str(key) for key in counts)
+                if progress_callback is not None:
+                    progress_callback(k, graph_index, len(graphs), len(keys))
+            if len(graphs) == 0 and progress_callback is not None:
+                progress_callback(k, 0, 0, 0)
             ordered = sorted(keys)
             ordered.append(GRAPHLET_OVERFLOW_KEY)
             keys_by_k[str(k)] = tuple(ordered)
@@ -305,6 +315,12 @@ class GraphletBasis:
     @property
     def width(self) -> int:
         return sum(len(self.keys_by_k[k]) for k in self.sizes)
+
+    @cached_property
+    def key_sets_by_k(self) -> dict[str, frozenset[str]]:
+        """Membership lookups for this fixed vocabulary, built once per basis."""
+
+        return {k: frozenset(keys) for k, keys in self.keys_by_k.items()}
 
     @property
     def simplex_width(self) -> int:
@@ -340,7 +356,7 @@ class GraphletBasis:
         values: list[float] = []
         for k in self.sizes:
             block = history.get(k, {}) or {}
-            known = set(self.keys_by_k[k])
+            known = self.key_sets_by_k[k]
             overflow = sum(
                 float(value) for key, value in block.items() if key not in known
             )

@@ -342,7 +342,7 @@ def test_cli_train_all_checkpoints_diagnose_generate_evaluate(tmp_path):
     cfg=adjacency_config(prepare_dataset(tmp_path),graphlets=True,loss=.1)
     path=tmp_path/'cfg.yaml';save_yaml(cfg,path)
     train=tmp_path/'train'
-    env={**os.environ,'PYTHONPATH':'src:.','OMP_NUM_THREADS':'1','MKL_NUM_THREADS':'1','PYTHONHASHSEED':'0'}
+    env={**os.environ,'PYTHONPATH':os.pathsep.join(['src','.']),'OMP_NUM_THREADS':'1','MKL_NUM_THREADS':'1','PYTHONHASHSEED':'0'}
     def run(script,*args,has_config=True):
         cmd=[sys.executable,'scripts/'+script]
         if has_config:cmd+=['--config',str(path)]

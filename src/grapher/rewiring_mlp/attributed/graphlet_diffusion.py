@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import itertools
 from collections import defaultdict
-from functools import lru_cache
 from math import comb
 from typing import Any, Mapping, Sequence
 
@@ -21,10 +20,11 @@ from grapher.rewiring_mlp.generic.graphlet_diffusion import (
     graphlet_simplex_to_clr as _graphlet_simplex_to_clr,
 )
 from grapher.utils.motifs import (
-    canonicalize_attributed_graph_python,
+    _canonicalize_attributed_tokens,
+    _stable_label_token,
+    attributed_graphlet_count_dict,
     canonicalize_attributed_simple_cycle,
     graphlet_topology_matches,
-    induced_simple_cycle_node_sets,
 )
 
 AttributedGraphletCounts = dict[str, dict[str, int]]
@@ -51,44 +51,23 @@ def _raw_pattern(
     *,
     node_attribute: str,
     edge_attribute: str,
-) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+) -> tuple[tuple[str, ...], tuple[str | None, ...]]:
     order = tuple(int(node) for node in nodes)
-    node_labels = tuple(graph.nodes[node][node_attribute] for node in order)
-    edge_labels: list[Any] = []
+    if len(order) > 7:
+        raise RuntimeError(
+            "The Python attributed canonicalizer supports at most "
+            "7 nodes; install nauty labelg for larger motifs."
+        )
+    node_labels = tuple(_stable_label_token(graph.nodes[node][node_attribute]) for node in order)
+    edge_labels: list[str | None] = []
     for left in range(len(order)):
         for right in range(left + 1, len(order)):
             u, v = order[left], order[right]
             edge_labels.append(
-                graph.edges[u, v][edge_attribute] if graph.has_edge(u, v) else None
+                _stable_label_token(graph.edges[u, v][edge_attribute])
+                if graph.has_edge(u, v) else None
             )
     return node_labels, tuple(edge_labels)
-
-
-@lru_cache(maxsize=262144)
-def _canonical_key_from_raw(
-    node_labels: tuple[Any, ...],
-    edge_labels: tuple[Any, ...],
-    node_attribute: str,
-    edge_attribute: str,
-) -> str:
-    graph = nx.Graph()
-    graph.add_nodes_from(
-        (index, {node_attribute: value})
-        for index, value in enumerate(node_labels)
-    )
-    cursor = 0
-    for left in range(len(node_labels)):
-        for right in range(left + 1, len(node_labels)):
-            value = edge_labels[cursor]
-            cursor += 1
-            if value is not None:
-                graph.add_edge(left, right, **{edge_attribute: value})
-    return canonicalize_attributed_graph_python(
-        graph,
-        node_label_attr=node_attribute,
-        edge_label_attr=edge_attribute,
-        max_nodes=7,
-    )
 
 
 def _canonical_key(
@@ -112,9 +91,7 @@ def _canonical_key(
         node_attribute=node_attribute,
         edge_attribute=edge_attribute,
     )
-    return _canonical_key_from_raw(
-        raw[0], raw[1], node_attribute, edge_attribute
-    )
+    return _canonicalize_attributed_tokens(raw[0], raw[1])
 
 
 def _selected_key_or_none(
@@ -124,15 +101,12 @@ def _selected_key_or_none(
     graphlet_basis: GraphletBasis,
     size: str,
 ) -> str | None:
-    subgraph = graph.subgraph(tuple(int(node) for node in nodes))
-    if (
-        graphlet_basis.connected_only
-        and len(nodes) > 1
-        and not nx.is_connected(subgraph)
-    ):
-        return None
-    if not graphlet_topology_matches(subgraph, graphlet_basis.topology_filter):
-        return None
+    if graphlet_basis.connected_only or graphlet_basis.topology_filter != "all":
+        subgraph = graph.subgraph(tuple(int(node) for node in nodes))
+        if graphlet_basis.connected_only and len(nodes) > 1 and not nx.is_connected(subgraph):
+            return None
+        if not graphlet_topology_matches(subgraph, graphlet_basis.topology_filter):
+            return None
     return _basis_key(
         _canonical_key(graph, nodes, graphlet_basis=graphlet_basis),
         graphlet_basis,
@@ -141,7 +115,7 @@ def _selected_key_or_none(
 
 
 def _basis_key(key: str, graphlet_basis: GraphletBasis, size: str) -> str:
-    known = set(graphlet_basis.keys_by_k[size])
+    known = graphlet_basis.key_sets_by_k[size]
     if key in known:
         return key
     if graphlet_basis.overflow_key is not None and graphlet_basis.overflow_key in known:
@@ -160,26 +134,20 @@ def extract_attributed_graphlet_counts(
     """Count selected attributed graphlets exactly in the fixed vocabulary."""
 
     _require_python_basis(graphlet_basis)
-    nodes = tuple(sorted(int(node) for node in graph.nodes()))
     counts_by_size: AttributedGraphletCounts = {}
     for size in graphlet_basis.sizes:
-        k = int(size)
         block: defaultdict[str, int] = defaultdict(int)
-        if len(nodes) >= k:
-            subsets = (
-                induced_simple_cycle_node_sets(graph, k)
-                if graphlet_basis.topology_filter == "simple_cycle"
-                else itertools.combinations(nodes, k)
-            )
-            for subset in subsets:
-                key = _selected_key_or_none(
-                    graph,
-                    subset,
-                    graphlet_basis=graphlet_basis,
-                    size=size,
-                )
-                if key is not None:
-                    block[key] += 1
+        raw_counts = attributed_graphlet_count_dict(
+            graph,
+            int(size),
+            node_label_attr=str(graphlet_basis.node_attribute),
+            edge_label_attr=str(graphlet_basis.edge_attribute),
+            connected_only=graphlet_basis.connected_only,
+            topology_filter=graphlet_basis.topology_filter,
+            backend="python",
+        )
+        for key, count in raw_counts.items():
+            block[_basis_key(key, graphlet_basis, size)] += count
         counts_by_size[size] = dict(block)
     return counts_by_size
 

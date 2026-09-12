@@ -929,6 +929,67 @@ def _stable_label_token(label: Any) -> str:
     return f"{type(label).__module__}.{type(label).__qualname__}:{label!r}"
 
 
+@lru_cache(maxsize=4096)
+def _attributed_permutation_edge_orders(
+    groups: tuple[tuple[int, ...], ...],
+) -> tuple[tuple[int, ...], ...]:
+    """Index the edge orders that preserve the sorted node-label sequence."""
+
+    n = sum(len(group) for group in groups)
+    pairs = tuple(itertools.combinations(range(n), 2))
+    edge_index = {pair: index for index, pair in enumerate(pairs)}
+    result: list[tuple[int, ...]] = []
+    for blocks in itertools.product(
+        *(itertools.permutations(group) for group in groups)
+    ):
+        order = tuple(index for block in blocks for index in block)
+        result.append(
+            tuple(
+                edge_index[tuple(sorted((order[left], order[right])))]
+                for left, right in pairs
+            )
+        )
+    return tuple(result)
+
+
+@lru_cache(maxsize=131072)
+def _canonicalize_attributed_tokens(
+    node_tokens: tuple[str, ...],
+    edge_tokens: tuple[str | None, ...],
+) -> str:
+    """Canonicalize a labeled adjacency pattern using the ATTR_PY_V1 format.
+
+    Stable string tokens keep values such as ``1``, ``True``, and ``1.0``
+    distinct and support unhashable labels. Only absent edges use ``None``.
+    The bounded cache is shared by vocabulary fitting and later extraction.
+    """
+
+    encoded_nodes = tuple(json.dumps(token, ensure_ascii=True) for token in node_tokens)
+    encoded_edges = tuple(
+        "null" if token is None else json.dumps(token, ensure_ascii=True)
+        for token in edge_tokens
+    )
+    # The legacy key minimizes the complete JSON string, whose node sequence
+    # comes first. Only permutations among identical *encoded* node labels
+    # can improve its edge sequence. Sorting raw Unicode tokens instead would
+    # change keys for escaped/non-ASCII labels.
+    grouped: dict[str, list[int]] = {}
+    for index, token in enumerate(encoded_nodes):
+        grouped.setdefault(token, []).append(index)
+    groups = tuple(tuple(grouped[token]) for token in sorted(grouped))
+    best_edges = min(
+        tuple(encoded_edges[index] for index in edge_order)
+        for edge_order in _attributed_permutation_edge_orders(groups)
+    )
+    return (
+        "ATTR_PY_V1|[["
+        + ",".join(sorted(encoded_nodes))
+        + "],["
+        + ",".join(best_edges)
+        + "]]"
+    )
+
+
 def canonicalize_attributed_graph_python(
     graph: nx.Graph,
     *,
@@ -939,10 +1000,9 @@ def canonicalize_attributed_graph_python(
 ) -> str:
     """Return an exact node/edge-label-preserving canonical key.
 
-    The implementation enumerates node orders and is therefore intended for
-    graphlets, not whole molecular graphs.  It provides a dependency-free
-    counterpart to the nauty coloured-incidence implementation and keeps
-    attributed graphlet training usable when ``labelg`` is unavailable.
+    The implementation compares node orders within equal-label groups and
+    caches labeled adjacency patterns. It is intended for graphlets, not
+    whole molecular graphs, and preserves the original ``ATTR_PY_V1`` keys.
     """
 
     _validate_simple_undirected(graph)
@@ -969,25 +1029,64 @@ def canonicalize_attributed_graph_python(
             data.get(edge_label_attr, "__MISSING__")
         )
 
-    best: str | None = None
-    for order in itertools.permutations(nodes):
-        encoded_nodes = [node_tokens[node] for node in order]
-        encoded_edges: list[str | None] = []
-        for left in range(len(order)):
-            for right in range(left + 1, len(order)):
-                encoded_edges.append(
-                    edge_tokens.get(frozenset((order[left], order[right])))
-                )
-        candidate = json.dumps(
-            [encoded_nodes, encoded_edges],
-            ensure_ascii=True,
-            separators=(",", ":"),
+    return _canonicalize_attributed_tokens(
+        tuple(node_tokens[node] for node in nodes),
+        tuple(
+            edge_tokens.get(frozenset((left, right)))
+            for left, right in itertools.combinations(nodes, 2)
+        ),
+    )
+
+
+def _attributed_graphlet_count_dict_python_all(
+    graph: nx.Graph,
+    k: int,
+    *,
+    node_label_attr: str,
+    edge_label_attr: str,
+    num_samples: int | None,
+    rng: np.random.Generator | None,
+    missing_ok: bool,
+) -> dict[str, int] | None:
+    """Count unfiltered subsets directly from labels and an adjacency table.
+
+    ``None`` requests the general path. In particular, missing attributes
+    retain the general path's validation of only the selected subsets.
+    """
+
+    _validate_simple_undirected(graph)
+    if k <= 0 or k > 7:
+        return None
+    if k > graph.number_of_nodes():
+        return {}
+    if not missing_ok and (
+        any(node_label_attr not in data for _, data in graph.nodes(data=True))
+        or any(edge_label_attr not in data for _, _, data in graph.edges(data=True))
+    ):
+        return None
+
+    nodes = sorted(graph.nodes(), key=lambda node: (type(node).__name__, repr(node)))
+    rank = {node: index for index, node in enumerate(nodes)}
+    node_tokens = tuple(
+        _stable_label_token(graph.nodes[node].get(node_label_attr, "__MISSING__"))
+        for node in nodes
+    )
+    adjacency: list[dict[int, str]] = [{} for _ in nodes]
+    for left, right, data in graph.edges(data=True):
+        token = _stable_label_token(data.get(edge_label_attr, "__MISSING__"))
+        u, v = rank[left], rank[right]
+        adjacency[u][v] = adjacency[v][u] = token
+
+    counts: Counter[str] = Counter()
+    for subset in _sample_node_subsets(
+        tuple(range(len(nodes))), k, num_samples=num_samples, rng=rng
+    ):
+        key = _canonicalize_attributed_tokens(
+            tuple(node_tokens[index] for index in subset),
+            tuple(adjacency[left].get(right) for left, right in itertools.combinations(subset, 2)),
         )
-        if best is None or candidate < best:
-            best = candidate
-    if best is None:
-        best = "[[],[]]"
-    return f"ATTR_PY_V1|{best}"
+        counts[key] += 1
+    return dict(counts)
 
 
 def canonicalize_attributed_simple_cycle(
@@ -1106,6 +1205,19 @@ def attributed_graphlet_count_dict(
         raise FileNotFoundError(
             "Attributed graphlet backend 'nauty' requires NAUTY_EXEC or labelg."
         )
+
+    if not use_nauty and selected_filter == "all" and not connected_only:
+        fast_counts = _attributed_graphlet_count_dict_python_all(
+            graph,
+            int(k),
+            node_label_attr=node_label_attr,
+            edge_label_attr=edge_label_attr,
+            num_samples=num_samples,
+            rng=rng,
+            missing_ok=missing_ok,
+        )
+        if fast_counts is not None:
+            return fast_counts
 
     counts: Counter[str] = Counter()
     for subgraph in _iter_k_induced_subgraphs(
