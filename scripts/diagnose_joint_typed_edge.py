@@ -5,6 +5,7 @@ import argparse
 from pathlib import Path
 import numpy as np
 import torch
+from grapher.data.sampling import restore_training_graphs
 from grapher.utils.io import load_yaml,apply_config_overrides
 from grapher.rewiring_mlp.attributed.joint_typed_edge_model import load_checkpoint,noisy_batch,structural_loss
 from grapher.rewiring_mlp.attributed.joint_typed_edge_data import load_splits,EndpointStore,collate
@@ -38,7 +39,9 @@ def main():
         raise ValueError('Dataset/checkpoint provenance mismatch.')
     from grapher.rewiring_mlp.generic.induced_graphlets import InducedGraphletSpec, extract_histogram, histogram_distance
     validate_model_graphlets(model, cfg)
-    device=next(model.parameters()).device;graphs=splits[args.split][:args.max_graphs]
+    device=next(model.parameters()).device
+    graphs=(restore_training_graphs(splits['train'],ckpt['config']['dataset'])
+            if args.split=='train' else splits[args.split])[:args.max_graphs]
     # Match the training validation-source convention; not a held-out source prior.
     store=EndpointStore(graphs,model.vectorizer,model.atom_types,cfg,seed=int(ckpt['config']['seed'])+(args.split!='train'),graphlet_basis=model.induced_graphlet_basis)
     generator=torch.Generator(device=device).manual_seed(args.seed)

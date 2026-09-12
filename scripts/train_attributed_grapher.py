@@ -15,6 +15,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from grapher.data.io import load_dataset_splits
+from grapher.data.sampling import sample_training_graphs
 from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.attributed.data import GraphCategoryVocabulary, GraphletBasis
 from grapher.rewiring_mlp.attributed.spectral_data import (
@@ -394,7 +395,11 @@ def main() -> None:
         default=None,
         help="Report joint typed vocabulary fitting every N graphs (default: 1000); 1 prints every graph, 0 disables this trigger.",
     )
-    parser.add_argument("--max-train-graphs", type=int, default=None)
+    parser.add_argument(
+        "--max-train-graphs", "--num-train-graphs",
+        dest="max_train_graphs", type=int, default=None,
+        help="Randomly sample up to N prepared training graphs without replacement using --seed; overrides dataset.max_train_graphs. 0 uses all graphs.",
+    )
     parser.add_argument("--max-val-graphs", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", default=None)
@@ -414,6 +419,7 @@ def main() -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    config["seed"] = seed
 
     dataset_cfg = dict(config.get("dataset", {}) or {})
     splits = load_dataset_splits(
@@ -422,12 +428,11 @@ def main() -> None:
         build_if_missing=bool(dataset_cfg.get("build_if_missing", False)),
         config_path=dataset_cfg.get("config_path"),
     )
-    train_graphs = _limited(
-        list(splits["train"]),
-        args.max_train_graphs
-        if args.max_train_graphs is not None
-        else dataset_cfg.get("max_train_graphs"),
-    )
+    train_limit = args.max_train_graphs if args.max_train_graphs is not None else dataset_cfg.get("max_train_graphs")
+    train_graphs, training_subset = sample_training_graphs(splits["train"], train_limit, seed=seed)
+    config.setdefault("dataset", {}).update(max_train_graphs=train_limit, training_subset=training_subset)
+    print(f"[AttributedSetup] training_subset strategy={training_subset['strategy']} "
+          f"selected={len(train_graphs)}/{len(splits['train'])} seed={seed}", flush=True)
     val_graphs = _limited(
         list(splits.get("val", [])) or list(splits["train"])[:1],
         args.max_val_graphs
@@ -675,6 +680,7 @@ def main() -> None:
     if args.output_dir is not None:
         checkpoint_path = Path(args.output_dir) / "checkpoint.pt"
     ensure_dir(checkpoint_path.parent)
+    save_json(training_subset, output_dir / "training_subset.json")
     print(
         f"Training attributed predictor device={device} batch_size={batch_size} "
         f"epochs={epochs} checkpoint={checkpoint_path}",
@@ -777,6 +783,7 @@ def main() -> None:
         "best_epoch": best_epoch,
         "best_val_loss": best_loss,
         "num_train_graphs": len(train_graphs),
+        "training_subset": training_subset,
         "num_val_graphs": len(val_graphs),
         "vocabulary": vocabulary.to_dict(),
         "observed_node_categories": observed_nodes,

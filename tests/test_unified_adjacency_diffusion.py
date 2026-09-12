@@ -349,7 +349,11 @@ def test_cli_train_all_checkpoints_diagnose_generate_evaluate(tmp_path):
         result=subprocess.run(cmd+list(map(str,args)),env=env,text=True,capture_output=True,timeout=90)
         assert result.returncode==0,result.stdout+'\n'+result.stderr
         return result.stdout
-    run('train_attributed_grapher.py','--output-dir',train,'--epochs',2,'--device','cpu')
+    run('train_attributed_grapher.py','--output-dir',train,'--epochs',2,'--device','cpu',
+        '--num-train-graphs',2,'--seed',42)
+    selection=json.loads((train/'training_subset.json').read_text())
+    assert selection['selected_graphs']==2 and selection['available_graphs']==4
+    assert selection['indices'] != [0,1]
     log=run('inspect_joint_typed_checkpoints.py','--training-dir',train,'--verify',has_config=False)
     assert ADJACENCY_MODE in log
     registry=json.loads((train/'checkpoint_registry.json').read_text())
@@ -364,8 +368,10 @@ def test_cli_train_all_checkpoints_diagnose_generate_evaluate(tmp_path):
     for mode in ('source','bridge','rollout'):
         extra=['--rewire'] if mode=='rollout' else []
         run('diagnose_joint_typed_edge.py','--checkpoint',train/'checkpoint.pt','--mode',mode,
-            '--max-graphs',2,'--device','cpu','--json-out',tmp_path/(mode+'.json'),*extra)
+            '--split','train' if mode=='source' else 'val',
+            '--max-graphs',8,'--device','cpu','--json-out',tmp_path/(mode+'.json'),*extra)
         result=json.loads((tmp_path/(mode+'.json')).read_text())
+        assert result['graphs']==2
         assert result['diffusion']['mode']==ADJACENCY_MODE
         assert result['maxima']['adjacency_prediction_spectrum_consistency_max_abs']<1e-5
     run('evaluate_induced_graphlets.py','--checkpoint',train/'checkpoint.pt',

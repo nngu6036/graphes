@@ -12,6 +12,7 @@ import networkx as nx
 import numpy as np
 import torch
 
+from grapher.data.sampling import restore_training_graphs
 from grapher.models.dhvae_hh.typed_constructor import construct_typed_graph,TypedConstructionError
 from grapher.rewiring_mlp.attributed.soft_edge_bridge import labels_to_logits,advance_edges,spectral_noise,edge_probabilities
 from grapher.rewiring_mlp.attributed.joint_typed_edge_model import load_checkpoint
@@ -324,8 +325,7 @@ def generate_joint_typed_edge(config,args):
               'No independent Laplacian/eigenvalue process.',flush=True)
 
     # Empirical conditioning must use the SAME training subset used for fitting.
-    effective_limit=ckpt['config']['dataset'].get('max_train_graphs')
-    train_graphs=splits['train'][:int(effective_limit)] if effective_limit else splits['train']
+    train_graphs=restore_training_graphs(splits['train'],ckpt['config']['dataset'])
     report={'format':'joint_typed_soft_edge_generation_v1','config':config,'seed':seed,
       'checkpoint':str(checkpoint),'checkpoint_sha256':file_sha256(checkpoint),'checkpoint_selection':ckpt.get('selection'),
       'dataset_provenance':provenance,'degree_sampler_source':'joint_checkpoint_embedded',

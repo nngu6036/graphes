@@ -324,6 +324,64 @@ def prepare_dataset(tmp_path):
     return cfg
 
 
+def test_random_training_subset_reaches_basis_endpoints_and_generation(tmp_path, monkeypatch):
+    from grapher.rewiring_mlp.attributed import joint_typed_edge_training as training
+    from grapher.rewiring_mlp.attributed import joint_typed_edge_generation as generation
+    from grapher.utils.io import load_pickle
+
+    cfg = prepare_dataset(tmp_path)
+    cfg['dataset']['max_train_graphs'] = 1  # The CLI count must take precedence.
+    cfg['structure_summary_prediction'].update(
+        induced_graphlet_histogram=True, induced_graphlet_attributed=True,
+        induced_graphlet_k=3, induced_graphlet_scope='all')
+    pool = [carbon_cycle(6) for _ in range(8)]
+    for index, graph in enumerate(pool):
+        graph.graph['prepared_index'] = index
+    split_path = tmp_path/'data'/'toy'/'train.pkl'
+    save_pickle(pool, split_path)
+    observed = {}
+    original_fit = training.fit_training_basis
+    original_store = training.EndpointStore
+
+    def fit(config, graphs):
+        observed['basis'] = [g.graph['prepared_index'] for g in graphs]
+        return original_fit(config, graphs)
+
+    def store(graphs, *args, **kwargs):
+        observed.setdefault('stores', []).append([g.graph.get('prepared_index') for g in graphs])
+        return original_store(graphs, *args, **kwargs)
+
+    monkeypatch.setattr(training, 'fit_training_basis', fit)
+    monkeypatch.setattr(training, 'EndpointStore', store)
+    output = tmp_path/'training_subset'
+    args = Namespace(seed=42, epochs=1, batch_size=2, device='cpu', output_dir=str(output),
+                     max_train_graphs=3, max_val_graphs=None)
+    train_joint_typed_edge(cfg, args)
+    selection = json.loads((output/'training_subset.json').read_text())
+    indices = selection['indices']
+    assert len(indices) == 3 and indices != [0, 1, 2]
+    assert observed['basis'] == observed['stores'][0] == indices
+    assert observed['stores'][1] == [None, None]
+    assert [g.graph['prepared_index'] for g in load_pickle(split_path)] == list(range(8))
+    report = json.loads((output/'report.json').read_text())
+    assert report['training_subset'] == selection
+    _, checkpoint = load_checkpoint(output/'checkpoint.pt')
+    assert checkpoint['config']['dataset']['training_subset'] == selection
+
+    original_sources = generation.generation_sources
+
+    def sources(model, graphs, *args, **kwargs):
+        observed['generation'] = [g.graph['prepared_index'] for g in graphs]
+        return original_sources(model, graphs, *args, **kwargs)
+
+    monkeypatch.setattr(generation, 'generation_sources', sources)
+    cfg['generation']['invariant_source'] = 'train_empirical'
+    generate_joint_typed_edge(cfg, Namespace(seed=99, device='cpu',
+        output_dir=str(tmp_path/'generation_subset'), num_generate=1,
+        checkpoint=str(output/'checkpoint.pt')))
+    assert observed['generation'] == indices
+
+
 def test_train_generate_export_diagnose_smoke(tmp_path):
     cfg=prepare_dataset(tmp_path);out=tmp_path/'training'
     args=Namespace(seed=42,epochs=2,batch_size=2,device='cpu',output_dir=str(out),max_train_graphs=None,max_val_graphs=None)

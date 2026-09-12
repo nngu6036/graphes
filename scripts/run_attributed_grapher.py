@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 from grapher.data.io import load_dataset_splits
+from grapher.data.sampling import restore_training_graphs
 from grapher.models.dhvae_hh.degree_sampler import TypedDegreeVAESampler
 from grapher.models.dhvae_hh.typed_constructor import (
     TypedConstructionError,
@@ -326,9 +327,7 @@ def main() -> None:
         build_if_missing=bool(dataset_cfg.get("build_if_missing", False)),
         config_path=dataset_cfg.get("config_path"),
     )
-    train_graphs = _limited(
-        list(splits["train"]), dataset_cfg.get("max_generation_train_graphs")
-    )
+    train_graphs = list(splits["train"])
     test_graphs = list(splits.get("test", []))
 
     predictor_cfg = dict(config.get("attributed_predictor", {}) or {})
@@ -343,6 +342,10 @@ def main() -> None:
     )
     if checkpoint.get("format") != ATTRIBUTED_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT:
         raise ValueError("Unsupported attributed predictor checkpoint format.")
+    trained_dataset_cfg = dict((checkpoint.get("config", {}) or {}).get("dataset", {}) or {})
+    if trained_dataset_cfg.get("training_subset") is not None:
+        train_graphs = restore_training_graphs(train_graphs, trained_dataset_cfg)
+    train_graphs = _limited(train_graphs, dataset_cfg.get("max_generation_train_graphs"))
     model_device = next(model.parameters()).device
     node_attribute = str(vocabulary.node_attribute)
     edge_attribute = str(vocabulary.edge_attribute)

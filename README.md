@@ -778,6 +778,15 @@ loading/computation, and checkpoint writing. Vocabulary fitting always reports
 the first and final graph; set both progress intervals to zero to disable periodic
 fitting reports.
 
+To train on a random subset of the prepared training split, add
+`--max-train-graphs 10000` (alias `--num-train-graphs 10000`). Selection is without
+replacement and reproducible with `--seed`; the same subset is used for all
+epochs and training graphlet vocabulary fitting. This option overrides
+`dataset.max_train_graphs` in the config. Omitting both limits, or passing zero,
+uses the full training split; requesting more graphs than available uses all of
+them. Selected original split indices are saved in `training_subset.json` and
+checkpoint metadata. Joint typed empirical generation restores that same subset.
+
 
 ## Empirical degree perturbations (Community-small)
 

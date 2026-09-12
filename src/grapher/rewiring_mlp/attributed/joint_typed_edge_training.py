@@ -12,6 +12,7 @@ import time
 import numpy as np
 import torch
 
+from grapher.data.sampling import sample_training_graphs
 from grapher.models.dhvae_hh.typed_degree_vae import (
     TypedSignatureVectorizer,TypedSignatureHistogramVAE,build_typed_signature_vae,
     typed_signature_vae_loss,save_typed_signature_checkpoint,TYPED_CHECKPOINT_FORMAT,
@@ -328,7 +329,12 @@ def train_joint_typed_edge(config,args):
           f'wall_seconds={time.perf_counter()-load_started:.2f}', flush=True)
     train_limit=args.max_train_graphs if args.max_train_graphs is not None else config['dataset'].get('max_train_graphs')
     val_limit=args.max_val_graphs if args.max_val_graphs is not None else config['dataset'].get('max_val_graphs')
-    train=splits['train'][:int(train_limit)] if train_limit else splits['train']
+    train,training_subset=sample_training_graphs(splits['train'],train_limit,seed=seed)
+    config['dataset'].update(max_train_graphs=train_limit,training_subset=training_subset)
+    atomic_json(training_subset,output/'training_subset.json')
+    print(f"[JointTypedEdge] training_subset strategy={training_subset['strategy']} "
+          f"selected={len(train)}/{len(splits['train'])} seed={seed} "
+          f"indices_file={output/'training_subset.json'}",flush=True)
     val=splits['val'][:int(val_limit)] if val_limit else splits['val']
     device=resolve_torch_device(args.device or pc.get('device','auto'))
     print(f'[JointTypedEdge] effective_graphs train={len(train)} val={len(val)} '
@@ -347,6 +353,7 @@ def train_joint_typed_edge(config,args):
     config['attributed_predictor'].update(epochs=epochs,batch_size=batch_size)
     config['dataset'].update(max_train_graphs=train_limit,max_val_graphs=val_limit)
     dataset_info={'train_graphs':len(train),'val_graphs':len(val),'provenance':provenance,
+                  'training_subset':training_subset,
                   'typed_initializer_sha256':file_sha256(j['initialize_degree_checkpoint']) if j.get('initialize_degree_checkpoint') else None,
                   'source_alignment':'indexed_typed_signatures_shared_node_permutation',
                   'endpoint_valence_policy':ENDPOINT_VALENCE_POLICY,
@@ -356,7 +363,7 @@ def train_joint_typed_edge(config,args):
     if model.induced_graphlet_basis is not None:
         atomic_json({'basis':model.induced_graphlet_basis.to_dict(),
                      'metadata':model.induced_graphlet_metadata(),
-                     'training_graphs':len(train), 'dataset_provenance':provenance},
+                     'training_graphs':len(train), 'training_subset':training_subset, 'dataset_provenance':provenance},
                     output/'attributed_graphlet_basis.json')
     atomic_json({'config':config,**dataset_info},output/'run_config.json')
     print('[JointTypedEdge] endpoints preserve prepared target bond types; '

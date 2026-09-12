@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import threading
 import time
+import sys
 from pathlib import Path
 
+import networkx as nx
 import pytest
 import torch
 
-from grapher.utils.io import load_yaml
+from grapher.utils.io import load_yaml, save_pickle
 from scripts.train_attributed_grapher import _heartbeat_loop, _run_epoch
 
 
@@ -118,3 +120,36 @@ def test_full_qm9_config_enables_intra_epoch_progress() -> None:
 
     assert predictor["batch_progress_interval"] == 10
     assert predictor["progress_interval_seconds"] == 30
+
+
+@pytest.mark.parametrize('flag', ['--max-train-graphs', '--num-train-graphs'])
+def test_legacy_cli_samples_prepared_train_before_fitting_vocabulary(tmp_path, monkeypatch, flag):
+    from scripts import train_attributed_grapher as cli
+
+    root = tmp_path/'toy'
+    root.mkdir()
+    graphs = [nx.path_graph(4) for _ in range(8)]
+    for index, graph in enumerate(graphs):
+        graph.graph['prepared_index'] = index
+    for split in ('train', 'val', 'test'):
+        save_pickle(graphs, root/f'{split}.pkl')
+    config = {'seed': 7, 'dataset': {'name': 'toy', 'root': str(tmp_path),
+                                   'max_train_graphs': 2, 'build_if_missing': False}}
+    monkeypatch.setattr(cli, 'load_yaml', lambda _: config)
+    monkeypatch.setattr(sys, 'argv', ['train', '--config', 'unused.yaml', flag, '3', '--seed', '42'])
+    observed = []
+
+    class SelectionReachedVocabulary(Exception):
+        pass
+
+    def vocabulary(cls, selected, _config):
+        observed.extend(g.graph['prepared_index'] for g in selected)
+        raise SelectionReachedVocabulary
+
+    monkeypatch.setattr(cli.GraphCategoryVocabulary, 'from_graphs', classmethod(vocabulary))
+    with pytest.raises(SelectionReachedVocabulary):
+        cli.main()
+    assert len(observed) == 3 and observed != [0, 1, 2]
+    assert config['seed'] == 42
+    assert config['dataset']['training_subset']['indices'] == observed
+    assert config['dataset']['max_train_graphs'] == 3

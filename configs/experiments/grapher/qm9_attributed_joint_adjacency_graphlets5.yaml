@@ -14,7 +14,7 @@ dataset:
   config_path: configs/datasets/qm9.yaml
   root: outputs/datasets
   build_if_missing: false
-  max_train_graphs: null
+  max_train_graphs: 32000
   max_val_graphs: 2000
 typed_signature:
   node_attribute: atomic_num
@@ -150,7 +150,7 @@ structure_summary_prediction:
   cycle_graphlet_histogram: false
   induced_graphlet_histogram: true
   induced_graphlet_attributed: true
-  induced_graphlet_k: 5
+  induced_graphlet_k: 3
   induced_graphlet_scope: all
 training_sources:
   mode: target_indexed_typed_constructor
@@ -160,7 +160,7 @@ training_sources:
 source_enrichment:
   enabled: false
 generation:
-  invariant_source: learned
+  invariant_source: train_empirical
   sample_num_nodes: empirical
   num_generate: 64
   max_attempts_per_graph: 128
