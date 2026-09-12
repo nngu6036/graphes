@@ -378,10 +378,11 @@ def main() -> None:
     if bool((config.get("joint_degree", {}) or {}).get("enabled", False)) and not joint_degree_enabled:
         raise ValueError("Joint-degree config requires a joint checkpoint; train with this config first.")
     checkpoint_selection = (checkpoint.get("report", {}) or {}).get("checkpoint_selection")
-    checkpoint_file_sha256 = None
+    # Prior ablations require checkpoint provenance for every predictor family,
+    # including the multi-size spectral+graphlet model (not only joint DH-VAE).
+    from grapher.rewiring_mlp.generic.joint_checkpointing import file_sha256
+    checkpoint_file_sha256 = file_sha256(checkpoint_path)
     if joint_degree_enabled:
-        from grapher.rewiring_mlp.generic.joint_checkpointing import file_sha256
-        checkpoint_file_sha256 = file_sha256(checkpoint_path)
         from grapher.rewiring_mlp.generic.joint_degree_training import graph_fingerprint
         recorded = dict((checkpoint.get("report", {}) or {}).get("dataset_graph_fingerprints", {}) or {})
         for split_name, expected in recorded.items():

@@ -181,12 +181,15 @@ def _available_blocks(seq: Sequence[int], size: int, limit: int) -> list[tuple[i
     return result
 
 
-def sum_preserving_round(x: Sequence[float], total: int, rng: np.random.Generator) -> tuple[int, ...]:
+def sum_preserving_round(
+    x: Sequence[float], total: int, rng: np.random.Generator, *, sort_result: bool = True
+) -> tuple[int, ...]:
     """Dependent randomized rounding: exact sum and coordinate expectations.
 
     Each pairwise update preserves the fractional sum and fixes at least one
-    coordinate. Sorting is performed only AFTER rounding; no iid rounding or
-    degree repair is used.
+    coordinate. Sorting is performed only AFTER rounding unless sort_result=False. Typed
+    callers must disable sorting to keep node/category correspondence intact.
+    No iid rounding or degree repair is used.
     """
     values = np.asarray(x, dtype=np.float64)
     if values.ndim != 1 or not np.isfinite(values).all() or np.any(values < 0):
@@ -213,7 +216,7 @@ def sum_preserving_round(x: Sequence[float], total: int, rng: np.random.Generato
     rounded = base + np.rint(frac).astype(np.int64)
     if int(rounded.sum()) != total:
         raise ArithmeticError("Dependent rounding failed the exact degree-sum check.")
-    return canonical_degrees(rounded.tolist())
+    return canonical_degrees(rounded.tolist()) if sort_result else tuple(int(v) for v in rounded)
 
 
 class PerturbedEmpiricalDegreeSampler:

@@ -1754,3 +1754,49 @@ PYTHONPATH=src python scripts/run_attributed_grapher.py \
   --metric-molecule-source raw_valid \
   --output-dir "$GEN/evaluation_val" \
   --require-fcd
+
+
+PYTHONPATH=src python - "$CFG" <<'PY'
+import sys
+from grapher.utils.io import load_yaml, save_yaml
+
+cfg = load_yaml(
+    "configs/experiments/grapher/qm9_attributed_joint_adjacency_graphlets5.yaml"
+)
+cfg["experiment"] = "qm9_joint_adjacency_graphlets3_train_empirical"
+cfg["structure_summary_prediction"]["induced_graphlet_k"] = 3
+cfg["generation"]["invariant_source"] = "train_empirical"
+save_yaml(cfg, sys.argv[1])
+PY
+
+
+
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --num-train-graphs "$NTRAIN" \
+  --seed 42 \
+  --device gpu \
+  --graphlet-progress-interval 100 \
+  --batch-progress-interval 10 \
+  --progress-interval-seconds 10 \
+  --num-train-graphs 20000
+
+
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate "$NGEN" \
+  --seed 42 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN/molecular_graphs.pkl" \
+  --dataset qm9_attributed \
+  --reference-split val \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --output-dir "$GEN/evaluation_val" \
+  --require-fcd

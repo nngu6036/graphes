@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter,defaultdict
 from copy import deepcopy
+from dataclasses import replace
 from itertools import combinations
 import math
 from pathlib import Path
@@ -14,6 +15,7 @@ import torch
 
 from grapher.data.sampling import restore_training_graphs
 from grapher.models.dhvae_hh.typed_constructor import construct_typed_graph,TypedConstructionError
+from grapher.rewiring_mlp.attributed.typed_prior import build_typed_empirical_sampler
 from grapher.rewiring_mlp.attributed.soft_edge_bridge import labels_to_logits,advance_edges,spectral_noise,edge_probabilities
 from grapher.rewiring_mlp.attributed.joint_typed_edge_model import load_checkpoint
 from grapher.rewiring_mlp.attributed.joint_typed_edge_data import (
@@ -238,14 +240,18 @@ def refine_typed_graph(source,targets,model,config,*,seed):
                     'connected':nx.is_connected(current),'candidate_search_totals':dict(search_totals),'target_scope':'single_frozen_soft_bridge_endpoint'}
 
 
-def generation_sources(model,train_graphs,config,*,seed,num_generate):
+def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_sampler=None):
     """One independent source RNG per output. Rewiring cannot consume this stream."""
     gc=config.get('generation',{}); source_mode=gc.get('invariant_source','learned')
-    if source_mode not in ('learned','train_empirical'): raise ValueError('invariant_source must be learned or train_empirical (no held-out oracle default).')
+    if source_mode not in ('learned','train_empirical','train_empirical_perturbed'): raise ValueError('invariant_source must be learned, train_empirical, or train_empirical_perturbed (training only).')
     if config.get('degree_generator',{}).get('checkpoint_path'):
         raise ValueError('Joint generation must use the embedded typed-DH-VAE, not an external checkpoint.')
     require_valid=bool(gc.get('require_rdkit_source_validity',True))
     if require_valid or config['attributed_refiner'].get('rdkit_candidate_filter',True): require_rdkit()
+    if empirical_sampler is None:
+        empirical_sampler=build_typed_empirical_sampler(config,train_graphs,seed=seed,
+            edge_types=model.edge_types,vectorizer=model.vectorizer,
+            graph_validator=(lambda g: is_valid_molecular_graph(graph_from_record(graph_record(g)))) if require_valid else None)
     dm=model.degree_model; v=model.vectorizer; dev=next(model.parameters()).device
     mode=gc.get('sample_num_nodes','empirical')
     if mode not in ('empirical','model'): raise ValueError('sample_num_nodes must be empirical or model.')
@@ -254,9 +260,14 @@ def generation_sources(model,train_graphs,config,*,seed,num_generate):
         source_started=time.perf_counter()
         rng=np.random.default_rng(np.random.SeedSequence([int(seed),index,1907]))
         result=None
+        fixed_summary=empirical_sampler.sample() if empirical_sampler is not None else None
+        if fixed_summary is not None:counter['invariant_proposals']+=1
         for attempt in range(int(gc.get('max_attempts_per_graph',128))):
-            counter['invariant_proposals']+=1
-            if source_mode=='train_empirical':
+            if fixed_summary is None:counter['invariant_proposals']+=1
+            if fixed_summary is not None:
+                invariant=TypedInvariant.from_dict(fixed_summary['typed_invariant'])
+                samp=fixed_summary['sampling_diagnostics']
+            elif source_mode=='train_empirical':
                 graph=train_graphs[int(rng.integers(len(train_graphs)))]
                 invariant=extract_typed_invariant(graph,edge_types=model.edge_types)
                 samp={'attempts_used':1,'fallback_used':False}
@@ -276,7 +287,10 @@ def generation_sources(model,train_graphs,config,*,seed,num_generate):
                 except RuntimeError:
                     counter['histogram_draws']+=budget; counter['invariant_sampling_failures']+=1; continue
             try:
-                constructed,diag=construct_typed_graph(invariant,config.get('constructor'),rng)
+                source_constructor=(replace(empirical_sampler.constructor_config,
+                    randomize_assignment=bool(config.get('constructor',{}).get('randomize_assignment',True)))
+                    if empirical_sampler is not None else config.get('constructor'))
+                constructed,diag=construct_typed_graph(invariant,source_constructor,rng)
                 source=graph_from_record(graph_record(constructed))
             except TypedConstructionError:
                 counter['constructor_failures']+=1; continue
@@ -326,9 +340,15 @@ def generate_joint_typed_edge(config,args):
 
     # Empirical conditioning must use the SAME training subset used for fitting.
     train_graphs=restore_training_graphs(splits['train'],ckpt['config']['dataset'])
+    empirical_sampler=build_typed_empirical_sampler(config,train_graphs,seed=seed,
+        edge_types=model.edge_types,vectorizer=model.vectorizer,
+        graph_validator=(lambda g: is_valid_molecular_graph(graph_from_record(graph_record(g))))
+            if config['generation'].get('require_rdkit_source_validity',True) else None)
     report={'format':'joint_typed_soft_edge_generation_v1','config':config,'seed':seed,
       'checkpoint':str(checkpoint),'checkpoint_sha256':file_sha256(checkpoint),'checkpoint_selection':ckpt.get('selection'),
-      'dataset_provenance':provenance,'degree_sampler_source':'joint_checkpoint_embedded',
+      'dataset_provenance':provenance,'degree_sampler_source':('joint_checkpoint_embedded'
+        if config['generation'].get('invariant_source','learned')=='learned'
+        else config['generation'].get('invariant_source')),
       'invariant_source':config['generation'].get('invariant_source','learned'),
       'strategy':'bridge_then_rewire','node_diffusion':False,'edge_diffusion':True,
       'diffusion':model.diffusion_metadata(),'checkpoint_format':ckpt['format'],
@@ -336,6 +356,13 @@ def generate_joint_typed_edge(config,args):
       'induced_graphlet_metadata': model.induced_graphlet_metadata(),
       'target_scope':'fixed_endpoint_per_graph','raw_graphs_no_posthoc_repair':True}
     def flush(complete=False):
+        if empirical_sampler is not None:
+            prior=empirical_sampler.report();prior['num_returned']=len(finals)
+            atomic_json(prior,output/'typed_degree_prior_report.json')
+            atomic_json([r['typed_invariant'] for r in empirical_sampler.records],output/'sampled_typed_invariants.json')
+            report['parent_typed_fingerprint']=prior['parent_typed_fingerprint']
+            report['sampled_typed_fingerprint']=prior['sampled_typed_fingerprint']
+            report['typed_degree_prior']={k:v for k,v in prior.items() if k not in ('records','parent_exclusions')}
         for name,obj in [('coarse_graphs.pkl',sources),('molecular_graphs.pkl',finals),('soft_endpoints.pkl',targets_saved)]:
             destination=output/(name if complete else 'partial_'+name)
             tmp=destination.with_name(destination.name+'.tmp'); save_pickle(obj,tmp); tmp.replace(destination)
@@ -344,7 +371,7 @@ def generate_joint_typed_edge(config,args):
             'source_graphs_sha256':record_hash([graph_record(g) for g in sources])})
         atomic_json(report,output/'report.json')
     try:
-        for i,(source,src_report,counts) in enumerate(generation_sources(model,train_graphs,config,seed=seed,num_generate=num)):
+        for i,(source,src_report,counts) in enumerate(generation_sources(model,train_graphs,config,seed=seed,num_generate=num,empirical_sampler=empirical_sampler)):
             t0=time.perf_counter(); sampling_counts=counts
             targets,bridge=sample_soft_endpoint(model,source,config,seed=seed+i*1009+7043)
             final,refinement=refine_typed_graph(source,targets,model,config,seed=seed+i*1009+9049)

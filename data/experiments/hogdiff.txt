@@ -252,7 +252,7 @@ Molecular evaluation
   fcd_num_reference_molecules: 12997
   fcd_num_valid_generated_molecules: 1024
   fcd_generated_smiles_source: valid_with_correction
-  
+
   
 PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
   --dataset qm9 \
@@ -273,3 +273,30 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --fcd-use-corrected \
   --require-fcd \
    --hogdiff-compatible-metrics
+
+
+
+  
+
+  
+export HOGDIFF=/home/quang/HOG-Diff
+export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
+
+PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
+  --dataset zinc \
+  --num-samples 1024 \
+  --seed-id 42 \
+  --run-id seed_42_e1000 \
+  --wrapper-config configs/baselines/hog_diff_zinc.yaml
+
+GEN_DIR="outputs/baselines/hog_diff/zinc/seed_42_e1000/generations/seed_42_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --output-dir "$GEN_DIR/evaluation" \
+    --require-fcd \
+ --hogdiff-compatible-metrics

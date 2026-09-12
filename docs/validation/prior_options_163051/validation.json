@@ -1,0 +1,13 @@
+{
+  "base_archive": "graphes(20260912-163051).zip",
+  "tests": "165 passed",
+  "command": "PYTHONPATH=src:. pytest -q tests/test_degree_perturbation.py tests/test_typed_degree_perturbation.py tests/test_typed_degree_perturbation_cli.py tests/test_unified_adjacency_diffusion.py tests/test_prior_options_compatibility.py tests/test_degree_perturbation_cli.py",
+  "bash_syntax_check": "passed",
+  "python_compile_check": "passed",
+  "new_adjacency_sampling_and_refinement_functions": "byte-identical to provided base archive",
+  "trained_user_checkpoints_and_prepared_benchmark_splits_available": false,
+  "benchmarks_rerun": false,
+  "molecular_smoke_evaluation": "toy inputs; FCD skipped and explicitly labelled NSPDK proxy, not quality evidence",
+  "community_smoke": "one-epoch tiny spectral_graphlet_transformer; 3,7,22 graphlet block widths for k=3,4,5; all five priors generated and evaluated; comparison summary passed",
+  "scope": "joint typed generation support restored; legacy attributed generation entrypoint not replaced"
+}
