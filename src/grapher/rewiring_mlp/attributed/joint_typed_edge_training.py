@@ -233,7 +233,8 @@ class TypedCheckpointManager:
                      'last_completed_epoch':epoch,'selections':self.records},self.output/'checkpoint_registry.json')
 
 
-def run_epoch(model,store,config,*,batch_size,device,optimizer=None,seed=0,beta=None):
+def run_epoch(model,store,config,*,batch_size,device,optimizer=None,seed=0,beta=None,
+              epoch=None,total_epochs=None):
     training=optimizer is not None; model.train(training)
     rng=np.random.default_rng(seed); indices=np.arange(len(store))
     if training: rng.shuffle(indices)
@@ -241,10 +242,12 @@ def run_epoch(model,store,config,*,batch_size,device,optimizer=None,seed=0,beta=
     generator=torch.Generator(device=device).manual_seed(seed)
     rows=[]; total_graphs=0; epoch_started=last_progress=time.perf_counter(); views=int(config['edge_diffusion'].get('views_per_graph',2))
     phase='train' if training else 'val'; total_batches=math.ceil(len(indices)/batch_size)
+    epoch_label=f"{epoch if epoch is not None else '?'}/{total_epochs if total_epochs is not None else '?'}"
+    progress_prefix=f'[JointTypedEdge] epoch={epoch_label} phase={phase}'
     total_load_seconds=total_compute_seconds=0.0
     pc=config['attributed_predictor']; interval=int(pc.get('batch_progress_interval',50))
     seconds=float(pc.get('progress_interval_seconds',60))
-    print(f'[JointTypedEdge] phase={phase} start graphs={len(store)} batches={total_batches} '
+    print(f'{progress_prefix} start graphs={len(store)} batches={total_batches} '
           f'batch_size={batch_size} views_per_graph={views}; timings=wall_seconds', flush=True)
     j=config['joint_typed_degree']; weights=config['attributed_predictor']['loss_weights']
     for start in range(0,len(indices),batch_size):
@@ -254,7 +257,7 @@ def run_epoch(model,store,config,*,batch_size,device,optimizer=None,seed=0,beta=
                       or (interval>0 and batch_index%interval==0)
                       or (seconds>0 and batch_started-last_progress>=seconds))
         if report_batch:
-            print(f'[JointTypedEdge] phase={phase} status=loading_batch '
+            print(f'{progress_prefix} status=loading_batch '
                   f'batch={batch_index}/{total_batches} graphs={total_graphs}/{len(store)}', flush=True)
         items=[store[int(i)] for i in indices[start:start+batch_size]]
         batch=collate(items,model.vectorizer,model.atom_types,device=device,
@@ -262,7 +265,7 @@ def run_epoch(model,store,config,*,batch_size,device,optimizer=None,seed=0,beta=
         compute_started=time.perf_counter()
         load_seconds=compute_started-batch_started
         if report_batch:
-            print(f'[JointTypedEdge] phase={phase} status=computing_batch '
+            print(f'{progress_prefix} status=computing_batch '
                   f'batch={batch_index}/{total_batches} load_collate_wall_seconds={load_seconds:.3f}', flush=True)
         count=len(items)
         if training: optimizer.zero_grad(set_to_none=True)
@@ -293,12 +296,12 @@ def run_epoch(model,store,config,*,batch_size,device,optimizer=None,seed=0,beta=
         total_load_seconds+=load_seconds; total_compute_seconds+=compute_seconds
         if report_batch or (seconds>0 and now-last_progress>=seconds):
             elapsed=now-epoch_started
-            print(f"[JointTypedEdge] phase={phase} status=batch_complete batch={len(rows)}/{total_batches} graphs={total_graphs}/{len(store)} "
+            print(f"{progress_prefix} status=batch_complete batch={len(rows)}/{total_batches} graphs={total_graphs}/{len(store)} "
                   f"joint_loss={accum['joint_loss']:.6f} load_collate_wall_seconds={load_seconds:.3f} "
                   f"compute_wall_seconds={compute_seconds:.3f} elapsed={elapsed:.1f}s "
                   f"graphs_per_second={total_graphs/max(elapsed,1.0e-12):.2f}",flush=True)
             last_progress=now
-    print(f'[JointTypedEdge] phase={phase} complete graphs={total_graphs} batches={len(rows)} '
+    print(f'{progress_prefix} complete graphs={total_graphs} batches={len(rows)} '
           f'load_collate_wall_seconds={total_load_seconds:.2f} compute_wall_seconds={total_compute_seconds:.2f} '
           f'wall_seconds={time.perf_counter()-epoch_started:.2f}', flush=True)
     return {k:(max(r[k] for _,r in rows) if k.endswith('_max_abs') else
@@ -392,13 +395,14 @@ def train_joint_typed_edge(config,args):
             unfrozen=trainable and epoch>freeze; model.set_degree_trainable(unfrozen)
             print(f'[JointTypedEdge] epoch={epoch}/{epochs} phase=train start degree_trainable={unfrozen}', flush=True)
             metrics=run_epoch(model,training,config,batch_size=batch_size,device=device,
-                              optimizer=optimizer,seed=seed+epoch*101)
+                              optimizer=optimizer,seed=seed+epoch*101,epoch=epoch,total_epochs=epochs)
             cuda_devices=[device.index or 0] if device.type=='cuda' else []
             print(f'[JointTypedEdge] epoch={epoch}/{epochs} phase=val start', flush=True)
             # Fork/reset also protects stochastic VAE validation from changing optimizer RNG.
             with torch.random.fork_rng(devices=cuda_devices):
                 torch.manual_seed(seed+991)
-                val_metrics=run_epoch(model,validation,config,batch_size=batch_size,device=device,seed=seed+991)
+                val_metrics=run_epoch(model,validation,config,batch_size=batch_size,device=device,
+                                      seed=seed+991,epoch=epoch,total_epochs=epochs)
             row={'epoch':epoch,'degree_trainable':unfrozen,
                  **{'train_'+k:v for k,v in metrics.items()},**{'val_'+k:v for k,v in val_metrics.items()}}
             history.append(row); atomic_json(history,output/'history.json')
