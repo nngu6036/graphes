@@ -196,7 +196,7 @@ def refine_typed_graph(source,targets,model,config,*,seed):
                     graphlet_histogram = graphlet_counter.histogram() if g is current else graphlet_counter.candidate_histogram(g)
             if graphlet_basis is not None:
                 out['graphlet'] = (attributed_histogram_distance(graphlet_histogram, targets['induced_histogram'], graphlet_basis)
-                    if len(g) >= graphlet_counter.k else 0.0)
+                    if len(g) >= graphlet_counter.min_k else 0.0)
             else:
                 out['graphlet'] = (induced_histogram_distance(graphlet_histogram, targets['induced_histogram'], graphlet_spec)
                     if len(g) >= graphlet_spec.k else 0.0)

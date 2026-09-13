@@ -27,7 +27,7 @@ from grapher.rewiring_mlp.generic.joint_checkpointing import atomic_json,file_sh
 from grapher.utils.device import resolve_torch_device
 from grapher.rewiring_mlp.generic.induced_graphlets import InducedGraphletSpec
 from grapher.rewiring_mlp.attributed.data import GraphletBasis
-from grapher.rewiring_mlp.attributed.induced_graphlets import (fit_training_basis, wants_attributed_histogram)
+from grapher.rewiring_mlp.attributed.induced_graphlets import (fit_training_basis, wants_attributed_histogram, requested_sizes)
 
 
 from .adjacency_diffusion import (
@@ -75,8 +75,10 @@ def validate_config(config):
         raise ValueError('adjacency_spectrum loss requires joint_typed_adjacency mode.')
     ss=config.get('structure_summary_prediction',{})
     induced_spec = InducedGraphletSpec.from_config(ss)
-    if induced_spec is not None and wants_attributed_histogram(config) and induced_spec.scope != 'all':
-        raise ValueError('Attributed induced graphlet histograms currently support induced_graphlet_scope=all only.')
+    if wants_attributed_histogram(config):
+        requested_sizes(config)
+        if ss.get('induced_graphlet_scope','all') != 'all':
+            raise ValueError('Attributed induced graphlet histograms currently support induced_graphlet_scope=all only.')
     if ss.get('orbit_summary', True) and int(ss.get('orbit_width',15))!=15:
         raise ValueError('Only the topology ORCA-15 auxiliary orbit summary is supported.')
     if not diff.get('spectral_enabled',True) and float(weights.get('spectrum',0))>0:
@@ -85,7 +87,7 @@ def validate_config(config):
         raise ValueError('Histogram loss requires the histogram head.')
     if not ss.get('orbit_summary',True) and float(weights.get('orbit_summary',0))>0:
         raise ValueError('Orbit loss requires the orbit head.')
-    if induced_spec is None and any(float(weights.get(key, 0)) > 0 for key in ('induced_graphlet_histogram', 'induced_graphlet_histogram_ce')):
+    if not ss.get('induced_graphlet_histogram',False) and any(float(weights.get(key, 0)) > 0 for key in ('induced_graphlet_histogram', 'induced_graphlet_histogram_ce')):
         raise ValueError('Induced graphlet loss requires its prediction head.')
     if ss.get('cycle_graphlet_histogram',False) or config.get('graphlet_diffusion',{}).get('enabled',False):
         raise ValueError('Cycle/attributed graphlet diffusion is not part of this focused edge experiment.')
@@ -152,8 +154,10 @@ def build_model(config,train_graphs,device):
           f'wall_seconds={time.perf_counter()-prior_started:.2f}', flush=True)
     ss=config.get('structure_summary_prediction',{})
     induced_spec = InducedGraphletSpec.from_config(ss)
-    if induced_spec is not None and wants_attributed_histogram(config) and induced_spec.scope != 'all':
-        raise ValueError('Attributed induced graphlet histograms currently support induced_graphlet_scope=all only.')
+    if wants_attributed_histogram(config):
+        requested_sizes(config)
+        if ss.get('induced_graphlet_scope','all') != 'all':
+            raise ValueError('Attributed induced graphlet histograms currently support induced_graphlet_scope=all only.')
     induced_basis = fit_training_basis(config, train_graphs)
     mode=resolve_mode(config)
     adjacency_options={}

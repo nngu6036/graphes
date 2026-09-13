@@ -105,7 +105,8 @@ def main():
     print(f'  diffusion: {model.diffusion_metadata()}')
     if model.induced_graphlet_metadata() is not None:
         m = model.induced_graphlet_metadata()
-        print(f"  graphlet attributed={m['attributed']} k={m['k']} bins={m['width']}")
+        order_text = m.get('sizes', [m.get('k')])
+        print(f"  graphlet attributed={m['attributed']} k={order_text} bins={m['width']}")
     for k,v in means.items(): print(f'  {k}: {v:.6f}')
 
 if __name__=='__main__': main()

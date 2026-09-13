@@ -15,7 +15,7 @@ from grapher.rewiring_mlp.attributed.induced_graphlets import (
     metadata as attributed_graphlet_metadata,
 )
 from grapher.rewiring_mlp.generic.joint_checkpointing import atomic_json, file_sha256
-from grapher.rewiring_mlp.attributed.induced_graphlets import wants_attributed_histogram, validate_model_graphlets
+from grapher.rewiring_mlp.attributed.induced_graphlets import wants_attributed_histogram, validate_model_graphlets, requested_sizes
 from scipy.spatial.distance import cdist
 
 
@@ -73,8 +73,10 @@ def main():
         if attributed_basis is None:
             p.error('The selected checkpoint has no attributed graphlet vocabulary.')
         info = attributed_graphlet_metadata(attributed_basis)
-        if spec.k != info['k'] or spec.scope != info['scope']:
-            p.error('k/scope cannot differ from the checkpoint vocabulary.')
+        if args.k is not None:
+            p.error('--k cannot override a multi-order attributed checkpoint vocabulary.')
+        if (tuple(info['sizes']) != requested_sizes(cfg) or (args.scope or 'all') != info['scope']):
+            p.error('k-range/scope cannot differ from the checkpoint vocabulary.')
         expected = ckpt.get('dataset_provenance', {}).get('split_sha256', {})
         if not expected or expected.get(args.reference_split) != file_sha256(refpath):
             raise ValueError('Reference dataset fingerprint differs from checkpoint.')
@@ -100,14 +102,17 @@ def main():
         'metric_scope':('additional attributed graphlet diagnostic (node/edge labels included)' if attributed_basis is not None else 'additional topology diagnostic, not GraphRNN clustering/orbit MMD, NSPDK or FCD'),
         'reference_mean_histogram':h_ref.mean(0).tolist(),'generated_mean_histogram':h_gen.mean(0).tolist()}
     if attributed_basis is not None:
-        k = attributed_basis.sizes[0]
-        j = attributed_basis.keys_by_k[k].index(attributed_basis.overflow_key)
-        report['reference_mean_overflow_mass'] = float(h_ref[:,j].mean())
-        report['generated_mean_overflow_mass'] = float(h_gen[:,j].mean())
+        report['reference_mean_overflow_mass_by_order']={}
+        report['generated_mean_overflow_mass_by_order']={}
+        for size,(start,stop) in zip(attributed_basis.sizes,attributed_basis.slices):
+            j=start+attributed_basis.keys_by_k[size].index(attributed_basis.overflow_key)
+            report['reference_mean_overflow_mass_by_order'][size]=float(h_ref[:,j].mean())
+            report['generated_mean_overflow_mass_by_order'][size]=float(h_gen[:,j].mean())
     atomic_json(report,Path(args.json_out))
     width = attributed_basis.width if attributed_basis is not None else spec.width
     mode = 'attributed' if attributed_basis is not None else 'topology'
-    print(f'Induced graphlets ({mode}) k={spec.k} scope={spec.scope} bins={width}: reference={len(h_ref)} generated={len(h_gen)}')
+    order_text = ','.join(attributed_basis.sizes) if attributed_basis is not None else str(spec.k)
+    print(f'Induced graphlets ({mode}) k={order_text} scope={spec.scope} bins={width}: reference={len(h_ref)} generated={len(h_gen)}')
     print(f'TV between mean graphlet histograms: {mean_tv:.6f}')
     print(f'Additional Laplace-TV biased MMD^2 (sigma={args.sigma}): {mmd:.6f}')
     print(f'Excluded graphs with n<k: reference={omitted_ref} generated={omitted_gen}')

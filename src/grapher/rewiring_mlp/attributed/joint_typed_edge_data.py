@@ -24,7 +24,7 @@ from grapher.rewiring_mlp.generic.induced_graphlets import InducedGraphletSpec, 
 from grapher.rewiring_mlp.attributed.data import GraphletBasis
 from grapher.rewiring_mlp.attributed.induced_graphlets import (
     extract_histogram as extract_attributed_induced_histogram,
-    metadata as attributed_graphlet_metadata, wants_attributed_histogram,
+    metadata as attributed_graphlet_metadata, wants_attributed_histogram, requested_sizes,
 )
 
 
@@ -127,9 +127,8 @@ class EndpointStore:
             raise ValueError("Attributed endpoint extraction requires the checkpoint/training graphlet basis; "
                              "never fit from validation or fall back to topology.")
         if graphlet_basis is not None:
-            requested = InducedGraphletSpec.from_config(config.get('structure_summary_prediction'))
             info = attributed_graphlet_metadata(graphlet_basis)
-            if requested is None or requested.k != info['k'] or requested.scope != info['scope']:
+            if requested_sizes(config) != tuple(info['sizes']) or config.get('structure_summary_prediction',{}).get('induced_graphlet_scope','all') != info['scope']:
                 raise ValueError("Endpoint config and attributed vocabulary differ.")
         self.memory = OrderedDict()
         self.capacity = int(config.get('training_sources',{}).get('memory_cache_graphs',256))

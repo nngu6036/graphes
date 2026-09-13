@@ -1756,20 +1756,15 @@ PYTHONPATH=src python scripts/run_attributed_grapher.py \
   --require-fcd
 
 
-PYTHONPATH=src python - "$CFG" <<'PY'
-import sys
-from grapher.utils.io import load_yaml, save_yaml
 
-cfg = load_yaml(
-    "configs/experiments/grapher/qm9_attributed_joint_adjacency_graphlets5.yaml"
-)
-cfg["experiment"] = "qm9_joint_adjacency_graphlets3_train_empirical"
-cfg["structure_summary_prediction"]["induced_graphlet_k"] = 3
-cfg["generation"]["invariant_source"] = "train_empirical"
-save_yaml(cfg, sys.argv[1])
-PY
+  CFG=configs/experiments/grapher/qm9_attributed_joint_typed_edge.yaml
 
+TRAIN=outputs/attributed_grapher/qm9_joint_typed_edge/seed_42
 
+GEN=outputs/attributed_generation/qm9_attributed_joint_typed_edge/seed_42
+
+NTRAIN=0       # All training graphs; change to 10000 for a random subset
+NGEN=1024
 
 PYTHONPATH=src python scripts/train_attributed_grapher.py \
   --config "$CFG" \
@@ -1799,4 +1794,81 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --metric-molecule-source raw_valid \
   --output-dir "$GEN/evaluation_val" \
-  --require-fcd
+  --require-fcd \
+  --hogdiff-compatible-metrics \
+
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 1.0
+  validity_without_correction: 1.0
+  fcd: 0.7437395423030502
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1024
+  num_invalid_generated_molecules: 0
+  num_valid_generated_molecules_with_projected_formal_charges: 1024
+  num_invalid_generated_molecules_after_projected_formal_charges: 0
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 1.0
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 0
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 1.0
+  unique_valid_count: 1024
+  novelty_rate: 0.62109375
+  novel_unique_valid_count: 636
+  nspdk_mmd: 0.00163920931363344
+  nspdk_mmd_valid_only: 0.00163920931363344
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 2.706879994874258e-05
+  nspdk_proxy_mmd_metric_source: 3.049278153836664e-05
+  fcd_num_reference_molecules: 12998
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+
+  CFG=configs/experiments/grapher/qm9_attributed_joint_typed_edge.yaml
+
+TRAIN=outputs/attributed_grapher/qm9_joint_typed_edge/seed_43
+
+GEN=outputs/attributed_generation/qm9_attributed_joint_typed_edge/seed_43
+
+NTRAIN=0       # All training graphs; change to 10000 for a random subset
+NGEN=1024
+
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --num-train-graphs "$NTRAIN" \
+  --seed 43 \
+  --device gpu \
+  --graphlet-progress-interval 100 \
+  --batch-progress-interval 10 \
+  --progress-interval-seconds 10 \
+  --num-train-graphs 20000
+
+
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate "$NGEN" \
+  --seed 43 \
+  --device gpu
+
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN/molecular_graphs.pkl" \
+  --dataset qm9_attributed \
+  --reference-split val \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --output-dir "$GEN/evaluation_val" \
+  --require-fcd \
+  --hogdiff-compatible-metrics \

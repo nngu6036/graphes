@@ -22,6 +22,7 @@ from grapher.rewiring_mlp.attributed.data import GraphletBasis
 from grapher.rewiring_mlp.attributed.induced_graphlets import (
     prediction_and_loss as attributed_induced_prediction_loss,
     mask_prediction as attributed_mask_prediction,
+    block_softmax as attributed_block_softmax,
     metadata as attributed_graphlet_metadata,
 )
 
@@ -242,7 +243,7 @@ class JointTypedEdgePredictor(nn.Module):
             out['clean_induced_graphlet_histogram_logits'] = graphlet_logits
             if self.induced_graphlet_basis is not None:
                 out['clean_induced_graphlet_histogram'] = attributed_mask_prediction(
-                    graphlet_logits.softmax(-1), batch['n'], self.induced_graphlet_basis)
+                    attributed_block_softmax(graphlet_logits, self.induced_graphlet_basis), batch['n'], self.induced_graphlet_basis)
             else:
                 out['clean_induced_graphlet_histogram'] = mask_prediction(
                     graphlet_logits.softmax(-1), batch['n'], self.induced_graphlet_spec)
