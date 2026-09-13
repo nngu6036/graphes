@@ -142,3 +142,38 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN_DIR" \
   --generated-stage spectre \
   --output-dir "$GEN_DIR/evaluation_report"
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.012987          0.027056      0.008995
+spectre_to_test                     0.008848          0.016365      0.007876
+
+export SPECTRE="/home/quang/SPECTRE"
+export SPECTRE_PYTHON="$(command -v python)"
+
+PYTHONPATH=src python scripts/run_spectre_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --wrapper-config configs/baselines/spectre_ego_small.yaml \
+  --seed-id 43 \
+  --run-id seed_43 \
+  --device gpu \
+  --n-epochs 10000
+
+# Generation
+PYTHONPATH=src python scripts/run_spectre_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --wrapper-config configs/baselines/spectre_ego_small.yaml \
+  --seed-id 43 \
+  --run-id seed_43 \
+  --num-samples 1024 \
+  --device gpu
+
+# Evaluation
+GEN_DIR="outputs/baselines/spectre/ego_small/seed_43/generations/seed_43_n_1024"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --generated-stage spectre \
+  --output-dir "$GEN_DIR/evaluation_report"
