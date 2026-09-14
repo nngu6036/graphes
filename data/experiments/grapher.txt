@@ -53,13 +53,11 @@ done
 CFG=configs/experiments/grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned.yaml
 TRAIN=outputs/attributed_grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned/seed_42
 GENROOT=outputs/attributed_generation/qm9_joint_typed_edge_laplacian_graphlets345/seed_42
-NTRAIN=20000
 NGEN=1024
 
 PYTHONPATH=src python scripts/train_attributed_grapher.py \
   --config "$CFG" \
   --output-dir "$TRAIN" \
-  --num-train-graphs "$NTRAIN" \
   --seed 42 \
   --device gpu \
   --graphlet-progress-interval 100 \
