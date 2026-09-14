@@ -6,7 +6,7 @@ dataset:
   config_path: configs/datasets/qm9.yaml
   root: outputs/datasets
   build_if_missing: false
-  max_train_graphs: null
+  max_train_graphs: null  # Full prepared train split; a CLI graph count overrides this.
   max_val_graphs: 2000
 pipeline:
   stage: attributed
