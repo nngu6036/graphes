@@ -1360,7 +1360,7 @@ def load_degree_vae_checkpoint(
     if architecture_version == 1:
         raise RuntimeError(
             "This checkpoint uses the old unconditional DH-VAE decoder. "
-            "Retrain it with scripts/train_degree_generator.py so decoding is "
+            "Retrain it with scripts/run_dhvae_hh_baseline.py so decoding is "
             "conditioned on graph size."
         )
     if architecture_version == 2:

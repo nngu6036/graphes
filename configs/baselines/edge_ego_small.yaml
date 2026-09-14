@@ -1,4 +1,17 @@
-# Small graphs: 64 steps, within the supplied EDGE README recommendation.
+comparison:
+  model: edge
+  dataset: ego_small
+  common_config: common_ego_small.yaml
+  status: source_readme_generic_budget_with_dataset_adapter
+  budget:
+    basis: upstream_released_generic_budget
+    unit: epochs
+    source: uploaded EDGE README training command
+    epochs: 50000
+    batch_size: 8
+    diffusion_steps: 64
+  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
+    select adaptations on validation only, never on test metrics.
 edge:
   train:
     epochs: 50000

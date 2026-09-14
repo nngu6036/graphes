@@ -1,0 +1,57 @@
+baseline_common:
+  schema_version: 1
+  dataset: qm9
+  reference:
+    model: defog
+    native_dataset: qm9
+    experiment: qm9_no_h
+    status: exact_upstream_profile_on_graphes_common_split
+    source_files:
+    - configs/experiment/qm9_no_h.yaml
+    - configs/train/train_default.yaml
+    - configs/dataset/qm9.yaml
+    - src/datasets/abstract_dataset.py
+  training:
+    epochs: 1000
+    batch_size: 1024
+    optimizer: adamw
+    learning_rate: 0.0002
+    weight_decay: 1.0e-12
+    gradient_clip_norm: null
+    ema_decay: 0.0
+    num_workers: 0
+    validation_every_epochs: 50
+  data:
+    remove_hydrogens: true
+    pin_memory: true
+    aromatic: true
+  reference_only:
+    declared_but_ineffective_dataset_num_workers: 16
+    sample_every_validation: 1
+    final_model_samples: 10000
+    sample_steps: 500
+    sample_time_distortion: polydec
+    sample_omega: 0.0
+    sample_eta: 0.0
+    model_layers: 9
+    transition: marginal
+  policy:
+    role: defog_reference_fallback_not_universal_training_horizon
+    raw_epoch_counts_cross_model_comparable: false
+    training_budget_rule: released_model_dataset_profile_or_validation_selected_adaptation
+    merge_precedence:
+    - upstream_defaults
+    - common_reference_fallback
+    - model_specific_config
+    - explicit_cli
+    budget_selection_uses_test_split: false
+  protocol:
+    fixed_prepared_splits: true
+    model_selection_split: val
+    final_evaluation_split: test
+    evaluation_seeds:
+    - 42
+    - 43
+    - 44
+    same_evaluator_across_models: true
+    same_requested_sample_count_per_report: true

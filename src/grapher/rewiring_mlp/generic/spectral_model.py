@@ -9,7 +9,9 @@ from torch.nn import functional as F
 
 from grapher.rewiring_mlp.generic.cycle_graphlets import validate_cycle_graphlet_k
 from grapher.rewiring_mlp.generic.induced_graphlets import (
-    InducedGraphletSpec, prediction_and_loss as induced_prediction_loss, mask_prediction,
+    InducedGraphletSpec, InducedGraphletCollectionSpec,
+    prediction_and_loss as induced_prediction_loss, mask_prediction,
+    block_softmax as induced_block_softmax,
 )
 from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
@@ -63,8 +65,12 @@ class TopologySpectralTransformerPredictor(nn.Module):
         cycle_graphlet_k: int = 3,
         predict_induced_graphlet_histogram: bool = False,
         induced_graphlet_k: int = 5,
+        induced_graphlet_k_min: int | None = None,
+        induced_graphlet_k_max: int | None = None,
         induced_graphlet_scope: str = "all",
         induced_graphlet_catalogue_fingerprint: str | None = None,
+        predict_edge_state: bool = False,
+        edge_smoothing: float = 0.01,
     ) -> None:
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -85,9 +91,21 @@ class TopologySpectralTransformerPredictor(nn.Module):
         self.predict_cycle_graphlet_histogram = bool(predict_cycle_graphlet_histogram)
         self.cycle_graphlet_k = validate_cycle_graphlet_k(cycle_graphlet_k)
         self.predict_induced_graphlet_histogram = bool(predict_induced_graphlet_histogram)
-        self.induced_graphlet_spec = InducedGraphletSpec(induced_graphlet_k, induced_graphlet_scope)
+        if induced_graphlet_k_min is not None or induced_graphlet_k_max is not None:
+            k_min = int(induced_graphlet_k if induced_graphlet_k_min is None else induced_graphlet_k_min)
+            k_max = int(induced_graphlet_k if induced_graphlet_k_max is None else induced_graphlet_k_max)
+            self.induced_graphlet_spec = (InducedGraphletSpec(k_min, induced_graphlet_scope)
+                if k_min == k_max else InducedGraphletCollectionSpec(tuple(range(k_min, k_max + 1)), induced_graphlet_scope))
+        else:
+            self.induced_graphlet_spec = InducedGraphletSpec(induced_graphlet_k, induced_graphlet_scope)
         self.induced_graphlet_k = self.induced_graphlet_spec.k
+        self.induced_graphlet_k_min = self.induced_graphlet_spec.min_k
+        self.induced_graphlet_k_max = self.induced_graphlet_spec.max_k
         self.induced_graphlet_scope = self.induced_graphlet_spec.scope
+        self.predict_edge_state = bool(predict_edge_state)
+        self.edge_smoothing = float(edge_smoothing)
+        if not 0.0 < self.edge_smoothing < 0.5:
+            raise ValueError("edge_smoothing must be in (0,0.5).")
         fingerprint = self.induced_graphlet_spec.metadata()["fingerprint"]
         if induced_graphlet_catalogue_fingerprint not in (None, fingerprint):
             raise ValueError("Induced graphlet checkpoint catalogue fingerprint mismatch.")
@@ -129,7 +147,9 @@ class TopologySpectralTransformerPredictor(nn.Module):
 
         # Same topology-state encoder family as the maintained structural model.
         self.node_in = nn.Linear(4, self.hidden_dim)
-        self.edge_in = nn.Linear(7, self.edge_dim)
+        # Legacy checkpoints use seven hard-source pair features. New joint edge
+        # diffusion adds current soft edge probability and source edge probability.
+        self.edge_in = nn.Linear(9 if self.predict_edge_state else 7, self.edge_dim)
         self.layers = nn.ModuleList(
             [
                 TopologyMPNNLayer(self.hidden_dim, self.edge_dim)
@@ -142,6 +162,12 @@ class TopologySpectralTransformerPredictor(nn.Module):
             nn.SiLU(),
             nn.Linear(self.graph_dim, self.graph_dim),
             nn.SiLU(),
+        )
+
+        self.clean_edge_head = (
+            nn.Sequential(
+                nn.Linear(self.edge_dim, self.edge_dim), nn.SiLU(), nn.Linear(self.edge_dim, 2)
+            ) if self.predict_edge_state else None
         )
 
         # [normalized current lambda_i, normalized source lambda_i,
@@ -233,6 +259,15 @@ class TopologySpectralTransformerPredictor(nn.Module):
         adjacency = batch.adjacency.bool()
         node_mask = batch.node_mask.bool()
         pair_mask = batch.pair_mask.bool()
+        if self.predict_edge_state:
+            if batch.current_edge_logits is None or batch.source_edge_logits is None:
+                raise ValueError("Generic edge diffusion is enabled but the batch has no edge bridge state.")
+            current_edge_prob = torch.softmax(batch.current_edge_logits, dim=-1)[..., 1]
+            source_edge_prob = torch.softmax(batch.source_edge_logits, dim=-1)[..., 1]
+            message_adjacency = current_edge_prob * pair_mask.to(current_edge_prob.dtype)
+        else:
+            current_edge_prob = source_edge_prob = None
+            message_adjacency = adjacency.to(batch.degrees.dtype)
         batch_size, node_count = node_mask.shape
         size_feature = batch.graph_size / (batch.graph_size + 1.0).clamp_min(1.0)
 
@@ -254,22 +289,18 @@ class TopologySpectralTransformerPredictor(nn.Module):
         degree_j = batch.degrees.unsqueeze(1).expand(
             batch_size, node_count, node_count
         )
-        edge_features = torch.stack(
-            [
-                adjacency.to(batch.degrees.dtype),
-                pair_mask.to(batch.degrees.dtype),
-                batch.time.view(-1, 1, 1).expand(
-                    batch_size, node_count, node_count
-                ),
-                0.5 * (degree_i + degree_j),
-                torch.abs(degree_i - degree_j),
-                degree_i * degree_j,
-                size_feature.view(-1, 1, 1).expand(
-                    batch_size, node_count, node_count
-                ),
-            ],
-            dim=-1,
-        )
+        pair_feature_values = [
+            adjacency.to(batch.degrees.dtype),
+            pair_mask.to(batch.degrees.dtype),
+            batch.time.view(-1, 1, 1).expand(batch_size, node_count, node_count),
+            0.5 * (degree_i + degree_j),
+            torch.abs(degree_i - degree_j),
+            degree_i * degree_j,
+            size_feature.view(-1, 1, 1).expand(batch_size, node_count, node_count),
+        ]
+        if self.predict_edge_state:
+            pair_feature_values.extend([current_edge_prob, source_edge_prob])
+        edge_features = torch.stack(pair_feature_values, dim=-1)
         edge_hidden = self.edge_in(edge_features)
         edge_hidden = 0.5 * (edge_hidden + edge_hidden.transpose(1, 2))
         edge_hidden = edge_hidden * pair_mask.unsqueeze(-1).to(edge_hidden.dtype)
@@ -278,7 +309,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
             node_hidden, edge_hidden = layer(
                 node_hidden,
                 edge_hidden,
-                adjacency,
+                message_adjacency,
                 node_mask,
             )
             node_hidden = self.dropout(node_hidden)
@@ -313,7 +344,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
             (batch.degrees - degree_mean.unsqueeze(1)).square() * degree_weights
         ).sum(dim=1) / degree_count
         degree_max = batch.degrees.masked_fill(~node_mask, 0.0).max(dim=1).values
-        return self.graph_encoder(
+        graph_hidden = self.graph_encoder(
             torch.cat(
                 [
                     node_pool,
@@ -328,6 +359,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
                 dim=-1,
             )
         )
+        return graph_hidden, edge_hidden
 
     def _spectrum_scale(self, batch: TopologySpectralBatch) -> torch.Tensor:
         # adjacency is symmetric, hence its total sum is exactly 2m.
@@ -431,7 +463,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
             logits = self.induced_graphlet_histogram_head(pooled)
             result["clean_induced_graphlet_histogram_logits"] = logits
             result["clean_induced_graphlet_histogram"] = mask_prediction(
-                logits.softmax(-1), batch.graph_size, self.induced_graphlet_spec)
+                induced_block_softmax(logits, self.induced_graphlet_spec), batch.graph_size, self.induced_graphlet_spec)
         if self.cycle_graphlet_histogram_head is not None:
             cycle_logits = self.cycle_graphlet_histogram_head(pooled)
             cycle_histogram = torch.softmax(cycle_logits, dim=-1)
@@ -462,8 +494,22 @@ class TopologySpectralTransformerPredictor(nn.Module):
         # diffusion progress, graph size, and the padding mask.  The adjacency
         # is still carried by the batch for invariant trace normalization, but
         # its topology is not encoded by the neural predictor.
-        graph_hidden = self._graph_context(batch) if self.use_graph_context else None
-        return self._spectral_outputs_from_graph_hidden(batch, graph_hidden)
+        edge_hidden = None
+        if self.use_graph_context:
+            graph_hidden, edge_hidden = self._graph_context(batch)
+        else:
+            graph_hidden = None
+            if self.predict_edge_state:
+                raise ValueError("predict_edge_state requires use_graph_context=true.")
+        outputs = self._spectral_outputs_from_graph_hidden(batch, graph_hidden)
+        if self.clean_edge_head is not None:
+            logits = self.clean_edge_head(edge_hidden)
+            logits = 0.5 * (logits + logits.transpose(1, 2))
+            logits = logits - logits.mean(dim=-1, keepdim=True)
+            logits = logits * batch.pair_mask.unsqueeze(-1).to(logits.dtype)
+            outputs["clean_edge_logits"] = logits
+            outputs["clean_edge_probabilities"] = torch.softmax(logits, dim=-1)
+        return outputs
 
     def _spectral_loss_from_outputs(
         self,
@@ -520,6 +566,22 @@ class TopologySpectralTransformerPredictor(nn.Module):
             + float(weights.get("moment2", 0.1)) * moment2_loss
             + float(weights.get("low_frequency", 0.0)) * low_frequency_loss
         )
+
+        edge_metrics: dict[str, float] = {}
+        if self.predict_edge_state:
+            if batch.clean_edge_labels_target is None or batch.clean_edge_logits_target is None:
+                raise ValueError("Edge diffusion head enabled but batch has no clean edge target.")
+            edge_logits = outputs["clean_edge_logits"]
+            upper = torch.triu(torch.ones_like(batch.pair_mask, dtype=torch.bool), diagonal=1)
+            pm = batch.pair_mask.bool() & upper
+            ce_all = F.cross_entropy(edge_logits.permute(0,3,1,2), batch.clean_edge_labels_target.long(), reduction="none")
+            denom = pm.to(edge_logits.dtype).sum().clamp_min(1.0)
+            edge_ce = (ce_all * pm.to(ce_all.dtype)).sum() / denom
+            edge_logit = (((edge_logits - batch.clean_edge_logits_target.to(edge_logits.dtype)).square().mean(-1)) * pm.to(edge_logits.dtype)).sum() / denom
+            total = total + float(weights.get("edge_ce", 1.0)) * edge_ce + float(weights.get("edge_logit", 0.1)) * edge_logit
+            with torch.no_grad():
+                edge_acc = (((edge_logits.argmax(-1) == batch.clean_edge_labels_target) & pm).to(edge_logits.dtype).sum() / denom)
+                edge_metrics = {"edge_ce_loss": float(edge_ce.detach().cpu()), "edge_logit_loss": float(edge_logit.detach().cpu()), "edge_accuracy": float(edge_acc.detach().cpu())}
 
         clustering_loss = predicted.sum() * 0.0
         clustering_mae = predicted.sum() * 0.0
@@ -707,6 +769,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
         metrics.update(orbit_metrics)
         metrics.update(cycle_metrics)
         metrics.update(induced_metrics)
+        metrics.update(edge_metrics)
         return total, metrics
 
 
@@ -746,8 +809,12 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "cycle_graphlet_k": self.cycle_graphlet_k,
             "predict_induced_graphlet_histogram": self.predict_induced_graphlet_histogram,
             "induced_graphlet_k": self.induced_graphlet_k,
+            "induced_graphlet_k_min": self.induced_graphlet_k_min,
+            "induced_graphlet_k_max": self.induced_graphlet_k_max,
             "induced_graphlet_scope": self.induced_graphlet_scope,
             "induced_graphlet_catalogue_fingerprint": self.induced_graphlet_spec.metadata()["fingerprint"],
+            "predict_edge_state": self.predict_edge_state,
+            "edge_smoothing": self.edge_smoothing,
         }
 
 
@@ -1029,8 +1096,15 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
         return self._degree_summary_outputs(batch)
 
     def forward(self, batch: TopologySpectralBatch) -> dict[str, torch.Tensor]:
-        graph_hidden = self._graph_context(batch)
+        graph_hidden, edge_hidden = self._graph_context(batch)
         outputs = self._spectral_outputs_from_graph_hidden(batch, graph_hidden)
+        if self.clean_edge_head is not None:
+            logits = self.clean_edge_head(edge_hidden)
+            logits = 0.5 * (logits + logits.transpose(1, 2))
+            logits = logits - logits.mean(dim=-1, keepdim=True)
+            logits = logits * batch.pair_mask.unsqueeze(-1).to(logits.dtype)
+            outputs["clean_edge_logits"] = logits
+            outputs["clean_edge_probabilities"] = torch.softmax(logits, dim=-1)
         outputs.update(self._graphlet_outputs_from_graph_hidden(batch, graph_hidden))
         outputs.update(self._degree_summary_outputs(batch))
         return outputs

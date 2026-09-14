@@ -327,7 +327,11 @@ def _deep_update(base: dict[str, Any], update: Mapping[str, Any]) -> dict[str, A
 
 
 def _load_options(request: TrainRequest) -> dict[str, Any]:
-    values: dict[str, Any] = {}
+    request_options = dict(request.options)
+    defaults = request_options.pop("comparison_defaults", {}) or {}
+    if not isinstance(defaults, Mapping):
+        raise TypeError("comparison_defaults must contain a mapping.")
+    values: dict[str, Any] = _deep_update({}, defaults)
     if request.config_path is not None:
         if not request.config_path.is_file():
             raise FileNotFoundError(f"Missing DeFoG wrapper config: {request.config_path}")
@@ -337,8 +341,8 @@ def _load_options(request: TrainRequest) -> dict[str, Any]:
         selected = loaded.get("defog", loaded)
         if not isinstance(selected, Mapping):
             raise TypeError("The defog config section must contain a mapping.")
-        values = dict(selected)
-    return _deep_update(values, request.options)
+        values = _deep_update(values, selected)
+    return _deep_update(values, request_options)
 
 
 def _native_dataset(benchmark_id: str, explicit: Any = None) -> str:
@@ -1086,6 +1090,17 @@ class DeFoGWrapper(BaseGeneratorWrapper):
                 "num_workers": "train.num_workers",
                 "check_val_every_n_epochs": "general.check_val_every_n_epochs",
                 "sample_every_val": "general.sample_every_val",
+                # Model-agnostic comparison-profile fields. These are explicit
+                # options rather than arbitrary hydra_overrides so a common
+                # config can coexist with DeFoG-specific sampler overrides.
+                "optimizer": "train.optimizer",
+                "learning_rate": "train.lr",
+                "weight_decay": "train.weight_decay",
+                "gradient_clip_norm": "train.clip_grad",
+                "ema_decay": "train.ema_decay",
+                "remove_hydrogens": "dataset.remove_h",
+                "pin_memory": "dataset.pin_memory",
+                "aromatic": "dataset.aromatic",
             }
             for option_name, hydra_name in known_overrides.items():
                 if option_name in options:

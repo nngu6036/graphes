@@ -12,9 +12,9 @@ def uses_typed_empirical_kernel(config):
     mode=generation.get('invariant_rng_mode','legacy')
     if mode not in ('legacy','independent'):
         raise ValueError('generation.invariant_rng_mode must be legacy or independent.')
-    active=source=='train_empirical_perturbed' or (source in ('train_empirical','empirical') and mode=='independent')
+    active=source in ('train_empirical_perturbed','edge_relocation') or (source in ('train_empirical','empirical') and mode=='independent')
     if generation.get('degree_perturbation') and not active:
-        raise ValueError('Typed degree_perturbation settings require invariant_source=train_empirical_perturbed; '
+        raise ValueError('Typed degree_perturbation settings require invariant_source=train_empirical_perturbed or edge_relocation; '
                          'they cannot be silently ignored for a learned/legacy source.')
     return active
 
@@ -27,6 +27,12 @@ def build_typed_empirical_sampler(config,train_graphs,*,seed,edge_types,node_att
     settings=deepcopy(generation.get('degree_perturbation',{}))
     if source in ('train_empirical','empirical'):
         settings={'method':'unit_transfer','probability':0.,'failure_policy':'error'}
+    elif source=='edge_relocation':
+        expected={'method':'edge_relocation','probability':1.0,'steps':1,'failure_policy':'error'}
+        for key,value in list(settings.items()):
+            if key in expected and value!=expected[key]:
+                raise ValueError(f'generation.invariant_source=edge_relocation fixes {key}={expected[key]!r}; received {value!r}.')
+        settings.update(expected)
     ctor=deepcopy(config.get('constructor',{}));sig=config.get('typed_signature',{})
     # Intersect all declared generation caps; never silently relax one.
     degree_caps=[v for v in (ctor.get('max_ordinary_degree'),sig.get('max_ordinary_degree'),

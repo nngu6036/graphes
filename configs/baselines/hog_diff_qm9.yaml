@@ -1,18 +1,30 @@
-# HOG-Diff baseline on GraphER's implicit-hydrogen QM9 attributed split.
+comparison:
+  model: hog_diff
+  dataset: qm9
+  common_config: common_qm9.yaml
+  status: exact_upstream_two_stage_profile
+  budget:
+    basis: upstream_released_two_stage_budget
+    unit: stage_iterations
+    source: configs/qm9.yaml
+    higher_order_iterations: 92000
+    higher_order_batch_size: 32
+    ou_iterations: 102000
+    ou_batch_size: 512
+  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
+    select adaptations on validation only, never on test metrics.
 hog_diff:
   source_env: HOGDIFF
   python_env: HOGDIFF_PYTHON
   upstream_config: qm9.yaml
   native_dataset: qm9
   num_workers: 0
-  # Smaller than the upstream evaluation batch to avoid requiring a single
-  # 10k-sample GPU allocation; workers iterate batches and return exact counts.
   generation_batch_size: 256
   training_estimates:
     enabled: false
   runtime:
     device: auto
-    cuda_visible_devices: "0"
+    cuda_visible_devices: '0'
     timeout_seconds: null
     progress:
       enabled: true
@@ -20,3 +32,9 @@ hog_diff:
       interval_seconds: 15
       iteration_interval: 200
       generation_batch_interval: 1
+  higher_order:
+    n_iters: 92000
+    batch_size: 32
+  ou:
+    n_iters: 102000
+    batch_size: 512

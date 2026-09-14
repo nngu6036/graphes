@@ -65,6 +65,11 @@ class TopologySpectralExample:
     clean_clustering_coefficient_target: float | None = None
     current_spectrum: np.ndarray | None = None
     source_spectrum: np.ndarray | None = None
+    # Optional generic soft binary-edge bridge over {no-edge, edge}.
+    current_edge_logits: np.ndarray | None = None
+    source_edge_logits: np.ndarray | None = None
+    clean_edge_logits_target: np.ndarray | None = None
+    clean_edge_labels_target: np.ndarray | None = None
     # Optional graphlet-logit diffusion supervision. Each graphlet order is a
     # probability simplex over connected graphlet classes plus one disconnected
     # subset bin; CLR coordinates are the Euclidean diffusion variables.
@@ -104,6 +109,10 @@ class TopologySpectralBatch:
     source_spectrum: torch.Tensor
     clean_spectrum_target: torch.Tensor
     spectrum_mask: torch.Tensor
+    current_edge_logits: torch.Tensor | None = None
+    source_edge_logits: torch.Tensor | None = None
+    clean_edge_logits_target: torch.Tensor | None = None
+    clean_edge_labels_target: torch.Tensor | None = None
     clean_clustering_coefficient_target: torch.Tensor | None = None
     current_graphlet_probabilities: torch.Tensor | None = None
     source_graphlet_probabilities: torch.Tensor | None = None
@@ -147,6 +156,18 @@ def collate_spectral_examples(
     source_spectra = np.zeros((batch_size, max_nodes), dtype=np.float32)
     clean_spectra = np.zeros((batch_size, max_nodes), dtype=np.float32)
     spectrum_mask = np.zeros((batch_size, max_nodes), dtype=np.bool_)
+
+    edge_enabled = any(example.current_edge_logits is not None for example in examples)
+    if edge_enabled and any(
+        example.current_edge_logits is None or example.source_edge_logits is None
+        or example.clean_edge_logits_target is None or example.clean_edge_labels_target is None
+        for example in examples
+    ):
+        raise ValueError("Cannot mix examples with and without generic edge-diffusion states.")
+    current_edge_logits = np.zeros((batch_size,max_nodes,max_nodes,2),dtype=np.float32) if edge_enabled else None
+    source_edge_logits = np.zeros((batch_size,max_nodes,max_nodes,2),dtype=np.float32) if edge_enabled else None
+    clean_edge_logits = np.zeros((batch_size,max_nodes,max_nodes,2),dtype=np.float32) if edge_enabled else None
+    clean_edge_labels = np.zeros((batch_size,max_nodes,max_nodes),dtype=np.int64) if edge_enabled else None
 
     clustering_enabled = any(
         example.clean_clustering_coefficient_target is not None for example in examples
@@ -193,9 +214,10 @@ def collate_spectral_examples(
     if any(value is not None for value in induced_targets):
         if any(value is None for value in induced_targets):
             raise ValueError("Cannot mix examples with and without induced graphlet targets.")
-        clean_induced_histogram = np.stack([
-            validate_induced_histogram(value) for value in induced_targets
-        ]).astype(np.float32)
+        arrays=[np.asarray(value,dtype=np.float64).reshape(-1) for value in induced_targets]
+        if len({arr.size for arr in arrays}) != 1 or any((not np.isfinite(arr).all()) or np.any(arr < -1e-7) for arr in arrays):
+            raise ValueError("Induced graphlet targets must share one finite nonnegative width.")
+        clean_induced_histogram = np.stack(arrays).astype(np.float32)
 
     graphlet_widths = {
         int(np.asarray(example.current_graphlet_logits).size)
@@ -285,6 +307,19 @@ def collate_spectral_examples(
         source_spectra[index, :n] = source_spectrum
         clean_spectra[index, :n] = target
         spectrum_mask[index, :n] = True
+        if edge_enabled:
+            arrays = [
+                np.asarray(example.current_edge_logits,dtype=np.float32),
+                np.asarray(example.source_edge_logits,dtype=np.float32),
+                np.asarray(example.clean_edge_logits_target,dtype=np.float32),
+            ]
+            labels = np.asarray(example.clean_edge_labels_target,dtype=np.int64)
+            if any(a.shape != (n,n,2) for a in arrays) or labels.shape != (n,n):
+                raise ValueError("Generic edge bridge tensors must have shape [n,n,2] and labels [n,n].")
+            current_edge_logits[index,:n,:n]=arrays[0]
+            source_edge_logits[index,:n,:n]=arrays[1]
+            clean_edge_logits[index,:n,:n]=arrays[2]
+            clean_edge_labels[index,:n,:n]=labels
         if clean_clustering is not None:
             value = float(example.clean_clustering_coefficient_target)
             if not np.isfinite(value) or value < -1.0e-8 or value > 1.0 + 1.0e-8:
@@ -340,6 +375,10 @@ def collate_spectral_examples(
         source_spectrum=torch.from_numpy(source_spectra),
         clean_spectrum_target=torch.from_numpy(clean_spectra),
         spectrum_mask=torch.from_numpy(spectrum_mask),
+        current_edge_logits=(torch.from_numpy(current_edge_logits) if current_edge_logits is not None else None),
+        source_edge_logits=(torch.from_numpy(source_edge_logits) if source_edge_logits is not None else None),
+        clean_edge_logits_target=(torch.from_numpy(clean_edge_logits) if clean_edge_logits is not None else None),
+        clean_edge_labels_target=(torch.from_numpy(clean_edge_labels) if clean_edge_labels is not None else None),
         clean_clustering_histogram_target=(
             torch.from_numpy(clean_clustering_histogram)
             if clean_clustering_histogram is not None else None
@@ -1133,6 +1172,54 @@ def _resolve_spectral_diffusion_endpoints(
     return source, target, metadata
 
 
+def _align_target_to_source_indexed_degrees(source: nx.Graph, target: nx.Graph, rng: np.random.Generator) -> nx.Graph:
+    """Relabel target so each node index has the source node's degree.
+
+    Pairwise edge diffusion needs a node-aligned clean endpoint. GraphER swaps
+    preserve indexed degrees, so alignment is restricted to equal-degree groups
+    and never changes either graph's degree multiset or any invariant summary.
+    """
+    source = normalize_topology_graph(source)
+    target = normalize_topology_graph(target)
+    if sorted(dict(source.degree()).values()) != sorted(dict(target.degree()).values()):
+        raise ValueError("Edge diffusion requires source/target in the same degree fibre.")
+    mapping = {}
+    degrees = sorted(set(dict(source.degree()).values()))
+    for degree in degrees:
+        src = [u for u,d in source.degree() if d == degree]
+        tgt = [u for u,d in target.degree() if d == degree]
+        if len(src) != len(tgt):
+            raise AssertionError("Degree-group cardinality mismatch during endpoint alignment.")
+        tgt = list(np.asarray(tgt)[rng.permutation(len(tgt))]) if len(tgt)>1 else tgt
+        mapping.update({int(v):int(u) for u,v in zip(sorted(src),tgt)})
+    aligned = normalize_topology_graph(nx.relabel_nodes(target,mapping,copy=True))
+    if [aligned.degree(i) for i in range(len(aligned))] != [source.degree(i) for i in range(len(source))]:
+        raise AssertionError("Indexed degree alignment failed.")
+    return aligned
+
+
+def _binary_edge_logits(graph: nx.Graph, smoothing: float) -> tuple[np.ndarray,np.ndarray]:
+    if not 0.0 < float(smoothing) < 0.5:
+        raise ValueError("generic edge_diffusion.smoothing must be in (0,0.5).")
+    n=len(graph); labels=nx.to_numpy_array(graph,nodelist=list(range(n)),weight=None,dtype=np.int64)
+    labels=(labels>0).astype(np.int64); np.fill_diagonal(labels,0)
+    probs=np.full((n,n,2),float(smoothing),dtype=np.float64)
+    for r in (0,1): probs[...,r]=np.where(labels==r,1.0-float(smoothing),float(smoothing))
+    logits=np.log(np.maximum(probs,1e-12)); logits-=logits.mean(axis=-1,keepdims=True)
+    mask=~np.eye(n,dtype=bool); logits*=mask[...,None]
+    return logits.astype(np.float32),labels
+
+
+def _sample_binary_edge_bridge(source:np.ndarray,target:np.ndarray,progress:float,sigma:float,rng:np.random.Generator)->tuple[np.ndarray,float]:
+    if not np.isfinite(sigma) or sigma<0: raise ValueError("generic edge_diffusion.sigma must be finite and nonnegative.")
+    t=float(np.clip(progress,0.0,1.0)); mean=(1-t)*source+t*target
+    noise=rng.normal(size=source.shape); noise=0.5*(noise+noise.transpose(1,0,2)); noise-=noise.mean(axis=-1,keepdims=True)
+    n=source.shape[0]; noise*=~np.eye(n,dtype=bool)[...,None]
+    std=float(sigma)*np.sqrt(max(t*(1-t),0.0)); state=mean+std*noise
+    state=0.5*(state+state.transpose(1,0,2));state-=state.mean(axis=-1,keepdims=True);state*=~np.eye(n,dtype=bool)[...,None]
+    return state.astype(np.float32),float(np.sqrt(np.mean((std*noise)**2)))
+
+
 @dataclass(frozen=True)
 class TopologySpectralDiffusionEndpoint:
     source: nx.Graph
@@ -1141,6 +1228,9 @@ class TopologySpectralDiffusionEndpoint:
     source_spectrum: np.ndarray
     clean_spectrum: np.ndarray
     spectral_scale: float
+    source_edge_logits: np.ndarray | None = None
+    clean_edge_logits: np.ndarray | None = None
+    clean_edge_labels: np.ndarray | None = None
     source_graphlet_probabilities: np.ndarray | None = None
     clean_graphlet_probabilities: np.ndarray | None = None
     source_graphlet_logits: np.ndarray | None = None
@@ -1164,6 +1254,7 @@ def _prepare_spectral_diffusion_endpoint(
     require_same_degree_sequence: bool,
     rng: np.random.Generator,
     structure_summary_config: dict[str, Any] | None = None,
+    edge_diffusion_config: dict[str, Any] | None = None,
 ) -> TopologySpectralDiffusionEndpoint:
     source, target, metadata = _resolve_spectral_diffusion_endpoints(
         raw_item,
@@ -1171,8 +1262,17 @@ def _prepare_spectral_diffusion_endpoint(
         require_same_degree_sequence=require_same_degree_sequence,
         rng=rng,
     )
+    edge_cfg=dict(edge_diffusion_config or {})
+    edge_enabled=bool(edge_cfg.get("enabled",False))
+    if edge_enabled:
+        target=_align_target_to_source_indexed_degrees(source,target,rng)
     source_spectrum = laplacian_eigenvalues(source)
     clean_spectrum = laplacian_eigenvalues(target)
+    source_edge_logits=clean_edge_logits=clean_edge_labels=None
+    if edge_enabled:
+        smoothing=float(edge_cfg.get("smoothing",0.01))
+        source_edge_logits,_=_binary_edge_logits(source,smoothing)
+        clean_edge_logits,clean_edge_labels=_binary_edge_logits(target,smoothing)
     scale = spectral_scale(
         source,
         mode=str(spectral_config.get("normalization", "mean_degree")),
@@ -1217,6 +1317,9 @@ def _prepare_spectral_diffusion_endpoint(
         source_spectrum=source_spectrum,
         clean_spectrum=clean_spectrum,
         spectral_scale=float(scale),
+        source_edge_logits=source_edge_logits,
+        clean_edge_logits=clean_edge_logits,
+        clean_edge_labels=clean_edge_labels,
         source_graphlet_probabilities=source_prob,
         clean_graphlet_probabilities=clean_prob,
         source_graphlet_logits=source_logits,
@@ -1265,6 +1368,7 @@ def _sample_spectral_diffusion_endpoint_examples(
     paths_per_graph = max(int(diff_values.get("paths_per_graph", 1)), 1)
     spectral_noise_rms: list[float] = []
     graphlet_noise_rms: list[float] = []
+    edge_noise_rms: list[float] = []
     examples: list[TopologySpectralExample] = []
 
     for path in range(paths_per_graph):
@@ -1283,6 +1387,12 @@ def _sample_spectral_diffusion_endpoint_examples(
             )
             spectral_noise_rms.append(float(spec_diag["noise_rms"]))
 
+            current_edge_logits=None
+            if endpoint.source_edge_logits is not None:
+                current_edge_logits,edge_rms=_sample_binary_edge_bridge(
+                    endpoint.source_edge_logits,endpoint.clean_edge_logits,float(progress),
+                    float(diff_values.get("edge_sigma",1.0)),rng)
+                edge_noise_rms.append(edge_rms)
             current_prob = current_logits = None
             if graphlet_basis is not None:
                 assert endpoint.source_graphlet_logits is not None
@@ -1312,6 +1422,10 @@ def _sample_spectral_diffusion_endpoint_examples(
                     current_spectrum=current_spectrum.astype(np.float32),
                     source_spectrum=endpoint.source_spectrum.astype(np.float32),
                     clean_spectrum_target=endpoint.clean_spectrum.astype(np.float32),
+                    current_edge_logits=current_edge_logits,
+                    source_edge_logits=(None if endpoint.source_edge_logits is None else endpoint.source_edge_logits.astype(np.float32)),
+                    clean_edge_logits_target=(None if endpoint.clean_edge_logits is None else endpoint.clean_edge_logits.astype(np.float32)),
+                    clean_edge_labels_target=(None if endpoint.clean_edge_labels is None else endpoint.clean_edge_labels.astype(np.int64)),
                     clean_clustering_histogram_target=(
                         None if endpoint.clean_clustering_histogram is None
                         else endpoint.clean_clustering_histogram.astype(np.float32)
@@ -1389,6 +1503,8 @@ def _sample_spectral_diffusion_endpoint_examples(
         "fix_spectral_lambda1": diff_cfg.fix_spectral_lambda1,
         "mean_spectral_noise_rms": float(np.mean(spectral_noise_rms)) if spectral_noise_rms else 0.0,
         "mean_graphlet_noise_rms": float(np.mean(graphlet_noise_rms)) if graphlet_noise_rms else 0.0,
+        "mean_edge_noise_rms": float(np.mean(edge_noise_rms)) if edge_noise_rms else 0.0,
+        "edge_diffusion_enabled": endpoint.source_edge_logits is not None,
         "mean_endpoint_spectral_discrepancy": float(endpoint.spectral_endpoint_distance),
         "source_modes": [str(endpoint.metadata["source_mode"])],
         "base_generators": [str(endpoint.metadata["base_generator"])],
@@ -1406,6 +1522,7 @@ def build_spectral_diffusion_examples(
     graphlet_logit_epsilon: float = 1.0e-5,
     seed: int = 0,
     structure_summary_config: dict[str, Any] | None = None,
+    edge_diffusion_config: dict[str, Any] | None = None,
 ) -> tuple[list[TopologySpectralExample], dict[str, Any]]:
     """Sample continuous stochastic summary-diffusion training states.
 
@@ -1434,6 +1551,7 @@ def build_spectral_diffusion_examples(
     endpoint_reports: list[dict[str, Any]] = []
     spectral_noise_rms: list[float] = []
     graphlet_noise_rms: list[float] = []
+    edge_noise_rms: list[float] = []
     sample_id = 0
 
     for raw_item in graphs:
@@ -1443,8 +1561,17 @@ def build_spectral_diffusion_examples(
             require_same_degree_sequence=require_same_degree_sequence,
             rng=rng,
         )
+        edge_cfg=dict(edge_diffusion_config or {})
+        edge_enabled=bool(edge_cfg.get("enabled",False))
+        if edge_enabled:
+            target=_align_target_to_source_indexed_degrees(source,target,rng)
         source_spectrum = laplacian_eigenvalues(source)
         clean_spectrum = laplacian_eigenvalues(target)
+        source_edge_logits=clean_edge_logits=clean_edge_labels=None
+        if edge_enabled:
+            smoothing=float(edge_cfg.get("smoothing",0.01))
+            source_edge_logits,_=_binary_edge_logits(source,smoothing)
+            clean_edge_logits,clean_edge_labels=_binary_edge_logits(target,smoothing)
         clean_clustering_coefficient = float(nx.average_clustering(target))
         clean_histogram = (
             extract_clustering_histogram(target, histogram_bins)
@@ -1520,6 +1647,12 @@ def build_spectral_diffusion_examples(
                 )
                 spectral_noise_rms.append(float(spec_diag["noise_rms"]))
 
+                current_edge_logits=None
+                if source_edge_logits is not None:
+                    current_edge_logits,edge_rms=_sample_binary_edge_bridge(
+                        source_edge_logits,clean_edge_logits,float(progress),
+                        float(edge_cfg.get("sigma",1.0)),rng)
+                    edge_noise_rms.append(edge_rms)
                 current_prob = current_logits = None
                 if graphlet_basis is not None:
                     assert source_logits is not None
@@ -1551,6 +1684,10 @@ def build_spectral_diffusion_examples(
                         current_spectrum=current_spectrum.astype(np.float32),
                         source_spectrum=source_spectrum.astype(np.float32),
                         clean_spectrum_target=clean_spectrum.astype(np.float32),
+                        current_edge_logits=current_edge_logits,
+                        source_edge_logits=(None if source_edge_logits is None else source_edge_logits.astype(np.float32)),
+                        clean_edge_logits_target=(None if clean_edge_logits is None else clean_edge_logits.astype(np.float32)),
+                        clean_edge_labels_target=(None if clean_edge_labels is None else clean_edge_labels.astype(np.int64)),
                         clean_clustering_coefficient_target=clean_clustering_coefficient,
                         clean_clustering_histogram_target=(
                             None if clean_histogram is None else clean_histogram.astype(np.float32)
@@ -1616,6 +1753,8 @@ def build_spectral_diffusion_examples(
         "fix_spectral_lambda1": diff_cfg.fix_spectral_lambda1,
         "mean_spectral_noise_rms": float(np.mean(spectral_noise_rms)) if spectral_noise_rms else 0.0,
         "mean_graphlet_noise_rms": float(np.mean(graphlet_noise_rms)) if graphlet_noise_rms else 0.0,
+        "mean_edge_noise_rms": float(np.mean(edge_noise_rms)) if edge_noise_rms else 0.0,
+        "edge_diffusion_enabled": bool((edge_diffusion_config or {}).get("enabled",False)),
         "mean_endpoint_spectral_discrepancy": (
             float(np.mean([row["spectral_endpoint_distance"] for row in endpoint_reports]))
             if endpoint_reports else 0.0
@@ -1641,6 +1780,7 @@ class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset)
         seed: int = 0,
         shuffle_graphs: bool = True,
         structure_summary_config: dict[str, Any] | None = None,
+        edge_diffusion_config: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.graphs = tuple(graphs)
@@ -1648,6 +1788,7 @@ class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset)
         self.source_config = dict(source_config or {})
         self.spectral_config = dict(spectral_config or {})
         self.structure_summary_config = dict(structure_summary_config or {})
+        self.edge_diffusion_config = dict(edge_diffusion_config or {})
         clustering_histogram_bins(self.structure_summary_config)
         orbit_summary_width(self.structure_summary_config)
         cycle_graphlet_k(self.structure_summary_config)
@@ -1683,6 +1824,7 @@ class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset)
                         graphlet_logit_epsilon=self.graphlet_logit_epsilon,
                         require_same_degree_sequence=require_same_degree_sequence,
                         rng=np.random.default_rng(self.seed + 10_007 * graph_index),
+                        edge_diffusion_config=self.edge_diffusion_config,
                     )
                 )
             self._endpoint_cache = tuple(prepared)
@@ -1719,7 +1861,7 @@ class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset)
             if self._endpoint_cache is not None:
                 examples, diagnostics = _sample_spectral_diffusion_endpoint_examples(
                     self._endpoint_cache[int(graph_index)],
-                    diffusion_config=self.diffusion_config,
+                    diffusion_config={**self.diffusion_config, "edge_sigma": float(self.edge_diffusion_config.get("sigma",1.0))},
                     graphlet_basis=self.graphlet_basis,
                     seed=sample_seed,
                 )
@@ -1735,6 +1877,7 @@ class TopologySpectralDiffusionIterableDataset(torch.utils.data.IterableDataset)
                     graphlet_basis=self.graphlet_basis,
                     graphlet_logit_epsilon=self.graphlet_logit_epsilon,
                     seed=sample_seed,
+                    edge_diffusion_config=self.edge_diffusion_config,
                 )
                 diagnostics = dict(diagnostics)
                 diagnostics["endpoint_cache"] = False

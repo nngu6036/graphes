@@ -1,48 +1,41 @@
+comparison:
+  model: digress
+  dataset: zinc
+  common_config: common_zinc.yaml
+  status: adapter_profile_no_upstream_zinc_experiment
+  budget:
+    basis: closest_profile_or_adapter
+    unit: epochs
+    source: GraphER adapter; uploaded DiGress has no ZINC experiment
+    epochs: 1000
+    batch_size: 256
+  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
+    select adaptations on validation only, never on test metrics.
 digress:
-  # GraphER-facing benchmark dataset.
   native_dataset: zinc
-
-  # GraphER-facing logical experiment name. Stock DiGress has no ZINC Hydra
-  # configuration, so the wrapper composes qm9/qm9_no_h only as a loader and
-  # architecture template, then supplies ZINC categorical info and priors in
-  # memory. The external DiGress checkout is not modified.
   experiment: zinc_no_h
-
-  # Match the molecular training setup used for QM9 in the current wrapper.
   n_epochs: 1000
-
-  # ZINC molecules are larger than QM9 (up to 38 heavy atoms), so use a
-  # substantially smaller training batch than the QM9 value of 1024.
   batch_size: 256
-
-  num_workers: 8
-
+  num_workers: 0
   check_val_every_n_epochs: 5
   save_every_n_epochs: 100
-
-  # Keep sampling memory bounded for n <= 38 dense molecular graphs.
   generation_batch_size: 128
-
-  # Recompute atom-type, edge-type and valency statistics from the exact
-  # GraphER ZINC training split. Node counts include validation graph sizes so
-  # validation-time likelihoods have complete support.
   training_estimates:
     enabled: true
-
-    # This is an auxiliary generated/source pool used by the wrapper rather
-    # than the number of molecules used for model training.
     num_graphs: 1024
-
     batch_size: 128
-
   runtime:
     gpus: 1
-    cuda_visible_devices: "0"
+    cuda_visible_devices: '0'
     device: auto
-
     progress:
       enabled: true
       stream_output: true
       interval_seconds: 15
       epoch_interval: 10
       generation_batch_interval: 1
+  hydra_overrides:
+  - train.lr=0.0002
+  - train.weight_decay=1e-12
+  - train.ema_decay=0.0
+  - train.optimizer=adamw

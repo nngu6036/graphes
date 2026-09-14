@@ -67,6 +67,7 @@ _WRAPPER_OPTION_KEYS = frozenset(
         "training_estimates",
         "runtime",
         "native_dataset",
+        "comparison_reference",
     }
 )
 _SOURCE_CODE_DIRS = ("models", "utils", "evaluation")
@@ -189,7 +190,11 @@ def _normalize_optimizer_numbers(config: dict[str, Any]) -> None:
 
 
 def _load_options(request: TrainRequest) -> dict[str, Any]:
-    options: dict[str, Any] = {}
+    request_options = dict(request.options)
+    defaults = request_options.pop("comparison_defaults", {}) or {}
+    if not isinstance(defaults, Mapping):
+        raise TypeError("comparison_defaults must contain a mapping.")
+    options: dict[str, Any] = _deep_update({}, defaults)
     if request.config_path is not None:
         if not request.config_path.is_file():
             raise FileNotFoundError(f"Missing HOG-Diff wrapper config: {request.config_path}")
@@ -199,8 +204,8 @@ def _load_options(request: TrainRequest) -> dict[str, Any]:
         selected = loaded.get("hog_diff", loaded)
         if not isinstance(selected, Mapping):
             raise TypeError("The hog_diff config section must contain a mapping.")
-        options = dict(selected)
-    options = _deep_update(options, request.options)
+        options = _deep_update(options, selected)
+    options = _deep_update(options, request_options)
     unknown = set(options).difference(_WRAPPER_OPTION_KEYS)
     if unknown:
         raise ValueError(f"Unknown HOG-Diff wrapper option(s): {sorted(unknown)}.")

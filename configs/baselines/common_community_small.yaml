@@ -1,0 +1,55 @@
+baseline_common:
+  schema_version: 1
+  dataset: community_small
+  reference:
+    model: defog
+    native_dataset: comm20
+    experiment: comm20
+    status: exact_upstream_profile
+    source_files:
+    - configs/experiment/comm20.yaml
+    - configs/train/train_default.yaml
+    - configs/dataset/comm20.yaml
+  training:
+    epochs: 1000000
+    batch_size: 256
+    optimizer: adamw
+    learning_rate: 0.0002
+    weight_decay: 1.0e-12
+    gradient_clip_norm: null
+    ema_decay: 0.0
+    num_workers: 0
+    validation_every_epochs: 1000
+  data:
+    remove_hydrogens: null
+    pin_memory: false
+    aromatic: null
+  reference_only:
+    sample_every_validation: 10
+    validation_samples: 20
+    final_model_samples: 20
+    sample_steps: 1000
+    sample_time_distortion: identity
+    sample_omega: 0.0
+    sample_eta: 0.0
+    model_layers: 8
+  policy:
+    role: defog_reference_fallback_not_universal_training_horizon
+    raw_epoch_counts_cross_model_comparable: false
+    training_budget_rule: released_model_dataset_profile_or_validation_selected_adaptation
+    merge_precedence:
+    - upstream_defaults
+    - common_reference_fallback
+    - model_specific_config
+    - explicit_cli
+    budget_selection_uses_test_split: false
+  protocol:
+    fixed_prepared_splits: true
+    model_selection_split: val
+    final_evaluation_split: test
+    evaluation_seeds:
+    - 42
+    - 43
+    - 44
+    same_evaluator_across_models: true
+    same_requested_sample_count_per_report: true

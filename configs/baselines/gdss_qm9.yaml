@@ -1,4 +1,16 @@
-# GDSS baseline on GraphER's implicit-hydrogen QM9 attributed split.
+comparison:
+  model: gdss
+  dataset: qm9
+  common_config: common_qm9.yaml
+  status: exact_upstream_dataset_profile
+  budget:
+    basis: upstream_released_profile
+    unit: epochs
+    source: config/qm9.yaml
+    epochs: 300
+    batch_size: 1024
+  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
+    select adaptations on validation only, never on test metrics.
 gdss:
   source_env: GDSS
   python_env: GDSS_PYTHON
@@ -11,7 +23,7 @@ gdss:
     enabled: false
   runtime:
     device: auto
-    cuda_visible_devices: "0"
+    cuda_visible_devices: '0'
     timeout_seconds: null
     progress:
       enabled: true
@@ -19,3 +31,13 @@ gdss:
       interval_seconds: 15
       epoch_interval: 50
       generation_batch_interval: 1
+  batch_size: 1024
+  train:
+    num_epochs: 300
+    lr: 0.005
+    lr_schedule: true
+    ema: 0.999
+    weight_decay: 0.0001
+    grad_norm: 1.0
+    lr_decay: 0.999
+    eps: 1.0e-05

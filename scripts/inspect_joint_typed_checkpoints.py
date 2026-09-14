@@ -38,7 +38,7 @@ def main():
             print(f"  induced graphlet TV: {m['val_induced_graphlet_histogram_tv']:.6f}")
             if args.verify and model.induced_graphlet_metadata() is not None:
                 info = model.induced_graphlet_metadata()
-                print(f"  attributed={info['attributed']} k={info['k']} bins={info['width']} "
+                orders=info.get('sizes',[info.get('k')]); print(f"  attributed={info['attributed']} k={','.join(str(k) for k in orders if k is not None)} bins={info['width']} "
                       f"fingerprint={info['fingerprint']}")
     if args.verify:print('All selected joint/typed checkpoints verified.')
 

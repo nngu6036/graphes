@@ -356,6 +356,16 @@ def main() -> None:
     trajectory_cfg = dict(config.get("topology_trajectory", {}) or {})
     diffusion_cfg = dict(config.get("summary_diffusion", {}) or {})
     spectral_cfg = dict(config.get("spectral_prediction", {}) or {})
+    edge_diffusion_cfg = dict(config.get("edge_diffusion", {}) or {})
+    if edge_diffusion_cfg and not spectral_family_mode:
+        raise ValueError("Generic edge_diffusion is supported only by spectral-family topology predictors.")
+    if edge_diffusion_cfg.get("enabled", False):
+        if str(edge_diffusion_cfg.get("bridge", "centered_logit_brownian")) != "centered_logit_brownian":
+            raise ValueError("Generic GraphER currently supports edge_diffusion.bridge=centered_logit_brownian only.")
+        if not 0.0 < float(edge_diffusion_cfg.get("smoothing",0.01)) < 0.5:
+            raise ValueError("edge_diffusion.smoothing must be in (0,0.5).")
+        if float(edge_diffusion_cfg.get("sigma",1.0)) < 0:
+            raise ValueError("edge_diffusion.sigma must be nonnegative.")
 
     # Spectral-family predictors are trained from continuous stochastic bridge
     # states in summary space.  Rewiring trajectories are intentionally NOT
@@ -478,6 +488,7 @@ def main() -> None:
                 diffusion_config=diffusion_cfg,
                 source_config=source_construction_cfg,
                 spectral_config=spectral_cfg,
+                edge_diffusion_config=edge_diffusion_cfg,
                 structure_summary_config=structure_summary_cfg,
                 graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
@@ -489,6 +500,7 @@ def main() -> None:
                 diffusion_config=diffusion_cfg,
                 source_config=source_construction_cfg,
                 spectral_config=spectral_cfg,
+                edge_diffusion_config=edge_diffusion_cfg,
                 structure_summary_config=structure_summary_cfg,
                 graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
@@ -505,6 +517,7 @@ def main() -> None:
                 diffusion_config=diffusion_cfg,
                 source_config=source_construction_cfg,
                 spectral_config=spectral_cfg,
+                edge_diffusion_config=edge_diffusion_cfg,
                 structure_summary_config=structure_summary_cfg,
                 graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
@@ -515,6 +528,7 @@ def main() -> None:
                 diffusion_config=diffusion_cfg,
                 source_config=source_construction_cfg,
                 spectral_config=spectral_cfg,
+                edge_diffusion_config=edge_diffusion_cfg,
                 structure_summary_config=structure_summary_cfg,
                 graphlet_basis=(graphlet_basis if spectral_graphlet_mode else None),
                 graphlet_logit_epsilon=graphlet_logit_epsilon,
@@ -602,7 +616,11 @@ def main() -> None:
             "cycle_graphlet_k": cycle_k or 3,
             "predict_induced_graphlet_histogram": induced_spec is not None,
             "induced_graphlet_k": induced_spec.k if induced_spec else 5,
+            "induced_graphlet_k_min": induced_spec.min_k if induced_spec else None,
+            "induced_graphlet_k_max": induced_spec.max_k if induced_spec else None,
             "induced_graphlet_scope": induced_spec.scope if induced_spec else "all",
+            "predict_edge_state": bool(edge_diffusion_cfg.get("enabled",False)),
+            "edge_smoothing": float(edge_diffusion_cfg.get("smoothing",0.01)),
         }
         if spectral_graphlet_mode:
             assert graphlet_basis is not None

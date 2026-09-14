@@ -179,7 +179,11 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
         cycle_graphlet_k=int(summaries.get("cycle_graphlet_k", 3)),
         predict_induced_graphlet_histogram=bool(summaries.get("induced_graphlet_histogram", False)),
         induced_graphlet_k=summaries.get("induced_graphlet_k", 5),
+        induced_graphlet_k_min=summaries.get("induced_graphlet_k_min"),
+        induced_graphlet_k_max=summaries.get("induced_graphlet_k_max"),
         induced_graphlet_scope=summaries.get("induced_graphlet_scope", "all"),
+        predict_edge_state=bool((config.get("edge_diffusion", {}) or {}).get("enabled", False)),
+        edge_smoothing=float((config.get("edge_diffusion", {}) or {}).get("smoothing", 0.01)),
     )
     model = JointDegreeSpectralPredictor(
         joint_degree_config={
@@ -215,7 +219,7 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
             raise ValueError("Initialization expects an ordinary spectral checkpoint, not a joint model/resume checkpoint.")
         for key in architecture_names - {"self"}:
             # Predict-head booleans may differ (the new default disables cycles).
-            if key.startswith("predict_") or key in {"cycle_graphlet_k", "clustering_histogram_bins", "orbit_summary_width", "induced_graphlet_k", "induced_graphlet_scope", "induced_graphlet_catalogue_fingerprint"}:
+            if key.startswith("predict_") or key in {"cycle_graphlet_k", "clustering_histogram_bins", "orbit_summary_width", "induced_graphlet_k", "induced_graphlet_k_min", "induced_graphlet_k_max", "induced_graphlet_scope", "induced_graphlet_catalogue_fingerprint", "edge_smoothing"}:
                 continue
             if source.model_config().get(key) != model.model_config().get(key):
                 raise ValueError(f"Warm-start topology architecture mismatch for {key}; use the matching config or disable initialization.")
@@ -262,6 +266,7 @@ def _endpoints(graphs, config, seed):
             require_same_degree_sequence=True,
             rng=np.random.default_rng(seed + 10007*i),
             structure_summary_config=config.get("structure_summary_prediction", {}),
+            edge_diffusion_config=config.get("edge_diffusion", {}),
         ) for i, graph in enumerate(graphs)
     ]
 
@@ -291,7 +296,8 @@ def run_joint_epoch(model, endpoints, *, config, epoch, seed, device, optimizer=
             views = []
             for index in ids:
                 examples, _ = _sample_spectral_diffusion_endpoint_examples(
-                    endpoints[int(index)], diffusion_config=config.get("summary_diffusion", {}),
+                    endpoints[int(index)], diffusion_config={**dict(config.get("summary_diffusion", {}) or {}),
+                        "edge_sigma": float((config.get("edge_diffusion", {}) or {}).get("sigma",1.0))},
                     graphlet_basis=None,
                     seed=seed + effective_epoch*1000003 + int(index)*10007,
                 )
@@ -360,6 +366,14 @@ def train_joint_degree_grapher(config: dict[str, Any], args) -> None:
     if not config.get("constructor", {}).get("ensure_connected", True):
         raise ValueError("Joint degree topology requires connected HH construction.")
     diffusion = config.setdefault("summary_diffusion", {})
+    edge_diffusion = dict(config.get("edge_diffusion", {}) or {})
+    if edge_diffusion.get("enabled",False):
+        if str(edge_diffusion.get("bridge","centered_logit_brownian")) != "centered_logit_brownian":
+            raise ValueError("Joint generic edge diffusion supports centered_logit_brownian only.")
+        if not 0.0 < float(edge_diffusion.get("smoothing",0.01)) < 0.5:
+            raise ValueError("edge_diffusion.smoothing must be in (0,0.5).")
+        if float(edge_diffusion.get("sigma",1.0)) < 0:
+            raise ValueError("edge_diffusion.sigma must be nonnegative.")
     if int(diffusion.get("source_randomization_steps", 0)) != 0:
         raise ValueError("This joint trainer uses fixed HH endpoints: set source_randomization_steps=0.")
     for key in ("samples_per_graph", "paths_per_graph"):

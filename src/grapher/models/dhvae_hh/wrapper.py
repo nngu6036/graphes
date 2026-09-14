@@ -1,8 +1,8 @@
 """Common GraphER wrapper for the project-owned DH-VAE + HH baseline.
 
-The wrapper delegates model fitting to the maintained
-``train_degree_generator.py`` entrypoint and delegates generation to the
-canonical samplers and constructors in this package. It adds experiment
+The wrapper delegates model fitting to ``grapher.models.dhvae_hh.training``
+and generation to the canonical samplers and constructors in this package.
+It adds experiment
 orchestration: immutable dataset references, run-scoped artifacts, exact-count
 generation, checksums, manifests, and atomic publication.
 """
@@ -340,10 +340,13 @@ def _training_environment(seed: int) -> dict[str, str]:
 def _run_training_subprocess(
     *, config_path: Path, log_path: Path, seed: int, timeout: float | None
 ) -> list[str]:
-    script = _project_root() / "scripts" / "train_degree_generator.py"
-    if not script.is_file():
-        raise FileNotFoundError(f"Missing DH-VAE training script: {script}.")
-    command = [sys.executable, str(script), "--config", str(config_path)]
+    command = [
+        sys.executable,
+        "-m",
+        "grapher.models.dhvae_hh.training",
+        "--config",
+        str(config_path),
+    ]
     environment = _training_environment(seed)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as log:

@@ -19,6 +19,11 @@ from grapher.models import (
     TrainRequest,
     create_baseline,
 )
+from grapher.models.comparison import (
+    comparison_request_options,
+    resolve_common_config,
+    resolve_wrapper_config,
+)
 
 
 @dataclass(frozen=True)
@@ -77,7 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, default=Path("outputs/baselines"))
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--generation-id", default=None)
-    parser.add_argument("--wrapper-config", type=Path, default=None)
+    parser.add_argument("--wrapper-config", type=Path, default=None, help="Model-specific YAML; defaults to configs/baselines/hog_diff_<dataset>.yaml.")
+    parser.add_argument("--common-config", type=Path, default=None, help="DeFoG-reference common profile. HOG-Diff keeps its two native stage budgets from the model YAML.")
+    parser.add_argument("--no-common-config", action="store_true", help="Disable automatic common-profile loading for a native-only diagnostic run.")
     parser.add_argument("--resume-from", type=Path, default=None)
     parser.add_argument(
         "--hogdiff-root",
@@ -148,6 +155,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
     _configure_environment(args)
     progress_enabled = not args.quiet
     profile = DATASET_PROFILES[args.dataset]
+    common = resolve_common_config(args.dataset, getattr(args, "common_config", None), disabled=getattr(args, "no_common_config", False))
+    wrapper_config = resolve_wrapper_config("hog_diff", args.dataset, args.wrapper_config)
     progress: dict[str, object] = {
         "enabled": progress_enabled,
         "stream_output": progress_enabled and not args.no_stream_subprocess_output,
@@ -167,10 +176,11 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
     if args.training_estimate_count is not None:
         training_estimates["num_graphs"] = args.training_estimate_count
 
-    options: dict[str, object] = {
+    options: dict[str, object] = comparison_request_options("hog_diff", common, model_config=wrapper_config)
+    options.update({
         "runtime": runtime,
         "training_estimates": training_estimates,
-    }
+    })
     if args.num_workers is not None:
         options["num_workers"] = args.num_workers
     if args.generation_batch_size is not None:
@@ -233,7 +243,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
             TrainRequest(
                 run=run,
                 dataset=dataset,
-                config_path=args.wrapper_config,
+                config_path=wrapper_config,
                 options=options,
                 resume_from=args.resume_from,
                 overwrite=args.overwrite,
@@ -275,6 +285,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
         "dataset": args.dataset,
         "serialized_dataset": profile.serialized_id,
         "native_dataset": profile.native_id,
+        "wrapper_config": str(wrapper_config) if wrapper_config is not None else None,
+        "common_config": str(common.path) if common is not None else None,
         "seed_id": args.seed_id,
         "run_id": run.run_id,
         "generation_id": generation.generation_dir.name,

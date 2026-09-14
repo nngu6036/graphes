@@ -1,5 +1,16 @@
-# Source-backed SPECTRE on frozen GraphER grid splits.
-# Rerun starting point, not a claim of paper-identical settings or reproduced metrics.
+comparison:
+  model: spectre
+  dataset: grid
+  common_config: null
+  status: adapted_from_planar_profile_for_large_grid
+  budget:
+    basis: closest_upstream_profile_with_adapter
+    unit: epochs
+    source: README Planar command
+    epochs: 12000
+    batch_size: 1
+  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
+    select adaptations on validation only, never on test metrics.
 spectre:
   train:
     epochs: 12000
@@ -39,6 +50,12 @@ spectre:
     SON_gumbel_temperature_decay: true
     decay_SON_gumbel_temp_over: 10000
     SON_gumbel_temperature_warmup_epochs: 0
+    lr_g: 0.0001
+    lr_d: 0.0001
+    beta1: 0.5
+    beta2: 0.9
+    weight_decay: 0.0
+    ema: 0.995
   sample:
     use_ema: true
   generation_batch_size: 1

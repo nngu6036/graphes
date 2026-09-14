@@ -150,14 +150,19 @@ def main() -> None:
             "cycle_graphlet_k": int(getattr(model, "cycle_graphlet_k", 3)),
             "induced_graphlet_histogram": bool(getattr(model, "predict_induced_graphlet_histogram", False)),
             "induced_graphlet_k": getattr(model, "induced_graphlet_k", 5),
+            "induced_graphlet_k_min": getattr(model, "induced_graphlet_k_min", None),
+            "induced_graphlet_k_max": getattr(model, "induced_graphlet_k_max", None),
             "induced_graphlet_scope": getattr(model, "induced_graphlet_scope", "all"),
         },
+        edge_diffusion_config=dict(config.get("edge_diffusion", {}) or {}),
         seed=int(args.seed),
     )
     if args.source_endpoint_only:
         for example in examples:
             example.time = 0.0
             example.current_spectrum = example.source_spectrum.copy()
+            if example.source_edge_logits is not None:
+                example.current_edge_logits = example.source_edge_logits.copy()
     source_histograms = (
         [extract_clustering_histogram(example.current_graph, model.clustering_histogram_bins) for example in examples]
         if getattr(model, "predict_clustering_histogram", False) else None
@@ -216,6 +221,16 @@ def main() -> None:
             trace_pred = (predicted * mask.to(predicted.dtype)).sum(dim=1)
             trace_target = (target * mask.to(target.dtype)).sum(dim=1)
             lambda1 = torch.abs(predicted[:, 0])
+            edge_accuracy = edge_ce = None
+            if outputs.get("clean_edge_logits") is not None and batch.clean_edge_labels_target is not None:
+                edge_logits=outputs["clean_edge_logits"]
+                upper=torch.triu(torch.ones_like(batch.pair_mask,dtype=torch.bool),diagonal=1)
+                pm=batch.pair_mask.bool() & upper
+                denom=pm.to(edge_logits.dtype).sum(dim=(1,2)).clamp_min(1.0)
+                correct=((edge_logits.argmax(-1)==batch.clean_edge_labels_target)&pm).to(edge_logits.dtype)
+                edge_accuracy=correct.sum(dim=(1,2))/denom
+                ce_all=torch.nn.functional.cross_entropy(edge_logits.permute(0,3,1,2),batch.clean_edge_labels_target.long(),reduction="none")
+                edge_ce=(ce_all*pm.to(ce_all.dtype)).sum(dim=(1,2))/denom
             predicted_clustering = outputs.get("clean_clustering_coefficient")
             target_clustering = batch.clean_clustering_coefficient_target
             predicted_histogram = outputs.get("clean_clustering_histogram")
@@ -272,10 +287,16 @@ def main() -> None:
                 gp = outputs["clean_induced_graphlet_histogram"]
                 gt = batch.clean_induced_graphlet_histogram_target.to(gp)
                 gs = torch.as_tensor(np.stack(source_induced_histograms[example_offset:example_offset+len(gp)]), device=gp.device, dtype=gp.dtype)
-                induced_tv = 0.5 * (gp-gt).abs().sum(-1)
-                source_induced_tv = 0.5 * (gs-gt).abs().sum(-1)
-                totals = torch.tensor([comb(int(n), induced_spec.k) if n >= induced_spec.k else 0 for n in batch.graph_size.cpu().tolist()], device=gp.device, dtype=gp.dtype)
-                induced_count_mae = (gp-gt).abs().mean(-1) * totals
+                block_tv=[]; source_block_tv=[]; block_count=[]
+                for k,(start,stop) in zip(induced_spec.sizes, induced_spec.slices):
+                    valid=(batch.graph_size >= int(k)).to(gp.dtype)
+                    block_tv.append(0.5*(gp[:,start:stop]-gt[:,start:stop]).abs().sum(-1)*valid)
+                    source_block_tv.append(0.5*(gs[:,start:stop]-gt[:,start:stop]).abs().sum(-1)*valid)
+                    totals=torch.tensor([comb(int(n),int(k)) if n>=int(k) else 0 for n in batch.graph_size.cpu().tolist()],device=gp.device,dtype=gp.dtype)
+                    block_count.append((gp[:,start:stop]-gt[:,start:stop]).abs().mean(-1)*totals*valid)
+                induced_tv=torch.stack(block_tv).mean(0)
+                source_induced_tv=torch.stack(source_block_tv).mean(0)
+                induced_count_mae=torch.stack(block_count).mean(0)
             example_offset += predicted.shape[0]
 
             for i in range(predicted.shape[0]):
@@ -292,6 +313,9 @@ def main() -> None:
                     ),
                     "lambda1_abs": float(lambda1[i].detach().cpu()),
                 }
+                if edge_accuracy is not None:
+                    row["edge_accuracy"] = float(edge_accuracy[i].detach().cpu())
+                    row["edge_ce"] = float(edge_ce[i].detach().cpu())
                 if predicted_clustering is not None and target_clustering is not None:
                     row["clustering_target"] = float(
                         target_clustering[i].detach().cpu()
@@ -316,7 +340,7 @@ def main() -> None:
                     row["cycle_graphlet_count_mae"] = float(cycle_count_mae[i].cpu())
                     if cycle_orbit_count_gap is not None:
                         row["cycle_orbit_triangle_count_gap"] = float(cycle_orbit_count_gap[i].cpu())
-                if induced_tv is not None and float(batch.graph_size[i]) >= induced_spec.k:
+                if induced_tv is not None and float(batch.graph_size[i]) >= induced_spec.min_k:
                     row["induced_graphlet_histogram_tv"] = float(induced_tv[i].cpu())
                     row["source_induced_graphlet_histogram_tv"] = float(source_induced_tv[i].cpu())
                     row["induced_graphlet_count_mae"] = float(induced_count_mae[i].cpu())
@@ -346,6 +370,10 @@ def main() -> None:
             "lambda1_abs",
         ):
             result[key] = _mean([row[key] for row in rows])
+        edge_rows=[row for row in rows if "edge_accuracy" in row]
+        if edge_rows:
+            result["edge_accuracy"]=_mean([row["edge_accuracy"] for row in edge_rows])
+            result["edge_ce"]=_mean([row["edge_ce"] for row in edge_rows])
         clustering_rows = [row for row in rows if "clustering_abs_error" in row]
         if clustering_rows:
             result["clustering_coefficient_mae"] = _mean(
@@ -424,7 +452,7 @@ def main() -> None:
         if "cycle_orbit_triangle_count_gap" in overall:
             print(f"  cycle/orbit predicted triangle-count gap: {overall['cycle_orbit_triangle_count_gap']:.6f}")
     if "induced_graphlet_histogram_tv" in overall:
-        print(f"  Induced graphlets: k={induced_spec.k} scope={induced_spec.scope} bins={induced_spec.width}")
+        print(f"  Induced graphlets: k={','.join(str(k) for k in induced_spec.sizes)} scope={induced_spec.scope} bins={induced_spec.width}")
         print(f"  HH -> clean induced graphlet TV:   {overall['source_induced_graphlet_histogram_tv']:.6f}")
         print(f"  pred -> clean induced graphlet TV: {overall['induced_graphlet_histogram_tv']:.6f}")
         print(f"  pred -> clean count MAE per bin:   {overall['induced_graphlet_count_mae']:.6f}")

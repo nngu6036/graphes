@@ -51,6 +51,11 @@ from grapher.rewiring_mlp.generic.spectral_refiner import (
     SpectralRefinerConfig,
     refine_graph_with_spectral_predictions,
 )
+from grapher.rewiring_mlp.generic.joint_edge_spectral_generation import (
+    JointEdgeSpectralRefinerConfig,
+    sample_soft_endpoint as sample_joint_edge_spectral_endpoint,
+    refine_graph as refine_joint_edge_spectral_graph,
+)
 from grapher.rewiring_mlp.generic.spectral_graphlet_refiner import (
     SpectralGraphletRefinerConfig,
     enrich_graph_with_degree_summary,
@@ -123,9 +128,17 @@ def _build_generation_degree_sampler(
         cfg["enabled"] = True
         return build_degree_sampler(cfg, train_graphs, seed=seed)
 
-    if source == "train_empirical_perturbed":
+    if source in {"train_empirical_perturbed", "edge_relocation"}:
+        settings = dict(perturbation_cfg or {})
+        if source == "edge_relocation":
+            conflicting = {k: settings[k] for k in ("method", "probability", "steps", "failure_policy") if k in settings}
+            expected = {"method": "edge_relocation", "probability": 1.0, "steps": 1, "failure_policy": "error"}
+            for key, value in conflicting.items():
+                if value != expected[key]:
+                    raise ValueError(f"generation.degree_source=edge_relocation fixes {key}={expected[key]!r}; received {value!r}.")
+            settings.update(expected)
         return PerturbedEmpiricalDegreeSampler.fit_from_graphs(
-            train_graphs, perturbation_cfg, seed=seed,
+            train_graphs, settings, seed=seed,
             support_max_degree=support_max_degree,
         )
 
@@ -168,6 +181,7 @@ def _guidance_diagnostic_summary(
     """
     components = set(settings.guidance_mode.split("_"))
     result: dict[str, Any] = {
+        "edge_guidance_weight": getattr(settings, "edge_weight", 0.0) if "edge" in components else 0.0,
         "spectral_guidance_weight": settings.spectral_weight if "spectral" in components else 0.0,
         "clustering_guidance_weight": settings.clustering_weight if "clustering" in components else 0.0,
         "orbit_guidance_weight": settings.orbit_weight if "orbit" in components else 0.0,
@@ -183,7 +197,7 @@ def _guidance_diagnostic_summary(
         "candidate_spectral_diagnostics_requested": settings.compute_candidate_spectral_diagnostics,
         "accepted_spectral_diagnostics_computed": bool(accepted_rows),
     }
-    for component in ("clustering", "orbit", "cycle", "graphlet"):
+    for component in ("edge", "clustering", "orbit", "cycle", "graphlet"):
         active = component in components
         measured = [r for r in accepted_rows if active and r.get(f"current_{component}_discrepancy") is not None]
         result[f"{component}_diagnostics_computed"] = bool(measured)
@@ -357,18 +371,19 @@ def main() -> None:
             f"{TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT!r}."
         )
     model_device = next(model.parameters()).device
+    joint_edge_diffusion = bool(guidance_mode == "spectral" and getattr(model, "predict_edge_state", False))
 
     degree_source = str(generation_cfg.get("degree_source", "learned")).lower()
     perturbation_cfg = dict(generation_cfg.get("degree_perturbation", {}) or {})
-    if perturbation_cfg and degree_source != "train_empirical_perturbed":
-        raise ValueError("generation.degree_perturbation requires degree_source=train_empirical_perturbed.")
+    if perturbation_cfg and degree_source not in {"train_empirical_perturbed", "edge_relocation"}:
+        raise ValueError("generation.degree_perturbation requires degree_source=train_empirical_perturbed or edge_relocation.")
     degree_rng_mode = str(generation_cfg.get(
-        "degree_rng_mode", "independent" if degree_source == "train_empirical_perturbed" else "legacy"
+        "degree_rng_mode", "independent" if degree_source in {"train_empirical_perturbed", "edge_relocation"} else "legacy"
     )).lower()
     if degree_rng_mode not in {"legacy", "independent"}:
         raise ValueError("generation.degree_rng_mode must be legacy or independent.")
-    if degree_source == "train_empirical_perturbed" and degree_rng_mode != "independent":
-        raise ValueError("Perturbed empirical degrees require degree_rng_mode=independent for parent pairing.")
+    if degree_source in {"train_empirical_perturbed", "edge_relocation"} and degree_rng_mode != "independent":
+        raise ValueError("Perturbed/edge-relocation degrees require degree_rng_mode=independent for parent pairing.")
     # The old first-three construction/refinement/enrichment streams are untouched.
     # The new control and all perturbation variants share this separate parent RNG.
     degree_rng = (np.random.default_rng(np.random.SeedSequence(seed, spawn_key=(3,)))
@@ -405,10 +420,15 @@ def main() -> None:
               f"conditioning=realized_degree_histogram; orbit_consistency={model.orbit_consistency}", flush=True)
 
     if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
+        suffix = (
+            "; temporary connected HH witness is used only to relocate an endpoint; "
+            "its adjacency is discarded and the actual GraphER source is reconstructed from the new degrees"
+            if degree_sampler.config.method == "edge_relocation" else ""
+        )
         print(f"[GraphER/DegreePerturbation] method={degree_sampler.config.method} "
               f"probability={degree_sampler.config.probability} steps={degree_sampler.config.steps} "
               f"failure_policy={degree_sampler.config.failure_policy}; "
-              "training degrees only; n,m preserved; actual changed degrees condition predictor", flush=True)
+              "training degrees only; n,m preserved; actual changed degrees condition predictor" + suffix, flush=True)
 
     constructor_cfg = dict(config.get("constructor", {}) or {})
     if str(constructor_cfg.get("type", "havel_hakimi")).lower() != "havel_hakimi":
@@ -481,8 +501,17 @@ def main() -> None:
                 flush=True,
             )
         else:
-            refiner_settings = SpectralRefinerConfig.from_dict(refiner_cfg)
-            active_components = set(refiner_settings.guidance_mode.split("_"))
+            if joint_edge_diffusion:
+                refiner_settings = JointEdgeSpectralRefinerConfig.from_dict(refiner_cfg, model=model)
+                active_components = set(refiner_settings.guidance_mode.split("_"))
+                print(
+                    "[GraphER/JointEdgeSpectral] loaded generic binary-edge + independent "
+                    "Laplacian-eigenvalue diffusion checkpoint; hard realization preserves indexed degrees.",
+                    flush=True,
+                )
+            else:
+                refiner_settings = SpectralRefinerConfig.from_dict(refiner_cfg)
+                active_components = set(refiner_settings.guidance_mode.split("_"))
             if "clustering" in active_components:
                 if refiner_settings.clustering_statistic == "histogram":
                     if not getattr(model, "predict_clustering_histogram", False):
@@ -493,11 +522,12 @@ def main() -> None:
                 elif not getattr(model, "predict_clustering_coefficient", False):
                     raise ValueError("Mean-clustering guidance requested, but checkpoint has no scalar clustering head.")
             if "graphlet" in active_components:
-                from grapher.rewiring_mlp.generic.induced_graphlets import InducedGraphletSpec
                 if not getattr(model, "predict_induced_graphlet_histogram", False):
                     raise ValueError("Graphlet guidance requested but checkpoint has no induced graphlet head; train a new checkpoint.")
-                if InducedGraphletSpec(refiner_settings.induced_graphlet_k, refiner_settings.induced_graphlet_scope) != model.induced_graphlet_spec:
-                    raise ValueError("Induced graphlet guidance catalogue differs from the checkpoint.")
+                if not joint_edge_diffusion:
+                    from grapher.rewiring_mlp.generic.induced_graphlets import InducedGraphletSpec
+                    if InducedGraphletSpec(refiner_settings.induced_graphlet_k, refiner_settings.induced_graphlet_scope) != model.induced_graphlet_spec:
+                        raise ValueError("Induced graphlet guidance catalogue differs from the checkpoint.")
             if "cycle" in active_components:
                 if not getattr(model, "predict_cycle_graphlet_histogram", False):
                     raise ValueError("Cycle guidance requested, but checkpoint has no cycle graphlet histogram head. Train with structure_summary_prediction.cycle_graphlet_histogram=true.")
@@ -660,18 +690,31 @@ def main() -> None:
                 ),
             )
         elif guidance_mode == "spectral":
-            refined, trace = refine_graph_with_spectral_predictions(
-                coarse,
-                model=model,
-                refiner_config=refiner_settings,
-                device=model_device,
-                rng=np.random.default_rng(refiner_graph_seeds[index]),
-                return_trace=True,
-                debug_context=(
-                    f"graph={index + 1}/{num_generate} "
-                    f"n={coarse.number_of_nodes()} m={coarse.number_of_edges()}"
-                ),
-            )
+            if joint_edge_diffusion:
+                bridge_seed = int(np.random.default_rng(refiner_graph_seeds[index]).integers(0, 2**31 - 1))
+                targets, bridge_report = sample_joint_edge_spectral_endpoint(
+                    model, base_graph, config, seed=bridge_seed
+                )
+                refined, trace = refine_joint_edge_spectral_graph(
+                    base_graph, targets, model, config,
+                    rng=np.random.default_rng(refiner_graph_seeds[index]),
+                    prediction_calls=int(bridge_report["prediction_calls"]),
+                )
+                if trace:
+                    trace[0]["bridge_report"] = bridge_report
+            else:
+                refined, trace = refine_graph_with_spectral_predictions(
+                    coarse,
+                    model=model,
+                    refiner_config=refiner_settings,
+                    device=model_device,
+                    rng=np.random.default_rng(refiner_graph_seeds[index]),
+                    return_trace=True,
+                    debug_context=(
+                        f"graph={index + 1}/{num_generate} "
+                        f"n={coarse.number_of_nodes()} m={coarse.number_of_edges()}"
+                    ),
+                )
         else:
             assert graphlet_basis is not None
             refined, trace = refine_graph_with_topology_predictions(
@@ -1085,6 +1128,8 @@ def main() -> None:
         "checkpoint_format": checkpoint.get("format"),
         "degree_source": degree_source,
         "degree_rng_mode": degree_rng_mode,
+        "joint_soft_edge_diffusion": joint_edge_diffusion,
+        "laplacian_eigenvalue_diffusion": bool(guidance_mode == "spectral"),
         "degree_prior_report_file": "degree_prior_report.json",
         "parent_degree_fingerprint": degree_prior_report["returned_parent_degree_fingerprint"],
         "sampled_degree_fingerprint": degree_prior_report["returned_degree_fingerprint"],

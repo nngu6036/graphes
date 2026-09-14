@@ -1,11 +1,29 @@
-# Source-backed GSDM on frozen GraphER community_small splits.
-# Rerun starting point, not a claim of paper-identical settings or reproduced metrics.
+comparison:
+  model: gdsm
+  dataset: community_small
+  common_config: common_community_small.yaml
+  status: exact_upstream_community_small
+  budget:
+    basis: upstream_released_profile
+    unit: epochs
+    source: config/community_small.yaml
+    epochs: 200
+    batch_size: 128
+  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
+    select adaptations on validation only, never on test metrics.
 gdsm:
   upstream_config: community_small.yaml
   train:
     epochs: 200
     batch_size: 128
     log_every: 10
+    lr: 0.01
+    lr_schedule: true
+    ema: 0.999
+    weight_decay: 0.0001
+    grad_norm: 1.0
+    lr_decay: 0.999
+    eps: 1.0e-05
   sample:
     use_ema: false
   generation_batch_size: 128

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train/generate GDSM via the GraphER baseline API."""
+"""Train/generate GDSM with common-reference then model-specific config precedence."""
 from grapher.models.external_cli import main
 
 if __name__ == "__main__":

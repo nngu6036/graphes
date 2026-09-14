@@ -1,5 +1,17 @@
-# Source-backed EDGE on frozen GraphER grid splits.
-# Rerun starting point, not a claim of paper-identical settings or reproduced metrics.
+comparison:
+  model: edge
+  dataset: grid
+  common_config: null
+  status: source_readme_generic_budget_with_dataset_adapter
+  budget:
+    basis: upstream_released_generic_budget
+    unit: epochs
+    source: uploaded EDGE README training command
+    epochs: 50000
+    batch_size: 2
+    diffusion_steps: 128
+  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
+    select adaptations on validation only, never on test metrics.
 edge:
   train:
     epochs: 50000

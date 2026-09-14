@@ -1,5 +1,16 @@
-# Source-backed CatFlow on frozen GraphER ego_small splits.
-# Rerun starting point, not a claim of paper-identical settings or reproduced metrics.
+comparison:
+  model: catflow
+  dataset: ego_small
+  common_config: common_ego_small.yaml
+  status: generic_adapter_no_upstream_ego_profile
+  budget:
+    basis: adapter_budget_requires_validation_check
+    unit: epochs
+    source: GraphER adapter; uploaded CatFlow README has no Ego profile
+    epochs: 1000
+    batch_size: 128
+  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
+    select adaptations on validation only, never on test metrics.
 catflow:
   train:
     epochs: 1000
@@ -9,7 +20,7 @@ catflow:
     log_every: 10
     distribution: normal
     loss_function: kld
-    path: linear  # v2: no fixed endpoint noise; pairs with the sampling velocity
+    path: linear
     validation_every: 100
     validation_repeats: 4
     checkpoint_every: 1000
@@ -23,7 +34,7 @@ catflow:
     atol: 1.0e-05
     rtol: 1.0e-05
     use_ema: true
-    checkpoint_selection: auto  # best for v2, last (with warning) for legacy checkpoints
+    checkpoint_selection: auto
   generation_batch_size: 128
   runtime:
     device: auto

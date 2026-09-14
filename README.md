@@ -1,799 +1,1216 @@
-# Unified adjacency-diffusion extension
+# GraphER
 
-See [GRAPHER_ADJACENCY_DIFFUSION.md](GRAPHER_ADJACENCY_DIFFUSION.md) for the new joint typed molecular mode, configs, and commands. Existing spectral experiments remain available.
+GraphER is an experimental graph-generation framework built around
+**constraint-preserving graph rewiring**. It supports generic graphs and
+attributed molecular graphs, multiple structural guidance variants, degree or
+typed-degree priors, and a common wrapper/evaluation layer for external
+baselines.
 
-# GraphER — Constraint-Preserving Graph Generation and Refinement
+The repository is organized for controlled experiments: prepared dataset splits
+are frozen, generated artifacts are run-scoped, and baseline outputs are routed
+through the same evaluation code whenever the graph representation permits it.
 
-## Joint-degree checkpoint selection
+## Core idea
 
-Joint DH-VAE + GraphER training now retains **best joint, best clustering histogram,
-best orbit, and last** checkpoints with epoch-matched degree exports. The default
-`checkpoint.pt` remains best joint; losses and guidance weights are unchanged.
-See [setup, commands, integrity checks and comparisons](GRAPHER_JOINT_MULTICHECKPOINT.md).
+For generic graphs, GraphER samples or obtains a degree sequence, constructs a
+simple connected realization, and refines that realization with valid rewiring
+operations. Accepted operations preserve the selected invariant while learned
+predictors guide higher-order structure such as adjacency targets, spectral
+summaries and graphlets.
 
+For molecular graphs, the invariant can include atom categories and bond-type
+specific degrees. Generation uses typed initialization and constrained
+bond/edge operations so atom/bond structure is not treated as an unconstrained
+post-processing problem.
 
-**GraphER** is a research and engineering project for **graph generative modeling**.
+The exact experimental variant is defined by YAML rather than by separate code
+forks.
 
-It investigates a practical question:
+## Controlled baseline comparison
 
-> **Can we improve the higher-order structure of a generated graph without destroying the properties the base generator already gets right?**
+`configs/baselines/common_<dataset>.yaml` is the **shared protocol/reference
+layer**. DeFoG supplies the reference settings, but its raw training horizon is
+**not a universal epoch budget**. One million DeFoG epochs does not mean one
+million HOG-Diff iterations, GraphRNN epochs, GDSS epochs, or SPECTRE epochs.
 
-GraphER starts from a **completed graph produced by a base generator**, predicts desirable structural summaries, and refines the graph through **valid double-edge swaps**. Each accepted move preserves the graph's indexed degree sequence and can enforce additional hard constraints such as simplicity and connectivity.
-
-The project combines ideas from **generative AI, graph neural networks, constrained search, discrete optimization, diffusion-style structural guidance, and reproducible ML systems engineering**.
-
----
-
-## Portfolio Highlights
-
-This repository demonstrates experience in:
-
-- **Generative AI research** for structured and discrete data
-- **Graph neural networks** and permutation-invariant graph representations
-- **Diffusion / bridge-inspired generative modeling**
-- **Constrained combinatorial optimization**
-- **PyTorch model design and training**
-- **Research-to-code implementation**
-- **ML benchmarking and reproducible experimentation**
-- Integration of research baselines such as **DiGress, DeFoG, GraphRNN, and DH-VAE**
-- **Molecular graph generation** with atom/bond constraints
-- **Performance optimization**, including incremental graphlet updates and candidate filtering
-- Experiment provenance, deterministic splits, checksums, manifests, isolated environments, and audit reports
-
----
-
-## What GraphER Does
-
-Given a completed graph \(G_0\), GraphER operates inside the degree-preserving state space
-
-\[
-\Omega(d^{(0)}) =
-\left\{
-G:
-G \text{ is simple and connected, and }
-d_v(G)=d_v(G_0)\ \forall v
-\right\}.
-\]
-
-A valid double-edge swap changes two edges while preserving every node degree.
-
-Before accepting a move, GraphER rejects candidates that would introduce:
-
-- self-loops,
-- duplicate edges,
-- disconnected graphs, or
-- previously visited states.
-
-Therefore, every accepted correction preserves node count, edge count, indexed node degree, degree multiset, simplicity, undirectedness, and connectivity.
-
-These are **hard properties of the transition operator**, not learned penalties.
-
----
-
-## Core Idea
-
-GraphER separates **what a graph should look like structurally** from **how to reach that structure under hard invariants**.
-
-The main structural target is
-
-\[
-\Phi(G)=\bigl(H_{3:5}(G),\ C(G),\ O_{0:14}(G)\bigr),
-\]
-
-where:
-
-- \(H_{3:5}\): connected induced graphlet histograms,
-- \(C(G)\): clustering-coefficient histogram,
-- \(O_{0:14}(G)\): 15-dimensional mean orbit-count vector.
-
-The predictor estimates a target structural state, while a constrained search procedure selects valid rewiring operations that move the current graph toward that target.
-
----
-
-## System Overview
-
-```mermaid
-flowchart LR
-    A["Base Generator"] --> B["Completed Graph"]
-    B --> C["GraphER Structural Predictor"]
-    C --> D["Predicted Structural Target"]
-    B --> E["Valid Degree-Preserving Swap Candidates"]
-    D --> F["Structural Energy"]
-    E --> F
-    F --> G["Best Improving Swap"]
-    G --> H["Refined Graph"]
-```
-
-GraphER is deliberately designed so the correction layer does **not** require access to the base model's training trajectory, diffusion states, logits, gradients, hidden states, or retraining.
-
-This makes it useful for studying **model-agnostic post-generation correction**.
-
----
-
-## Model Architecture
-
-The active structural predictor consumes:
-
-- current binary adjacency,
-- normalized indexed node degrees,
-- graph size,
-- normalized rewiring time \(t/T\),
-- padding masks.
-
-It predicts:
-
-- one Dirichlet concentration vector per graphlet size,
-- an optional Beta distribution for connected-subset mass,
-- a Dirichlet concentration vector for clustering,
-- non-negative orbit-count predictions.
-
-The graph-level outputs are permutation invariant.
-
-The active generic model intentionally has **no terminal adjacency decoder, edge/no-edge prediction head, or learned edge-selection policy**.
-
----
-
-## Constrained Refinement
-
-At step \(t\), GraphER scores candidate graph transformations using a structural energy:
-
-\[
-\widehat E_t(G)=
-\lambda_g D_g(H(G),\widehat H_t)
-+\lambda_c D_c(C(G),\widehat C_t)
-+\lambda_o D_o(O(G),\widehat O_t)
-+\lambda_m D_m(\rho(G),\widehat\rho_t).
-\]
-
-For candidate action \(a\),
-
-\[
-\Delta_t(a)=
-\widehat E_t(G_t)-\widehat E_t(T_a(G_t)).
-\]
-
-Only candidates with positive gain are eligible for acceptance.
-
-This gives a **step-local improvement guarantee for the frozen prediction used in that decision**, while retaining the graph invariants enforced by the transition operator.
-
----
-
-## Generative Pipelines
-
-### 1. From-Scratch Topology Generation
+The merge order for every maintained external-baseline runner is:
 
 ```text
-Degree Model
-    ↓
-Degree Sequence
-    ↓
-Randomized Connected Havel–Hakimi
-    ↓
-Initial Graph
-    ↓
-GraphER Refinement
-    ↓
-Generated Graph
+upstream defaults
+  -> common_<dataset>.yaml reference fallbacks
+  -> <model>_<dataset>.yaml model-native/equivalent settings
+  -> explicit CLI overrides
 ```
 
-### 2. Post-Generation Refinement
+Therefore the common files define the comparison context and provenance, while
+each model YAML is authoritative for quantities whose numerical meaning depends
+on the implementation. In particular, every maintained model config now records
+a `comparison:` section with the source and native training-budget unit.
+
+The shared controls that should remain fixed across methods are the prepared
+train/validation/test splits, seed policy, model selection on validation only,
+requested sample count for a report, graph representation, and evaluator.
+Optimizer schedules and training horizons follow the released model/dataset
+profile when one exists. When the released code has no matching dataset profile,
+the config is explicitly marked as an adaptation and its budget must be selected
+on validation data rather than test MMD.
+
+The DeFoG-reference profiles are:
 
 ```text
-Frozen Base Generator
-    ↓
-Completed Graph
-    ↓
-GraphER
-    ↓
-Structurally Refined Graph
+configs/baselines/common_community_small.yaml
+configs/baselines/common_ego_small.yaml
+configs/baselines/common_qm9.yaml
+configs/baselines/common_zinc.yaml
 ```
 
-Supported or scaffolded integrations include:
+`common_ego_small.yaml` remains a Comm20-derived reference because the supplied
+DeFoG source does not contain the GraphER/GDSS Ego-small experiment.
 
-| Model | Role | Status |
-|---|---|---|
-| DH-VAE + Havel–Hakimi | Project-owned base generator | Ready |
-| DiGress | External diffusion baseline | Ready |
-| DeFoG | External discrete-flow baseline | Ready |
-| GDSS | External score/SDE baseline | Ready |
-| GraphRNN | External autoregressive baseline | Ready |
-| CatFlow | External categorical-flow baseline | Corrected linear-path v2; CPU smoke-tested |
-| GSDM (`gdsm` / `gsdm`) | External spectral-diffusion baseline | Implemented; CPU smoke-tested |
-| EDGE | External degree-guided diffusion baseline | Implemented; native environment still requires validation |
-| SPECTRE | External spectral GAN baseline | Implemented; CPU smoke-tested |
-| HOG-Diff | External higher-order / bridge diffusion baseline | Ready |
-| FLAGG | External baseline | Integration scaffold |
+Representative Community-small budgets after model-specific overrides are:
 
-CatFlow, GSDM, EDGE, and SPECTRE setup, supported datasets, source adaptations,
-separate training/generation/evaluation commands, and validation limits are in
-[Source-backed baseline guide](docs/SOURCE_BACKED_BASELINES.md).
-CatFlow users should first read the [path-mismatch audit and corrected commands](docs/CATFLOW_PATH_AUDIT_20260908.md).
-The standalone distribution includes the four uploaded sources under `external/`,
-not inside the `grapher` Python package. These workers do not train GraphER itself.
+| Model | Effective training budget | Source status |
+|---|---:|---|
+| DeFoG | 1,000,000 epochs, batch 256 | released `comm20` profile |
+| DiGress | 1,000,000 epochs, batch 256 | released `comm20` profile |
+| GDSS | 5,000 epochs, batch 128 | released `community_small` profile |
+| GSDM | 200 epochs, batch 128 | released `community_small` profile |
+| EDGE | 50,000 epochs, batch 8 | released generic training budget; small-graph diffusion adapter |
+| GraphRNN | 3,000 epochs × 32 mini-batches/epoch | released default schedule |
+| HOG-Diff | 6,000 higher-order + 22,000 OU iterations | released `cs.yaml` two-stage schedule |
+| SPECTRE | 12,000 epochs, batch 10 | released Community command |
+| CatFlow | 10,000 epochs, batch 128 | GraphER linear-v2 generic adapter budget; no released generic CatFlow profile, validate before reporting |
 
----
+These counts are deliberately **not normalized to the same integer**. They are
+different optimization units and model costs. For publication, report runtime
+and/or optimizer-update counts alongside quality when compute fairness matters.
 
-## Structural Guidance Variants
+See [`docs/BASELINES.md`](docs/BASELINES.md) for the full dataset-by-model budget
+matrix and commands.
 
-### Structural-Summary Predictor
-
-Predicts graphlet, clustering, and orbit summaries directly from the current graph state.
-
-### Spectral Guidance
-
-Predicts the clean combinatorial-Laplacian spectrum and uses valid rewiring operations to move the graph toward a spectral target.
-
-### Spectral + Graphlet-Logit Diffusion
-
-Combines:
-
-- global Laplacian-spectrum information,
-- local higher-order graphlet structure.
-
-Graphlet probabilities are represented in centered log-ratio coordinates and diffused in continuous summary space.
-
-A coarse-to-fine schedule lets spectral information dominate early while graphlet structure becomes more influential near the clean endpoint.
-
----
-
-## Molecular Graph Generation
-
-GraphER also contains an attributed molecular generation path for datasets such as **QM9** and **ZINC**.
-
-The revised molecular rewiring kernel preserves exactly:
-
-- atom categories,
-- indexed ordinary degrees,
-- global bond-type counts.
-
-It may select two bonds of different types and reassign those two bond types
-across either double-edge reconnection. Per-node typed degrees and weighted
-valence can therefore change locally; atom-specific valence and RDKit checks
-serve as validity constraints instead of treating those quantities as hard
-invariants. The previous same-bond-type kernel remains available as a strict
-ablation.
-
-The attributed spectral–graphlet model combines:
-
-- unweighted topology spectrum,
-- bond-order-weighted spectrum,
-- attributed graphlet logits.
-
-Candidate graphlets are updated using a **stateful local-delta cache**, while RDKit sanitization is restricted to a shortlisted set of promising candidates.
-
-For molecular ring-focused experiments, set
-`graphlet_topology_filter: simple_cycle`. This retains only chordless induced
-cycles, uses direct bounded-degree ring enumeration and dihedral attributed
-canonicalization, and keeps a background coordinate for all non-ring subsets.
-See [`docs/CYCLE_ONLY_GRAPHLET_GUIDANCE.md`](docs/CYCLE_ONLY_GRAPHLET_GUIDANCE.md)
-and
-[`configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet.yaml`](configs/experiments/grapher/qm9_attributed_spectral_cycle_graphlet.yaml).
-
----
-
-## Engineering Highlights
-
-### Unified Baseline Interface
-
-External generators use a common API:
-
-```python
-train(request: TrainRequest) -> TrainingArtifacts
-generate(request: GenerateRequest) -> GenerationArtifacts
-```
-
-This enables heterogeneous graph generators to be trained, sampled, serialized, and evaluated under one GraphER-facing contract.
-
-### Reproducible Artifact Management
-
-Experiments record:
-
-- resolved configuration,
-- training and generation seeds,
-- dataset identity,
-- graph-batch hashes,
-- source-pool hashes,
-- pairing metadata,
-- matching costs,
-- runtime diagnostics,
-- evaluation metrics,
-- correction statistics.
-
-### Base-to-Target Matching
-
-Completed base outputs are paired with target graphs using:
-
-- exact node-count strata,
-- Hungarian matching over normalized sorted-degree profiles.
-
-Higher-order metrics such as graphlets, clustering, and orbit counts are deliberately **excluded from the matching cost**, so they remain genuine prediction targets.
-
-### Incremental Structural Computation
-
-Candidate graphlet and orbit statistics use exact switch-local delta updates rather than full recomputation where possible.
-
-This matters because constrained graph generation may evaluate many candidate rewiring operations per generation step.
-
----
-
-## Repository Structure
+## Repository layout
 
 ```text
 configs/
-    datasets/
-    experiments/
+  datasets/                 Prepared-dataset protocols
+  baselines/                Baseline-specific and common comparison YAMLs
+  experiments/
+    baselines/              Shared evaluation configs
+    dhvae/                  Degree/typed-degree prior configs
+    grapher/                GraphER experiment variants
 
 docs/
-    TOPOLOGY_GENERATOR.md
-    ATTRIBUTED_SPECTRAL_GRAPHLET_DIFFUSION.md
-    HOG_DIFF_WRAPPER.md
-    DESIGN_CONTRACT.md
-    IMPLEMENTATION_AUDIT.md
+  BASELINES.md              Canonical baseline/comparison guide
+  DESIGN_CONTRACT.md        GraphER representation and invariant contract
+  TOPOLOGY_GENERATOR.md     Generic topology generation details
+  ATTRIBUTED_*.md           Attributed/molecular guidance details
+  SPECTRAL_*.md             Spectral guidance and diagnostics
+  degree_perturbation_*.md  Prior-perturbation experiment notes
 
 scripts/
-    prepare_generic_dataset.py
-    train_degree_generator.py
-    train_topology_grapher.py
-    run_topology_grapher.py
-    run_digress_baseline.py
-    run_graphrnn_baseline.py
-    run_defog_baseline.py
-    run_hog_diff_baseline.py
-    evaluate_graph_generation_report.py
-    evaluate_generated_molecules.py
+  prepare_*_dataset.py      Dataset preparation
+  train_*_grapher.py        GraphER training
+  run_*_grapher.py          GraphER generation
+  run_*_baseline.py         Baseline orchestration
+  evaluate_*.py             Shared evaluation
+  diagnose_*.py             Focused diagnostics
+  draw_*.py                 Visualization utilities
 
 src/grapher/
-    models/
-    rewiring_mlp/
-        generic/
-        attributed/
-        core/
-        molecular/
-        evaluation/
-
-tests/
+  data/                     Dataset IO and sampling
+  models/                   Baseline wrappers and external workers
+  rewiring_mlp/             GraphER generic/attributed models and refiners
+  properties/               Structural summaries
+  utils/                    Shared utilities
 ```
 
----
+## Environment
 
-## Quick Start
-
-### Environment
+Run commands from the repository root and expose `src` on `PYTHONPATH`:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-
-python -m pip install --upgrade pip
-python -m pip install torch numpy networkx pyyaml matplotlib
-python -m pip install pytest ruff
+export PYTHONPATH=src
 ```
 
-Python 3.10+ is recommended.
+GraphER itself and each external baseline may require different PyTorch/CUDA or
+third-party environments. Baseline wrappers are designed to launch the upstream
+model with its own Python interpreter; see `docs/BASELINES.md` for environment
+variables and supported datasets.
 
-Optional molecular workflows additionally use RDKit, PyG, and `fcd-torch`.
+## Prepare datasets
 
-### Example: Community-small
+Prepare each benchmark once, then reuse the exact split files for every model.
+Do not rebuild them between baseline runs.
 
-Prepare the dataset:
+### Generic graphs
 
 ```bash
 PYTHONPATH=src python scripts/prepare_generic_dataset.py \
   --dataset community_small \
   --root outputs/datasets
+
+PYTHONPATH=src python scripts/prepare_generic_dataset.py \
+  --dataset ego_small \
+  --root outputs/datasets
 ```
 
-Train the project-owned DH-VAE + Havel–Hakimi base:
+The generic preparation script also supports the configured Grid benchmark.
+
+### QM9
 
 ```bash
-PYTHONPATH=src python scripts/run_dhvae_hh_baseline.py \
-  --dataset community_small \
-  --num-samples 1024 \
-  --training-estimate-count 1024 \
-  --seed-id 42 \
-  --device gpu
+PYTHONPATH=src python scripts/prepare_qm9_dataset.py \
+  --root outputs/datasets
+```
+
+The canonical molecular protocol uses the configured heavy-atom representation
+and records preparation metadata with the split artifacts.
+
+### ZINC
+
+```bash
+PYTHONPATH=src python scripts/prepare_zinc_dataset.py \
+  --smiles-file /path/to/zinc250k.csv \
+  --test-indices-file /path/to/valid_idx_zinc250k.json \
+  --root outputs/datasets
+```
+
+Use the dataset configuration and preparation protocol that matches the intended
+paper comparison.
+
+## GraphER: train, generate and evaluate by dataset
+
+The maintained GraphER configuration couples two learned diffusion states:
+
+- a **soft edge state** (binary for generic graphs; categorical bond type for
+  molecular graphs), and
+- the **eigenvalues of the combinatorial Laplacian** (topology and, for
+  molecules, bond-weighted channels).
+
+The structural heads predict a 100-bin clustering-coefficient histogram, the
+15-coordinate orbit summary, and induced graphlet distributions for
+`k = 3, 4, 5`.  Molecular graphlet identities additionally include
+`atomic_num` and `bond_type`.
+
+The degree/typed-degree encoder and decoder are trained jointly with GraphER.
+At generation time the same GraphER checkpoint can be used with either of two
+sequence sources:
+
+```text
+learned
+    sample a degree / typed-degree sequence from the embedded jointly trained
+    DH-VAE decoder
+
+edge_relocation
+    sample a training sequence -> construct a temporary connected realization
+    -> relocate one edge endpoint while preserving simplicity/connectivity
+    -> extract the changed degree / typed-degree sequence
+    -> DISCARD the temporary adjacency
+    -> construct a fresh GraphER source from the changed sequence
+```
+
+`edge_relocation` is therefore a **generation-time prior option**.  It does not
+require retraining GraphER.  In the commands below each dataset is trained once,
+then the exact same checkpoint is evaluated with both the learned and perturbed
+sequence sources.
+
+The standalone DH-VAE/typed-DH-VAE checkpoint is only a warm start for joint
+training.  Train it once if the checkpoint referenced by the GraphER config does
+not already exist.
+
+### Community-small
+
+One-time degree-prior warm start:
+
+```bash
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/community_small.yaml
 ```
 
 Train GraphER:
 
 ```bash
+CFG=configs/experiments/grapher/community_small_joint_edge_laplacian_graphlets345_learned.yaml
+TRAIN=outputs/topology_grapher/community_small_joint_edge_laplacian_graphlets345_learned/seed_42
+GENROOT=outputs/topology_generation/community_small_joint_edge_laplacian_graphlets345/seed_42
+
 PYTHONPATH=src python scripts/train_topology_grapher.py \
-  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
-  --output-dir outputs/topology_grapher/community_small/seed_42 \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
   --seed 42 \
   --device gpu
 ```
 
-Generate refined graphs:
+Generate with the learned degree sequence:
 
 ```bash
+GEN="$GENROOT/learned"
 PYTHONPATH=src python scripts/run_topology_grapher.py \
-  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
-  --output-dir outputs/topology_generation/community_small/seed_42 \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
   --num-generate 1024 \
   --seed 42 \
   --device gpu
 ```
 
-Evaluate:
+Generate with the edge-relocated degree sequence:
 
 ```bash
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/community_small_topology_graphlet.yaml \
-  --generated-dir outputs/topology_generation/community_small/seed_42 \
-  --output-dir outputs/topology_grapher/community_small/seed_42/evaluation
+GEN="$GENROOT/edge_relocation"
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu \
+  --set generation.degree_source=edge_relocation \
+  --set generation.degree_rng_mode=independent \
+  --set generation.degree_perturbation.max_attempts=256 \
+  --set generation.degree_perturbation.max_distance=4.0 \
+  --set generation.degree_perturbation.require_novel=false
 ```
 
----
+Evaluate both sequence sources on validation data:
 
-## Evaluation
+```bash
+for MODE in learned edge_relocation; do
+  GEN="$GENROOT/$MODE"
 
-Generic graph experiments support:
+  PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+    --config "$CFG" \
+    --generated-dir "$GEN" \
+    --reference-split val \
+    --output-dir "$GEN/evaluation_val"
 
-- Degree MMD
-- Clustering MMD
-- Orbit MMD
-- graphlet statistics
-- connectivity
-- correction coverage
-- accepted swaps
-- runtime per graph
-- invariant-preservation diagnostics
+  PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
+    --config "$CFG" \
+    --generated-graphs "$GEN/topology_refined_graphs.pkl" \
+    --reference-split val \
+    --json-out "$GEN/evaluation_val/induced_graphlets345.json"
+done
+```
 
-Molecular evaluation additionally supports:
+### Ego-small
 
-- molecular validity,
-- corrected validity,
-- uniqueness,
-- novelty,
-- FCD when the compatible backend is installed,
-- saved valid SMILES.
+One-time degree-prior warm start:
 
----
+```bash
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/ego_small.yaml
+```
 
-## Research Questions Explored
+Train GraphER:
 
-GraphER is being used to study:
+```bash
+CFG=configs/experiments/grapher/ego_small_joint_edge_laplacian_graphlets345_learned.yaml
+TRAIN=outputs/topology_grapher/ego_small_joint_edge_laplacian_graphlets345_learned/seed_42
+GENROOT=outputs/topology_generation/ego_small_joint_edge_laplacian_graphlets345/seed_42
 
-1. **Can a completed graph be structurally improved without retraining the base generator?**
-2. **How much higher-order structure can be changed while preserving an exact degree sequence?**
-3. **Can structural guidance transfer across heterogeneous graph generators?**
-4. **Do graphlet, clustering, orbit, or spectral targets provide the most useful correction signal?**
-5. **How should global spectral information and local motif information be combined during generation?**
-6. **Can expensive graph statistics be updated locally after rewiring rather than recomputed from scratch?**
-7. **How useful are informative graph priors compared with random or empirical initializations?**
-
----
-
-## Why This Project Is Interesting
-
-Many graph generative models produce an adjacency matrix directly. GraphER explores a different perspective:
-
-> **Generate or obtain a reasonable graph first, then navigate a constrained graph space to improve selected structural properties.**
-
-This decomposition separates:
-
-- invariant structure from higher-order structure,
-- generation from correction,
-- learned prediction from exact combinatorial constraints,
-- base-model quality from refinement quality.
-
-It also creates a framework for experimenting with **discrete diffusion, diffusion bridges, structural priors, graph rewiring, and constrained generative modeling**.
-
----
-
-## Current Limitations
-
-GraphER is a research prototype rather than a production graph-generation library.
-
-Current limitations include:
-
-- exact degree preservation means a poor degree sequence cannot be repaired by rewiring,
-- finite graphlet/orbit summaries do not uniquely determine an adjacency matrix,
-- some targets may be unreachable inside a fixed degree fibre,
-- finite candidate budgets may miss improving moves,
-- dense pair features have \(O(n^2)\) memory/computation,
-- exact graphlet counting limits scalability on larger graphs,
-- the greedy corrector does not imply convergence to the data distribution.
-
-These limitations are part of the research problem and are tracked explicitly.
-
----
-
-## Reproducibility
-
-Paper-facing experiments use fixed dataset splits and multiple model seeds.
-
-The repository separates:
-
-- dataset preparation,
-- baseline training,
-- baseline generation,
-- GraphER training,
-- GraphER correction,
-- evaluation
-
-into independently auditable stages.
-
-Generated outputs and correction reports retain provenance linking each refined batch to the corresponding raw graph batch.
-
----
-
-## About This Project
-
-GraphER is part of my PhD research in **Generative AI for Graphs**.
-
-The project reflects my interests in:
-
-- deep generative models,
-- graph machine learning,
-- diffusion and bridge processes,
-- combinatorial optimization,
-- ML systems engineering,
-- reproducible scientific computing.
-
-I am particularly interested in **research engineering, generative AI, graph ML, and research-to-code projects**.
-
----
-
-## Documentation
-
-For implementation details, see:
-
-- [`docs/TOPOLOGY_GENERATOR.md`](docs/TOPOLOGY_GENERATOR.md)
-- [`docs/ATTRIBUTED_SPECTRAL_GRAPHLET_DIFFUSION.md`](docs/ATTRIBUTED_SPECTRAL_GRAPHLET_DIFFUSION.md)
-- [`docs/DESIGN_CONTRACT.md`](docs/DESIGN_CONTRACT.md)
-- [`docs/IMPLEMENTATION_AUDIT.md`](docs/IMPLEMENTATION_AUDIT.md)
-- [`docs/GRAPHRNN_WRAPPER.md`](docs/GRAPHRNN_WRAPPER.md)
-- [`docs/DIGRESS_WRAPPER.md`](docs/DIGRESS_WRAPPER.md)
-- [`docs/DEFOG_WRAPPER.md`](docs/DEFOG_WRAPPER.md)
-
----
-
-## License
-
-Add the appropriate open-source license before public release.
-
-
-## Prepare molecular datasets
-
-mkdir -p data/qm9
-
-wget --content-disposition \
-  -O data/qm9/uncharacterized.txt \
-  https://ndownloader.figshare.com/files/3195404
-
-wget -O data/qm9/gdb9.tar.gz \
-  https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/gdb9.tar.gz
-
-tar -xzf data/qm9/gdb9.tar.gz -C data/qm9
-
-PYTHONPATH=src python scripts/prepare_qm9_dataset.py \
-  --config configs/datasets/qm9.yaml \
-  --source sdf \
-  --sdf-file data/qm9/gdb9.sdf \
-  --uncharacterized-file data/qm9/uncharacterized.txt \
-  --root outputs/datasets
-
-# Draw a reproducible random sample from the prepared attributed dataset.
-PYTHONPATH=src python scripts/draw_dataset.py \
-  --dataset qm9_attributed \
-  --dataset-root outputs/datasets \
-  --split test \
-  --count 16 \
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
   --seed 42 \
-  --row 3 \
-  --col 4 \
-  --output outputs/qm9_test_random_16.png
+  --device gpu
+```
 
-# One PDF containing 64 pages of random valid molecules, followed by typed
-# C3-C5 graphlet drawings. Counts use valid molecules from train+val+test.
-# Each class preserves atom types, bond types, and their ring arrangement;
-# equivalent rotations and reflections are grouped. All observed classes are
-# drawn with element labels and bond types, up to six graphlets per page.
-# Molecular graphs must pass RDKit sanitization; exclusions are reported.
-# --count must not exceed the valid pool. --all draws every valid molecule.
-# Counts are also saved to outputs/qm9_random_1024_graphlet_histogram.json.
-PYTHONPATH=src python scripts/draw_dataset.py \
-  --dataset qm9_attributed \
-  --dataset-root outputs/datasets \
-  --split all \
-  --count 1024 \
+Generate and evaluate the learned sequence:
+
+```bash
+GEN="$GENROOT/learned"
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate 1024 \
   --seed 42 \
-  --row 4 \
-  --col 4 \
-  --k-min 3 \
-  --k-max 5 \
-  --output outputs/qm9_random_1024.pdf
+  --device gpu
 
-# Draw generated graphs directly from the same pickle passed to evaluation.
-# Molecular panels and typed C3-C5 counts use raw-valid molecules from the full
-# generated file: direct RDKit sanitization, without inferred charges or bond
-# correction. No prepared reference dataset or evaluation run is needed.
-# Replace --all with --count 1024 for a random sample (if 1024 are valid).
-# Graphlet counts always cover the full valid input pool, regardless of --count.
-PYTHONPATH=src python scripts/draw_generated_dataset.py \
-  --generated-graphs "$GEN/molecular_graphs.pkl" \
-  --dataset qm9_attributed \
-  --all \
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config "$CFG" \
+  --generated-dir "$GEN" \
+  --reference-split val \
+  --output-dir "$GEN/evaluation_val"
+
+PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
+  --config "$CFG" \
+  --generated-graphs "$GEN/topology_refined_graphs.pkl" \
+  --reference-split val \
+  --json-out "$GEN/evaluation_val/induced_graphlets345.json"
+```
+
+Generate and evaluate the perturbed sequence:
+
+```bash
+GEN="$GENROOT/edge_relocation"
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate 1024 \
   --seed 42 \
-  --row 4 --col 4 \
-  --k-min 3 --k-max 5 \
-  --output "$GEN/generated_drawings.pdf"
+  --device gpu \
+  --set generation.degree_source=edge_relocation \
+  --set generation.degree_rng_mode=independent \
+  --set generation.degree_perturbation.max_attempts=256 \
+  --set generation.degree_perturbation.max_distance=4.0 \
+  --set generation.degree_perturbation.require_novel=false
 
-# --dataset is an optional label/hint; generic graphs also work automatically.
-# A *_drawing.json file records selected original file indices and exclusions;
-# *_graphlet_histogram.json records typed-cycle counts and frequencies.
-# PNG and separate --graphlet-output exports work as in draw_dataset.py.
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config "$CFG" \
+  --generated-dir "$GEN" \
+  --reference-split val \
+  --output-dir "$GEN/evaluation_val"
 
-# Draw valid generated molecules that are farthest from the training set in
-# both ChemNet (FCD mean term) and NSPDK feature space. Higher panel scores
-# mean farther; the adjacent JSON file records full-precision scores.
-PYTHONHASHSEED=0 PYTHONPATH=src python scripts/draw_generated_qm9_outliers.py \
-  --generated-dir outputs/attributed_grapher/<run>/seed_42 \
-  --dataset qm9_attributed \
-  --dataset-root outputs/datasets \
-  --split train \
-  --ranking joint \
-  --count 16 \
-  --row 4 \
-  --col 4 \
-  --fcd-device gpu \
-  --output outputs/qm9_generated_outliers.png
+PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
+  --config "$CFG" \
+  --generated-graphs "$GEN/topology_refined_graphs.pkl" \
+  --reference-split val \
+  --json-out "$GEN/evaluation_val/induced_graphlets345.json"
+```
 
-# The same command automatically uses a node-link view for generic graphs.
-PYTHONPATH=src python scripts/draw_dataset.py \
-  --dataset community_small \
-  --dataset-root outputs/datasets \
-  --split test \
-  --count 8 \
+### Grid
+
+One-time degree-prior warm start:
+
+```bash
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/grid.yaml
+```
+
+The Grid graphs are much larger than Community-small/Ego-small.  The exact
+`k=3,4,5` induced-graphlet target is therefore substantially more expensive;
+start with a small training/generation smoke run before launching the full
+configuration.
+
+Train GraphER:
+
+```bash
+CFG=configs/experiments/grapher/grid_joint_edge_laplacian_graphlets345_learned.yaml
+TRAIN=outputs/topology_grapher/grid_joint_edge_laplacian_graphlets345_learned/seed_42
+GENROOT=outputs/topology_generation/grid_joint_edge_laplacian_graphlets345/seed_42
+
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
   --seed 42 \
-  --row 2 \
-  --col 4 \
-  --output outputs/community_small_test_random_8.png
+  --device gpu
+```
 
-# Draw every Community-small graph (train, validation, and test) over pages.
-PYTHONPATH=src python scripts/draw_dataset.py \
-  --dataset community_small \
-  --dataset-root outputs/datasets \
-  --split all \
-  --all \
-  --row 4 \
-  --col 5 \
-  --k-min 3 \
-  --k-max 5 \
-  --output outputs/community_small_all.png
+Generate both sequence sources:
 
-# Draw every Ego-small graph in the same way.
-PYTHONPATH=src python scripts/draw_dataset.py \
-  --dataset ego_small \
-  --dataset-root outputs/datasets \
-  --split all \
-  --all \
-  --row 4 \
-  --col 5 \
-  --k-min 3 \
-  --k-max 5 \
-  --output outputs/ego_small_all.png
+```bash
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GENROOT/learned" \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
 
-# Supplying both --k-min and --k-max also creates an induced-cycle graphlet
-# drawing for each cycle (C3 through C5 here), labeled with count and frequency,
-# sorted from highest to lowest frequency. Counts always use train+val+test,
-# independently of --split, --count, --seed, or --all used for graph drawings.
-# The historical _graphlet_histogram filename is retained for compatibility.
-# The commands above respectively write:
-#   outputs/community_small_all_graphlet_histogram.{png,json}
-#   outputs/ego_small_all_graphlet_histogram.{png,json}
-# Only node-induced subgraphs that are exactly a simple cycle are counted;
-# chorded cycles and subgraphs with branches or disconnected nodes are omitted.
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GENROOT/edge_relocation" \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu \
+  --set generation.degree_source=edge_relocation \
+  --set generation.degree_rng_mode=independent \
+  --set generation.degree_perturbation.max_attempts=256 \
+  --set generation.degree_perturbation.max_distance=4.0 \
+  --set generation.degree_perturbation.require_novel=false
+```
 
-PYTHONPATH=src python scripts/prepare_zinc_dataset.py \
-  --config configs/datasets/zinc.yaml \
-  --smiles-file data/zinc250k.csv \
-  --smiles-column smiles \
-  --root outputs/datasets
+Evaluate both:
 
+```bash
+for MODE in learned edge_relocation; do
+  GEN="$GENROOT/$MODE"
+
+  PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+    --config "$CFG" \
+    --generated-dir "$GEN" \
+    --reference-split val \
+    --output-dir "$GEN/evaluation_val"
+
+  PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
+    --config "$CFG" \
+    --generated-graphs "$GEN/topology_refined_graphs.pkl" \
+    --reference-split val \
+    --json-out "$GEN/evaluation_val/induced_graphlets345.json"
+done
+```
+
+### QM9
+
+The maintained QM9 GraphER experiment uses 20,000 randomly selected training
+molecules.  The selected indices are determined by `--seed 42` and reused by the
+joint model.  Graphlet identities include topology, `atomic_num`, and
+`bond_type` for `k=3,4,5`.
+
+One-time typed-degree warm start:
+
+```bash
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/qm9_typed.yaml
+```
+
+Train GraphER:
+
+```bash
+CFG=configs/experiments/grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned.yaml
+TRAIN=outputs/attributed_grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned/seed_42
+GENROOT=outputs/attributed_generation/qm9_joint_typed_edge_laplacian_graphlets345/seed_42
+NTRAIN=20000
+NGEN=1024
+
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --num-train-graphs "$NTRAIN" \
+  --seed 42 \
+  --device gpu \
+  --graphlet-progress-interval 100 \
+  --batch-progress-interval 10 \
+  --progress-interval-seconds 10
+```
+
+Generate with the learned typed sequence:
+
+```bash
+GEN="$GENROOT/learned"
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate "$NGEN" \
+  --seed 42 \
+  --device gpu
+```
+
+Generate with the edge-relocated typed sequence:
+
+```bash
+GEN="$GENROOT/edge_relocation"
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate "$NGEN" \
+  --seed 42 \
+  --device gpu \
+  --set generation.invariant_source=edge_relocation \
+  --set generation.invariant_rng_mode=independent \
+  --set generation.degree_perturbation.max_attempts=256 \
+  --set generation.degree_perturbation.max_distance=4.0 \
+  --set generation.degree_perturbation.require_novel=false
+```
+
+Evaluate both sequence sources using the strict raw-valid molecular protocol and
+the checkpoint-fitted attributed graphlet vocabulary:
+
+```bash
+for MODE in learned edge_relocation; do
+  GEN="$GENROOT/$MODE"
+
+  PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+    --generated-graphs "$GEN/molecular_graphs.pkl" \
+    --dataset qm9_attributed \
+    --reference-split val \
+    --train-split train \
+    --metric-molecule-source raw_valid \
+    --nspdk-backend eden \
+    --nspdk-complexity 4 \
+    --nspdk-bond-label-mode hogdiff \
+    --output-dir "$GEN/evaluation_val" \
+    --require-fcd
+
+  PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
+    --config "$CFG" \
+    --checkpoint "$TRAIN/checkpoint.pt" \
+    --generated-graphs "$GEN/molecular_graphs.pkl" \
+    --reference-split val \
+    --max-reference-graphs 1024 \
+    --max-generated-graphs 1024 \
+    --seed 42 \
+    --json-out "$GEN/evaluation_val/attributed_graphlets345.json"
+done
+```
+
+`--hogdiff-compatible-metrics` can be run as a **separate** report when a
+HOG-Diff-compatible comparison is required; it changes the molecular metric
+source to corrected-valid molecules and should not be mixed with the strict
+`raw_valid` report above.
+
+### ZINC250k
+
+One-time typed-degree warm start:
+
+```bash
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/zinc_typed.yaml
+```
+
+The command below uses the full prepared ZINC training split when `NTRAIN=0`.
+Set `NTRAIN=20000` for a smaller development experiment.
+
+```bash
+CFG=configs/experiments/grapher/zinc_joint_typed_edge_laplacian_graphlets345_learned.yaml
+TRAIN=outputs/attributed_grapher/zinc_joint_typed_edge_laplacian_graphlets345_learned/seed_42
+GENROOT=outputs/attributed_generation/zinc_joint_typed_edge_laplacian_graphlets345/seed_42
+NTRAIN=0
+NGEN=1024
+
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --num-train-graphs "$NTRAIN" \
+  --seed 42 \
+  --device gpu \
+  --graphlet-progress-interval 100 \
+  --batch-progress-interval 10 \
+  --progress-interval-seconds 10
+```
+
+Generate learned and edge-relocated typed sequences:
+
+```bash
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GENROOT/learned" \
+  --num-generate "$NGEN" \
+  --seed 42 \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GENROOT/edge_relocation" \
+  --num-generate "$NGEN" \
+  --seed 42 \
+  --device gpu \
+  --set generation.invariant_source=edge_relocation \
+  --set generation.invariant_rng_mode=independent \
+  --set generation.degree_perturbation.max_attempts=256 \
+  --set generation.degree_perturbation.max_distance=4.0 \
+  --set generation.degree_perturbation.require_novel=false
+```
+
+Evaluate both sequence sources:
+
+```bash
+for MODE in learned edge_relocation; do
+  GEN="$GENROOT/$MODE"
+
+  PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+    --generated-graphs "$GEN/molecular_graphs.pkl" \
+    --dataset zinc \
+    --reference-split val \
+    --train-split train \
+    --metric-molecule-source raw_valid \
+    --nspdk-backend eden \
+    --nspdk-complexity 4 \
+    --nspdk-bond-label-mode hogdiff \
+    --output-dir "$GEN/evaluation_val" \
+    --require-fcd
+
+  PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
+    --config "$CFG" \
+    --checkpoint "$TRAIN/checkpoint.pt" \
+    --generated-graphs "$GEN/molecular_graphs.pkl" \
+    --reference-split val \
+    --max-reference-graphs 1024 \
+    --max-generated-graphs 1024 \
+    --seed 42 \
+    --json-out "$GEN/evaluation_val/attributed_graphlets345.json"
+done
+```
+
+### Final test reporting
+
+Use `val` while selecting checkpoints, refiner weights and prior options.  After
+all choices are frozen, rerun generation with the selected configuration and
+change only the evaluator reference from `val` to `test`.  Do not tune against
+test FCD/MMD.
+
+## Baselines: training, generation and evaluation
+
+All maintained baseline runners automatically resolve the applicable
+`common_<dataset>.yaml` comparison profile and the model-specific
+`<model>_<dataset>.yaml` profile. The model-specific profile overrides
+model-dependent training quantities such as epochs/iterations, optimizer
+settings, batch size and sampler settings. **Do not pass an epoch override just
+to match DeFoG's raw epoch count.** Use explicit CLI overrides only for a
+separately named experiment.
+
+The examples below use Community-small, seed 42 and 1,024 generated graphs.
+For all commands, run from the GraphER repository root with:
+
+```bash
+export PYTHONPATH=src
+```
+
+External implementations may use separate environments. Set the corresponding
+source root and Python executable before launching a baseline:
+
+```bash
 export DEFOG=/home/quang/DeFoG
-export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+export DEFOG_PYTHON=/path/to/defog-env/bin/python
+
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/path/to/digress-env/bin/python
+
+export GDSS=/home/quang/GDSS
+export GDSS_PYTHON=/path/to/gdss-env/bin/python
+
+export GRAPHRNN=/home/quang/GraphRNN
+export GRAPHRNN_PYTHON=/path/to/graphrnn-env/bin/python
+
+export HOGDIFF=/home/quang/HOG-Diff
+export HOGDIFF_PYTHON=/path/to/hogdiff-env/bin/python
+
+export CATFLOW=/home/quang/CatFlow
+export CATFLOW_PYTHON=/path/to/catflow-env/bin/python
+
+export GDSM=/home/quang/Fast_Graph_Generation_via_Spectral_Diffusion
+export GDSM_PYTHON=/path/to/gdsm-env/bin/python
+
+export EDGE=/home/quang/graph-generation-EDGE
+export EDGE_PYTHON=/path/to/edge-env/bin/python
+
+export SPECTRE=/home/quang/SPECTRE
+export SPECTRE_PYTHON=/path/to/spectre-env/bin/python
+```
+
+If a baseline is installed in the current environment, its `*_PYTHON` variable
+can simply be `$(command -v python)`.
+
+### Supported datasets
+
+| Baseline | Community-small | Ego-small | Grid | QM9 | ZINC |
+|---|:---:|:---:|:---:|:---:|:---:|
+| DeFoG | yes | yes* | — | yes | yes |
+| DiGress | yes | yes* | yes | yes | yes |
+| GDSS | yes | yes | yes | yes | yes |
+| GraphRNN | yes | yes | yes | — | — |
+| HOG-Diff | yes | yes | — | yes | yes |
+| CatFlow | yes* | yes* | yes* | yes | yes |
+| GSDM/GDSM | yes | yes* | yes | — | — |
+| EDGE | yes* | yes* | yes* | — | — |
+| SPECTRE | yes | yes* | yes | yes* | — |
+
+`*` marks a GraphER dataset adaptation rather than an exact released upstream
+profile. The corresponding YAML records this status and its budget provenance.
+
+### DeFoG
+
+`run_defog_baseline.py` performs training and generation in one invocation.
+Community-small uses the DeFoG reference budget from
+`common_community_small.yaml`.
+
+```bash
+RUN=seed_42
+N=1024
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
   --dataset community_small \
-  --num-samples 1024 \
-  --seed-id 42
+  --common-config configs/baselines/common_community_small.yaml \
+  --num-samples "$N" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
 
-## Minimal spectral diffusion + clustering histogram experiment
+GEN_DIR="outputs/baselines/defog/community_small/$RUN/generations/seed_42_n_${N}"
 
-The optional clean local-clustering histogram head and histogram-guided rewiring are documented in
-[`GRAPHER_CLUSTERING_HISTOGRAM.md`](GRAPHER_CLUSTERING_HISTOGRAM.md). The new experiment is
-`configs/experiments/grapher/community_small_topology_spectral_clustering_histogram.yaml`.
-It uses 100 normalized bins, a softmax head and CDF loss, and spectral + histogram-W1
-candidate scoring. Existing scalar-clustering configs/checkpoints retain their behavior.
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
 
+### DiGress
 
-## Orbit-dominant clustering + orbit debug configuration
+`run_digress_baseline.py` also trains and generates in one invocation. Its
+Community-small model config retains the released `comm20` training horizon
+rather than inheriting a generic cross-model epoch count.
 
-The new `community_small_topology_spectral_clustering_histogram_orbit_dominant.yaml`
-keeps joint spectral/histogram/orbit training unchanged and uses generation weights
-clustering=0.25, orbit=1.0, spectrum=0.0. Existing joint checkpoints can be reused.
-The graph report evaluator now supports `--reference-split val|test`; use validation
-for guidance selection. See [GRAPHER_ORBIT_DOMINANT.md](GRAPHER_ORBIT_DOMINANT.md)
-for installation, checkpoint reuse, optional training, generation, evaluation,
-performance options, and reporting compatibility notes.
+```bash
+RUN=seed_42
+N=1024
 
-### Cycle-only graphlet summary (k=3)
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/digress_community_small.yaml \
+  --num-samples "$N" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
 
-The spectral-input debug predictor can additionally learn a two-bin triangle
-occurrence histogram and use it in degree-preserving rewiring, alongside the
-clustering histogram and orbit summary. See
-[GRAPHER_CYCLE3_SUMMARY.md](GRAPHER_CYCLE3_SUMMARY.md) for the exact normalization,
-limits, checkpoint requirements, diagnostics, and training/generation/evaluation
-commands. The new config is
-`configs/experiments/grapher/community_small_topology_spectral_clustering_orbit_cycle3.yaml`.
+GEN_DIR="outputs/baselines/digress/community_small/$RUN/generations/seed_42_n_${N}"
 
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
 
-## Joint degree-conditioned GraphER
+### GDSS
 
-The optional `community_small_topology_joint_degree.yaml` experiment embeds the
-ordinary DH-VAE in GraphER, shares degree encoder/decoder features with the spectral
-summary predictor, and enforces nine necessary degree/orbit identities. Generation
-uses the degree model in the selected joint checkpoint. See
-[GRAPHER_JOINT_DEGREE.md](GRAPHER_JOINT_DEGREE.md) for warm-start requirements,
-training/generation/evaluation commands, ablations, and limitations. Existing
-separate-model configurations remain supported.
+GDSS likewise trains and generates in one command. The model-specific YAML keeps
+GDSS's released optimizer and training horizon.
 
-Joint training covers edge counts up to the simple-graph bound implied by the
-DH-VAE's existing node and degree limits, even when validation graphs have more
-edges than any training graph. Warm-start checkpoints with a smaller edge head
-are expanded automatically: learned conditioning and existing logits are
-preserved, and new edge classes start with at most `1e-6` total probability per
-supported graph size. Empirical distributions still use only training graphs.
-The expansion is logged and saved in the training report and joint checkpoint;
-the training command and component checkpoint paths need no changes.
+```bash
+RUN=seed_42
+N=1024
 
-## Joint typed prior and soft bond diffusion (new attributed family)
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdss_community_small.yaml \
+  --num-samples "$N" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
 
-See [GRAPHER_JOINT_TYPED_EDGE.md](GRAPHER_JOINT_TYPED_EDGE.md) for the new
-joint typed-DH-VAE + symmetric soft edge-logit bridge, indexed source/target
-alignment, independent checkpoint selections, and same-bond-type constrained
-realization. The new QM9/ZINC configs are `*_attributed_joint_typed_edge.yaml`.
-Legacy generic and attributed model families remain available unchanged.
+GEN_DIR="outputs/baselines/gdss/community_small/$RUN/generations/seed_42_n_${N}"
 
-## Full induced-graphlet summaries
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
 
-See [GRAPHER_INDUCED_GRAPHLETS.md](GRAPHER_INDUCED_GRAPHLETS.md) for exact k=3/4/5 topology histograms, prediction and guidance in generic/joint-degree and joint typed-edge GraphER, catalogue definitions, compatibility requirements, and commands. The new default k=5 experiment uses all 34 connected and disconnected classes; cycle experiments remain unchanged.
+### GraphRNN
 
-Joint typed-edge runs with `induced_graphlet_attributed: true` first fit an exact
-atom-and-bond-labeled vocabulary on the training split. This is CPU preprocessing;
-`--device gpu` selects the device for model training. With `scope: all`, fitting
-includes every induced k-node subset, including disconnected ones. Canonical
-patterns are cached in memory during the process. Add
-`--progress-interval-seconds 10` to `scripts/train_attributed_grapher.py` to report
-graphs/subsets processed, observed bins, elapsed time, and estimated time remaining
-during fitting. This also controls training progress reports. Fitting additionally
-reports every 1,000 graphs; use `--graphlet-progress-interval 1` for every graph.
-Reports include the last graph's index, size, time, new bins, recent throughput,
-and canonicalization cache hits/misses. Workload and training stage logs identify
-dataset loading, model initialization, split validation, endpoint setup, batch
-loading/computation, and checkpoint writing. Vocabulary fitting always reports
-the first and final graph; set both progress intervals to zero to disable periodic
-fitting reports.
+GraphRNN's wrapper performs training and generation together. Its native budget
+is expressed as epochs times sampled mini-batches per epoch; do not compare the
+raw epoch integer directly with DeFoG.
 
-To train on a random subset of the prepared training split, add
-`--max-train-graphs 10000` (alias `--num-train-graphs 10000`). Selection is without
-replacement and reproducible with `--seed`; the same subset is used for all
-epochs and training graphlet vocabulary fitting. This option overrides
-`dataset.max_train_graphs` in the config. Omitting both limits, or passing zero,
-uses the full training split; requesting more graphs than available uses all of
-them. Selected original split indices are saved in `training_subset.json` and
-checkpoint metadata. Joint typed empirical generation restores that same subset.
+```bash
+RUN=seed_42
+N=1024
 
+PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/graphrnn_community_small.yaml \
+  --num-samples "$N" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
 
-## Empirical degree perturbations (Community-small)
+GEN_DIR="outputs/baselines/graphrnn/community_small/$RUN/generations/seed_42_n_${N}"
 
-Generation-only options `unit_transfer`, `moment_preserving`, `edge_relocation`,
-and `interpolation` are available through
-`generation.degree_source=train_empirical_perturbed`. All preserve node/edge
-counts; moment-preserving blocks also preserve the squared-degree sum.
-See [the protocol and per-option commands](docs/degree_perturbation_community_small.md).
-A new independently seeded empirical control, prior-only coverage diagnostic,
-three-seed runner, and provenance-checked metric summarizer are included.
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
+
+### HOG-Diff
+
+HOG-Diff is a two-stage model. The Community-small config uses the released
+6,000 higher-order iterations followed by 22,000 OU iterations. One invocation
+runs both training stages and then generates the requested batch.
+
+```bash
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/hog_diff_community_small.yaml \
+  --num-samples "$N" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/hog_diff/community_small/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
+
+To generate another batch from an already completed managed HOG-Diff run, add
+`--generation-only` and choose a new `--generation-id`.
+
+### CatFlow
+
+CatFlow exposes separate training and generation stages. Community-small uses
+the GraphER `linear_v2` adapter config; this is explicitly marked as an adapted
+budget because the supplied CatFlow release does not provide a native generic
+Community-small profile.
+
+```bash
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/catflow_community_small_linear_v2.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/catflow_community_small_linear_v2.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
+
+### GSDM / GDSM
+
+The upstream project is GSDM, while GraphER retains canonical model ID `gdsm`
+for compatibility with the existing wrapper/output layout. `gsdm` is accepted
+as an alias by the consolidated source runner.
+
+```bash
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_gdsm_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdsm_community_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_gdsm_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdsm_community_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/gdsm/community_small/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
+
+### EDGE
+
+EDGE uses separate train/generate stages. Its model YAML retains the released
+generic training horizon and degree-guided diffusion settings rather than the
+DeFoG epoch fallback.
+
+```bash
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_edge_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/edge_community_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_edge_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/edge_community_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/edge/community_small/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
+
+### SPECTRE
+
+SPECTRE also exposes separate stages and retains the released Community training
+schedule, including the GAN-specific optimizer settings in its model YAML.
+
+```bash
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_spectre_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/spectre_community_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_spectre_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/spectre_community_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/spectre/community_small/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
+
+### Ego-small and Grid
+
+For a supported generic dataset, replace `community_small` in the runner,
+output path and evaluation config. For example, GDSS on Ego-small is:
+
+```bash
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/gdss_ego_small.yaml \
+  --num-samples "$N" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/gdss/ego_small/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
+
+Use `configs/experiments/baselines/grid_evaluation.yaml` analogously for Grid.
+
+### QM9 and ZINC baseline evaluation
+
+Molecular-capable runners use the same training command pattern with
+`--dataset qm9` or `--dataset zinc`. The managed generation is still written to
+`base_graphs.pkl`, and the molecular evaluator reads it directly from the
+generation directory.
+
+QM9 is supported by DeFoG, DiGress, GDSS, HOG-Diff, CatFlow and SPECTRE. ZINC
+is supported by DeFoG, DiGress, GDSS, HOG-Diff and CatFlow.
+
+For example, CatFlow/QM9 is:
+
+```bash
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --hogdiff-compatible-metrics \
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
+```
+
+For a one-command molecular runner such as DeFoG, training and generation are:
+
+```bash
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --num-samples "$N" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/defog/qm9/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --hogdiff-compatible-metrics \
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
+```
+
+For ZINC, replace `qm9` by `zinc` in the runner and managed output path, and use
+`--dataset zinc` in `evaluate_generated_molecules.py`.
+
+### Validation versus final test reporting
+
+Use the validation split for checkpoint/budget selection and reserve the test
+split for final reporting. For generic graphs:
+
+```bash
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --reference-split val \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_val"
+```
+
+The final paper result should omit `--reference-split val` (or explicitly use
+`--reference-split test`). Do not choose training horizons or checkpoints by
+looking at test MMD.
+
+Full source-derived budgets, adaptation status and artifact conventions are in
+[`docs/BASELINES.md`](docs/BASELINES.md).
+
+## Prior perturbation experiments
+
+The maintained batch launcher covers both QM9 typed-prior experiments and
+Community-small degree-prior experiments:
+
+```bash
+bash scripts/run_prior_options.sh community_small generate edge_relocation
+bash scripts/run_prior_options.sh qm9 generate edge_relocation
+```
+
+Use `bash scripts/run_prior_options.sh --help` for supported stages and methods.
+Detailed Community-small perturbation definitions are in
+[`docs/degree_perturbation_community_small.md`](docs/degree_perturbation_community_small.md).
+
+## Evaluation
+
+### Generic graphs
+
+Use the shared evaluator for both GraphER and compatible baseline outputs:
+
+```bash
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir <generation-directory> \
+  --output-dir <generation-directory>/evaluation_report
+```
+
+The report computes degree and clustering MMD and, when enabled/available,
+four-node orbit MMD. Keep the generic MMD protocol and reference split fixed
+across methods.
+
+For validation-time model selection use `--reference-split val`; reserve the
+test split for final reporting.
+
+### Molecular graphs
+
+```bash
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs <molecular_graphs.pkl> \
+  --dataset qm9_attributed \
+  --dataset-root outputs/datasets \
+  --reference-split test \
+  --train-split train \
+  --require-fcd \
+  --output-dir <evaluation-directory>
+```
+
+The evaluator supports validity, uniqueness, novelty, NSPDK, FCD and optional
+attributed graphlet diagnostics. Use the same metric-source convention for every
+model in a given table.
+
+## Diagnostics and visualization
+
+The `diagnose_*` scripts are intentionally narrow and are not alternate training
+entry points. Examples include CatFlow path/provenance checks, spectral denoiser
+analysis, typed-degree perturbation audits and joint-checkpoint diagnostics.
+
+Useful visualization commands include:
+
+```bash
+PYTHONPATH=src python scripts/draw_dataset.py --help
+PYTHONPATH=src python scripts/draw_generated_dataset.py --help
+PYTHONPATH=src python scripts/draw_generated_qm9_outliers.py --help
+```
+
+## Artifact and reproducibility policy
+
+For every reported experiment retain:
+
+- dataset identity and split hashes;
+- model/config identity;
+- common baseline profile when used;
+- training and generation seeds;
+- checkpoint selection rule;
+- exact generated sample count;
+- evaluator configuration;
+- source/commit or source digest for external baselines;
+- runtime/hardware details.
+
+Do not silently regenerate a missing dataset during final evaluation. Do not
+select checkpoints on test MMD. Do not mix corrected and legacy CatFlow training
+paths under the same result label.
+
+## Documentation
+
+Current canonical documents:
+
+- [`docs/BASELINES.md`](docs/BASELINES.md) — baseline protocol, runners and common configs;
+- [`docs/DESIGN_CONTRACT.md`](docs/DESIGN_CONTRACT.md) — invariants and implementation contract;
+- [`docs/TOPOLOGY_GENERATOR.md`](docs/TOPOLOGY_GENERATOR.md) — generic topology generation;
+- [`docs/ATTRIBUTED_SPECTRAL_GRAPHLET_DIFFUSION.md`](docs/ATTRIBUTED_SPECTRAL_GRAPHLET_DIFFUSION.md) — attributed spectral/graphlet pipeline;
+- [`docs/SPECTRAL_GRAPHLET_DIFFUSION.md`](docs/SPECTRAL_GRAPHLET_DIFFUSION.md) — generic spectral/graphlet guidance;
+- [`docs/SPECTRAL_ONLY_DEBUG.md`](docs/SPECTRAL_ONLY_DEBUG.md) — spectral debugging protocol;
+- [`docs/CYCLE_GRAPHLET_GUIDANCE.md`](docs/CYCLE_GRAPHLET_GUIDANCE.md) — molecular cycle-only graphlet guidance and current tuning;
+- [`docs/degree_perturbation_community_small.md`](docs/degree_perturbation_community_small.md) — degree-prior perturbations.
+
+Short-lived integration audits, generated validation logs and per-wrapper setup
+documents are intentionally not kept in `docs/`; current operational guidance
+belongs in this README or `docs/BASELINES.md`.

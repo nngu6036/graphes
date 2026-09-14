@@ -64,6 +64,7 @@ _WRAPPER_OPTION_KEYS = frozenset(
         "training_estimates",
         "runtime",
         "native_dataset",
+        "comparison_reference",
     }
 )
 _SOURCE_CODE_DIRS = ("models", "utils", "evaluation")
@@ -153,7 +154,11 @@ def _deep_update(base: dict[str, Any], update: Mapping[str, Any]) -> dict[str, A
 
 
 def _load_options(request: TrainRequest) -> dict[str, Any]:
-    options: dict[str, Any] = {}
+    request_options = dict(request.options)
+    defaults = request_options.pop("comparison_defaults", {}) or {}
+    if not isinstance(defaults, Mapping):
+        raise TypeError("comparison_defaults must contain a mapping.")
+    options: dict[str, Any] = _deep_update({}, defaults)
     if request.config_path is not None:
         if not request.config_path.is_file():
             raise FileNotFoundError(f"Missing GDSS wrapper config: {request.config_path}")
@@ -163,8 +168,8 @@ def _load_options(request: TrainRequest) -> dict[str, Any]:
         selected = loaded.get("gdss", loaded)
         if not isinstance(selected, Mapping):
             raise TypeError("The gdss config section must contain a mapping.")
-        options = dict(selected)
-    options = _deep_update(options, request.options)
+        options = _deep_update(options, selected)
+    options = _deep_update(options, request_options)
     unknown = set(options).difference(_WRAPPER_OPTION_KEYS)
     if unknown:
         raise ValueError(f"Unknown GDSS wrapper option(s): {sorted(unknown)}.")

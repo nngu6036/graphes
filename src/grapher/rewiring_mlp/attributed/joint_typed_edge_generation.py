@@ -17,6 +17,7 @@ from grapher.data.sampling import restore_training_graphs
 from grapher.models.dhvae_hh.typed_constructor import construct_typed_graph,TypedConstructionError
 from grapher.rewiring_mlp.attributed.typed_prior import build_typed_empirical_sampler
 from grapher.rewiring_mlp.attributed.soft_edge_bridge import labels_to_logits,advance_edges,spectral_noise,edge_probabilities
+from grapher.rewiring_mlp.attributed.spectral import attributed_laplacian_spectra
 from grapher.rewiring_mlp.attributed.joint_typed_edge_model import load_checkpoint
 from grapher.rewiring_mlp.attributed.joint_typed_edge_data import (
     collate,inference_item,load_splits,graph_record,record_hash,graph_from_record,
@@ -110,9 +111,10 @@ def validate_refiner(cfg,model):
     if not cfg.get('preserve_connectivity',True) or not cfg.get('strict_same_bond',True):
         raise ValueError('Joint typed edge generation requires connected same-bond-type rewiring.')
     weights=dict(cfg.get('weights',{'edge':1.0}))
-    if set(weights)-{'edge','clustering','orbit','graphlet'}: raise ValueError('Only edge, clustering, orbit, and graphlet scoring are implemented.')
+    if set(weights)-{'edge','spectral','clustering','orbit','graphlet'}: raise ValueError('Only edge, spectral, clustering, orbit, and graphlet scoring are implemented.')
     if not weights or any(not math.isfinite(float(x)) or float(x)<0 for x in weights.values()) or sum(weights.values())<=0:
         raise ValueError('Need finite nonnegative guidance weights with at least one positive.')
+    if weights.get('spectral',0)>0 and not model.spectral_enabled: raise ValueError('Spectral guidance needs a trained Laplacian-spectrum head.')
     if weights.get('clustering',0)>0 and not model.histogram_bins: raise ValueError('Clustering guidance needs a histogram head.')
     if weights.get('orbit',0)>0 and not model.orbit_enabled: raise ValueError('Orbit guidance needs an orbit head.')
     if weights.get('graphlet',0)>0 and model.induced_graphlet_basis is None and model.induced_graphlet_spec is None: raise ValueError('Graphlet guidance needs a trained induced graphlet head.')
@@ -170,6 +172,16 @@ def refine_typed_graph(source,targets,model,config,*,seed):
     if np.any(probs<0) or not np.allclose(probs.sum(-1),1,atol=1e-5) or not np.allclose(probs,probs.transpose(1,0,2),atol=1e-6):
         raise ValueError('Endpoint edge probabilities must be symmetric distributions.')
 
+    target_spectra = None
+    spectral_scale = None
+    if 'spectral' in weights:
+        target_spectra=np.asarray(targets.get('spectra'),dtype=np.float64)
+        expected=(2,len(source))
+        if target_spectra.shape!=expected or not np.isfinite(target_spectra).all():
+            raise ValueError(f'Predicted Laplacian spectrum must have shape {expected}.')
+        source_spectra=attributed_laplacian_spectra(source,edge_attribute=model.vectorizer.vocabulary.edge_attribute)
+        spectral_scale=np.maximum(np.abs(source_spectra).sum(-1)/max(len(source),1),1.0)
+
     graphlet_counter = None
     graphlet_basis = model.induced_graphlet_basis
     graphlet_spec = model.induced_graphlet_spec
@@ -185,6 +197,9 @@ def refine_typed_graph(source,targets,model,config,*,seed):
     def discrepancies(g, *, action=None, graphlet_histogram=None):
         out={}
         if 'edge' in weights: out['edge']=edge_energy(g,probs,edge_types)
+        if 'spectral' in weights:
+            actual=attributed_laplacian_spectra(g,edge_attribute=model.vectorizer.vocabulary.edge_attribute)
+            out['spectral']=float(np.sqrt(np.mean(((actual-target_spectra)/spectral_scale[:,None])**2)))
         if 'clustering' in weights:
             out['clustering']=clustering_histogram_wasserstein(extract_clustering_histogram(g,model.histogram_bins),targets['histogram'])
         if 'orbit' in weights: out['orbit']=orbit_summary_distance(extract_orbit_summary(g),targets['orbit'],distance='log_rmse')
@@ -243,7 +258,7 @@ def refine_typed_graph(source,targets,model,config,*,seed):
 def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_sampler=None):
     """One independent source RNG per output. Rewiring cannot consume this stream."""
     gc=config.get('generation',{}); source_mode=gc.get('invariant_source','learned')
-    if source_mode not in ('learned','train_empirical','train_empirical_perturbed'): raise ValueError('invariant_source must be learned, train_empirical, or train_empirical_perturbed (training only).')
+    if source_mode not in ('learned','train_empirical','train_empirical_perturbed','edge_relocation'): raise ValueError('invariant_source must be learned, train_empirical, train_empirical_perturbed, or edge_relocation (training only).')
     if config.get('degree_generator',{}).get('checkpoint_path'):
         raise ValueError('Joint generation must use the embedded typed-DH-VAE, not an external checkpoint.')
     require_valid=bool(gc.get('require_rdkit_source_validity',True))

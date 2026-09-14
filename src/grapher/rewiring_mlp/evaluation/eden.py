@@ -1,4 +1,4 @@
-# Adapted from the EDeN NSPDK implementation bundled with HOG-Diff; see docs/HOG_DIFF_COMPARISON_AND_ADAPTATION.md.
+# Adapted from the EDeN NSPDK implementation bundled with the HOG-Diff baseline source.
 ### code adapted from https://github.com/fabriziocosta/EDeN
 """Provides interface for vectorizer."""
 

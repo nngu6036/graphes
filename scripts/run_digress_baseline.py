@@ -19,6 +19,11 @@ from grapher.models import (
     TrainRequest,
     create_baseline,
 )
+from grapher.models.comparison import (
+    comparison_request_options,
+    resolve_common_config,
+    resolve_wrapper_config,
+)
 
 
 @dataclass(frozen=True)
@@ -91,7 +96,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--generation-id", default=None)
-    parser.add_argument("--wrapper-config", type=Path, default=None)
+    parser.add_argument("--wrapper-config", type=Path, default=None, help="Model-specific YAML; defaults to configs/baselines/digress_<dataset>.yaml.")
+    parser.add_argument("--common-config", type=Path, default=None, help="DeFoG-reference common profile; defaults to configs/baselines/common_<dataset>.yaml.")
+    parser.add_argument("--no-common-config", action="store_true", help="Disable automatic common-profile loading for a native-only diagnostic run.")
     parser.add_argument("--resume-from", type=Path, default=None)
     parser.add_argument("--digress-root", type=Path, default=None)
     parser.add_argument("--digress-python", type=Path, default=None)
@@ -166,6 +173,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
     _configure_environment(args)
     progress_enabled = not args.quiet
     profile = DATASET_PROFILES[args.dataset]
+    common = resolve_common_config(args.dataset, getattr(args, "common_config", None), disabled=getattr(args, "no_common_config", False))
+    wrapper_config = resolve_wrapper_config("digress", args.dataset, args.wrapper_config)
     progress: dict[str, object] = {
         "enabled": progress_enabled,
         "stream_output": (
@@ -200,11 +209,12 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
     elif gpu_id is not None:
         raise ValueError("--gpu-id requires --device gpu.")
 
-    training_options: dict[str, object] = {
+    training_options: dict[str, object] = comparison_request_options("digress", common, model_config=wrapper_config)
+    training_options.update({
         "experiment": profile.experiment,
         "training_estimates": training_estimates,
         "runtime": runtime_options,
-    }
+    })
     for key in (
         "n_epochs",
         "batch_size",
@@ -248,7 +258,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
         TrainRequest(
             run=run,
             dataset=dataset,
-            config_path=args.wrapper_config,
+            config_path=wrapper_config,
             options=training_options,
             resume_from=args.resume_from,
             overwrite=args.overwrite,
@@ -288,6 +298,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
         "serialized_dataset": profile.serialized_id,
         "native_dataset": profile.native_id,
         "experiment": profile.experiment,
+        "wrapper_config": str(wrapper_config) if wrapper_config is not None else None,
+        "common_config": str(common.path) if common is not None else None,
         "seed_id": args.seed_id,
         "device": requested_device,
         "gpu_id": (0 if requested_device == "gpu" and gpu_id is None else gpu_id),

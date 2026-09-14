@@ -1,4 +1,16 @@
-# QM9: native k=2 GAN for n>=2; explicit empirical category branch for n=1.
+comparison:
+  model: spectre
+  dataset: qm9
+  common_config: common_qm9.yaml
+  status: exact_upstream_qm9_profile_with_graphes_singleton_adapter
+  budget:
+    basis: upstream_released_profile
+    unit: epochs
+    source: README QM9 command
+    epochs: 30
+    batch_size: 128
+  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
+    select adaptations on validation only, never on test metrics.
 spectre:
   train:
     epochs: 30
@@ -41,6 +53,12 @@ spectre:
     SON_gumbel_temperature_warmup_epochs: 0
     n_G: 3
     n_D: 3
+    lr_g: 0.0001
+    lr_d: 0.0001
+    beta1: 0.5
+    beta2: 0.9
+    weight_decay: 0.0
+    ema: 0.995
   sample:
     use_ema: true
   generation_batch_size: 32

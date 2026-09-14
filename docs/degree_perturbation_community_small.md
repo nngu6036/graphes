@@ -145,57 +145,46 @@ so an optional `--max-degree` can reproduce a known checkpoint support ceiling.
 Actual generation obtains that ceiling directly from the loaded joint model.
 This preflight does not report graph-generation quality or MMD.
 
-## One command per option (generation AND evaluation)
+## Maintained batch launcher (generation and evaluation)
 
-The runner defaults to generation seeds 42,43,44, 64 samples each, GPU generation,
-and validation evaluation. It refuses to overwrite an existing completed run.
-
-```bash
-# Required fresh empirical control
-bash scripts/run_community_small_degree_perturbation_ablation.sh empirical
-
-# Option 1
-bash scripts/run_community_small_degree_perturbation_ablation.sh unit_transfer
-
-# Option 2
-bash scripts/run_community_small_degree_perturbation_ablation.sh moment_preserving
-
-# Option 3
-bash scripts/run_community_small_degree_perturbation_ablation.sh edge_relocation
-
-# Option 4
-bash scripts/run_community_small_degree_perturbation_ablation.sh interpolation
-```
-
-Or run the full matrix once:
+The repository now keeps one prior-ablation launcher for both Community-small
+and QM9. It avoids a second Community-small-only shell script. By default the
+Community-small path uses generation seed 42, 64 samples, GPU generation, and
+validation evaluation. Existing nonempty outputs are never overwritten.
 
 ```bash
-bash scripts/run_community_small_degree_perturbation_ablation.sh all
+# Empirical control
+bash scripts/run_prior_options.sh community_small generate empirical
+
+# Perturbation options
+bash scripts/run_prior_options.sh community_small generate unit_transfer
+bash scripts/run_prior_options.sh community_small generate moment_preserving
+bash scripts/run_prior_options.sh community_small generate edge_relocation
+bash scripts/run_prior_options.sh community_small generate interpolation
+
+# Full perturbation matrix
+bash scripts/run_prior_options.sh community_small generate all
 ```
 
-Do not run `all` after the individual commands into the same output root; the
-runner intentionally refuses to overwrite the completed outputs.
-
-To start with only generation seed 42:
+Use multiple generation seeds through the environment, for example:
 
 ```bash
-SEEDS="42" bash scripts/run_community_small_degree_perturbation_ablation.sh all
+SEEDS="42 43 44" \
+  bash scripts/run_prior_options.sh community_small generate all
 ```
 
-To explicitly request perturbation on every sample, use a **new output root**:
+To explicitly request perturbation on every sample, use a fresh output root:
 
 ```bash
 PERTURB_PROBABILITY=1.0 \
 OUT_ROOT=outputs/topology_generation/community_small_degree_perturbation_rho100/ckpt_seed_42 \
-  bash scripts/run_community_small_degree_perturbation_ablation.sh all
+  bash scripts/run_prior_options.sh community_small generate all
 ```
 
-This still logs impossible perturbations as identity transitions under the
-provided failure policy. It does not promise 100% changed degree multisets.
-
-Runner environment overrides: `PYTHON`, `CKPT`, `SEEDS`, `NUM_GENERATE`, `DEVICE`,
-`OUT_ROOT`, `REFERENCE_SPLIT`, and `PERTURB_PROBABILITY`. Use validation while
-selecting settings. Reserve test evaluation for a locked final configuration.
+The launcher also supports `all` and `train` stages and can train the shared
+checkpoint when it is missing. Run `bash scripts/run_prior_options.sh --help`
+for the maintained environment overrides. Use validation while selecting
+settings and reserve test evaluation for a locked final configuration.
 
 ## Explicit Python commands for each option
 

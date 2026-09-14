@@ -346,7 +346,12 @@ class PerturbedEmpiricalTypedDegreeSampler:
             'preserved_edge_type_counts':typed_totals(parent)==typed_totals(current),
             'preserved_second_moments':typed_moments(parent)==typed_moments(current),
             'node_count':current.num_nodes,'edge_type_totals':list(typed_totals(current)),
-            'operations':operations,'repair_used':False,'attempts_used':1}
+            'operations':operations,
+            'temporary_witness_used':bool(selected and cfg.method=='edge_relocation'),
+            'temporary_witness_kind':'connected_typed_realization' if selected and cfg.method=='edge_relocation' else None,
+            'temporary_witness_discarded':bool(selected and cfg.method=='edge_relocation'),
+            'actual_grapher_source_reconstructed_from_typed_invariant':bool(selected and cfg.method=='edge_relocation'),
+            'repair_used':False,'attempts_used':1}
         self.records.append(record)
         if output_failure or (failed and cfg.failure_policy=='error'):
             raise DegreePerturbationError(f'Typed {cfg.method} failed for training parent {self.train_indices[parent_index]}: '

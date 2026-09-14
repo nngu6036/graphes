@@ -202,8 +202,21 @@ class JointDegreeSpectralPredictor(TopologySpectralTransformerPredictor):
 
     def forward(self, batch: TopologySpectralBatch) -> dict[str, torch.Tensor]:
         context, totals = self.degree_condition(batch)
-        graph_hidden = self._graph_context(batch) if self.use_graph_context else None
+        edge_hidden = None
+        if self.use_graph_context:
+            graph_hidden, edge_hidden = self._graph_context(batch)
+        else:
+            graph_hidden = None
+            if self.predict_edge_state:
+                raise ValueError("predict_edge_state requires use_graph_context=true.")
         outputs = self._spectral_outputs_from_graph_hidden(batch, graph_hidden, degree_context=context)
+        if self.clean_edge_head is not None:
+            logits = self.clean_edge_head(edge_hidden)
+            logits = 0.5 * (logits + logits.transpose(1, 2))
+            logits = logits - logits.mean(dim=-1, keepdim=True)
+            logits = logits * batch.pair_mask.unsqueeze(-1).to(logits.dtype)
+            outputs["clean_edge_logits"] = logits
+            outputs["clean_edge_probabilities"] = torch.softmax(logits, dim=-1)
         outputs["degree_moment_totals"] = totals
         if self.predict_orbit_summary:
             raw = outputs["clean_orbit_summary"]

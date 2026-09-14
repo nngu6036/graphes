@@ -34,7 +34,7 @@ model writes `architecture_version: 4`.
 ## Community-small: train
 
 ```bash
-PYTHONPATH=src python scripts/train_degree_generator.py \
+PYTHONPATH=src python -m grapher.models.dhvae_hh.training \
   --config configs/experiments/dhvae/community_small.yaml
 ```
 
@@ -63,7 +63,7 @@ PYTHONPATH=src python scripts/run_dhvae_hh_baseline.py \
 Run this before GraphER refinement:
 
 ```bash
-PYTHONPATH=src python scripts/evaluate_degree_generator.py \
+PYTHONPATH=src python -m grapher.models.dhvae_hh.evaluation \
   --config configs/experiments/dhvae/community_small.yaml \
   --num-samples 10000 \
   --skip-constructor-check

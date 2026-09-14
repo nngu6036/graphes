@@ -438,6 +438,10 @@ class PerturbedEmpiricalDegreeSampler:
             "preserved_second_moment": sum(d*d for d in parent) == sum(d*d for d in current),
             "connected_feasible": connected_feasible(current, self.max_degree),
             "operations": operations, "raw_graphical": True, "raw_connected_feasible": True,
+            "temporary_witness_used": bool(selected and self.config.method == "edge_relocation"),
+            "temporary_witness_kind": "connected_havel_hakimi" if selected and self.config.method == "edge_relocation" else None,
+            "temporary_witness_discarded": bool(selected and self.config.method == "edge_relocation"),
+            "actual_grapher_source_reconstructed_from_degrees": bool(selected and self.config.method == "edge_relocation"),
             "repair_used": False, "attempts_used": 1,
         }
         self.records.append(record)

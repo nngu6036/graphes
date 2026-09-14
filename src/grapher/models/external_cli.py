@@ -11,6 +11,11 @@ import yaml
 
 from grapher.models import DatasetReference, GenerateRequest, RunSpec, TrainRequest, create_baseline, normalize_baseline_id
 from grapher.models.external_codec import PROFILES
+from grapher.models.comparison import (
+    comparison_request_options,
+    resolve_common_config,
+    resolve_wrapper_config,
+)
 
 
 def positive(raw: str) -> int:
@@ -33,7 +38,9 @@ def build_parser(model: str) -> argparse.ArgumentParser:
     parser.add_argument("--dataset-root", type=Path, default=Path("outputs/datasets"))
     parser.add_argument("--serialized-dataset")
     parser.add_argument("--output-root", type=Path, default=Path("outputs/baselines"))
-    parser.add_argument("--wrapper-config", type=Path)
+    parser.add_argument("--wrapper-config", type=Path, help="Model-specific YAML; defaults to configs/baselines/<model>_<dataset>.yaml.")
+    parser.add_argument("--common-config", type=Path, help="DeFoG-reference common profile; defaults to configs/baselines/common_<dataset>.yaml when available.")
+    parser.add_argument("--no-common-config", action="store_true", help="Disable automatic common-profile loading for a native-only diagnostic run.")
     parser.add_argument("--source-root", f"--{model}-root", dest="source_root", type=Path)
     parser.add_argument("--python", f"--{model}-python", dest="python", type=Path)
     parser.add_argument("--checkpoint", type=Path)
@@ -64,7 +71,10 @@ def main(model_id: str, argv: Sequence[str] | None = None) -> int:
     profile = PROFILES[args.dataset]
     run = RunSpec.for_seed(model_id=model, dataset_id=args.dataset, seed=args.seed_id,
                            output_root=args.output_root, run_id=args.run_id)
-    options = {"runtime": {"progress": {"enabled": not args.quiet, "stream_output": not args.quiet}}}
+    common = resolve_common_config(args.dataset, args.common_config, disabled=args.no_common_config)
+    config = resolve_wrapper_config(model, args.dataset, args.wrapper_config)
+    options = comparison_request_options(model, common, model_config=config)
+    options["runtime"] = {"progress": {"enabled": not args.quiet, "stream_output": not args.quiet}}
     if args.source_root is not None:
         options["source_root"] = str(args.source_root.expanduser().absolute())
     if args.python is not None:
@@ -75,13 +85,12 @@ def main(model_id: str, argv: Sequence[str] | None = None) -> int:
         value = getattr(args, key)
         if value is not None: options["runtime"][key] = value
     if args.generation_batch_size is not None: options["generation_batch_size"] = args.generation_batch_size
-    config = args.wrapper_config
-    if config is None:
-        config = Path(__file__).resolve().parents[3] / "configs" / "baselines" / f"{model}_{args.dataset}.yaml"
-        if not config.is_file():
-            raise FileNotFoundError(f"Default wrapper config not found: {config}")
     wrapper = create_baseline(model)
-    summary = {"model": model, "dataset": args.dataset, "run_dir": str(run.layout.run_dir), "stage": args.stage}
+    summary = {
+        "model": model, "dataset": args.dataset, "run_dir": str(run.layout.run_dir), "stage": args.stage,
+        "wrapper_config": str(config) if config is not None else None,
+        "common_config": str(common.path) if common is not None else None,
+    }
     if args.stage in ("train", "all"):
         training_options = dict(options)
         train = {}
@@ -94,15 +103,19 @@ def main(model_id: str, argv: Sequence[str] | None = None) -> int:
                 config_path=config, options=training_options, overwrite=args.overwrite))
         checkpoint = result.checkpoint_path
         summary["training_manifest"] = str(result.manifest_path)
+        # Generation may only change runtime/sampling controls. The trained
+        # model-specific/common settings are already frozen in the manifest.
+        options = {k: v for k, v in options.items() if k in {"runtime", "generation_batch_size", "sample", "source_root", "python"}}
     else:
         checkpoint = args.checkpoint or run.layout.checkpoints_dir / (model + ".pt")
         # Runtime/sample options may be overridden at generation, but never
         # silently replace model hyperparameters stored with the checkpoint.
-        raw = yaml.safe_load(config.read_text()) or {}
+        raw = (yaml.safe_load(config.read_text()) or {}) if config is not None else {}
         section = raw.get(model, raw.get("gsdm", raw) if model == "gdsm" else raw)
         from grapher.models.external_wrapper import merge
         generated = {k: v for k, v in section.items() if k in {"runtime", "sample", "generation_batch_size"}}
-        options = merge(generated, options)
+        runtime_only = {k: v for k, v in options.items() if k in {"runtime", "generation_batch_size", "sample", "source_root", "python"}}
+        options = merge(generated, runtime_only)
     summary["checkpoint"] = str(checkpoint)
     if args.stage in ("generate", "all"):
         result = wrapper.generate(GenerateRequest(run=run, checkpoint_path=checkpoint, num_graphs=args.num_samples,

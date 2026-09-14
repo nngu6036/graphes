@@ -1,6 +1,18 @@
-# Corrected CatFlow path. Retrain under a NEW run-id; not a claim of benchmark convergence.
-# Source-backed CatFlow on frozen GraphER community_small splits.
-# Rerun starting point, not a claim of paper-identical settings or reproduced metrics.
+comparison:
+  model: catflow
+  dataset: community_small
+  common_config: common_community_small.yaml
+  status: graphes_linear_v2_generic_adapter_budget_requires_validation_check
+  budget:
+    basis: adapter_budget_not_upstream_native
+    unit: epochs
+    source: GraphER CatFlow linear-v2 adapter; uploaded CatFlow README has no generic
+      graph profile
+    epochs: 10000
+    batch_size: 128
+  fairness_note: The uploaded CatFlow release has no generic Community-small profile.
+    This explicit linear-v2 budget prevents DeFoG fallback leakage but is not claimed
+    compute- or convergence-equivalent; tune only on validation.
 catflow:
   train:
     epochs: 10000
@@ -10,7 +22,7 @@ catflow:
     log_every: 100
     distribution: normal
     loss_function: kld
-    path: linear  # v2: no fixed endpoint noise; pairs with the sampling velocity
+    path: linear
     validation_every: 100
     validation_repeats: 4
     checkpoint_every: 1000
@@ -24,7 +36,7 @@ catflow:
     atol: 1.0e-05
     rtol: 1.0e-05
     use_ema: true
-    checkpoint_selection: auto  # best for v2, last (with warning) for legacy checkpoints
+    checkpoint_selection: auto
   generation_batch_size: 128
   runtime:
     device: auto

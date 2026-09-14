@@ -79,7 +79,15 @@ class SourceBackedWrapper(BaseGeneratorWrapper):
         return replace(p, max_nodes=maximum)
 
     def _options(self, request: TrainRequest) -> dict[str, Any]:
-        options = copy.deepcopy(self.default_options)
+        # Merge order is deliberate: upstream wrapper defaults -> common
+        # DeFoG-reference fallbacks -> model-specific YAML -> explicit CLI.
+        # This prevents raw DeFoG epoch counts from overwriting a baseline's
+        # native/equivalent convergence budget.
+        request_options = copy.deepcopy(dict(request.options))
+        comparison_defaults = request_options.pop("comparison_defaults", {}) or {}
+        if not isinstance(comparison_defaults, Mapping):
+            raise TypeError("comparison_defaults must contain a mapping.")
+        options = merge(copy.deepcopy(self.default_options), comparison_defaults)
         if request.config_path:
             raw = yaml.safe_load(request.config_path.read_text()) or {}
             if not isinstance(raw, Mapping):
@@ -88,9 +96,10 @@ class SourceBackedWrapper(BaseGeneratorWrapper):
             if not isinstance(selected, Mapping):
                 raise TypeError("Model configuration section must be a mapping.")
             options = merge(options, selected)
-        options = merge(options, request.options)
+        options = merge(options, request_options)
         allowed = {"source_env", "python_env", "source_root", "python", "runtime", "train", "model", "sample",
-                   "generation_batch_size", "max_nodes", "upstream_config", "config_overrides", "training_estimates"}
+                   "generation_batch_size", "max_nodes", "upstream_config", "config_overrides", "training_estimates",
+                   "comparison_reference"}
         if set(options) - allowed:
             raise ValueError(f"Unknown wrapper options: {sorted(set(options) - allowed)}.")
         train = options.get("train", {})

@@ -20,7 +20,7 @@ from scipy.spatial.distance import cdist
 
 
 def features(graphs, spec, *, attributed_basis=None):
-    k = int(attributed_basis.sizes[0]) if attributed_basis is not None else spec.k
+    k = min(int(value) for value in attributed_basis.sizes) if attributed_basis is not None else int(spec.min_k)
     valid = [g for g in graphs if len(g) >= k]
     if not valid:
         raise ValueError(f'No graphs with n>={k}; graphlet comparison is undefined.')
@@ -28,13 +28,25 @@ def features(graphs, spec, *, attributed_basis=None):
     return np.stack([extractor(g) for g in valid]), len(graphs)-len(valid)
 
 
-def kernel_mean(a, b, sigma):
+def _slices(spec, attributed_basis=None):
+    return tuple(attributed_basis.slices) if attributed_basis is not None else tuple(spec.slices)
+
+
+def _mean_block_tv(left, right, slices):
+    return float(np.mean([0.5*np.abs(left[a:b]-right[a:b]).sum() for a,b in slices]))
+
+
+def kernel_mean(a, b, sigma, slices):
     # Chunk both axes to bound pairwise storage for molecular datasets.
     total = 0.0
     for i in range(0, len(a), 128):
         for j in range(0, len(b), 128):
-            # Avoid an O(batch^2 * vocabulary_width) temporary for large labeled vocabularies.
-            tv = 0.5*cdist(a[i:i+128], b[j:j+128], metric='cityblock')
+            # Average TV across separately-normalized k-blocks.
+            tv = None
+            for start, stop in slices:
+                block = 0.5*cdist(a[i:i+128,start:stop], b[j:j+128,start:stop], metric='cityblock')
+                tv = block if tv is None else tv + block
+            tv = tv / max(len(slices), 1)
             total += np.exp(-tv/sigma).sum()
     return float(total/(len(a)*len(b)))
 
@@ -54,7 +66,12 @@ def main():
     p.add_argument('--json-out', required=True)
     args=p.parse_args(); cfg=load_yaml(args.config)
     spec=InducedGraphletSpec.from_config(cfg.get('structure_summary_prediction')) or InducedGraphletSpec()
-    spec=InducedGraphletSpec(args.k if args.k is not None else spec.k, args.scope or spec.scope)
+    if args.k is not None:
+        spec=InducedGraphletSpec(args.k, args.scope or spec.scope)
+    elif args.scope is not None and args.scope != spec.scope:
+        if len(spec.sizes) != 1:
+            p.error('--scope cannot override a multi-order generic checkpoint/config; use a matching config.')
+        spec=InducedGraphletSpec(int(spec.sizes[0]), args.scope)
     if not np.isfinite(args.sigma) or args.sigma<=0: p.error('sigma must be positive and finite')
     if args.max_reference_graphs<=0 or args.max_generated_graphs<=0: p.error('sample caps must be positive')
     root=Path(cfg['dataset'].get('root','outputs/datasets'))/cfg['dataset']['name']
@@ -90,8 +107,9 @@ def main():
     g_idx=np.sort(rng.choice(len(generated), min(len(generated),args.max_generated_graphs), replace=False))
     h_ref, omitted_ref=features([references[i] for i in r_idx],spec,attributed_basis=attributed_basis)
     h_gen, omitted_gen=features([generated[i] for i in g_idx],spec,attributed_basis=attributed_basis)
-    mean_tv=float(.5*np.abs(h_ref.mean(0)-h_gen.mean(0)).sum())
-    mmd=kernel_mean(h_ref,h_ref,args.sigma)+kernel_mean(h_gen,h_gen,args.sigma)-2*kernel_mean(h_ref,h_gen,args.sigma)
+    slices=_slices(spec,attributed_basis)
+    mean_tv=_mean_block_tv(h_ref.mean(0),h_gen.mean(0),slices)
+    mmd=kernel_mean(h_ref,h_ref,args.sigma,slices)+kernel_mean(h_gen,h_gen,args.sigma,slices)-2*kernel_mean(h_ref,h_gen,args.sigma,slices)
     report={'format':'induced_graphlet_histogram_comparison_v2','reference_split':args.reference_split,
         'catalogue':(attributed_graphlet_metadata(attributed_basis) if attributed_basis is not None else spec.metadata()),'reference_sha256':file_sha256(refpath),'generated_sha256':file_sha256(genpath),
         'checkpoint':checkpoint_info,
@@ -111,7 +129,7 @@ def main():
     atomic_json(report,Path(args.json_out))
     width = attributed_basis.width if attributed_basis is not None else spec.width
     mode = 'attributed' if attributed_basis is not None else 'topology'
-    order_text = ','.join(attributed_basis.sizes) if attributed_basis is not None else str(spec.k)
+    order_text = ','.join(attributed_basis.sizes) if attributed_basis is not None else ','.join(str(k) for k in spec.sizes)
     print(f'Induced graphlets ({mode}) k={order_text} scope={spec.scope} bins={width}: reference={len(h_ref)} generated={len(h_gen)}')
     print(f'TV between mean graphlet histograms: {mean_tv:.6f}')
     print(f'Additional Laplace-TV biased MMD^2 (sigma={args.sigma}): {mmd:.6f}')
