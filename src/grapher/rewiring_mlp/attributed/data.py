@@ -23,6 +23,7 @@ from grapher.rewiring_mlp.core.rewiring import (
 )
 from grapher.utils.motifs import (
     attributed_graphlet_count_dict,
+    attributed_graphlet_count_dict_multi,
     graphlet_count_dict,
     normalize_graphlet_topology_filter,
     normalize_count_dict,
@@ -265,38 +266,78 @@ class GraphletBasis:
 
         keys_by_k: dict[str, tuple[str, ...]] = {}
         rng = np.random.default_rng(int(seed))
-        for k in range(cfg.graphlet_k_min, cfg.graphlet_k_max + 1):
-            keys: set[str] = set()
+        orders = tuple(range(cfg.graphlet_k_min, cfg.graphlet_k_max + 1))
+        attributed_backend = str(raw.get("attributed_backend", "auto"))
+
+        # GraphER's molecular k=3,4,5 setup is exact, unfiltered and uses the
+        # Python attributed canonicalizer.  Scan each molecule once and reuse
+        # its compiled labels/adjacency for every requested order.  Sampled
+        # or filtered workflows retain the historical k-major traversal so
+        # their RNG/progress semantics are unchanged.
+        use_multik_exact = bool(
+            attributed
+            and attributed_backend == "python"
+            and not cfg.graphlet_connected_only
+            and normalize_graphlet_topology_filter(cfg.graphlet_topology_filter) == "all"
+            and (cfg.graphlet_num_samples is None or int(cfg.graphlet_num_samples) <= 0)
+        )
+        if use_multik_exact:
+            keys_by_order: dict[int, set[str]] = {k: set() for k in orders}
             for graph_index, graph in enumerate(graphs, start=1):
-                if attributed:
-                    counts = attributed_graphlet_count_dict(
-                        graph,
-                        k,
-                        node_label_attr=str(node_attribute),
-                        edge_label_attr=str(edge_attribute),
-                        connected_only=cfg.graphlet_connected_only,
-                        topology_filter=cfg.graphlet_topology_filter,
-                        num_samples=cfg.graphlet_num_samples,
-                        rng=rng,
-                        backend=str(raw.get("attributed_backend", "auto")),
-                    )
-                else:
-                    counts = graphlet_count_dict(
-                        graph,
-                        k,
-                        connected_only=cfg.graphlet_connected_only,
-                        topology_filter=cfg.graphlet_topology_filter,
-                        num_samples=cfg.graphlet_num_samples,
-                        rng=rng,
-                    )
-                keys.update(str(key) for key in counts)
-                if progress_callback is not None:
-                    progress_callback(k, graph_index, len(graphs), len(keys))
-            if len(graphs) == 0 and progress_callback is not None:
-                progress_callback(k, 0, 0, 0)
-            ordered = sorted(keys)
-            ordered.append(GRAPHLET_OVERFLOW_KEY)
-            keys_by_k[str(k)] = tuple(ordered)
+                counts_by_order = attributed_graphlet_count_dict_multi(
+                    graph,
+                    orders,
+                    node_label_attr=str(node_attribute),
+                    edge_label_attr=str(edge_attribute),
+                    connected_only=False,
+                    topology_filter="all",
+                    num_samples=None,
+                    rng=rng,
+                    backend="python",
+                )
+                for k in orders:
+                    keys_by_order[k].update(str(key) for key in counts_by_order.get(k, {}))
+                    if progress_callback is not None:
+                        progress_callback(k, graph_index, len(graphs), len(keys_by_order[k]))
+            for k in orders:
+                if len(graphs) == 0 and progress_callback is not None:
+                    progress_callback(k, 0, 0, 0)
+                ordered = sorted(keys_by_order[k])
+                ordered.append(GRAPHLET_OVERFLOW_KEY)
+                keys_by_k[str(k)] = tuple(ordered)
+        else:
+            for k in orders:
+                keys: set[str] = set()
+                for graph_index, graph in enumerate(graphs, start=1):
+                    if attributed:
+                        counts = attributed_graphlet_count_dict(
+                            graph,
+                            k,
+                            node_label_attr=str(node_attribute),
+                            edge_label_attr=str(edge_attribute),
+                            connected_only=cfg.graphlet_connected_only,
+                            topology_filter=cfg.graphlet_topology_filter,
+                            num_samples=cfg.graphlet_num_samples,
+                            rng=rng,
+                            backend=attributed_backend,
+                        )
+                    else:
+                        counts = graphlet_count_dict(
+                            graph,
+                            k,
+                            connected_only=cfg.graphlet_connected_only,
+                            topology_filter=cfg.graphlet_topology_filter,
+                            num_samples=cfg.graphlet_num_samples,
+                            rng=rng,
+                        )
+                    keys.update(str(key) for key in counts)
+                    if progress_callback is not None:
+                        progress_callback(k, graph_index, len(graphs), len(keys))
+                if len(graphs) == 0 and progress_callback is not None:
+                    progress_callback(k, 0, 0, 0)
+                ordered = sorted(keys)
+                ordered.append(GRAPHLET_OVERFLOW_KEY)
+                keys_by_k[str(k)] = tuple(ordered)
         return cls(
             keys_by_k=keys_by_k,
             connected_only=cfg.graphlet_connected_only,

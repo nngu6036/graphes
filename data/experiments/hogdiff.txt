@@ -300,3 +300,38 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --output-dir "$GEN_DIR/evaluation" \
     --require-fcd \
  --hogdiff-compatible-metrics
+
+ Molecular evaluation
+  validity: 0.9853515625
+  validity_with_correction: 0.9990234375
+  validity_with_projected_formal_charges: 0.9921875
+  validity_without_correction: 0.9853515625
+  fcd: 3.1748988876708353
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1009
+  num_invalid_generated_molecules: 15
+  num_valid_generated_molecules_with_projected_formal_charges: 1016
+  num_invalid_generated_molecules_after_projected_formal_charges: 8
+  num_raw_invalid_resolved_by_projected_formal_charges: 7
+  projected_formal_charge_success_rate_on_raw_invalid: 0.4666666666666667
+  num_valid_generated_molecules_with_correction: 1023
+  num_invalid_generated_molecules_after_correction: 1
+  num_molecules_corrected_to_valid: 14
+  correction_success_rate_on_raw_invalid: 0.9333333333333333
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.9931573802541545
+  unique_valid_count: 1016
+  novelty_rate: 0.8818897637795275
+  novel_unique_valid_count: 896
+  nspdk_mmd: 0.081206495443031
+  nspdk_mmd_valid_only: 0.081206495443031
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.3719737588699472e-05
+  nspdk_proxy_mmd_metric_source: 0.0006449369391147669
+  fcd_num_reference_molecules: 1000
+  fcd_num_valid_generated_molecules: 1023
+  fcd_generated_smiles_source: valid_with_correction

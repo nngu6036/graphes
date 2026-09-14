@@ -445,10 +445,14 @@ done
 
 ### QM9
 
-The maintained QM9 GraphER experiment uses 20,000 randomly selected training
-molecules.  The selected indices are determined by `--seed 42` and reused by the
-joint model.  Graphlet identities include topology, `atomic_num`, and
-`bond_type` for `k=3,4,5`.
+The maintained QM9 GraphER experiment uses the full prepared training split by
+default (`dataset.max_train_graphs: null`).  The attributed graphlet vocabulary
+is fitted on a deterministic training-only subset controlled by
+`graphlet_prediction.max_basis_graphs` (20,000 in the default config); this
+limits vocabulary-discovery cost only and does **not** reduce the predictor's
+training set.  Unseen labeled graphlet classes map to the existing overflow bin.
+Graphlet identities include topology, `atomic_num`, and `bond_type` for
+`k=3,4,5`.
 
 One-time typed-degree warm start:
 

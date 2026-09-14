@@ -359,8 +359,16 @@ def train_joint_typed_edge(config,args):
               f'wall_seconds={time.perf_counter()-validation_started:.2f}', flush=True)
     config['attributed_predictor'].update(epochs=epochs,batch_size=batch_size)
     config['dataset'].update(max_train_graphs=train_limit,max_val_graphs=val_limit)
+    graphlet_basis_limit=(config.get('graphlet_prediction',{}) or {}).get('max_basis_graphs')
+    graphlet_basis_graphs=(
+        min(len(train),int(graphlet_basis_limit))
+        if graphlet_basis_limit is not None and int(graphlet_basis_limit)>0
+        else len(train)
+    )
     dataset_info={'train_graphs':len(train),'val_graphs':len(val),'provenance':provenance,
                   'training_subset':training_subset,
+                  'graphlet_basis_graphs':graphlet_basis_graphs if model.induced_graphlet_basis is not None else 0,
+                  'graphlet_basis_sampling':('uniform_without_replacement' if model.induced_graphlet_basis is not None and graphlet_basis_graphs<len(train) else 'all_training_graphs'),
                   'typed_initializer_sha256':file_sha256(j['initialize_degree_checkpoint']) if j.get('initialize_degree_checkpoint') else None,
                   'source_alignment':'indexed_typed_signatures_shared_node_permutation',
                   'endpoint_valence_policy':ENDPOINT_VALENCE_POLICY,
@@ -370,7 +378,11 @@ def train_joint_typed_edge(config,args):
     if model.induced_graphlet_basis is not None:
         atomic_json({'basis':model.induced_graphlet_basis.to_dict(),
                      'metadata':model.induced_graphlet_metadata(),
-                     'training_graphs':len(train), 'training_subset':training_subset, 'dataset_provenance':provenance},
+                     'training_graphs':len(train),
+                     'basis_graphs':graphlet_basis_graphs,
+                     'basis_sampling':dataset_info['graphlet_basis_sampling'],
+                     'basis_seed':seed,
+                     'training_subset':training_subset, 'dataset_provenance':provenance},
                     output/'attributed_graphlet_basis.json')
     atomic_json({'config':config,**dataset_info},output/'run_config.json')
     print('[JointTypedEdge] endpoints preserve prepared target bond types; '

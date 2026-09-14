@@ -234,8 +234,23 @@ def fit_training_basis(config:dict,train_graphs)->GraphletBasis|None:
     settings=dict(graphlet_history=True,graphlet_k_min=min(sizes),graphlet_k_max=max(sizes),graphlet_connected_only=False,
       graphlet_topology_filter="all",graphlet_num_samples=None,attributed=True,node_attribute=cat.get("node_attribute","atomic_num"),
       edge_attribute=cat.get("edge_attribute","bond_type"),attributed_backend="python")
-    print(f"[AttributedGraphlets] fitting TRAIN-only labeled vocabulary: graphs={len(train_graphs)} k={min(sizes)}..{max(sizes)} scope=all; labels={settings['node_attribute']}/{settings['edge_attribute']}",flush=True)
-    node_counts=[g.number_of_nodes() for g in train_graphs]
+
+    # Vocabulary discovery does not need to rescan the whole molecular training
+    # split.  Honour the existing graphlet_prediction.max_basis_graphs option
+    # and use a deterministic training-only sample.  Unseen classes remain
+    # well-defined because every order already contains an overflow bin.
+    gp=config.get("graphlet_prediction",{}) or {}
+    requested_limit=gp.get("max_basis_graphs")
+    basis_graphs=list(train_graphs)
+    if requested_limit is not None and int(requested_limit)>0 and len(basis_graphs)>int(requested_limit):
+        limit=int(requested_limit); seed=int(config.get("seed",42))
+        rng=np.random.default_rng(seed)
+        selected=np.sort(rng.choice(len(basis_graphs),size=limit,replace=False))
+        basis_graphs=[basis_graphs[int(index)] for index in selected]
+        print(f"[AttributedGraphlets] vocabulary subset: selected={len(basis_graphs)}/{len(train_graphs)} "
+              f"strategy=uniform_without_replacement seed={seed} overflow=enabled",flush=True)
+    print(f"[AttributedGraphlets] fitting TRAIN-only labeled vocabulary: graphs={len(basis_graphs)} k={min(sizes)}..{max(sizes)} scope=all; labels={settings['node_attribute']}/{settings['edge_attribute']}",flush=True)
+    node_counts=[g.number_of_nodes() for g in basis_graphs]
     subset_counts=[sum(comb(n,k) if n>=k else 0 for k in sizes) for n in node_counts]; total_subsets=sum(subset_counts)
     pc=config.get("attributed_predictor",{}); seconds=float(pc.get("progress_interval_seconds",60)); graph_interval=int(pc.get("graphlet_progress_interval",1000))
     print(f"[AttributedGraphlets] CPU preprocessing: induced_subsets={total_subsets:,} across k={list(sizes)}; progress_interval_seconds={seconds:g} graphlet_progress_interval={graph_interval}",flush=True)
@@ -243,11 +258,12 @@ def fit_training_basis(config:dict,train_graphs)->GraphletBasis|None:
     initial_cache=_canonicalize_attributed_tokens.cache_info()
     def progress(k:int,done:int,total:int,bins:int):
       nonlocal last_progress,completed_subsets,last_subsets,last_bins,previous_graph_finished
-      # GraphletBasis invokes callback separately for each k, so progress reporting here is approximate per block.
+      # The optimized exact path may report several k values after each graph;
+      # sampled/filtered paths retain the historical k-major progress order.
       now=time.perf_counter(); by_graph=graph_interval>0 and done%graph_interval==0; by_time=seconds>0 and now-last_progress>=seconds
       if done not in (0,1,total) and not by_graph and not by_time:return
       print(f"[AttributedGraphlets] vocabulary progress k={k} graphs={done}/{total} bins={bins} elapsed={now-started:.1f}s",flush=True); last_progress=now; last_bins=bins
-    basis=GraphletBasis.fit_from_graphs(train_graphs,settings,attributed=True,seed=int(config.get("seed",42)),progress_callback=progress)
+    basis=GraphletBasis.fit_from_graphs(basis_graphs,settings,attributed=True,seed=int(config.get("seed",42)),progress_callback=progress)
     info=metadata(basis)
     print(f"[AttributedGraphlets] attributed=True sizes={info['sizes']} bins={info['width']} block_widths={info['block_widths']} fingerprint={info['fingerprint']}",flush=True)
     return basis

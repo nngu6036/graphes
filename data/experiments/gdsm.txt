@@ -1,30 +1,167 @@
-export GDSM="/home/quang/GDSM"
-export GDSM_PYTHON="$(command -v python)"
+RUN=seed_42
+N=1024
 
-# Training
 PYTHONPATH=src python scripts/run_gdsm_baseline.py \
   --stage train \
   --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/gdsm_community_small.yaml \
   --seed-id 42 \
-  --run-id seed_42 \
+  --run-id "$RUN" \
   --device gpu
 
-# Generation
 PYTHONPATH=src python scripts/run_gdsm_baseline.py \
   --stage generate \
   --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/gdsm_community_small.yaml \
   --seed-id 42 \
-  --run-id seed_42 \
-  --num-samples 1024 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
   --device gpu
 
-# Evaluation
-GEN_DIR="outputs/baselines/gdsm/community_small/seed_42/generations/seed_42_n_1024"
+GEN_DIR="outputs/baselines/gdsm/community_small/$RUN/generations/seed_42_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
-  --generated-stage gdsm \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+
+  Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+gdsm_to_test                        0.005480          0.007885      0.000457
+
+RUN=seed_43
+N=1024
+
+PYTHONPATH=src python scripts/run_gdsm_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdsm_community_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_gdsm_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdsm_community_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/gdsm/community_small/$RUN/generations/seed_43_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+gdsm_to_test                        0.014972          0.010614      0.001501
+
+RUN=seed_44
+N=1024
+
+PYTHONPATH=src python scripts/run_gdsm_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdsm_community_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_gdsm_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdsm_community_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/gdsm/community_small/$RUN/generations/seed_44_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+gdsm_to_test                        0.010720          0.012201      0.000801
+
+
+
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_gdsm_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/gdsm_ego_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_gdsm_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/gdsm_ego_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/gdsm/ego_small/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+  Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.012987          0.027056      0.008995
+gdsm_to_test                        0.030634          0.122794      0.010824
+
+
+
+RUN=seed_43
+N=1024
+
+PYTHONPATH=src python scripts/run_gdsm_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/gdsm_ego_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_gdsm_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/gdsm_ego_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/gdsm/ego_small/$RUN/generations/seed_43_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"

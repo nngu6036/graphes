@@ -21,8 +21,11 @@ from grapher.rewiring_mlp.generic.graphlet_diffusion import (
 )
 from grapher.utils.motifs import (
     _canonicalize_attributed_tokens,
+    _canonicalize_compiled_attributed_subset,
+    _compile_attributed_graph_python_all,
     _stable_label_token,
     attributed_graphlet_count_dict,
+    attributed_graphlet_count_dict_multi,
     canonicalize_attributed_simple_cycle,
     graphlet_topology_matches,
 )
@@ -134,19 +137,19 @@ def extract_attributed_graphlet_counts(
     """Count selected attributed graphlets exactly in the fixed vocabulary."""
 
     _require_python_basis(graphlet_basis)
+    raw_by_k = attributed_graphlet_count_dict_multi(
+        graph,
+        (int(size) for size in graphlet_basis.sizes),
+        node_label_attr=str(graphlet_basis.node_attribute),
+        edge_label_attr=str(graphlet_basis.edge_attribute),
+        connected_only=graphlet_basis.connected_only,
+        topology_filter=graphlet_basis.topology_filter,
+        backend="python",
+    )
     counts_by_size: AttributedGraphletCounts = {}
     for size in graphlet_basis.sizes:
         block: defaultdict[str, int] = defaultdict(int)
-        raw_counts = attributed_graphlet_count_dict(
-            graph,
-            int(size),
-            node_label_attr=str(graphlet_basis.node_attribute),
-            edge_label_attr=str(graphlet_basis.edge_attribute),
-            connected_only=graphlet_basis.connected_only,
-            topology_filter=graphlet_basis.topology_filter,
-            backend="python",
-        )
-        for key, count in raw_counts.items():
+        for key, count in raw_by_k.get(int(size), {}).items():
             block[_basis_key(key, graphlet_basis, size)] += count
         counts_by_size[size] = dict(block)
     return counts_by_size
@@ -370,6 +373,27 @@ def candidate_attributed_graphlet_counts(
     result: AttributedGraphletCounts = {
         size: dict(current_counts.get(size, {})) for size in graphlet_basis.sizes
     }
+    fast_all = (
+        not graphlet_basis.connected_only
+        and graphlet_basis.topology_filter == "all"
+    )
+    compiled_before = compiled_after = None
+    if fast_all:
+        compiled_before = _compile_attributed_graph_python_all(
+            graph,
+            node_label_attr=str(graphlet_basis.node_attribute),
+            edge_label_attr=str(graphlet_basis.edge_attribute),
+            missing_ok=False,
+        )
+        compiled_after = _compile_attributed_graph_python_all(
+            candidate,
+            node_label_attr=str(graphlet_basis.node_attribute),
+            edge_label_attr=str(graphlet_basis.edge_attribute),
+            missing_ok=False,
+        )
+        if compiled_before is None or compiled_after is None:
+            fast_all = False
+
     for size in graphlet_basis.sizes:
         k = int(size)
         delta: defaultdict[str, int] = defaultdict(int)
@@ -381,20 +405,32 @@ def candidate_attributed_graphlet_counts(
             connected_only=graphlet_basis.connected_only,
             topology_filter=graphlet_basis.topology_filter,
         ):
-            before_key = _selected_key_or_none(
-                graph,
-                subset,
-                graphlet_basis=graphlet_basis,
-                size=size,
-            )
+            if fast_all:
+                before_key = _basis_key(
+                    _canonicalize_compiled_attributed_subset(compiled_before, subset),
+                    graphlet_basis,
+                    size,
+                )
+                after_key = _basis_key(
+                    _canonicalize_compiled_attributed_subset(compiled_after, subset),
+                    graphlet_basis,
+                    size,
+                )
+            else:
+                before_key = _selected_key_or_none(
+                    graph,
+                    subset,
+                    graphlet_basis=graphlet_basis,
+                    size=size,
+                )
+                after_key = _selected_key_or_none(
+                    candidate,
+                    subset,
+                    graphlet_basis=graphlet_basis,
+                    size=size,
+                )
             if before_key is not None:
                 delta[before_key] -= 1
-            after_key = _selected_key_or_none(
-                candidate,
-                subset,
-                graphlet_basis=graphlet_basis,
-                size=size,
-            )
             if after_key is not None:
                 delta[after_key] += 1
         updated = result[size]

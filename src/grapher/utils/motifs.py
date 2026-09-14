@@ -952,6 +952,13 @@ def _attributed_permutation_edge_orders(
     return tuple(result)
 
 
+@lru_cache(maxsize=4096)
+def _encoded_attributed_token(token: str) -> str:
+    """JSON-encode one stable label token once across all graphlets."""
+
+    return json.dumps(token, ensure_ascii=True)
+
+
 @lru_cache(maxsize=131072)
 def _canonicalize_attributed_tokens(
     node_tokens: tuple[str, ...],
@@ -959,14 +966,16 @@ def _canonicalize_attributed_tokens(
 ) -> str:
     """Canonicalize a labeled adjacency pattern using the ATTR_PY_V1 format.
 
-    Stable string tokens keep values such as ``1``, ``True``, and ``1.0``
-    distinct and support unhashable labels. Only absent edges use ``None``.
-    The bounded cache is shared by vocabulary fitting and later extraction.
+    The output is byte-for-byte compatible with the historical implementation.
+    Internally, repeated JSON encoding is cached and candidate permutations are
+    compared through compact integer ranks rather than tuples of Python strings.
+    This matters most for carbon-rich k=5 molecular graphlets, where the exact
+    canonicalizer may inspect all 5! label-preserving node permutations.
     """
 
-    encoded_nodes = tuple(json.dumps(token, ensure_ascii=True) for token in node_tokens)
+    encoded_nodes = tuple(_encoded_attributed_token(token) for token in node_tokens)
     encoded_edges = tuple(
-        "null" if token is None else json.dumps(token, ensure_ascii=True)
+        "null" if token is None else _encoded_attributed_token(token)
         for token in edge_tokens
     )
     # The legacy key minimizes the complete JSON string, whose node sequence
@@ -976,14 +985,32 @@ def _canonicalize_attributed_tokens(
     grouped: dict[str, list[int]] = {}
     for index, token in enumerate(encoded_nodes):
         grouped.setdefault(token, []).append(index)
+    sorted_node_tokens = tuple(sorted(encoded_nodes))
     groups = tuple(tuple(grouped[token]) for token in sorted(grouped))
-    best_edges = min(
-        tuple(encoded_edges[index] for index in edge_order)
-        for edge_order in _attributed_permutation_edge_orders(groups)
-    )
+    orders = _attributed_permutation_edge_orders(groups)
+
+    if len(orders) == 1:
+        best_order = orders[0]
+    else:
+        # Integer ranks preserve Python string lexicographic order exactly but
+        # make the O(k!) comparison substantially cheaper.
+        unique_edges = sorted(set(encoded_edges))
+        ranks = {token: rank for rank, token in enumerate(unique_edges)}
+        edge_ranks = tuple(ranks[token] for token in encoded_edges)
+        candidates = list(orders)
+        for position in range(len(edge_ranks)):
+            best_rank = min(edge_ranks[order[position]] for order in candidates)
+            candidates = [
+                order for order in candidates
+                if edge_ranks[order[position]] == best_rank
+            ]
+            if len(candidates) == 1:
+                break
+        best_order = candidates[0]
+    best_edges = tuple(encoded_edges[index] for index in best_order)
     return (
         "ATTR_PY_V1|[["
-        + ",".join(sorted(encoded_nodes))
+        + ",".join(sorted_node_tokens)
         + "],["
         + ",".join(best_edges)
         + "]]"
@@ -1038,27 +1065,42 @@ def canonicalize_attributed_graph_python(
     )
 
 
-def _attributed_graphlet_count_dict_python_all(
+@dataclass(frozen=True)
+class _CompiledAttributedGraph:
+    """Compact exact representation used by the Python graphlet counter.
+
+    The previous fast path rebuilt node tokens and a sparse adjacency mapping
+    independently for every requested graphlet order.  GraphER normally asks
+    for k=3,4,5 together, so that repeated setup became a noticeable part of
+    endpoint-cache construction and graphlet-vocabulary fitting.  This
+    representation is built once per graph and reused across all requested k.
+    """
+
+    nodes: tuple[Any, ...]
+    node_index: dict[Any, int]
+    node_tokens: tuple[str, ...]
+    edge_tokens: tuple[tuple[str | None, ...], ...]
+
+    @property
+    def num_nodes(self) -> int:
+        return len(self.node_tokens)
+
+
+def _compile_attributed_graph_python_all(
     graph: nx.Graph,
-    k: int,
     *,
     node_label_attr: str,
     edge_label_attr: str,
-    num_samples: int | None,
-    rng: np.random.Generator | None,
     missing_ok: bool,
-) -> dict[str, int] | None:
-    """Count unfiltered subsets directly from labels and an adjacency table.
+) -> _CompiledAttributedGraph | None:
+    """Compile labels and a dense edge-token table once for exact counting.
 
-    ``None`` requests the general path. In particular, missing attributes
-    retain the general path's validation of only the selected subsets.
+    ``None`` requests the general validation path.  In particular, when
+    ``missing_ok`` is false and an attribute is absent we preserve the legacy
+    behavior that validates only the actually selected subgraphs.
     """
 
     _validate_simple_undirected(graph)
-    if k <= 0 or k > 7:
-        return None
-    if k > graph.number_of_nodes():
-        return {}
     if not missing_ok and (
         any(node_label_attr not in data for _, data in graph.nodes(data=True))
         or any(edge_label_attr not in data for _, _, data in graph.edges(data=True))
@@ -1071,22 +1113,191 @@ def _attributed_graphlet_count_dict_python_all(
         _stable_label_token(graph.nodes[node].get(node_label_attr, "__MISSING__"))
         for node in nodes
     )
-    adjacency: list[dict[int, str]] = [{} for _ in nodes]
+    n = len(nodes)
+    dense: list[list[str | None]] = [[None] * n for _ in range(n)]
     for left, right, data in graph.edges(data=True):
         token = _stable_label_token(data.get(edge_label_attr, "__MISSING__"))
         u, v = rank[left], rank[right]
-        adjacency[u][v] = adjacency[v][u] = token
+        dense[u][v] = dense[v][u] = token
+    return _CompiledAttributedGraph(
+        nodes=tuple(nodes),
+        node_index=rank,
+        node_tokens=node_tokens,
+        edge_tokens=tuple(tuple(row) for row in dense),
+    )
+
+
+def _compiled_edge_tokens(
+    edge_tokens: tuple[tuple[str | None, ...], ...],
+    subset: tuple[int, ...],
+) -> tuple[str | None, ...]:
+    """Return upper-triangle edge labels without per-subset combinations().
+
+    k=3,4,5 dominate GraphER.  Small explicit branches avoid generator and
+    dictionary overhead while preserving the exact legacy token ordering.
+    """
+
+    k = len(subset)
+    e = edge_tokens
+    if k == 3:
+        a, b, c = subset
+        return (e[a][b], e[a][c], e[b][c])
+    if k == 4:
+        a, b, c, d = subset
+        return (
+            e[a][b], e[a][c], e[a][d],
+            e[b][c], e[b][d], e[c][d],
+        )
+    if k == 5:
+        a, b, c, d, f = subset
+        return (
+            e[a][b], e[a][c], e[a][d], e[a][f],
+            e[b][c], e[b][d], e[b][f],
+            e[c][d], e[c][f], e[d][f],
+        )
+    return tuple(
+        e[left][right]
+        for left, right in itertools.combinations(subset, 2)
+    )
+
+
+
+
+def _canonicalize_compiled_attributed_subset(
+    compiled: _CompiledAttributedGraph,
+    nodes: Iterable[Any],
+) -> str:
+    """Canonicalize one subset from a precompiled attributed graph."""
+
+    subset = tuple(compiled.node_index[node] for node in nodes)
+    return _canonicalize_attributed_tokens(
+        tuple(compiled.node_tokens[index] for index in subset),
+        _compiled_edge_tokens(compiled.edge_tokens, subset),
+    )
+
+
+def _count_compiled_attributed_graphlets(
+    compiled: _CompiledAttributedGraph,
+    k: int,
+    *,
+    num_samples: int | None,
+    rng: np.random.Generator | None,
+) -> dict[str, int]:
+    if k <= 0 or k > 7:
+        raise ValueError("The Python attributed graphlet counter supports 1 <= k <= 7.")
+    if k > compiled.num_nodes:
+        return {}
 
     counts: Counter[str] = Counter()
-    for subset in _sample_node_subsets(
-        tuple(range(len(nodes))), k, num_samples=num_samples, rng=rng
+    indices = tuple(range(compiled.num_nodes))
+    node_tokens = compiled.node_tokens
+    edge_tokens = compiled.edge_tokens
+    for raw_subset in _sample_node_subsets(
+        indices, k, num_samples=num_samples, rng=rng
     ):
+        subset = tuple(int(index) for index in raw_subset)
         key = _canonicalize_attributed_tokens(
             tuple(node_tokens[index] for index in subset),
-            tuple(adjacency[left].get(right) for left, right in itertools.combinations(subset, 2)),
+            _compiled_edge_tokens(edge_tokens, subset),
         )
         counts[key] += 1
     return dict(counts)
+
+
+def attributed_graphlet_count_dict_multi(
+    graph: nx.Graph,
+    sizes: Iterable[int],
+    *,
+    node_label_attr: str = "node_label",
+    edge_label_attr: str = "edge_label",
+    connected_only: bool = True,
+    topology_filter: str = "all",
+    num_samples: int | None = None,
+    rng: np.random.Generator | None = None,
+    missing_ok: bool = False,
+    backend: str = "auto",
+    nauty_exec: str | os.PathLike[str] | None = NAUTY_EXEC,
+) -> dict[int, dict[str, int]]:
+    """Count several attributed graphlet orders with one graph compilation.
+
+    The optimized path is exact and is used for GraphER's molecular setting
+    ``backend='python', connected_only=False, topology_filter='all'``.  Other
+    modes deliberately fall back to the established single-k implementation
+    so their filtering/sampling semantics are unchanged.
+    """
+
+    orders = tuple(dict.fromkeys(int(k) for k in sizes))
+    if not orders:
+        return {}
+    selected_filter = normalize_graphlet_topology_filter(topology_filter)
+    selected_backend = str(backend).lower()
+    if selected_backend not in {"auto", "python", "nauty"}:
+        raise ValueError("backend must be 'auto', 'python', or 'nauty'.")
+    use_nauty = selected_backend == "nauty" or (
+        selected_backend == "auto" and bool(nauty_exec)
+    )
+
+    if not use_nauty and selected_filter == "all" and not connected_only:
+        compiled = _compile_attributed_graph_python_all(
+            graph,
+            node_label_attr=node_label_attr,
+            edge_label_attr=edge_label_attr,
+            missing_ok=missing_ok,
+        )
+        if compiled is not None:
+            return {
+                k: _count_compiled_attributed_graphlets(
+                    compiled, k, num_samples=num_samples, rng=rng
+                )
+                for k in orders
+            }
+
+    # General fallback.  This is intentionally below the optimized branch so
+    # the existing single-k function remains the source of truth for nauty,
+    # connected-only, cycle-filtered, and missing-attribute workflows.
+    return {
+        k: attributed_graphlet_count_dict(
+            graph,
+            k,
+            node_label_attr=node_label_attr,
+            edge_label_attr=edge_label_attr,
+            connected_only=connected_only,
+            topology_filter=selected_filter,
+            num_samples=num_samples,
+            rng=rng,
+            missing_ok=missing_ok,
+            backend=selected_backend,
+            nauty_exec=nauty_exec,
+        )
+        for k in orders
+    }
+
+
+def _attributed_graphlet_count_dict_python_all(
+    graph: nx.Graph,
+    k: int,
+    *,
+    node_label_attr: str,
+    edge_label_attr: str,
+    num_samples: int | None,
+    rng: np.random.Generator | None,
+    missing_ok: bool,
+) -> dict[str, int] | None:
+    """Compatibility single-k wrapper around the compiled exact counter."""
+
+    if k <= 0 or k > 7:
+        return None
+    compiled = _compile_attributed_graph_python_all(
+        graph,
+        node_label_attr=node_label_attr,
+        edge_label_attr=edge_label_attr,
+        missing_ok=missing_ok,
+    )
+    if compiled is None:
+        return None
+    return _count_compiled_attributed_graphlets(
+        compiled, int(k), num_samples=num_samples, rng=rng
+    )
 
 
 def canonicalize_attributed_simple_cycle(
