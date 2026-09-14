@@ -1,32 +1,93 @@
-export EDGE="/home/quang/EDGE"
-export EDGE_PYTHON="$(command -v python)"
+RUN=seed_42
+N=1024
 
-
-# Training
 PYTHONPATH=src python scripts/run_edge_baseline.py \
   --stage train \
   --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/edge_community_small.yaml \
   --seed-id 42 \
-  --run-id seed_42 \
-  --device gpu \
-  --n-epochs 10000
+  --run-id "$RUN" \
+  --device gpu
 
-# Generation
 PYTHONPATH=src python scripts/run_edge_baseline.py \
   --stage generate \
   --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/edge_community_small.yaml \
   --seed-id 42 \
-  --run-id seed_42 \
-  --num-samples 1024 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
   --device gpu
 
-# Evaluation
-GEN_DIR="outputs/baselines/edge/community_small/seed_42/generations/seed_42_n_1024"
+GEN_DIR="outputs/baselines/edge/community_small/$RUN/generations/seed_42_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
-  --generated-stage edge \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+edge_to_test                        0.013677          0.587387      0.401765
+
+RUN=seed_43
+N=1024
+
+PYTHONPATH=src python scripts/run_edge_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/edge_community_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_edge_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/edge_community_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/edge/community_small/$RUN/generations/seed_43_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+
+
+
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_edge_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/edge_ego_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_edge_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/edge_ego_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/edge/ego_small/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"

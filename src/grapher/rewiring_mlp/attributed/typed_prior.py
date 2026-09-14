@@ -16,6 +16,8 @@ def uses_typed_empirical_kernel(config):
     if generation.get('degree_perturbation') and not active:
         raise ValueError('Typed degree_perturbation settings require invariant_source=train_empirical_perturbed or edge_relocation; '
                          'they cannot be silently ignored for a learned/legacy source.')
+    if not active and any(key in generation for key in ('invariant_failure_policy','max_invariant_parent_attempts')):
+        raise ValueError('invariant_failure_policy and max_invariant_parent_attempts require an independent typed empirical prior.')
     return active
 
 
@@ -46,6 +48,8 @@ def build_typed_empirical_sampler(config,train_graphs,*,seed,edge_types,node_att
     return PerturbedEmpiricalTypedDegreeSampler.fit(train_graphs,settings,seed=seed,
         edge_types=edge_types,node_attribute=node_attribute,edge_attribute=edge_attribute,
         constructor_config=ctor,graph_validator=graph_validator,
+        parent_failure_policy=generation.get('invariant_failure_policy','error'),
+        max_parent_attempts=generation.get('max_invariant_parent_attempts',128),
         allowed_signatures=vectorizer.vocabulary.signatures if vectorizer is not None else None)
 
 

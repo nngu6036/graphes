@@ -467,13 +467,11 @@ Train GraphER:
 CFG=configs/experiments/grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned.yaml
 TRAIN=outputs/attributed_grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned/seed_42
 GENROOT=outputs/attributed_generation/qm9_joint_typed_edge_laplacian_graphlets345/seed_42
-NTRAIN=20000
 NGEN=1024
 
 PYTHONPATH=src python scripts/train_attributed_grapher.py \
   --config "$CFG" \
   --output-dir "$TRAIN" \
-  --num-train-graphs "$NTRAIN" \
   --seed 42 \
   --device gpu \
   --graphlet-progress-interval 100 \
@@ -662,31 +660,31 @@ source root and Python executable before launching a baseline:
 
 ```bash
 export DEFOG=/home/quang/DeFoG
-export DEFOG_PYTHON=/path/to/defog-env/bin/python
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 export DIGRESS=/home/quang/DiGress
-export DIGRESS_PYTHON=/path/to/digress-env/bin/python
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
 
 export GDSS=/home/quang/GDSS
-export GDSS_PYTHON=/path/to/gdss-env/bin/python
+export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
 
 export GRAPHRNN=/home/quang/GraphRNN
-export GRAPHRNN_PYTHON=/path/to/graphrnn-env/bin/python
+export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/graphrnn/bin/python
 
 export HOGDIFF=/home/quang/HOG-Diff
-export HOGDIFF_PYTHON=/path/to/hogdiff-env/bin/python
+export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hog_diff/bin/python
 
 export CATFLOW=/home/quang/CatFlow
-export CATFLOW_PYTHON=/path/to/catflow-env/bin/python
+export CATFLOW_PYTHON=/home/quang/miniconda3/envs/catflow/bin/python
 
-export GDSM=/home/quang/Fast_Graph_Generation_via_Spectral_Diffusion
-export GDSM_PYTHON=/path/to/gdsm-env/bin/python
+export GDSM=/home/quang/gdsm
+export GDSM_PYTHON=/home/quang/miniconda3/envs/gdsm/bin/python
 
-export EDGE=/home/quang/graph-generation-EDGE
-export EDGE_PYTHON=/path/to/edge-env/bin/python
+export EDGE=/home/quang/EDGE
+export EDGE_PYTHON=/home/quang/miniconda3/envs/edge/bin/python
 
 export SPECTRE=/home/quang/SPECTRE
-export SPECTRE_PYTHON=/path/to/spectre-env/bin/python
+export SPECTRE_PYTHON=/home/quang/miniconda3/envs/spectre/bin/python
 ```
 
 If a baseline is installed in the current environment, its `*_PYTHON` variable

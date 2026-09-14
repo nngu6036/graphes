@@ -255,8 +255,8 @@ def refine_typed_graph(source,targets,model,config,*,seed):
                     'connected':nx.is_connected(current),'candidate_search_totals':dict(search_totals),'target_scope':'single_frozen_soft_bridge_endpoint'}
 
 
-def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_sampler=None):
-    """One independent source RNG per output. Rewiring cannot consume this stream."""
+def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_sampler=None,sampling_counts=None):
+    """Independent source RNG; optional shared counts include unfinished outputs."""
     gc=config.get('generation',{}); source_mode=gc.get('invariant_source','learned')
     if source_mode not in ('learned','train_empirical','train_empirical_perturbed','edge_relocation'): raise ValueError('invariant_source must be learned, train_empirical, train_empirical_perturbed, or edge_relocation (training only).')
     if config.get('degree_generator',{}).get('checkpoint_path'):
@@ -270,13 +270,21 @@ def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_s
     dm=model.degree_model; v=model.vectorizer; dev=next(model.parameters()).device
     mode=gc.get('sample_num_nodes','empirical')
     if mode not in ('empirical','model'): raise ValueError('sample_num_nodes must be empirical or model.')
-    counter=Counter(); counter['requested_graphs']=num_generate
+    counter=Counter() if sampling_counts is None else sampling_counts
+    counter['requested_graphs']=num_generate
     for index in range(num_generate):
         source_started=time.perf_counter()
         rng=np.random.default_rng(np.random.SeedSequence([int(seed),index,1907]))
         result=None
-        fixed_summary=empirical_sampler.sample() if empirical_sampler is not None else None
-        if fixed_summary is not None:counter['invariant_proposals']+=1
+        fixed_summary=None
+        if empirical_sampler is not None:
+            prior_draws=len(empirical_sampler.records)
+            try:
+                fixed_summary=empirical_sampler.sample()
+            finally:
+                draws=empirical_sampler.records[prior_draws:]
+                counter['invariant_proposals']+=len(draws)
+                counter['invariant_sampling_failures']+=sum(not row['returned'] for row in draws)
         for attempt in range(int(gc.get('max_attempts_per_graph',128))):
             if fixed_summary is None:counter['invariant_proposals']+=1
             if fixed_summary is not None:
@@ -348,7 +356,7 @@ def generate_joint_typed_edge(config,args):
     output=Path(args.output_dir)
     if output.exists() and any(output.iterdir()): raise FileExistsError(f'Use a fresh generation directory: {output}')
     output.mkdir(parents=True,exist_ok=True)
-    sources=[]; finals=[]; records=[]; targets_saved=[]; sampling_counts={}; start=time.perf_counter()
+    sources=[]; finals=[]; records=[]; targets_saved=[]; sampling_counts=Counter(); start=time.perf_counter()
     if model.spectral_mode == ADJACENCY_MODE:
         print('[AdjacencyDiffusion] sampling one soft categorical adjacency; signed spectra derived each step. '
               'No independent Laplacian/eigenvalue process.',flush=True)
@@ -359,6 +367,10 @@ def generate_joint_typed_edge(config,args):
         edge_types=model.edge_types,vectorizer=model.vectorizer,
         graph_validator=(lambda g: is_valid_molecular_graph(graph_from_record(graph_record(g))))
             if config['generation'].get('require_rdkit_source_validity',True) else None)
+    if empirical_sampler is not None and empirical_sampler.parent_failure_policy=='resample_parent':
+        print('[TypedDegreePrior] invariant_failure_policy=resample_parent '
+              f'max_invariant_parent_attempts={empirical_sampler.max_parent_attempts}; '
+              'returned parents are conditioned on successful sampling; every rejected draw is recorded.',flush=True)
     report={'format':'joint_typed_soft_edge_generation_v1','config':config,'seed':seed,
       'checkpoint':str(checkpoint),'checkpoint_sha256':file_sha256(checkpoint),'checkpoint_selection':ckpt.get('selection'),
       'dataset_provenance':provenance,'degree_sampler_source':('joint_checkpoint_embedded'
@@ -373,10 +385,12 @@ def generate_joint_typed_edge(config,args):
     def flush(complete=False):
         if empirical_sampler is not None:
             prior=empirical_sampler.report();prior['num_returned']=len(finals)
+            sampling_counts['invariant_proposals']=prior['num_parent_draws']
+            sampling_counts['invariant_sampling_failures']=prior['num_rejected_parent_draws']
             atomic_json(prior,output/'typed_degree_prior_report.json')
-            atomic_json([r['typed_invariant'] for r in empirical_sampler.records],output/'sampled_typed_invariants.json')
-            report['parent_typed_fingerprint']=prior['parent_typed_fingerprint']
-            report['sampled_typed_fingerprint']=prior['sampled_typed_fingerprint']
+            atomic_json([r['typed_invariant'] for r in empirical_sampler.returned_records],output/'sampled_typed_invariants.json')
+            report['parent_typed_fingerprint']=prior['returned_parent_typed_fingerprint']
+            report['sampled_typed_fingerprint']=prior['returned_sampled_typed_fingerprint']
             report['typed_degree_prior']={k:v for k,v in prior.items() if k not in ('records','parent_exclusions')}
         for name,obj in [('coarse_graphs.pkl',sources),('molecular_graphs.pkl',finals),('soft_endpoints.pkl',targets_saved)]:
             destination=output/(name if complete else 'partial_'+name)
@@ -386,8 +400,9 @@ def generate_joint_typed_edge(config,args):
             'source_graphs_sha256':record_hash([graph_record(g) for g in sources])})
         atomic_json(report,output/'report.json')
     try:
-        for i,(source,src_report,counts) in enumerate(generation_sources(model,train_graphs,config,seed=seed,num_generate=num,empirical_sampler=empirical_sampler)):
-            t0=time.perf_counter(); sampling_counts=counts
+        for i,(source,src_report,_counts) in enumerate(generation_sources(model,train_graphs,config,seed=seed,num_generate=num,
+                empirical_sampler=empirical_sampler,sampling_counts=sampling_counts)):
+            t0=time.perf_counter()
             targets,bridge=sample_soft_endpoint(model,source,config,seed=seed+i*1009+7043)
             final,refinement=refine_typed_graph(source,targets,model,config,seed=seed+i*1009+9049)
             sources.append(source); finals.append(final); targets_saved.append(targets)

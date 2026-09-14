@@ -197,6 +197,67 @@ The evaluation train split used for molecular novelty is the full prepared train
 split; this does not expand the empirical sampling bank beyond the model's saved
 training subset.
 
+### Strict novel edge relocation: retrying rejected training parents
+
+The direct `generation.invariant_source=edge_relocation` alias requests one
+successful relocation for every output. It fixes `probability=1.0`, `steps=1`,
+and `degree_perturbation.failure_policy=error`. A selected training parent can
+have no allowed relocation after checking connectivity, molecular constraints,
+the checkpoint signature vocabulary, and (when enabled) novelty. Increasing
+`degree_perturbation.max_attempts` cannot help when all candidates from the
+temporary witness have already been checked. `no_valid_edge_relocation` describes
+that search result; it does not prove that every realization of the parent is
+immovable.
+
+Joint typed generation now offers an explicit parent retry policy:
+
+```bash
+GEN="$GENROOT/edge_relocation_resampled"
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate "$NGEN" \
+  --seed 42 \
+  --device gpu \
+  --set generation.invariant_source=edge_relocation \
+  --set generation.invariant_rng_mode=independent \
+  --set generation.invariant_failure_policy=resample_parent \
+  --set generation.max_invariant_parent_attempts=128 \
+  --set generation.degree_perturbation.max_attempts=256 \
+  --set generation.degree_perturbation.max_distance=4.0 \
+  --set generation.degree_perturbation.require_novel=true
+```
+
+Use a fresh output directory for a retry of a failed run. Each output gets at
+most 128 training parent draws here, each with the existing candidate budget.
+Failed draws are logged immediately with their parent index, candidate count,
+and rejection reasons. A successful draw must pass every existing constraint;
+there is no unchanged-parent fallback in this mode. Exhausting the parent budget
+still raises an error and saves partial outputs. Once an invariant is accepted,
+subsequent source construction retries continue to use that fixed invariant.
+
+The default `generation.invariant_failure_policy=error` retains the original
+one-parent behavior. `resample_parent` requires
+`degree_perturbation.failure_policy=error` and an active typed empirical sampler;
+it cannot be combined with `keep_original` or applied to the learned prior.
+The parent stream remains reproducible and independent of denoising/rewiring,
+but returned parents are now conditioned on successful sampling. They must not
+be described as matched empirical parent draws across perturbation methods.
+`diagnose_typed_degree_perturbations.py` explicitly disables parent retries for
+its paired-method audit and logs this choice when given a retry-enabled config.
+
+`typed_degree_prior_report.json` retains every attempted parent in `records`.
+Each record includes `returned`, `output_index` (zero-based), and `parent_attempt`
+(one-based). The report separates `num_parent_draws`, `num_rejected_parent_draws`,
+and `num_returned_samples`, and includes `returned_record_indices` and
+`returned_*` fingerprints/fractions. Existing unprefixed prior metrics describe
+all attempts; the `returned_*` metrics describe accepted sampler outputs.
+`sampled_typed_invariants.json` and the top-level generation fingerprints contain
+only returned sampler outputs. `num_returned` in the prior report and
+`num_generated` in `report.json` count completed generated graphs; these may be
+smaller than the number of accepted invariants if a later generation stage fails.
+
 ## Validation scope
 
 Tests exercise ordinary and typed perturbations, the existing new adjacency

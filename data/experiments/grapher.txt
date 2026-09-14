@@ -53,13 +53,39 @@ done
 CFG=configs/experiments/grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned.yaml
 TRAIN=outputs/attributed_grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned/seed_42
 GENROOT=outputs/attributed_generation/qm9_joint_typed_edge_laplacian_graphlets345/seed_42
+NTRAIN=10000
 NGEN=1024
 
 PYTHONPATH=src python scripts/train_attributed_grapher.py \
   --config "$CFG" \
   --output-dir "$TRAIN" \
+  --num-train-graphs "$NTRAIN" \
   --seed 42 \
   --device gpu \
   --graphlet-progress-interval 100 \
   --batch-progress-interval 10 \
   --progress-interval-seconds 10
+
+GEN="$GENROOT/learned"
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate "$NGEN" \
+  --seed 42 \
+  --device gpu
+
+
+GEN="$GENROOT/edge_relocation"
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate "$NGEN" \
+  --seed 42 \
+  --device gpu \
+  --set generation.invariant_source=edge_relocation \
+  --set generation.invariant_rng_mode=independent \
+  --set generation.degree_perturbation.max_attempts=256 \
+  --set generation.degree_perturbation.max_distance=4.0 \
+  --set generation.degree_perturbation.require_novel=true

@@ -113,7 +113,7 @@ attributed_predictor:
   spectral_layers: 2
   spectral_heads: 4
   epochs: 100
-  batch_size: 16
+  batch_size: 64
   learning_rate: 0.0001
   weight_decay: 1.0e-05
   grad_clip: 1.0

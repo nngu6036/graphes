@@ -52,10 +52,14 @@ def main():
         return is_valid_molecular_graph(graph_from_record(graph_record(graph,node_attribute,edge_attribute)))
     out=Path(args.output_dir);out.mkdir(parents=True,exist_ok=True)
     report={'training_only':True,'checkpoint_loaded':args.checkpoint is not None,'dataset_provenance':provenance,'reports':{}}
+    if config.get('generation',{}).get('invariant_failure_policy')=='resample_parent':
+        print('[TypedDegreePriorAudit] using invariant_failure_policy=error with keep_original '
+              'to retain matched training parents across methods.',flush=True)
     parents=[]
     for method in args.methods:
         cfg=deepcopy(config);gc=cfg.setdefault('generation',{})
-        gc.update(invariant_source='train_empirical_perturbed',invariant_rng_mode='independent')
+        gc.update(invariant_source='train_empirical_perturbed',invariant_rng_mode='independent',
+                  invariant_failure_policy='error')
         gc['degree_perturbation']={**gc.get('degree_perturbation',{}),'method':method,
                                  'probability':args.probability,'failure_policy':'keep_original'}
         sampler=build_typed_empirical_sampler(cfg,train,seed=args.seed,edge_types=tuple(cat['edge_categories']),

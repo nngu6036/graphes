@@ -100,15 +100,27 @@ def _json_scalar(value):
 class PerturbedEmpiricalTypedDegreeSampler:
     """Sample one eligible training parent, then perturb or explicitly keep it.
 
-    Constructor/domain failures never cause a different parent draw. Incomplete
-    multi-step changes roll back transactionally. Static local parent exclusions
+    By default failures never cause a different parent draw. The explicit
+    resample_parent policy rejects failed draws with a bounded budget; its
+    returned parents are conditioned on perturbation success, not paired across
+    methods. Incomplete multi-step changes roll back transactionally. Local exclusions
     are identical across methods and are reported. Validity of an unchanged
     parent is verified on a NEW realization, not its original training graph.
     """
     def __init__(self, invariants: Sequence[TypedInvariant], config=None, *, seed: int = 42,
                  constructor_config=None, allowed_signatures: Sequence[TypedDegreeSignature] | None = None,
-                 endpoint_compatible: Callable | None = None, graph_validator: Callable[[nx.Graph], bool] | None = None):
+                 endpoint_compatible: Callable | None = None, graph_validator: Callable[[nx.Graph], bool] | None = None,
+                 parent_failure_policy: str = 'error', max_parent_attempts: int = 128):
         self.config = config if isinstance(config,DegreePerturbationConfig) else DegreePerturbationConfig.from_dict(config)
+        if parent_failure_policy not in ('error', 'resample_parent'):
+            raise ValueError('generation.invariant_failure_policy must be error or resample_parent.')
+        if isinstance(max_parent_attempts, bool) or not isinstance(max_parent_attempts, (int, np.integer)) or max_parent_attempts < 1:
+            raise ValueError('generation.max_invariant_parent_attempts must be a positive integer.')
+        if parent_failure_policy == 'resample_parent' and self.config.failure_policy != 'error':
+            raise ValueError('resample_parent requires degree_perturbation.failure_policy=error; do not combine it with keep_original.')
+        self.parent_failure_policy = parent_failure_policy
+        self.max_parent_attempts = int(max_parent_attempts)
+        self._num_returned = 0
         self.seed = int(seed)
         if self.seed < 0: raise ValueError('seed must be nonnegative.')
         cfg = constructor_config if isinstance(constructor_config,TypedConstructorConfig) else TypedConstructorConfig.from_dict(constructor_config)
@@ -307,7 +319,35 @@ class PerturbedEmpiricalTypedDegreeSampler:
 
     def sample(self,rng=None):
         rng=self.parent_rng if rng is None else rng
-        return self.perturb_parent(int(rng.integers(len(self.invariants))))
+        budget=self.max_parent_attempts if self.parent_failure_policy=='resample_parent' else 1
+        for attempt in range(1,budget+1):
+            before=len(self.records)
+            try:
+                summary=self.perturb_parent(int(rng.integers(len(self.invariants))))
+            except DegreePerturbationError as exc:
+                # Only recorded sampling failures are eligible for rejection.
+                if len(self.records)==before or self.parent_failure_policy=='error':
+                    raise
+                record=self.records[-1]; record['parent_attempt']=attempt
+                reason=record['output_failure'] or record['failure_reason']
+                print(f'[TypedDegreePrior] sample={self._num_returned+1} parent_attempt={attempt}/{budget} '
+                      f'rejected_parent={record["parent_train_index"]} reason={reason} '
+                      f'candidate_checks={record["candidate_checks"]} rejections={record["proposal_rejections"]} '
+                      f'action={"resample_parent" if attempt<budget else "stop_budget_exhausted"}',flush=True)
+                if attempt==budget:
+                    raise DegreePerturbationError(
+                        f'Typed {self.config.method} exhausted {budget} training parent draws for '
+                        f'output {self._num_returned+1} under invariant_failure_policy=resample_parent. '
+                        f'Last failure: {exc} Rejected draws are recorded; no constraints were relaxed.'
+                    ) from exc
+            else:
+                summary['sampling_diagnostics']['parent_attempt']=attempt
+                return summary
+
+    @property
+    def returned_records(self):
+        """Successful sampler outputs, excluding rejected parent attempts."""
+        return [record for record in self.records if record['returned']]
 
     def perturb_parent(self,parent_index: int,*,requested: bool | None = None):
         if parent_index<0 or parent_index>=len(self.invariants): raise IndexError('Eligible training parent index out of range.')
@@ -333,7 +373,8 @@ class PerturbedEmpiricalTypedDegreeSampler:
             graph,diag=self._realize(current,rng,rejections)
             if graph is None:output_failure=diag['failure_reason']
         changed=typed_key(current)!=typed_key(parent)
-        record={'sample_index':idx,'method':cfg.method,'parent_train_index':self.train_indices[parent_index],
+        record={'sample_index':idx,'output_index':self._num_returned,'parent_attempt':1,'returned':False,
+            'method':cfg.method,'parent_train_index':self.train_indices[parent_index],
             'parent_eligible_index':parent_index,'parent_typed_invariant':parent.to_dict(),'typed_invariant':current.to_dict(),
             'parent_degree_sequence':parent.degree_sequence,'degree_sequence':current.degree_sequence,
             'requested':selected,'changed':changed,'ordinary_degrees_changed':parent.degree_sequence!=current.degree_sequence,
@@ -355,18 +396,32 @@ class PerturbedEmpiricalTypedDegreeSampler:
         self.records.append(record)
         if output_failure or (failed and cfg.failure_policy=='error'):
             raise DegreePerturbationError(f'Typed {cfg.method} failed for training parent {self.train_indices[parent_index]}: '
-                f'{output_failure or failure}. No parent redraw, degree repair, or untyped fallback was performed.')
+                f'{output_failure or failure}; candidate_checks={checks}, proposal_rejections={dict(rejections)}. '
+                'This parent attempt used no degree repair or untyped fallback.')
         summary=degree_summary(current.degree_sequence)
+        record['returned']=True
+        self._num_returned+=1
         summary.update(typed_invariant=current.to_dict(),sampling_diagnostics=record)
         return summary
 
     def report(self):
         rows=self.records;n=len(rows);requested=sum(r['requested'] for r in rows);changed=sum(r['changed'] for r in rows)
+        returned=self.returned_records
         failures=Counter(r['failure_reason'] for r in rows if r['failure_reason']);rejections=Counter()
         for row in rows:rejections.update(row['proposal_rejections'])
         mean=lambda key:float(np.mean([r[key] for r in rows])) if rows else 0.0
         return {'format':'empirical_typed_degree_perturbation_v1','method':self.config.method,'training_only':True,
             'config':asdict(self.config),'constructor_config':asdict(self.constructor_config),
+            'parent_failure_policy':self.parent_failure_policy,'max_parent_attempts':self.max_parent_attempts,
+            'parent_distribution':('empirical_conditioned_on_success' if self.parent_failure_policy=='resample_parent'
+                                   else 'empirical_without_redraw'),
+            'metrics_scope':'all_parent_attempts_unless_prefixed_returned',
+            'num_parent_draws':n,'num_returned_samples':len(returned),'num_rejected_parent_draws':n-len(returned),
+            'returned_record_indices':[r['sample_index'] for r in returned],
+            'returned_parent_typed_fingerprint':typed_fingerprint([TypedInvariant.from_dict(r['parent_typed_invariant']) for r in returned]),
+            'returned_sampled_typed_fingerprint':typed_fingerprint([TypedInvariant.from_dict(r['typed_invariant']) for r in returned]),
+            'returned_novel_typed_fraction':float(np.mean([r['novel_vs_training'] for r in returned])) if returned else None,
+            'returned_changed_fraction':float(np.mean([r['changed'] for r in returned])) if returned else None,
             'checkpoint_signature_mask_enabled':self.allowed_signatures is not None,'domain_validator_enabled':self.graph_validator is not None,
             'num_training_graphs':self.original_training_count,'num_eligible_training_graphs':len(self.invariants),
             'parent_exclusions':self.exclusions,'training_typed_fingerprint':self.training_fingerprint,
