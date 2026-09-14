@@ -15,7 +15,7 @@ from itertools import combinations, permutations, islice
 from math import comb
 import hashlib
 import json
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, Union
 
 import networkx as nx
 import numpy as np
@@ -168,7 +168,8 @@ class InducedGraphletCollectionSpec:
         return payload
 
 
-InducedSpec = InducedGraphletSpec | InducedGraphletCollectionSpec
+# Type aliases are evaluated at import time, even with postponed annotations.
+InducedSpec = Union[InducedGraphletSpec, InducedGraphletCollectionSpec]
 
 
 def _graph(k, code):
