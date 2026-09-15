@@ -98,6 +98,8 @@ def _build_generation_degree_sampler(
     seed: int,
     perturbation_cfg: dict[str, Any] | None = None,
     support_max_degree: int | None = None,
+    parent_failure_policy: str = "error",
+    max_parent_attempts: int = 128,
 ):
     """Build the configured ordinary-degree sampler for generic generation.
 
@@ -108,6 +110,10 @@ def _build_generation_degree_sampler(
     """
 
     source = str(degree_source).lower()
+    if source not in {"train_empirical_perturbed", "edge_relocation"} and (
+        parent_failure_policy != "error" or max_parent_attempts != 128
+    ):
+        raise ValueError("Parent retry settings require degree_source=train_empirical_perturbed or edge_relocation.")
     cfg = dict(degree_cfg or {})
     degree_type = str(cfg.get("type", "degree_histogram_vae")).lower()
     if "typed" in degree_type:
@@ -140,6 +146,8 @@ def _build_generation_degree_sampler(
         return PerturbedEmpiricalDegreeSampler.fit_from_graphs(
             train_graphs, settings, seed=seed,
             support_max_degree=support_max_degree,
+            parent_failure_policy=parent_failure_policy,
+            max_parent_attempts=max_parent_attempts,
         )
 
     if source in {"empirical", "train_empirical"}:
@@ -163,6 +171,27 @@ def _checkpoint_format(path: str | Path) -> str:
     if not isinstance(checkpoint, dict):
         raise TypeError(f"Topology checkpoint must be a mapping: {path}")
     return str(checkpoint.get("format", ""))
+
+
+def _generation_degree_prior_report(
+    degree_sampler, *, degree_source, seed, degree_rng_mode,
+    degree_sampling_records, target_degree_sequences,
+):
+    """Separate all prior attempts, accepted summaries, and completed graphs."""
+    if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
+        report = degree_sampler.report()
+        report["sampling_scope"] = "all_prior_attempts_including_constructor_rejections"
+    else:
+        report = {"format": "degree_prior_audit_v1", "degree_source": degree_source,
+                  "num_samples": len(degree_sampling_records)}
+    report.update({
+        "degree_source": degree_source, "seed": seed, "degree_rng_mode": degree_rng_mode,
+        "num_returned": len(degree_sampling_records),
+        "returned_parent_degree_fingerprint": sequence_fingerprint(r["parent_degree_sequence"] for r in degree_sampling_records),
+        "returned_degree_fingerprint": sequence_fingerprint(target_degree_sequences),
+        "returned_records": degree_sampling_records,
+    })
+    return report
 
 
 def _mean_or_zero(rows: list[dict[str, Any]], key: str) -> float:
@@ -375,6 +404,10 @@ def main() -> None:
 
     degree_source = str(generation_cfg.get("degree_source", "learned")).lower()
     perturbation_cfg = dict(generation_cfg.get("degree_perturbation", {}) or {})
+    if degree_source not in {"train_empirical_perturbed", "edge_relocation"} and any(
+        key in generation_cfg for key in ("degree_failure_policy", "max_degree_parent_attempts")
+    ):
+        raise ValueError("generation.degree_failure_policy and max_degree_parent_attempts require a perturbed training-degree prior.")
     if perturbation_cfg and degree_source not in {"train_empirical_perturbed", "edge_relocation"}:
         raise ValueError("generation.degree_perturbation requires degree_source=train_empirical_perturbed or edge_relocation.")
     degree_rng_mode = str(generation_cfg.get(
@@ -413,6 +446,8 @@ def main() -> None:
             reference_graphs=reference_graphs, seed=seed,
             perturbation_cfg=perturbation_cfg,
             support_max_degree=(int(model.degree_vectorizer.max_degree) if joint_degree_enabled else None),
+            parent_failure_policy=generation_cfg.get("degree_failure_policy", "error"),
+            max_parent_attempts=generation_cfg.get("max_degree_parent_attempts", 128),
         )
         degree_sampler_source = "external_checkpoint" if degree_source in {"learned", "degree_vae"} else degree_source
     if joint_degree_enabled:
@@ -429,6 +464,10 @@ def main() -> None:
               f"probability={degree_sampler.config.probability} steps={degree_sampler.config.steps} "
               f"failure_policy={degree_sampler.config.failure_policy}; "
               "training degrees only; n,m preserved; actual changed degrees condition predictor" + suffix, flush=True)
+        if degree_sampler.parent_failure_policy == "resample_parent":
+            print("[GraphER/DegreePerturbation] degree_failure_policy=resample_parent "
+                  f"max_degree_parent_attempts={degree_sampler.max_parent_attempts}; "
+                  "accepted parents are conditioned on successful perturbations; rejected draws are recorded.", flush=True)
 
     constructor_cfg = dict(config.get("constructor", {}) or {})
     if str(constructor_cfg.get("type", "havel_hakimi")).lower() != "havel_hakimi":
@@ -608,6 +647,32 @@ def main() -> None:
     if max_attempts_per_graph <= 0:
         raise ValueError("generation.max_attempts_per_graph must be positive.")
 
+    def save_source_failure(error, index, rejections):
+        output_dir = ensure_dir(args.output_dir)
+        failed_report = _generation_degree_prior_report(
+            degree_sampler, degree_source=degree_source, seed=seed, degree_rng_mode=degree_rng_mode,
+            degree_sampling_records=degree_sampling_records, target_degree_sequences=target_degree_sequences,
+        )
+        failed_report.update(generation_aborted=True, failure=str(error), num_requested=num_generate)
+        save_json(failed_report, output_dir / "degree_prior_report.json")
+        save_pickle(coarse_graphs, output_dir / "partial_coarse_graphs.pkl")
+        save_pickle(refined_graphs, output_dir / "partial_topology_refined_graphs.pkl")
+        if source_enrichment_enabled:
+            save_pickle(enriched_base_graphs, output_dir / "partial_enriched_base_graphs.pkl")
+        save_json(target_degree_sequences, output_dir / "partial_sampled_degree_sequences.json")
+        save_json({
+            "format": "topology_partial_generation_v1", "complete": False,
+            "failure": str(error), "failed_generation_index": index,
+            "generation_rejections": dict(rejections), "num_requested": num_generate,
+            "num_generated": len(refined_graphs), "seed": seed, "degree_source": degree_source,
+            "degree_rng_mode": degree_rng_mode, "checkpoint_path": str(checkpoint_path),
+            "checkpoint_sha256": checkpoint_file_sha256, "config": config,
+            "degree_prior_report_file": "degree_prior_report.json",
+            "parent_degree_fingerprint": failed_report["returned_parent_degree_fingerprint"],
+            "sampled_degree_fingerprint": failed_report["returned_degree_fingerprint"],
+            "pipeline_records": pipeline_records, "traces": traces,
+        }, output_dir / "partial_report.json")
+
     for index in range(num_generate):
         graph_started = time.perf_counter()
         generation_rejections: Counter[str] = Counter()
@@ -623,13 +688,9 @@ def main() -> None:
                     if degree_sampler is None:
                         raise RuntimeError("Degree sampler was not initialized.")
                     degree_summary = degree_sampler.sample(degree_rng)
-            except DegreePerturbationError:
-                # Strict failures are not permission to sample a different parent.
-                output_dir = ensure_dir(args.output_dir)
-                if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
-                    failed_report = degree_sampler.report()
-                    failed_report["generation_aborted"] = True
-                    save_json(failed_report, output_dir / "degree_prior_report.json")
+            except DegreePerturbationError as exc:
+                # The sampler alone controls parent retries and their budget.
+                save_source_failure(exc, index, generation_rejections)
                 raise
             except RuntimeError:
                 generation_rejections["degree_prior_rejected"] += 1
@@ -643,11 +704,13 @@ def main() -> None:
                 continue
             break
         else:
-            raise RuntimeError(
+            error = RuntimeError(
                 "Topology generation exhausted "
                 f"{max_attempts_per_graph} attempts for graph {index}; "
                 f"rejections={dict(generation_rejections)}."
             )
+            save_source_failure(error, index, generation_rejections)
+            raise error
 
         if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
             degree_summary["sampling_diagnostics"]["returned_generation_index"] = index
@@ -797,7 +860,7 @@ def main() -> None:
             "degree_raw_connected_feasible": float(
                 bool(sampling_diagnostics.get("raw_connected_feasible", True))
             ),
-            "degree_sampling_attempts": int(sampling_diagnostics.get("attempts_used", 1)),
+            "degree_sampling_attempts": int(sampling_diagnostics.get("parent_attempt", sampling_diagnostics.get("attempts_used", 1))),
             "degree_repair_used": float(bool(sampling_diagnostics.get("repair_used", False))),
             "degree_repair_l1": int(sampling_diagnostics.get("repair_l1_adjustment", 0)),
             "candidate_proposals": proposals,
@@ -1094,11 +1157,17 @@ def main() -> None:
         "degree_conditioning": "actual_histogram_posterior_mean_decoder_features" if joint_degree_enabled else None,
         "orbit_consistency": model.orbit_consistency if joint_degree_enabled else None,
     })
+    degree_prior_report = _generation_degree_prior_report(
+        degree_sampler, degree_source=degree_source, seed=seed, degree_rng_mode=degree_rng_mode,
+        degree_sampling_records=degree_sampling_records, target_degree_sequences=target_degree_sequences,
+    )
     if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
-        degree_prior_report = degree_sampler.report()
-        degree_prior_report["sampling_scope"] = "all_prior_attempts_including_constructor_rejections"
         diagnostics.update({
             "degree_perturbation_method": degree_prior_report["method"],
+            "degree_parent_failure_policy": degree_prior_report["parent_failure_policy"],
+            "degree_prior_parent_draws": degree_prior_report["num_parent_draws"],
+            "degree_prior_rejected_parent_draws": degree_prior_report["num_rejected_parent_draws"],
+            "degree_prior_accepted_samples": degree_prior_report["num_accepted_samples"],
             "degree_perturbation_requested_fraction": degree_prior_report["requested_fraction"],
             "degree_perturbation_changed_fraction": degree_prior_report["changed_fraction"],
             "degree_perturbation_success_given_requested": degree_prior_report["success_given_requested"],
@@ -1109,16 +1178,6 @@ def main() -> None:
             "degree_perturbation_preserves_n_m": degree_prior_report["all_preserve_n_m"],
             "degree_perturbation_preserves_second_moment": degree_prior_report["all_preserve_second_moment"],
         })
-    else:
-        degree_prior_report = {"format": "degree_prior_audit_v1", "degree_source": degree_source,
-                               "num_samples": len(degree_sampling_records)}
-    degree_prior_report.update({
-        "degree_source": degree_source, "seed": seed, "degree_rng_mode": degree_rng_mode,
-        "num_returned": len(degree_sampling_records),
-        "returned_parent_degree_fingerprint": sequence_fingerprint(r["parent_degree_sequence"] for r in degree_sampling_records),
-        "returned_degree_fingerprint": sequence_fingerprint(target_degree_sequences),
-        "returned_records": degree_sampling_records,
-    })
     report = {
         "format": report_format,
         "pipeline_mode": "topology",

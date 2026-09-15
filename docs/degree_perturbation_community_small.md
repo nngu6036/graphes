@@ -119,6 +119,70 @@ this is covered by an end-to-end test of source and final graph fingerprints.
 `parent_degree_fingerprint` must match within a sampling seed. Source graph
 fingerprints generally should not match after a successful perturbation.
 
+## Retrying failed parents during topology generation
+
+The direct `generation.degree_source=edge_relocation` alias requires one
+successful degree-changing relocation per sample: it fixes `probability=1.0`,
+`steps=1`, and `degree_perturbation.failure_policy=error`. Even with
+`require_novel=false`, a proposal must differ from its own parent's degree
+multiset; it may match another training multiset. A complete graph or a
+three-node path can have no permitted change. `no_valid_edge_relocation` means
+the move list of the temporary witness was exhausted, so increasing
+`max_attempts` alone need not help.
+
+To skip failed parent draws explicitly, use the topology parent retry options:
+
+```bash
+GEN="$GENROOT/edge_relocation_resampled"
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu \
+  --set generation.degree_source=edge_relocation \
+  --set generation.degree_rng_mode=independent \
+  --set generation.degree_failure_policy=resample_parent \
+  --set generation.max_degree_parent_attempts=128 \
+  --set generation.degree_perturbation.max_attempts=256 \
+  --set generation.degree_perturbation.max_distance=4.0 \
+  --set generation.degree_perturbation.require_novel=false
+```
+
+The new policy permits at most 128 training parent draws per requested degree
+summary here. Each draw retains its own candidate budget and must satisfy all
+existing constraints: changed degrees, preserved node/edge counts, degree
+support, connectivity, distance, and novelty when requested. Rejected draws log
+their parent index, candidate count, and rejection reasons. The parent RNG
+remains reproducible and independent of construction and rewiring. Accepted
+parents are conditioned on successful perturbations, so this is a different
+prior from matched empirical parent sampling across methods.
+
+The default `generation.degree_failure_policy=error` preserves the original
+one-parent behavior. `resample_parent` requires
+`degree_perturbation.failure_policy=error` and a perturbed training-degree source;
+it cannot be combined with an unchanged-parent fallback. These topology options
+are separate from the molecular `generation.invariant_failure_policy` options.
+
+`degree_prior_report.json` retains every attempt in `records` and adds
+`num_parent_draws`, `num_rejected_parent_draws`, and `num_accepted_samples`.
+`accepted_*` metrics/fingerprints describe successful degree summaries;
+`num_returned`, `returned_records`, and `returned_*` fingerprints describe
+completed generated graphs. The existing unprefixed metrics cover all attempts.
+Fresh HH construction keeps its existing retry policy, so accepted summaries
+can outnumber completed graphs. `sampled_degree_sequences.json` still contains
+only sequences associated with completed graphs.
+
+If the parent or source-construction budget is exhausted, generation raises an
+error and saves the degree audit, `partial_report.json`,
+`partial_coarse_graphs.pkl`, `partial_topology_refined_graphs.pkl`, and
+`partial_sampled_degree_sequences.json` for completed graphs. Source enrichment,
+when enabled, also saves `partial_enriched_base_graphs.pkl`. Use a fresh output
+directory for another run. `diagnose_degree_perturbations.py` deliberately keeps
+its one-parent, `keep_original` audit policy to compare methods on matched
+parents, even when the generation config enables retries.
+
 ## Installation
 
 Extract the full archive into a new working directory, or extract the patch-only

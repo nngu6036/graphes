@@ -5,8 +5,9 @@ The kernels operate on degree MULTISETS, not node identities. No validation/test
 invariants or original training adjacencies are retained by this sampler.
 
 A failed perturbation is either a labelled identity transition (keep_original)
-or an error. We never silently redraw the parent, repair its degrees, or switch
-methods. This matters when a degree sequence admits no permitted perturbation.
+or an error. An explicit, bounded ``parent_failure_policy=resample_parent`` can
+reject failed parent draws, conditioning the empirical prior on success. Every
+draw is recorded; no degree constraints are relaxed and no methods are switched.
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ METHODS = ("unit_transfer", "moment_preserving", "edge_relocation", "interpolati
 
 
 class DegreePerturbationError(ValueError):
-    """A requested perturbation failed; do not hide this by resampling parents."""
+    """A requested perturbation failed; parent rejection requires explicit opt-in."""
 
 
 @dataclass(frozen=True)
@@ -220,17 +221,27 @@ def sum_preserving_round(
 
 
 class PerturbedEmpiricalDegreeSampler:
-    """One parent draw per sample; only kernel randomness uses a separate stream.
+    """Auditable empirical parent draws with separate kernel randomness.
 
-    ``sample(rng)`` consumes exactly one integer from rng to pick the parent.
-    The mixture coin and perturbation kernel each have per-sample RNG streams.
-    Thus differing rejection counts do not change later parent/mixture draws.
+    By default ``sample(rng)`` consumes exactly one integer to pick the parent.
+    Opt-in parent rejection consumes one integer per attempt, up to the budget.
+    The mixture coin and perturbation kernel each have per-attempt RNG streams;
+    kernel candidate checks never consume the parent stream.
     """
 
     def __init__(self, degree_sequences: Sequence[Sequence[int]],
                  config: DegreePerturbationConfig | Mapping[str, Any] | None = None,
-                 *, seed: int = 0, support_max_degree: int | None = None):
+                 *, seed: int = 0, support_max_degree: int | None = None,
+                 parent_failure_policy: str = "error", max_parent_attempts: int = 128):
         self.config = config if isinstance(config, DegreePerturbationConfig) else DegreePerturbationConfig.from_dict(config)
+        if parent_failure_policy not in ("error", "resample_parent"):
+            raise ValueError("parent_failure_policy must be error or resample_parent.")
+        if isinstance(max_parent_attempts, bool) or not isinstance(max_parent_attempts, (int, np.integer)) or max_parent_attempts < 1:
+            raise ValueError("max_parent_attempts must be a positive integer.")
+        if parent_failure_policy == "resample_parent" and self.config.failure_policy != "error":
+            raise ValueError("parent_failure_policy=resample_parent requires degree_perturbation.failure_policy=error.")
+        self.parent_failure_policy = parent_failure_policy
+        self.max_parent_attempts = int(max_parent_attempts)
         self.seed = int(seed)
         if self.seed < 0:
             raise ValueError("seed must be nonnegative.")
@@ -248,11 +259,13 @@ class PerturbedEmpiricalDegreeSampler:
             grouped[(len(seq), sum(seq))].add(seq)
         self.groups = {k: sorted(v) for k, v in grouped.items()}
         self.records: list[dict[str, Any]] = []
+        self._num_accepted = 0
         self._parent_rng = np.random.default_rng(np.random.SeedSequence(self.seed, spawn_key=(3,)))
         self._neighbor_cache: dict[tuple[int, ...], list[tuple[int, ...]]] = {}
 
     @classmethod
-    def fit_from_graphs(cls, graphs: Sequence[nx.Graph], config=None, *, seed=0, support_max_degree=None):
+    def fit_from_graphs(cls, graphs: Sequence[nx.Graph], config=None, *, seed=0, support_max_degree=None,
+                        parent_failure_policy="error", max_parent_attempts=128):
         # Extract invariants and then discard adjacency. In particular option 3
         # reconstructs its temporary witness from degrees, not training edges.
         seqs = []
@@ -262,7 +275,8 @@ class PerturbedEmpiricalDegreeSampler:
             if graph.number_of_nodes() == 0 or not nx.is_connected(graph):
                 raise ValueError("Degree perturbation expects nonempty connected training graphs.")
             seqs.append([int(d) for _, d in graph.degree()])
-        return cls(seqs, config, seed=seed, support_max_degree=support_max_degree)
+        return cls(seqs, config, seed=seed, support_max_degree=support_max_degree,
+                   parent_failure_policy=parent_failure_policy, max_parent_attempts=max_parent_attempts)
 
     def _check(self, proposal, current, parent, visited, rejections, *, partner=None) -> tuple[int, ...] | None:
         seq = canonical_degrees(proposal)
@@ -388,8 +402,41 @@ class PerturbedEmpiricalDegreeSampler:
 
     def sample(self, rng: np.random.Generator | None = None) -> dict[str, Any]:
         parent_rng = self._parent_rng if rng is None else rng
-        parent_index = int(parent_rng.integers(len(self.degree_sequences)))
-        return self.perturb_parent(parent_index)
+        budget = self.max_parent_attempts if self.parent_failure_policy == "resample_parent" else 1
+        for attempt in range(1, budget + 1):
+            before = len(self.records)
+            try:
+                parent_index = int(parent_rng.integers(len(self.degree_sequences)))
+                summary = self.perturb_parent(parent_index)
+            except DegreePerturbationError as exc:
+                # Catalogue/programming errors without a failed sampling record
+                # are not evidence that this parent can simply be rejected.
+                if (self.parent_failure_policy == "error" or len(self.records) != before + 1
+                        or self.records[-1]["returned"]):
+                    raise
+                record = self.records[-1]
+                record["parent_attempt"] = attempt
+                print(
+                    f'[DegreePrior] sample={self._num_accepted + 1} parent_attempt={attempt}/{budget} '
+                    f'rejected_parent={record["parent_train_index"]} reason={record["failure_reason"]} '
+                    f'candidate_checks={record["candidate_checks"]} rejections={record["proposal_rejections"]} '
+                    f'action={"resample_parent" if attempt < budget else "stop_budget_exhausted"}',
+                    flush=True,
+                )
+                if attempt == budget:
+                    raise DegreePerturbationError(
+                        f"{self.config.method} exhausted {budget} training parent draws for "
+                        f"output {self._num_accepted + 1} under parent_failure_policy=resample_parent. "
+                        f"Last failure: {exc} Rejected draws are recorded; no constraints were relaxed."
+                    ) from exc
+            else:
+                summary["sampling_diagnostics"]["parent_attempt"] = attempt
+                return summary
+
+    @property
+    def returned_records(self) -> list[dict[str, Any]]:
+        """Accepted sampler outputs; downstream graph construction may still fail."""
+        return [record for record in self.records if record["returned"]]
 
     def perturb_parent(self, parent_index: int, *, requested: bool | None = None) -> dict[str, Any]:
         """Perturb an explicit training parent; useful for paired prior diagnostics."""
@@ -421,6 +468,7 @@ class PerturbedEmpiricalDegreeSampler:
         changed = current != parent
         record = {
             "sample_index": sample_index, "method": self.config.method, "parent_train_index": int(parent_index),
+            "output_index": self._num_accepted, "parent_attempt": 1, "returned": False,
             "parent_degree_sequence": list(parent), "degree_sequence": list(current),
             "requested": selected, "changed": changed, "failure_reason": failure,
             "failure_policy": self.config.failure_policy,
@@ -447,16 +495,20 @@ class PerturbedEmpiricalDegreeSampler:
         self.records.append(record)
         if failed and self.config.failure_policy == "error":
             raise DegreePerturbationError(
-                f"{self.config.method} failed for training parent {parent_index}: {failure}. "
-                "No parent redraw or degree repair was performed. Explicitly use "
-                "failure_policy=keep_original to record an identity transition."
+                f"{self.config.method} failed for training parent {parent_index}: {failure}; "
+                f"candidate_checks={checks}, max_attempts={self.config.max_attempts} per step, "
+                f"proposal_rejections={dict(sorted(rejections.items()))}. "
+                "This parent attempt used no degree repair or constraint relaxation."
             )
         summary = degree_summary(current)
+        record["returned"] = True
+        self._num_accepted += 1
         summary["sampling_diagnostics"] = record
         return summary
 
     def report(self) -> dict[str, Any]:
         rows = self.records
+        accepted = self.returned_records
         requested = sum(r["requested"] for r in rows)
         changed = sum(r["changed"] for r in rows)
         failures = Counter(r["failure_reason"] for r in rows if r["failure_reason"])
@@ -467,6 +519,17 @@ class PerturbedEmpiricalDegreeSampler:
         return {
             "format": "empirical_degree_perturbation_v1", "method": self.config.method,
             "training_only": True, "config": asdict(self.config), "effective_max_degree": self.max_degree,
+            "parent_failure_policy": self.parent_failure_policy, "max_parent_attempts": self.max_parent_attempts,
+            "parent_distribution": ("empirical_conditioned_on_success" if self.parent_failure_policy == "resample_parent"
+                                    else "empirical_without_redraw"),
+            "metrics_scope": "all_parent_attempts_unless_prefixed_accepted",
+            "num_parent_draws": len(rows), "num_rejected_parent_draws": len(rows) - len(accepted),
+            "num_accepted_samples": len(accepted),
+            "accepted_record_indices": [r["sample_index"] for r in accepted],
+            "accepted_parent_degree_fingerprint": sequence_fingerprint(r["parent_degree_sequence"] for r in accepted),
+            "accepted_degree_fingerprint": sequence_fingerprint(r["degree_sequence"] for r in accepted),
+            "accepted_novel_degree_fraction": float(np.mean([r["novel_vs_training"] for r in accepted])) if accepted else None,
+            "accepted_changed_fraction": float(np.mean([r["changed"] for r in accepted])) if accepted else None,
             "num_training_graphs": len(self.degree_sequences), "num_training_degree_multisets": len(self.training_set),
             "training_degree_fingerprint": sequence_fingerprint(self.degree_sequences),
             "parent_degree_fingerprint": sequence_fingerprint(r["parent_degree_sequence"] for r in rows),

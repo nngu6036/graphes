@@ -55,6 +55,9 @@ def main() -> None:
         path = Path(data.get("root", "outputs/datasets")) / data.get("name", "sbm") / f"{split}.pkl"
         result["dataset_split_sha256"][split] = hashlib.sha256(path.read_bytes()).hexdigest()
     print("Prior-only coverage audit (not generated-graph MMD)")
+    if (config.get("generation", {}) or {}).get("degree_failure_policy") == "resample_parent":
+        print("[DegreePriorAudit] using degree_failure_policy=error with keep_original "
+              "to retain matched training parents across methods.", flush=True)
     print(f"{'Method':22s} {'Requested':>10s} {'Changed':>10s} {'Novel':>10s} {'Fallbacks':>10s}")
     parent_fingerprint = None
     for method in args.methods:
