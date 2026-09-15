@@ -253,26 +253,42 @@ Molecular evaluation
   fcd_num_valid_generated_molecules: 1024
   fcd_generated_smiles_source: valid_with_correction
 
-  
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --dataset qm9 \
-  --num-samples 1024 \
-  --seed-id 44 \
-  --run-id seed_44 \
 
+
+
+RUN=seed_44
+N=1024
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_44_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs \
-    outputs/baselines/hog_diff/qm9/seed_44/generations/seed_44_n_1024/base_graphs.pkl \
+  --generated-dir "$GEN_DIR" \
   --dataset-root outputs/datasets \
   --dataset qm9_attributed \
   --reference-split test \
   --train-split train \
-  --output-dir \
-    outputs/baselines/hog_diff/qm9/seed_44/generations/seed_44_n_1024/evaluation_corrected_fcd \
-  --fcd-use-corrected \
+  --hogdiff-compatible-metrics \
   --require-fcd \
-   --hogdiff-compatible-metrics
+  --output-dir "$GEN_DIR/evaluation_molecules"
 
 
 

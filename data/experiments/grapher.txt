@@ -141,7 +141,7 @@ PYTHONPATH=src python scripts/train_attributed_grapher.py \
   --progress-interval-seconds 10
 
 
-
+GENROOT=outputs/attributed_generation/qm9_joint_typed_edge_laplacian_graphlets345/seed_42
 GEN="$GENROOT/edge_relocation_resampled"
 PYTHONPATH=src python scripts/run_attributed_grapher.py \
   --config "$CFG" \
@@ -156,25 +156,16 @@ PYTHONPATH=src python scripts/run_attributed_grapher.py \
   --set generation.degree_perturbation.max_distance=4.0 \
   --set generation.degree_perturbation.require_novel=true
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-    --config "$CFG" \
-    --generated-dir "$GEN" \
-    --reference-split val \
-    --output-dir "$GEN/evaluation_val"
 
-
-PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
-    --config "$CFG" \
-    --checkpoint "$TRAIN/checkpoint.pt" \
-    --generated-graphs "$GEN/molecular_graphs.pkl" \
-    --reference-split val \
-    --max-reference-graphs 1024 \
-    --max-generated-graphs 1024 \
-    --seed 42 \
-    --json-out "$GEN/evaluation_val/attributed_graphlets345.json"
-
-
-
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --hogdiff-compatible-metrics \
+  --require-fcd \
+  --output-dir "$GEN/evaluation_molecules"
 
 
 GEN="$GENROOT/learned"
@@ -186,9 +177,12 @@ PYTHONPATH=src python scripts/run_attributed_grapher.py \
   --seed 42 \
   --device gpu
 
-GEN="$GENROOT/edge_relocation_resampled"
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-    --config "$CFG" \
-    --generated-dir "$GEN" \
-    --reference-split val \
-    --output-dir "$GEN/evaluation_val"
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --hogdiff-compatible-metrics \
+  --require-fcd \
+  --output-dir "$GEN/evaluation_molecules"

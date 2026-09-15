@@ -76,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("--dataset", required=True, choices=tuple(DATASET_PROFILES))
-    parser.add_argument("--num-samples", required=True, type=_positive_int)
+    parser.add_argument("--num-samples", type=positive, default=1024)
     parser.add_argument("--seed-id", "--seed", dest="seed_id", required=True, type=_nonnegative_int)
     parser.add_argument("--dataset-root", type=Path, default=Path("outputs/datasets"))
     parser.add_argument("--output-root", type=Path, default=Path("outputs/baselines"))

@@ -366,7 +366,74 @@ Molecular evaluation
 
 
 
+RUN=seed_44
+N=1024
 
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_44_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --hogdiff-compatible-metrics \
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
+
+Molecular evaluation
+  validity: 0.94140625
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.955078125
+  validity_without_correction: 0.94140625
+  fcd: 0.866943414389592
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 964
+  num_invalid_generated_molecules: 60
+  num_valid_generated_molecules_with_projected_formal_charges: 978
+  num_invalid_generated_molecules_after_projected_formal_charges: 46
+  num_raw_invalid_resolved_by_projected_formal_charges: 14
+  projected_formal_charge_success_rate_on_raw_invalid: 0.23333333333333334
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 60
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.9990234375
+  unique_valid_count: 1023
+  novelty_rate: 0.5894428152492669
+  novel_unique_valid_count: 603
+  nspdk_mmd: 0.001281340114234537
+  nspdk_mmd_valid_only: 0.001281340114234537
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.876750015797905e-05
+  nspdk_proxy_mmd_metric_source: 2.1068966093077372e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
 
 
 
@@ -437,3 +504,108 @@ Molecular evaluation
   fcd_num_reference_molecules: 1000
   fcd_num_valid_generated_molecules: 1024
   fcd_generated_smiles_source: valid_with_correction
+
+
+
+RUN=seed_43
+N=1024
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset zinc \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/catflow_zinc.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset zinc \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/catflow_zinc.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+GEN_DIR="outputs/baselines/catflow/zinc/$RUN/generations/seed_43_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --hogdiff-compatible-metrics \
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
+
+
+
+Molecular evaluation
+  validity: 0.357421875
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.4580078125
+  validity_without_correction: 0.357421875
+  fcd: 26.042136006762576
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 366
+  num_invalid_generated_molecules: 658
+  num_valid_generated_molecules_with_projected_formal_charges: 469
+  num_invalid_generated_molecules_after_projected_formal_charges: 555
+  num_raw_invalid_resolved_by_projected_formal_charges: 103
+  projected_formal_charge_success_rate_on_raw_invalid: 0.15653495440729484
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 658
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 1.0
+  unique_valid_count: 1024
+  novelty_rate: 1.0
+  novel_unique_valid_count: 1024
+  nspdk_mmd: 0.016501519979740947
+  nspdk_mmd_valid_only: 0.016501519979740947
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.00023285219493931783
+  nspdk_proxy_mmd_metric_source: 0.00026414597880426916
+  fcd_num_reference_molecules: 1000
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+RUN=seed_44
+N=1024
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset zinc \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/catflow_zinc.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset zinc \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/catflow_zinc.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+GEN_DIR="outputs/baselines/catflow/zinc/$RUN/generations/seed_44_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --hogdiff-compatible-metrics \
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
