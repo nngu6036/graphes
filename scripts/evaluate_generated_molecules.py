@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 """Evaluate generated molecular graphs.
 
-This script is intended for outputs from
-`scripts/generate_grapher_molecular_mixture_flow.py`, which writes:
+This script accepts GraphER molecular outputs and managed molecular baselines
+such as CatFlow, GDSS, and HOG-Diff:
 
   molecular_graphs.pkl   # all generated graphs, including invalid ones
+  generated_graphs.pkl   # GraphER alias
+  base_graphs.pkl        # managed baseline outputs, including invalid ones
   generated.smi          # valid SMILES only
 
 Metrics:
@@ -255,20 +257,32 @@ def _resolve_generated_graphs(
 
     if args.generated_dir:
         d = Path(args.generated_dir)
-        pkl = d / "molecular_graphs.pkl"
-        if pkl.exists():
-            return _load_graphs_from_path(pkl), str(pkl), True
-        refined = d / "generated_graphs.pkl"
-        if refined.exists():
-            return _load_graphs_from_path(refined), str(refined), True
+        # Prefer the complete graph batch over valid-only SMILES so invalid
+        # baseline samples remain in the validity denominator.
+        for name in ("molecular_graphs.pkl", "generated_graphs.pkl", "base_graphs.pkl"):
+            pkl = d / name
+            if pkl.is_file():
+                return _load_graphs_from_path(pkl), str(pkl), True
         smi = d / "generated.smi"
-        if smi.exists():
+        if smi.is_file():
             graphs, _ = _load_smiles_as_graphs(smi)
             return graphs, str(smi), False
 
     if args.generated_smiles:
         graphs, _ = _load_smiles_as_graphs(args.generated_smiles)
         return graphs, str(args.generated_smiles), False
+
+    if args.generated_dir:
+        d = Path(args.generated_dir).resolve()
+        if not d.exists():
+            raise FileNotFoundError(f"Generated directory does not exist: {d}")
+        if not d.is_dir():
+            raise NotADirectoryError(f"--generated-dir must be a directory: {d}")
+        raise FileNotFoundError(
+            f"No supported generated molecule input found in {d}. Expected "
+            "molecular_graphs.pkl, generated_graphs.pkl, base_graphs.pkl, or generated.smi. "
+            "Use --generated-graphs PATH for a differently named graph pickle."
+        )
 
     raise ValueError(
         "Provide --generated-dir, --generated-graphs, or --generated-smiles."
@@ -1079,19 +1093,22 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Evaluate generated molecular graphs from GraphER + mixture CatFlow."
+        description="Evaluate generated molecular graphs from GraphER or managed baselines."
     )
 
     source = parser.add_argument_group("Generated molecules")
     source.add_argument(
         "--generated-dir",
         default=None,
-        help="Directory containing molecular_graphs.pkl and/or generated.smi.",
+        help=(
+            "Directory containing molecular_graphs.pkl, generated_graphs.pkl, "
+            "base_graphs.pkl (managed baselines), or generated.smi."
+        ),
     )
     source.add_argument(
         "--generated-graphs",
         default=None,
-        help="Path to molecular_graphs.pkl. Preferred for validity.",
+        help="Path to a NetworkX graph pickle, including base_graphs.pkl. Preferred for validity.",
     )
     source.add_argument(
         "--generated-smiles",

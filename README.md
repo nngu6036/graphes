@@ -675,7 +675,7 @@ export HOGDIFF=/home/quang/HOG-Diff
 export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hog_diff/bin/python
 
 export CATFLOW=/home/quang/CatFlow
-export CATFLOW_PYTHON=/home/quang/miniconda3/envs/catflow/bin/python
+export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 export GDSM=/home/quang/gdsm
 export GDSM_PYTHON=/home/quang/miniconda3/envs/gdsm/bin/python

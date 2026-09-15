@@ -1,70 +1,296 @@
-export CATFLOW="/home/quang/CatFlow"
-export CATFLOW_PYTHON="$(command -v python)"
+
+RUN=seed_42
+N=1024
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
   --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/catflow_community_small.yaml \
   --seed-id 42 \
-  --run-id seed_42 \
-  --device gpu \
-  --n-epochs 200000
+  --run-id "$RUN" \
+  --device gpu
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/catflow_community_small.yaml \
   --seed-id 42 \
-  --run-id seed_42 \
-  --num-samples 1024 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
   --device gpu
 
-# Evaluation
-GEN_DIR="outputs/baselines/catflow/community_small/seed_42/generations/seed_42_n_1024"
+GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_42_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
-  --generated-stage catflow \
   --output-dir "$GEN_DIR/evaluation_report"
+
+Evaluation counts: reference_test=20 generated=1024 train_reference=64
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+catflow_to_test                     0.072821          0.823010      0.426084
+
+RUN=seed_43
+N=1024
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/catflow_community_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/catflow_community_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_43_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.004733          0.009889      0.000399
+catflow_to_test                     0.080028          0.831395      0.483119
+
+
+RUN=seed_44
+N=1024
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/catflow_community_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/catflow_community_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_44_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+
 
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
 train_to_test                       0.004733          0.009889      0.000399
-catflow_to_test                     0.081284          0.767483      0.421003
+catflow_to_test                     0.078349          0.813439      0.450069
 
 
 
-export CATFLOW="/home/quang/CatFlow"
-export CATFLOW_PYTHON="$(command -v python)"
-
-CFG="configs/baselines/catflow_community_small_linear_v2.yaml"
-RUN="seed_42_linear_v2"
+RUN=seed_42
+N=1024
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
-  --dataset community_small \
-  --wrapper-config "$CFG" \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/catflow_ego_small.yaml \
   --seed-id 42 \
   --run-id "$RUN" \
-  --device gpu \
-  --n-epochs 10000
-
+  --device gpu
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
-  --dataset community_small \
-  --wrapper-config "$CFG" \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/catflow_ego_small.yaml \
   --seed-id 42 \
   --run-id "$RUN" \
-  --num-samples 1024 \
+  --num-samples "$N" \
   --device gpu
 
-
-GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_42_n_1024"
+GEN_DIR="outputs/baselines/catflow/ego_small/$RUN/generations/seed_42_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
-  --generated-stage catflow_linear_v2 \
   --output-dir "$GEN_DIR/evaluation_report"
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.012987          0.027056      0.008995
+catflow_to_test                     0.122425          0.079914      0.036366
+
+
+
+RUN=seed_43
+N=1024
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/catflow_ego_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/catflow_ego_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/catflow/ego_small/$RUN/generations/seed_43_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+  Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.012987          0.027056      0.008995
+catflow_to_test                     0.127305          0.087133      0.036739
+
+
+
+
+
+
+
+
+RUN=seed_44
+N=1024
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/catflow_ego_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/catflow_ego_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/catflow/ego_small/$RUN/generations/seed_44_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_test                       0.012987          0.027056      0.008995
+catflow_to_test                     0.141249          0.089677      0.038129
+
+
+
+
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --hogdiff-compatible-metrics \
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
+
+
+
+
+
+
+
+
+
+RUN=seed_43
+N=1024
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_43_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --hogdiff-compatible-metrics \
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
