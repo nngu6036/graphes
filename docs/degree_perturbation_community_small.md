@@ -97,18 +97,20 @@ The API's default failure policy is `error`. To use strict generation, override:
 --set generation.degree_perturbation.failure_policy=error
 ```
 
-A strict failure aborts generation and writes `degree_prior_report.json` before
-raising. This avoids silently conditioning the sampled parent distribution on
-whether a perturbation was possible. The existing downstream HH constructor
-retains its existing retry behavior; if constructor failures change the returned
-parent batch, the comparison script detects the fingerprint mismatch.
+A strict failure still raises within the sampler API. The topology generation
+script logs that failed graph slot, skips it, and continues with the remaining
+slots. It saves all attempted parents in `degree_prior_report.json`; successful
+outputs therefore need not contain every requested parent. The existing
+downstream HH constructor retains its retry behavior. The comparison script
+detects differences in the returned parent batches.
 
 ## Reproducible comparisons
 
 The new configs use a parent-sampling RNG independent of source construction,
 refinement, the mixture coin, and perturbation rejection counts. Each perturbation
 sample has separate mixture and kernel streams. This provides matching parent
-samples and mixture flags across methods, barring downstream constructor retries.
+samples and mixture flags across methods at the sampler level. Skipped slots,
+parent retries, and downstream constructor retries can change returned batches.
 
 **Run the new `empirical` control.** Historical empirical experiments used a
 shared degree/construction RNG. The new control is not expected to reproduce
@@ -159,8 +161,8 @@ remains reproducible and independent of construction and rewiring. Accepted
 parents are conditioned on successful perturbations, so this is a different
 prior from matched empirical parent sampling across methods.
 
-The default `generation.degree_failure_policy=error` preserves the original
-one-parent behavior. `resample_parent` requires
+The default `generation.degree_failure_policy=error` preserves one-parent
+sampling: a failed request skips its graph slot. `resample_parent` requires
 `degree_perturbation.failure_policy=error` and a perturbed training-degree source;
 it cannot be combined with an unchanged-parent fallback. These topology options
 are separate from the molecular `generation.invariant_failure_policy` options.
@@ -174,14 +176,23 @@ Fresh HH construction keeps its existing retry policy, so accepted summaries
 can outnumber completed graphs. `sampled_degree_sequences.json` still contains
 only sequences associated with completed graphs.
 
-If the parent or source-construction budget is exhausted, generation raises an
-error and saves the degree audit, `partial_report.json`,
-`partial_coarse_graphs.pkl`, `partial_topology_refined_graphs.pkl`, and
-`partial_sampled_degree_sequences.json` for completed graphs. Source enrichment,
-when enabled, also saves `partial_enriched_base_graphs.pkl`. Use a fresh output
-directory for another run. `diagnose_degree_perturbations.py` deliberately keeps
-its one-parent, `keep_original` audit policy to compare methods on matched
-parents, even when the generation config enables retries.
+If a parent or source-construction budget is exhausted, the script logs
+`skipped=True` with the slot index, failure stage, attempt count, and reason.
+It continues with the next slot and saves successful graphs under the usual
+filenames. `--num-generate` is the number of slots to process: skipped slots are
+not replaced indefinitely, so the final batch may contain fewer graphs.
+Even if every slot is skipped, the run finishes with empty graph files and a
+valid report; inline evaluation is omitted because there are no generated graphs.
+
+Both reports include `num_requested`, `num_attempted`, `num_generated`,
+`num_skipped`, `skipped_graphs`, and `generation_success_fraction`.
+`complete=true` means every slot was processed; `requested_count_reached` says
+whether all requested graphs were produced. Completed graph records retain
+their original slot indices and random seeds. Pipeline aggregates explicitly
+cover only completed graphs; the overall success fraction includes skips.
+Unexpected errors still propagate, rather than being mistaken for exhausted
+sampling requests. `diagnose_degree_perturbations.py` retains its one-parent,
+`keep_original` audit policy for matched comparisons across methods.
 
 ## Installation
 

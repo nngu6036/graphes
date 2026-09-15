@@ -195,6 +195,46 @@ def test_retry_does_not_swallow_unrelated_or_unrecorded_errors(monkeypatch, erro
     assert sampler.records == []
 
 
+def test_unmarked_error_after_rejected_parent_propagates_without_sampling_failure_marker(monkeypatch) -> None:
+    sampler = _sampler(retry=True)
+    perturb_parent = sampler.perturb_parent
+    error = DegreePerturbationError("Moment-block catalogue exceeds max_block_alternatives.")
+    calls = []
+
+    def fail_after_rejection(parent_index, **kwargs):
+        calls.append(parent_index)
+        if len(calls) == 2:
+            raise error
+        return perturb_parent(parent_index, **kwargs)
+
+    monkeypatch.setattr(sampler, "perturb_parent", fail_after_rejection)
+    rng = np.random.default_rng(1)
+    expected = np.random.default_rng(1)
+    expected.integers(2, size=2)
+    with pytest.raises(DegreePerturbationError) as caught:
+        sampler.sample(rng)
+    assert caught.value is error
+    assert not caught.value.sampling_failure
+    assert calls == [0, 1]
+    assert len(sampler.records) == 1 and not sampler.records[0]["returned"]
+    assert sampler.records[0]["failure_reason"] == "no_valid_edge_relocation"
+    assert sampler.returned_records == []
+    np.testing.assert_array_equal(rng.integers(100, size=8), expected.integers(100, size=8))
+
+
+@pytest.mark.parametrize("retry, expected_records", [(False, 1), (True, 3)])
+def test_expected_terminal_sampling_errors_are_explicitly_marked(retry, expected_records) -> None:
+    sampler = _sampler(graphs=[nx.complete_graph(3)], retry=retry, budget=3)
+    with pytest.raises(DegreePerturbationError) as caught:
+        sampler.sample()
+    assert caught.value.sampling_failure is True
+    assert len(sampler.records) == expected_records
+    assert all(not row["returned"] for row in sampler.records)
+    if retry:
+        assert isinstance(caught.value.__cause__, DegreePerturbationError)
+        assert caught.value.__cause__.sampling_failure is True
+
+
 @pytest.mark.parametrize("budget", [0, -1, True, 1.5])
 def test_parent_retry_budget_requires_a_positive_integer(budget) -> None:
     with pytest.raises(ValueError):

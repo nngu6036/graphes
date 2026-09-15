@@ -30,6 +30,10 @@ METHODS = ("unit_transfer", "moment_preserving", "edge_relocation", "interpolati
 class DegreePerturbationError(ValueError):
     """A requested perturbation failed; parent rejection requires explicit opt-in."""
 
+    def __init__(self, message: str, *, sampling_failure: bool = False):
+        super().__init__(message)
+        self.sampling_failure = bool(sampling_failure)
+
 
 @dataclass(frozen=True)
 class DegreePerturbationConfig:
@@ -411,7 +415,8 @@ class PerturbedEmpiricalDegreeSampler:
             except DegreePerturbationError as exc:
                 # Catalogue/programming errors without a failed sampling record
                 # are not evidence that this parent can simply be rejected.
-                if (self.parent_failure_policy == "error" or len(self.records) != before + 1
+                if (not exc.sampling_failure or self.parent_failure_policy == "error"
+                        or len(self.records) != before + 1
                         or self.records[-1]["returned"]):
                     raise
                 record = self.records[-1]
@@ -427,7 +432,8 @@ class PerturbedEmpiricalDegreeSampler:
                     raise DegreePerturbationError(
                         f"{self.config.method} exhausted {budget} training parent draws for "
                         f"output {self._num_accepted + 1} under parent_failure_policy=resample_parent. "
-                        f"Last failure: {exc} Rejected draws are recorded; no constraints were relaxed."
+                        f"Last failure: {exc} Rejected draws are recorded; no constraints were relaxed.",
+                        sampling_failure=True,
                     ) from exc
             else:
                 summary["sampling_diagnostics"]["parent_attempt"] = attempt
@@ -498,7 +504,8 @@ class PerturbedEmpiricalDegreeSampler:
                 f"{self.config.method} failed for training parent {parent_index}: {failure}; "
                 f"candidate_checks={checks}, max_attempts={self.config.max_attempts} per step, "
                 f"proposal_rejections={dict(sorted(rejections.items()))}. "
-                "This parent attempt used no degree repair or constraint relaxation."
+                "This parent attempt used no degree repair or constraint relaxation.",
+                sampling_failure=True,
             )
         summary = degree_summary(current)
         record["returned"] = True

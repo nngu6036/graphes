@@ -643,9 +643,20 @@ def main() -> None:
     enrichment_traces: list[list[dict[str, Any]]] = []
     graph_runtimes: list[float] = []
     pipeline_records: list[dict[str, Any]] = []
+    skipped_graphs: list[dict[str, Any]] = []
+    source_rejection_totals: Counter[str] = Counter()
     max_attempts_per_graph = int(generation_cfg.get("max_attempts_per_graph", 8))
     if max_attempts_per_graph <= 0:
         raise ValueError("generation.max_attempts_per_graph must be positive.")
+
+    def skip_graph(index, stage, attempts_used, reason, rejections):
+        skipped_graphs.append({
+            "generation_index": index, "stage": stage, "attempts_used": attempts_used,
+            "reason": str(reason), "generation_rejections": dict(rejections),
+            "runtime_seconds": float(time.perf_counter() - graph_started),
+        })
+        print(f"graph={index + 1}/{num_generate} skipped=True stage={stage} "
+              f"attempts={attempts_used} reason={reason}; continuing with the next graph slot.", flush=True)
 
     def save_source_failure(error, index, rejections):
         output_dir = ensure_dir(args.output_dir)
@@ -653,7 +664,8 @@ def main() -> None:
             degree_sampler, degree_source=degree_source, seed=seed, degree_rng_mode=degree_rng_mode,
             degree_sampling_records=degree_sampling_records, target_degree_sequences=target_degree_sequences,
         )
-        failed_report.update(generation_aborted=True, failure=str(error), num_requested=num_generate)
+        failed_report.update(generation_aborted=True, failure=str(error), num_requested=num_generate,
+                             num_skipped=len(skipped_graphs), skipped_graphs=skipped_graphs)
         save_json(failed_report, output_dir / "degree_prior_report.json")
         save_pickle(coarse_graphs, output_dir / "partial_coarse_graphs.pkl")
         save_pickle(refined_graphs, output_dir / "partial_topology_refined_graphs.pkl")
@@ -664,6 +676,7 @@ def main() -> None:
             "format": "topology_partial_generation_v1", "complete": False,
             "failure": str(error), "failed_generation_index": index,
             "generation_rejections": dict(rejections), "num_requested": num_generate,
+            "num_skipped": len(skipped_graphs), "skipped_graphs": skipped_graphs,
             "num_generated": len(refined_graphs), "seed": seed, "degree_source": degree_source,
             "degree_rng_mode": degree_rng_mode, "checkpoint_path": str(checkpoint_path),
             "checkpoint_sha256": checkpoint_file_sha256, "config": config,
@@ -676,7 +689,9 @@ def main() -> None:
     for index in range(num_generate):
         graph_started = time.perf_counter()
         generation_rejections: Counter[str] = Counter()
+        source_ready = False
         for generation_attempt in range(1, max_attempts_per_graph + 1):
+            prior_draws_before = len(degree_sampler.records) if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler) else 0
             try:
                 if degree_source in {"oracle", "test_oracle"}:
                     if not reference_graphs:
@@ -689,9 +704,15 @@ def main() -> None:
                         raise RuntimeError("Degree sampler was not initialized.")
                     degree_summary = degree_sampler.sample(degree_rng)
             except DegreePerturbationError as exc:
-                # The sampler alone controls parent retries and their budget.
-                save_source_failure(exc, index, generation_rejections)
-                raise
+                if not exc.sampling_failure:
+                    save_source_failure(exc, index, generation_rejections)
+                    raise
+                # The sampler has exhausted this request. Skip the slot without
+                # discarding outputs or admitting an unchanged degree sequence.
+                draws = len(degree_sampler.records) - prior_draws_before
+                generation_rejections["degree_prior_rejected"] += draws
+                skip_graph(index, "degree_prior", draws, exc, generation_rejections)
+                break
             except RuntimeError:
                 generation_rejections["degree_prior_rejected"] += 1
                 continue
@@ -702,6 +723,7 @@ def main() -> None:
             except (ValueError, RuntimeError, AssertionError):
                 generation_rejections["constructor_rejected"] += 1
                 continue
+            source_ready = True
             break
         else:
             error = RuntimeError(
@@ -709,8 +731,12 @@ def main() -> None:
                 f"{max_attempts_per_graph} attempts for graph {index}; "
                 f"rejections={dict(generation_rejections)}."
             )
-            save_source_failure(error, index, generation_rejections)
-            raise error
+            stage = "source_construction" if generation_rejections["constructor_rejected"] else "degree_prior"
+            skip_graph(index, stage, max_attempts_per_graph, error, generation_rejections)
+
+        source_rejection_totals.update(generation_rejections)
+        if not source_ready:
+            continue
 
         if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
             degree_summary["sampling_diagnostics"]["returned_generation_index"] = index
@@ -918,7 +944,7 @@ def main() -> None:
     coarse_metrics: dict[str, Any] = {}
     enriched_metrics: dict[str, Any] = {}
     refined_metrics: dict[str, Any] = {}
-    if inline_evaluation:
+    if inline_evaluation and refined_graphs:
         compute_orbit = bool(evaluation_cfg.get("compute_orbit", True))
         graphlet_backend = str(evaluation_cfg.get("graphlet_backend", "sampled")).lower()
         if compute_orbit or graphlet_backend in {"orca", "exact_orca", "exact"}:
@@ -959,7 +985,8 @@ def main() -> None:
         pipeline_records,
         require_complete=True,
         allow_fallback=False,
-    )
+    ) if pipeline_records else {"num_records": 0, "status": "no_generated_graphs"}
+    aggregated_pipeline["sampling_scope"] = "completed_graphs_only"
     accepted_steps = [sum(bool(row.get("accepted")) for row in trace) for trace in traces]
     trace_rows = [row for trace in traces for row in trace]
     accepted_rows = [row for row in trace_rows if bool(row.get("accepted"))]
@@ -996,7 +1023,7 @@ def main() -> None:
                     for graph in enriched_base_graphs
                 ]
             )
-        ),
+        ) if enriched_base_graphs else None,
         "constructor_target_degree_match_rate": degree_target_match_rate(
             coarse_graphs,
             target_degree_sequences,
@@ -1013,8 +1040,8 @@ def main() -> None:
                     for graph in refined_graphs
                 ]
             )
-        ),
-        "mean_accepted_steps": float(np.mean(accepted_steps)),
+        ) if refined_graphs else None,
+        "mean_accepted_steps": float(np.mean(accepted_steps)) if accepted_steps else None,
         "all_accepted_moves_improve_frozen_energy": bool(
             all(float(row["energy_improvement"]) > 0.0 for row in accepted_rows)
         ),
@@ -1032,12 +1059,12 @@ def main() -> None:
         "mean_realized_prediction_horizon": (
             float(np.mean(prediction_horizons)) if prediction_horizons else 0.0
         ),
-        "mean_prediction_calls": float(np.mean(prediction_call_counts)),
+        "mean_prediction_calls": float(np.mean(prediction_call_counts)) if prediction_call_counts else None,
         "mean_accepted_swaps_per_prediction_call": float(
             sum(accepted_steps) / max(sum(prediction_call_counts), 1)
         ),
         "plateau_refresh_count": int(plateau_refresh_count),
-        "mean_graph_runtime_seconds": float(np.mean(graph_runtimes)),
+        "mean_graph_runtime_seconds": float(np.mean(graph_runtimes)) if graph_runtimes else None,
         "source_enrichment_enabled": bool(source_enrichment_enabled),
         "mean_source_enrichment_accepted_steps": float(
             np.mean(
@@ -1045,7 +1072,8 @@ def main() -> None:
             )
         ) if enrichment_traces else 0.0,
         "runtime_seconds": float(time.perf_counter() - run_started),
-        "inline_evaluation": inline_evaluation,
+        "inline_evaluation": inline_evaluation and bool(refined_graphs),
+        "inline_evaluation_skipped_reason": "no_generated_graphs" if inline_evaluation and not refined_graphs else None,
     }
     if guidance_mode == "spectral_graphlet":
         diagnostics.update(
@@ -1161,6 +1189,14 @@ def main() -> None:
         degree_sampler, degree_source=degree_source, seed=seed, degree_rng_mode=degree_rng_mode,
         degree_sampling_records=degree_sampling_records, target_degree_sequences=target_degree_sequences,
     )
+    completion = {
+        "num_requested": num_generate, "num_attempted": num_generate,
+        "num_generated": len(refined_graphs), "num_skipped": len(skipped_graphs),
+        "skipped_graphs": skipped_graphs, "requested_count_reached": len(refined_graphs) == num_generate,
+        "generation_success_fraction": len(refined_graphs) / num_generate,
+        "generation_rejections": dict(sorted(source_rejection_totals.items())),
+    }
+    degree_prior_report.update(completion, complete=True, generation_aborted=False)
     if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
         diagnostics.update({
             "degree_perturbation_method": degree_prior_report["method"],
@@ -1180,6 +1216,8 @@ def main() -> None:
         })
     report = {
         "format": report_format,
+        "complete": True,
+        **completion,
         "pipeline_mode": "topology",
         "guidance_mode": refiner_settings.guidance_mode if guidance_mode == "spectral" else guidance_mode,
         "predictor_family": guidance_mode,
@@ -1212,7 +1250,6 @@ def main() -> None:
             "min_relative_improvement": refiner_settings.min_relative_improvement,
         },
         "orca_exec": orca_exec,
-        "num_generated": len(refined_graphs),
         "hh_source": coarse_metrics,
         "enriched_base": enriched_metrics,
         "topology_refined": refined_metrics,
@@ -1245,6 +1282,8 @@ def main() -> None:
     save_json(degree_prior_report, output_dir / "degree_prior_report.json")
     save_json(target_degree_sequences, output_dir / "sampled_degree_sequences.json")
     save_json(report, output_dir / "report.json")
+    print(f"Generation finished: requested={num_generate} generated={len(refined_graphs)} "
+          f"skipped={len(skipped_graphs)}", flush=True)
     print("Topology generation diagnostics", flush=True)
     for key, value in diagnostics.items():
         print(f"  {key}: {value}", flush=True)
