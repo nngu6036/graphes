@@ -25,6 +25,11 @@ from grapher.models.comparison import (
     resolve_wrapper_config,
 )
 
+def positive(raw: str) -> int:
+    n = int(raw)
+    if n <= 0:
+        raise argparse.ArgumentTypeError("Expected a positive integer.")
+    return n
 
 @dataclass(frozen=True)
 class DatasetProfile:
