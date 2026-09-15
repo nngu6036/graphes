@@ -62,6 +62,59 @@ topology_final_to_val               0.064304          0.062973      0.020346
 
 
 
+
+CFG=configs/experiments/grapher/ego_small_joint_edge_laplacian_graphlets345_learned.yaml
+TRAIN=outputs/topology_grapher/ego_small_joint_edge_laplacian_graphlets345_learned/seed_42
+GENROOT=outputs/topology_generation/ego_small_joint_edge_laplacian_graphlets345/seed_42
+
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --seed 42 \
+  --device gpu
+
+GEN="$GENROOT/learned"
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
+
+GEN="$GENROOT/edge_relocation"
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu \
+  --set generation.degree_source=edge_relocation \
+  --set generation.degree_rng_mode=independent \
+  --set generation.degree_perturbation.max_attempts=256 \
+  --set generation.degree_perturbation.max_distance=4.0 \
+  --set generation.degree_perturbation.require_novel=false
+
+
+for MODE in learned edge_relocation; do
+  GEN="$GENROOT/$MODE"
+
+  PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+    --config "$CFG" \
+    --generated-dir "$GEN" \
+    --reference-split val \
+    --output-dir "$GEN/evaluation_val"
+
+  PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
+    --config "$CFG" \
+    --generated-graphs "$GEN/topology_refined_graphs.pkl" \
+    --reference-split val \
+    --json-out "$GEN/evaluation_val/induced_graphlets345.json"
+done
+
+
+
 CFG=configs/experiments/grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned.yaml
 TRAIN=outputs/attributed_grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned/seed_42
 GENROOT=outputs/attributed_generation/qm9_joint_typed_edge_laplacian_graphlets345/seed_42
@@ -94,6 +147,22 @@ PYTHONPATH=src python scripts/run_attributed_grapher.py \
   --set generation.degree_perturbation.max_distance=4.0 \
   --set generation.degree_perturbation.require_novel=true
 
+
+GEN="$GENROOT/learned"
+PYTHONPATH=src python scripts/run_attributed_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate "$NGEN" \
+  --seed 42 \
+  --device gpu
+
+GEN="$GENROOT/edge_relocation_resampled"
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+    --config "$CFG" \
+    --generated-dir "$GEN" \
+    --reference-split val \
+    --output-dir "$GEN/evaluation_val"
 PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
     --config "$CFG" \
     --checkpoint "$TRAIN/checkpoint.pt" \

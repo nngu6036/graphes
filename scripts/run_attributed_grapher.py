@@ -121,6 +121,10 @@ def _mean(rows: list[dict[str, Any]], key: str) -> float:
     return float(np.mean(values)) if values else 0.0
 
 
+def _mean_values(values: list[Any]) -> float:
+    return float(np.mean(values)) if values else 0.0
+
+
 def _weighted_valence(graph: nx.Graph) -> tuple[float, ...]:
     values = {int(node): 0.0 for node in graph.nodes()}
     for u, v, data in graph.edges(data=True):
@@ -267,11 +271,24 @@ def _partial_report(
     requested: int,
     attempts: list[int],
     started: float,
+    skipped_graphs: list[dict[str, Any]] | None = None,
+    rejection_reasons: Counter[str] | None = None,
+    generated_indices: list[int] | None = None,
 ) -> dict[str, Any]:
     return {
         "format": "attributed_spectral_graphlet_partial_generation_v2",
+        "complete": False,
         "generated": int(generated),
         "requested": int(requested),
+        "num_requested": int(requested),
+        "num_attempted": len(attempts),
+        "num_generated": int(generated),
+        "num_skipped": len(skipped_graphs or []),
+        "skipped_graphs": list(skipped_graphs or []),
+        "generated_indices": list(generated_indices or []),
+        "requested_count_reached": generated == requested,
+        "generation_success_fraction": float(generated / max(len(attempts), 1)),
+        "generation_rejections": dict(sorted((rejection_reasons or {}).items())),
         "generation_attempts": int(sum(attempts)),
         "end_to_end_yield_so_far": float(generated / max(sum(attempts), 1)),
         "runtime_seconds": float(time.perf_counter() - started),
@@ -390,7 +407,9 @@ def main() -> None:
     )
     if num_generate <= 0:
         raise ValueError("num_generate must be positive.")
-    max_attempts = max(int(generation_cfg.get("max_attempts_per_graph", 32)), 1)
+    max_attempts = int(generation_cfg.get("max_attempts_per_graph", 32))
+    if max_attempts < 1:
+        raise ValueError("generation.max_attempts_per_graph must be positive.")
     invariant_source = str(
         generation_cfg.get(
             "invariant_source", generation_cfg.get("degree_source", "empirical")
@@ -488,15 +507,38 @@ def main() -> None:
     traces: list[list[dict[str, Any]]] = []
     graph_runtimes: list[float] = []
     attempts_per_graph: list[int] = []
+    attempts_per_slot: list[int] = []
+    skipped_graphs: list[dict[str, Any]] = []
+    generated_indices: list[int] = []
     constructor_records: list[dict[str, Any]] = []
     source_metadata: list[dict[str, Any]] = []
     audits: list[dict[str, bool]] = []
     rejection_reasons: Counter[str] = Counter()
 
+    def save_partial(error: Exception | None = None, stage: str | None = None) -> None:
+        _atomic_pickle(final_graphs, output_dir / "molecular_graphs.partial.pkl")
+        _atomic_pickle(source_graphs, output_dir / "typed_source_graphs.partial.pkl")
+        if source_enrichment_enabled:
+            _atomic_pickle(enriched_base_graphs, output_dir / "enriched_base_graphs.partial.pkl")
+        partial = _partial_report(
+            generated=len(final_graphs), requested=num_generate,
+            attempts=attempts_per_slot, started=started, skipped_graphs=skipped_graphs,
+            rejection_reasons=rejection_reasons, generated_indices=generated_indices,
+        )
+        if error is not None:
+            partial.update(failure=str(error), failed_generation_index=len(attempts_per_slot) - 1,
+                           failure_stage=stage)
+        _atomic_json(partial, output_dir / "partial_report.json")
+
     for graph_index in range(num_generate):
         graph_started = time.perf_counter()
         succeeded = False
+        attempts_per_slot.append(0)
+        slot_rejections: Counter[str] = Counter()
+        last_failure: dict[str, Any] = {}
         for attempt in range(1, max_attempts + 1):
+            attempts_per_slot[-1] = attempt
+            stage = "invariant_sampling"
             try:
                 invariant, invariant_metadata = _sample_invariant(
                     invariant_source,
@@ -518,6 +560,7 @@ def main() -> None:
                         "Typed invariant attribute names do not match predictor checkpoint."
                     )
 
+                stage = "source_construction"
                 source, constructor_record = construct_typed_graph(
                     invariant,
                     constructor_cfg,
@@ -540,6 +583,7 @@ def main() -> None:
                     node_attribute=node_attribute,
                     edge_attribute=edge_attribute,
                 )
+                stage = "source_validation"
                 source_is_valid = _generation_rdkit_valid(
                     source,
                     infer_projected_formal_charges=(
@@ -549,11 +593,14 @@ def main() -> None:
                 source_is_raw_valid = is_valid_molecular_graph(source)
                 if require_source_validity and not source_is_valid:
                     rejection_reasons["rdkit_invalid_source"] += 1
+                    slot_rejections["rdkit_invalid_source"] += 1
+                    last_failure = {"stage": stage, "reason": "rdkit_invalid_source"}
                     continue
 
                 base_graph = source
                 enrichment_trace: list[dict[str, Any]] = []
                 if source_enrichment_enabled:
+                    stage = "source_enrichment"
                     assert source_enrichment_refiner is not None
                     enrichment_rng = np.random.default_rng(
                         np.random.SeedSequence([seed, graph_index, attempt, 3571])
@@ -581,6 +628,7 @@ def main() -> None:
                     if base_graph.number_of_nodes() > 1 and not nx.is_connected(base_graph):
                         raise AssertionError("Source enrichment returned a disconnected molecule.")
 
+                stage = "refinement"
                 attempt_rng = np.random.default_rng(
                     np.random.SeedSequence([seed, graph_index, attempt, 7919])
                 )
@@ -619,6 +667,7 @@ def main() -> None:
                     )
                 if refined.number_of_nodes() > 1 and not nx.is_connected(refined):
                     raise AssertionError("Refinement returned a disconnected molecule.")
+                stage = "final_validation"
                 final_is_valid = _generation_rdkit_valid(
                     refined,
                     infer_projected_formal_charges=(
@@ -628,8 +677,14 @@ def main() -> None:
                 final_is_raw_valid = is_valid_molecular_graph(refined)
                 if require_final_validity and not final_is_valid:
                     rejection_reasons["rdkit_invalid_final"] += 1
+                    slot_rejections["rdkit_invalid_final"] += 1
+                    last_failure = {"stage": stage, "reason": "rdkit_invalid_final"}
                     continue
 
+                stage = "output_audit"
+                audit = _preservation_audit(
+                    source, refined, node_attribute=node_attribute, edge_attribute=edge_attribute,
+                )
                 source_graphs.append(source)
                 enriched_base_graphs.append(base_graph)
                 final_graphs.append(refined)
@@ -637,9 +692,11 @@ def main() -> None:
                 traces.append(trace)
                 graph_runtimes.append(float(time.perf_counter() - graph_started))
                 attempts_per_graph.append(attempt)
+                generated_indices.append(graph_index)
                 constructor_records.append(
                     {
                         **constructor_record,
+                        "generation_index": graph_index,
                         "generation_attempt": attempt,
                         "rdkit_validation_mode": refiner_cfg.rdkit_validation_mode,
                         "source_rdkit_valid": source_is_raw_valid,
@@ -648,15 +705,8 @@ def main() -> None:
                         "final_rdkit_valid_configured": final_is_valid,
                     }
                 )
-                source_metadata.append(invariant_metadata)
-                audits.append(
-                    _preservation_audit(
-                        source,
-                        refined,
-                        node_attribute=node_attribute,
-                        edge_attribute=edge_attribute,
-                    )
-                )
+                source_metadata.append({**invariant_metadata, "generation_index": graph_index})
+                audits.append(audit)
                 enrichment_accepted = sum(
                     bool(row.get("accepted")) for row in enrichment_trace
                 )
@@ -676,43 +726,50 @@ def main() -> None:
                 succeeded = True
                 break
             except TypedConstructionError as exc:
+                if stage != "source_construction":
+                    save_partial(exc, stage)
+                    raise
                 reason = str(exc.diagnostics.get("failure_reason", "failed"))
                 rejection_reasons[f"constructor:{reason}"] += 1
-            except (AssertionError, KeyError, RuntimeError, TypeError, ValueError) as exc:
-                rejection_reasons[f"generation:{type(exc).__name__}"] += 1
-                if attempt == max_attempts:
-                    raise RuntimeError(
-                        f"Attributed generation failed for graph {graph_index + 1} "
-                        f"after {max_attempts} attempts: {exc}"
-                    ) from exc
+                slot_rejections[f"constructor:{reason}"] += 1
+                last_failure = {"stage": stage, "reason": reason, "error": str(exc),
+                                "constructor_diagnostics": dict(exc.diagnostics)}
+            except RuntimeError as exc:
+                # The legacy typed VAE uses RuntimeError for this one expected
+                # feasibility-budget failure. Other runtime failures remain fatal.
+                if (stage != "invariant_sampling"
+                        or invariant_source not in {"learned", "typed_vae", "degree_vae"}
+                        or not str(exc).startswith(
+                    "Typed invariant sampling exhausted its feasibility budget:"
+                )):
+                    save_partial(exc, stage)
+                    raise
+                rejection_reasons["typed_prior_feasibility_budget"] += 1
+                slot_rejections["typed_prior_feasibility_budget"] += 1
+                last_failure = {"stage": stage, "reason": "typed_prior_feasibility_budget",
+                                "error": str(exc)}
+            except Exception as exc:
+                save_partial(exc, stage)
+                raise
 
         if not succeeded:
-            raise RuntimeError(
-                f"Attributed generation exhausted {max_attempts} attempts for graph {graph_index + 1}."
+            skipped_graphs.append({
+                "generation_index": graph_index, "attempts_used": attempt,
+                **last_failure, "generation_rejections": dict(sorted(slot_rejections.items())),
+                "runtime_seconds": float(time.perf_counter() - graph_started),
+            })
+            print(
+                f"[GraphER/AttributedSpectralGraphlet] graph={graph_index + 1}/{num_generate} "
+                f"skipped=True attempts={attempt} stage={last_failure.get('stage')} "
+                f"reason={last_failure.get('reason')} rejections={dict(slot_rejections)}",
+                flush=True,
             )
 
-        if checkpoint_every > 0 and len(final_graphs) % checkpoint_every == 0:
-            _atomic_pickle(
-                final_graphs, output_dir / "molecular_graphs.partial.pkl"
-            )
-            _atomic_pickle(
-                source_graphs, output_dir / "typed_source_graphs.partial.pkl"
-            )
-            if source_enrichment_enabled:
-                _atomic_pickle(
-                    enriched_base_graphs, output_dir / "enriched_base_graphs.partial.pkl"
-                )
-            _atomic_json(
-                _partial_report(
-                    generated=len(final_graphs),
-                    requested=num_generate,
-                    attempts=attempts_per_graph,
-                    started=started,
-                ),
-                output_dir / "partial_report.json",
-            )
+        if checkpoint_every > 0 and (graph_index + 1) % checkpoint_every == 0:
+            save_partial()
             print(
-                f"Saved atomic partial generation checkpoint: {len(final_graphs)}/{num_generate}",
+                f"Saved atomic partial generation checkpoint: attempted={graph_index + 1}/{num_generate} "
+                f"generated={len(final_graphs)} skipped={len(skipped_graphs)}",
                 flush=True,
             )
 
@@ -775,7 +832,22 @@ def main() -> None:
         max((int(row.get("prediction_calls", 0)) for row in trace), default=0)
         for trace in traces
     ]
+    generation_summary = {
+        "complete": True,
+        "num_requested": num_generate,
+        "num_attempted": len(attempts_per_slot),
+        "num_generated": len(final_graphs),
+        "num_skipped": len(skipped_graphs),
+        "skipped_graphs": skipped_graphs,
+        "generated_indices": generated_indices,
+        "requested_count_reached": len(final_graphs) == num_generate,
+        "generation_success_fraction": float(len(final_graphs) / max(len(attempts_per_slot), 1)),
+        "generation_attempts": int(sum(attempts_per_slot)),
+        "end_to_end_yield": float(len(final_graphs) / max(sum(attempts_per_slot), 1)),
+        "generation_rejections": dict(sorted(rejection_reasons.items())),
+    }
     diagnostics = {
+        **generation_summary,
         "pipeline_mode": "attributed",
         "guidance_mode": "dual_spectral_attributed_graphlet",
         "invariant_source": invariant_source,
@@ -806,54 +878,31 @@ def main() -> None:
         "mean_source_enrichment_energy_improvement": _mean(
             enrichment_accepted_rows, "energy_improvement"
         ),
-        "rewiring_invariant_preservation_rate": float(
-            np.mean(rewiring_invariant_preservation)
-        ),
-        "typed_degree_preservation_rate": float(np.mean(typed_preservation)),
-        "mean_typed_degree_changed_node_fraction": float(
-            np.mean([row["typed_degree_changed_node_fraction"] for row in audits])
-        ),
+        "rewiring_invariant_preservation_rate": _mean_values(rewiring_invariant_preservation),
+        "typed_degree_preservation_rate": _mean_values(typed_preservation),
+        "mean_typed_degree_changed_node_fraction": _mean(audits, "typed_degree_changed_node_fraction"),
         # Compatibility alias retained for older report readers.  In revised
         # cross-type mode this is diagnostic and is not expected to be 1.0.
-        "typed_invariant_preservation_rate": float(np.mean(typed_preservation)),
-        "node_type_preservation_rate": float(
-            np.mean([row["node_type_preserved"] for row in audits])
-        ),
-        "indexed_degree_preservation_rate": float(
-            np.mean([row["indexed_degree_preserved"] for row in audits])
-        ),
-        "edge_type_count_preservation_rate": float(
-            np.mean([row["edge_type_counts_preserved"] for row in audits])
-        ),
-        "per_node_weighted_valence_preservation_rate": float(
-            np.mean([row["weighted_valence_preserved"] for row in audits])
-        ),
+        "typed_invariant_preservation_rate": _mean_values(typed_preservation),
+        "node_type_preservation_rate": _mean(audits, "node_type_preserved"),
+        "indexed_degree_preservation_rate": _mean(audits, "indexed_degree_preserved"),
+        "edge_type_count_preservation_rate": _mean(audits, "edge_type_counts_preserved"),
+        "per_node_weighted_valence_preservation_rate": _mean(audits, "weighted_valence_preserved"),
         # Compatibility alias; per-node weighted valence is no longer a hard
         # invariant under cross-type reassignment.
-        "weighted_valence_preservation_rate": float(
-            np.mean([row["weighted_valence_preserved"] for row in audits])
-        ),
-        "connectedness_rate": float(
-            np.mean(
-                [
-                    graph.number_of_nodes() <= 1 or nx.is_connected(graph)
-                    for graph in final_graphs
-                ]
-            )
-        ),
+        "weighted_valence_preservation_rate": _mean(audits, "weighted_valence_preserved"),
+        "connectedness_rate": _mean_values([
+            graph.number_of_nodes() <= 1 or nx.is_connected(graph) for graph in final_graphs
+        ]),
         # Raw/no-correction rates match evaluate_generated_molecules.py.
-        "rdkit_valid_source_rate": float(np.mean(source_validity)),
-        "rdkit_valid_final_rate": float(np.mean(final_validity)),
-        "rdkit_valid_source_rate_raw": float(np.mean(source_validity)),
-        "rdkit_valid_final_rate_raw": float(np.mean(final_validity)),
-        "rdkit_valid_source_rate_configured": float(
-            np.mean(configured_source_validity)
-        ),
-        "rdkit_valid_final_rate_configured": float(
-            np.mean(configured_final_validity)
-        ),
-        "mean_accepted_steps": float(np.mean(accepted_counts)),
-        "mean_prediction_calls": float(np.mean(prediction_counts)),
+        "rdkit_valid_source_rate": _mean_values(source_validity),
+        "rdkit_valid_final_rate": _mean_values(final_validity),
+        "rdkit_valid_source_rate_raw": _mean_values(source_validity),
+        "rdkit_valid_final_rate_raw": _mean_values(final_validity),
+        "rdkit_valid_source_rate_configured": _mean_values(configured_source_validity),
+        "rdkit_valid_final_rate_configured": _mean_values(configured_final_validity),
+        "mean_accepted_steps": _mean_values(accepted_counts),
+        "mean_prediction_calls": _mean_values(prediction_counts),
         "mean_accepted_swaps_per_prediction_call": float(
             sum(accepted_counts) / max(sum(prediction_counts), 1)
         ),
@@ -939,11 +988,8 @@ def main() -> None:
         "rdkit_candidates_rejected": int(
             sum(int(row.get("rdkit_rejected", 0)) for row in trace_rows)
         ),
-        "mean_graph_runtime_seconds": float(np.mean(graph_runtimes)),
-        "generation_attempts": int(sum(attempts_per_graph)),
-        "end_to_end_yield": float(
-            len(final_graphs) / max(sum(attempts_per_graph), 1)
-        ),
+        "mean_graph_runtime_seconds": _mean_values(graph_runtimes),
+        "mean_attempts_per_generated_graph": _mean_values(attempts_per_graph),
         "runtime_seconds": float(time.perf_counter() - started),
         "rejection_reasons": dict(sorted(rejection_reasons.items())),
     }
@@ -964,6 +1010,7 @@ def main() -> None:
         encoding="utf-8",
     )
     report = {
+        **generation_summary,
         "format": "attributed_spectral_graphlet_generation_v2",
         "checkpoint_format": checkpoint.get("format"),
         "training_state_source": checkpoint.get("config", {})

@@ -99,8 +99,9 @@ def _builder_config() -> dict:
 
 def test_default_policy_still_raises_for_first_immovable_parent() -> None:
     sampler = _sampler()
-    with pytest.raises(DegreePerturbationError, match="edge_relocation"):
+    with pytest.raises(DegreePerturbationError, match="edge_relocation") as caught:
         sampler.sample()
+    assert caught.value.sampling_failure is True
     assert len(sampler.records) == 1
     record = sampler.records[0]
     assert record["parent_train_index"] == 0
@@ -141,8 +142,11 @@ def test_opt_in_retry_returns_changed_parent_and_records_rejection() -> None:
 
 def test_retries_are_bounded_when_all_parents_are_immovable() -> None:
     sampler = _sampler(graphs=[_bank()[0]], retry=True, max_parent_attempts=3)
-    with pytest.raises(DegreePerturbationError):
+    with pytest.raises(DegreePerturbationError) as caught:
         sampler.sample()
+    assert caught.value.sampling_failure is True
+    assert isinstance(caught.value.__cause__, DegreePerturbationError)
+    assert caught.value.__cause__.sampling_failure is True
     assert len(sampler.records) == 3
     assert [row["parent_attempt"] for row in sampler.records] == [1, 2, 3]
     assert {row["output_index"] for row in sampler.records} == {0}
@@ -232,6 +236,81 @@ def test_retry_does_not_swallow_unrelated_exceptions(monkeypatch, error) -> None
     with pytest.raises(type(error)):
         sampler.sample()
     assert calls == [0]
+    assert sampler.records == []
+
+
+def test_unmarked_step_error_after_rejected_parent_is_not_reclassified_or_retried(monkeypatch) -> None:
+    sampler = _sampler(retry=True)
+    original_step = sampler._one_step
+    error = DegreePerturbationError("unexpected internal typed step failure")
+    calls = []
+
+    def step(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise error
+        return original_step(*args, **kwargs)
+
+    monkeypatch.setattr(sampler, "_one_step", step)
+    with pytest.raises(DegreePerturbationError, match="internal typed step") as caught:
+        sampler.sample()
+    assert caught.value is error and caught.value.sampling_failure is False
+    assert len(calls) == 2
+    assert len(sampler.records) == 1
+    assert sampler.records[0]["parent_train_index"] == 0
+    assert not sampler.records[0]["returned"]
+    assert sampler.records[0]["failure_reason"] == "no_valid_edge_relocation"
+
+
+def test_retry_requires_a_fresh_failed_record_even_for_marked_errors(monkeypatch) -> None:
+    sampler = _sampler(retry=True)
+    with pytest.raises(DegreePerturbationError):
+        sampler.perturb_parent(0)
+    previous_record = deepcopy(sampler.records[0])
+    error = DegreePerturbationError("marked error without a fresh record", sampling_failure=True)
+    calls = []
+
+    def fail(parent_index):
+        calls.append(parent_index)
+        raise error
+
+    monkeypatch.setattr(sampler, "perturb_parent", fail)
+    with pytest.raises(DegreePerturbationError) as caught:
+        sampler.sample()
+    assert caught.value is error
+    assert len(calls) == 1
+    assert sampler.records == [previous_record]
+
+
+def test_constructor_failure_after_recording_is_marked_as_expected(monkeypatch) -> None:
+    from grapher.models.dhvae_hh.typed_constructor import TypedConstructionError
+    from grapher.models.dhvae_hh import typed_degree_perturbation as perturbation
+
+    def failed_construction(*args, **kwargs):
+        raise TypedConstructionError("fixture exhausted constructor", {"failure_reason": "search_budget_exhausted"})
+
+    monkeypatch.setattr(perturbation, "construct_typed_graph", failed_construction)
+    sampler = _sampler()
+    with pytest.raises(DegreePerturbationError) as caught:
+        sampler.sample()
+    assert caught.value.sampling_failure is True
+    assert len(sampler.records) == 1 and not sampler.records[0]["returned"]
+    assert sampler.records[0]["output_failure"] == "joint_constructor_search_budget_exhausted"
+
+
+def test_unrecorded_moment_catalogue_budget_error_stays_fatal() -> None:
+    # P5 has multiple three-entry blocks in its [1,1,2,2,2] typed column.
+    # A deliberately undersized catalogue is not a rejected generated parent.
+    sampler = PerturbedEmpiricalTypedDegreeSampler.fit(
+        [_graph(nx.path_graph(5))],
+        DegreePerturbationConfig(method="moment_preserving", probability=1.0,
+                                block_size=3, max_block_patterns=1),
+        edge_types=(1,), constructor_config=_constructor(), seed=0,
+        parent_failure_policy="resample_parent", max_parent_attempts=3,
+    )
+    with pytest.raises(DegreePerturbationError, match="source blocks") as caught:
+        sampler.sample()
+    assert caught.value.sampling_failure is False
     assert sampler.records == []
 
 
@@ -372,18 +451,23 @@ def test_later_source_constructor_failure_retries_the_fixed_invariant_only(monke
     # Patch only final source construction; the sampler still builds real witnesses.
     monkeypatch.setattr(generation, "construct_typed_graph", fail_construction)
     sampling_counts = Counter()
-    with pytest.raises(RuntimeError, match="Failed to realize source 0"):
-        list(generation.generation_sources(
-            _generation_model(), _bank(), _generation_config(), seed=42, num_generate=5,
-            empirical_sampler=sampler, sampling_counts=sampling_counts,
-        ))
-    assert len(attempted_invariants) == 3
-    assert [row["parent_train_index"] for row in sampler.records] == [0, 1]
-    assert len(sampler.returned_records) == 1
-    expected = TypedInvariant.from_dict(sampler.returned_records[0]["typed_invariant"])
-    assert all(typed_key(invariant) == typed_key(expected) for invariant in attempted_invariants)
-    assert sampler.report()["num_parent_draws"] == 2
-    assert sampling_counts["constructor_failures"] == 3
-    assert sampling_counts["invariant_proposals"] == 2
-    assert sampling_counts["invariant_sampling_failures"] == 1
+    skipped_graphs = []
+    outputs = list(generation.generation_sources(
+        _generation_model(), _bank(), _generation_config(), seed=42, num_generate=5,
+        empirical_sampler=sampler, sampling_counts=sampling_counts, skipped_graphs=skipped_graphs,
+    ))
+    assert outputs == []
+    assert len(attempted_invariants) == 15
+    assert [row["parent_train_index"] for row in sampler.records[:2]] == [0, 1]
+    assert len(sampler.returned_records) == 5
+    for index, row in enumerate(sampler.returned_records):
+        expected = TypedInvariant.from_dict(row["typed_invariant"])
+        attempts = attempted_invariants[index * 3:(index + 1) * 3]
+        assert all(typed_key(invariant) == typed_key(expected) for invariant in attempts)
+    assert sampling_counts["constructor_failures"] == 15
+    assert sampling_counts["invariant_proposals"] == len(sampler.records)
+    assert sampling_counts["invariant_sampling_failures"] == len(sampler.records) - 5
     assert sampling_counts["requested_graphs"] == 5
+    assert sampling_counts["attempted_graphs"] == sampling_counts["skipped_graphs"] == 5
+    assert [row["generation_index"] for row in skipped_graphs] == list(range(5))
+    assert all(row["stage"] == "source_construction" and row["attempts_used"] == 3 for row in skipped_graphs)

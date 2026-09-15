@@ -14,6 +14,8 @@ import numpy as np
 import torch
 
 from grapher.data.sampling import restore_training_graphs
+from grapher.models.dhvae_hh.degree_perturbation import DegreePerturbationError
+from grapher.models.dhvae_hh.typed_degree_perturbation import typed_fingerprint
 from grapher.models.dhvae_hh.typed_constructor import construct_typed_graph,TypedConstructionError
 from grapher.rewiring_mlp.attributed.typed_prior import build_typed_empirical_sampler
 from grapher.rewiring_mlp.attributed.soft_edge_bridge import labels_to_logits,advance_edges,spectral_noise,edge_probabilities
@@ -255,7 +257,7 @@ def refine_typed_graph(source,targets,model,config,*,seed):
                     'connected':nx.is_connected(current),'candidate_search_totals':dict(search_totals),'target_scope':'single_frozen_soft_bridge_endpoint'}
 
 
-def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_sampler=None,sampling_counts=None):
+def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_sampler=None,sampling_counts=None,skipped_graphs=None):
     """Independent source RNG; optional shared counts include unfinished outputs."""
     gc=config.get('generation',{}); source_mode=gc.get('invariant_source','learned')
     if source_mode not in ('learned','train_empirical','train_empirical_perturbed','edge_relocation'): raise ValueError('invariant_source must be learned, train_empirical, train_empirical_perturbed, or edge_relocation (training only).')
@@ -272,20 +274,40 @@ def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_s
     if mode not in ('empirical','model'): raise ValueError('sample_num_nodes must be empirical or model.')
     counter=Counter() if sampling_counts is None else sampling_counts
     counter['requested_graphs']=num_generate
+    skipped_graphs=[] if skipped_graphs is None else skipped_graphs
+    max_attempts=int(gc.get('max_attempts_per_graph',128))
+    if max_attempts<1: raise ValueError('generation.max_attempts_per_graph must be positive.')
+    def skip(index,stage,attempts,reason,before,started):
+        rejections={key:counter[key]-before[key] for key in
+                    ('invariant_sampling_failures','constructor_failures','rdkit_source_rejections')
+                    if counter[key]>before[key]}
+        skipped_graphs.append({'generation_index':index,'stage':stage,'attempts_used':attempts,
+            'reason':str(reason),'generation_rejections':rejections,'runtime_seconds':time.perf_counter()-started})
+        counter['skipped_graphs']+=1
+        print(f'[JointTypedEdge] graph={index+1}/{num_generate} skipped=True stage={stage} '
+              f'attempts={attempts} reason={reason}; continuing with the next graph slot.',flush=True)
     for index in range(num_generate):
         source_started=time.perf_counter()
+        before=counter.copy(); counter['attempted_graphs']+=1
         rng=np.random.default_rng(np.random.SeedSequence([int(seed),index,1907]))
         result=None
         fixed_summary=None
+        last_failure=None
         if empirical_sampler is not None:
             prior_draws=len(empirical_sampler.records)
             try:
                 fixed_summary=empirical_sampler.sample()
+            except DegreePerturbationError as exc:
+                if not exc.sampling_failure: raise
+                last_failure=exc
             finally:
                 draws=empirical_sampler.records[prior_draws:]
                 counter['invariant_proposals']+=len(draws)
                 counter['invariant_sampling_failures']+=sum(not row['returned'] for row in draws)
-        for attempt in range(int(gc.get('max_attempts_per_graph',128))):
+            if last_failure is not None:
+                skip(index,'invariant_sampling',len(draws),last_failure,before,source_started)
+                continue
+        for attempt in range(max_attempts):
             if fixed_summary is None:counter['invariant_proposals']+=1
             if fixed_summary is not None:
                 invariant=TypedInvariant.from_dict(fixed_summary['typed_invariant'])
@@ -307,7 +329,9 @@ def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_s
                               fallback='error',include_diagnostics=True)[0]
                     invariant=TypedInvariant.from_dict(summary['typed_invariant']); samp=summary['sampling_diagnostics']
                     counter['histogram_draws']+=samp['attempts_used']
-                except RuntimeError:
+                except RuntimeError as exc:
+                    if not str(exc).startswith('Typed invariant sampling exhausted its feasibility budget:'): raise
+                    last_failure=exc
                     counter['histogram_draws']+=budget; counter['invariant_sampling_failures']+=1; continue
             try:
                 source_constructor=(replace(empirical_sampler.constructor_config,
@@ -315,17 +339,22 @@ def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_s
                     if empirical_sampler is not None else config.get('constructor'))
                 constructed,diag=construct_typed_graph(invariant,source_constructor,rng)
                 source=graph_from_record(graph_record(constructed))
-            except TypedConstructionError:
+            except TypedConstructionError as exc:
+                last_failure=exc
                 counter['constructor_failures']+=1; continue
             counter['constructed_sources']+=1
             if require_valid and not is_valid_molecular_graph(source):
+                last_failure='Source molecule failed RDKit validity checks.'
                 counter['rdkit_source_rejections']+=1; continue
             observed=extract_typed_invariant(source,edge_types=model.edge_types)
             if Counter(observed.signatures)!=Counter(invariant.signatures): raise AssertionError('Constructor changed typed multiset.')
             result=(source,{'source_index':index,'attempts':attempt+1,'sampling':samp,'constructor':diag,
                             'constructor_target_typed_match':True,'source_seconds':time.perf_counter()-source_started},dict(counter)); break
         if result is None:
-            raise RuntimeError(f'Failed to realize source {index} within sampling/constructor/RDKit budget. Counts={dict(counter)}. No empirical fallback was used.')
+            stage=('source_construction' if counter['constructor_failures']>before['constructor_failures']
+                   or counter['rdkit_source_rejections']>before['rdkit_source_rejections'] else 'invariant_sampling')
+            skip(index,stage,max_attempts,last_failure or 'Source sampling budget exhausted.',before,source_started)
+            continue
         yield result
 
 
@@ -356,7 +385,7 @@ def generate_joint_typed_edge(config,args):
     output=Path(args.output_dir)
     if output.exists() and any(output.iterdir()): raise FileExistsError(f'Use a fresh generation directory: {output}')
     output.mkdir(parents=True,exist_ok=True)
-    sources=[]; finals=[]; records=[]; targets_saved=[]; sampling_counts=Counter(); start=time.perf_counter()
+    sources=[]; finals=[]; records=[]; targets_saved=[]; skipped_graphs=[]; sampling_counts=Counter(); start=time.perf_counter()
     if model.spectral_mode == ADJACENCY_MODE:
         print('[AdjacencyDiffusion] sampling one soft categorical adjacency; signed spectra derived each step. '
               'No independent Laplacian/eigenvalue process.',flush=True)
@@ -383,28 +412,38 @@ def generate_joint_typed_edge(config,args):
       'induced_graphlet_metadata': model.induced_graphlet_metadata(),
       'target_scope':'fixed_endpoint_per_graph','raw_graphs_no_posthoc_repair':True}
     def flush(complete=False):
+        completion={'num_requested':num,'num_attempted':sampling_counts['attempted_graphs'],
+            'num_generated':len(finals),'num_skipped':len(skipped_graphs),'skipped_graphs':skipped_graphs,
+            'requested_count_reached':len(finals)==num,'generation_success_fraction':len(finals)/num}
         if empirical_sampler is not None:
             prior=empirical_sampler.report();prior['num_returned']=len(finals)
+            completed=[r['sampling'] for r in records]
+            prior.update(completion,complete=complete)
+            prior.update(completed_records=completed,completed_record_indices=[r['sample_index'] for r in completed],
+                completed_parent_typed_fingerprint=typed_fingerprint([TypedInvariant.from_dict(r['parent_typed_invariant']) for r in completed]),
+                completed_sampled_typed_fingerprint=typed_fingerprint([TypedInvariant.from_dict(r['typed_invariant']) for r in completed]))
             sampling_counts['invariant_proposals']=prior['num_parent_draws']
             sampling_counts['invariant_sampling_failures']=prior['num_rejected_parent_draws']
             atomic_json(prior,output/'typed_degree_prior_report.json')
-            atomic_json([r['typed_invariant'] for r in empirical_sampler.returned_records],output/'sampled_typed_invariants.json')
-            report['parent_typed_fingerprint']=prior['returned_parent_typed_fingerprint']
-            report['sampled_typed_fingerprint']=prior['returned_sampled_typed_fingerprint']
-            report['typed_degree_prior']={k:v for k,v in prior.items() if k not in ('records','parent_exclusions')}
+            atomic_json([r['typed_invariant'] for r in completed],output/'sampled_typed_invariants.json')
+            report['parent_typed_fingerprint']=prior['completed_parent_typed_fingerprint']
+            report['sampled_typed_fingerprint']=prior['completed_sampled_typed_fingerprint']
+            report['typed_degree_prior']={k:v for k,v in prior.items() if k not in ('records','parent_exclusions','completed_records')}
         for name,obj in [('coarse_graphs.pkl',sources),('molecular_graphs.pkl',finals),('soft_endpoints.pkl',targets_saved)]:
             destination=output/(name if complete else 'partial_'+name)
             tmp=destination.with_name(destination.name+'.tmp'); save_pickle(obj,tmp); tmp.replace(destination)
-        report.update({'num_generated':len(finals),'complete':complete,'records':records,'sampling_counts':sampling_counts,
+        report.update({**completion,'complete':complete,'records':records,'sampling_counts':sampling_counts,
             'runtime_seconds':time.perf_counter()-start,
             'source_graphs_sha256':record_hash([graph_record(g) for g in sources])})
         atomic_json(report,output/'report.json')
     try:
-        for i,(source,src_report,_counts) in enumerate(generation_sources(model,train_graphs,config,seed=seed,num_generate=num,
-                empirical_sampler=empirical_sampler,sampling_counts=sampling_counts)):
+        for source,src_report,_counts in generation_sources(model,train_graphs,config,seed=seed,num_generate=num,
+                empirical_sampler=empirical_sampler,sampling_counts=sampling_counts,skipped_graphs=skipped_graphs):
+            i=src_report['source_index']
             t0=time.perf_counter()
             targets,bridge=sample_soft_endpoint(model,source,config,seed=seed+i*1009+7043)
             final,refinement=refine_typed_graph(source,targets,model,config,seed=seed+i*1009+9049)
+            if empirical_sampler is not None: src_report['sampling']['returned_generation_index']=i
             sources.append(source); finals.append(final); targets_saved.append(targets)
             soft_seconds=time.perf_counter()-t0
             records.append({**src_report,'bridge':bridge,**refinement,'soft_sampling_and_rewiring_seconds':soft_seconds,
@@ -416,17 +455,20 @@ def generate_joint_typed_edge(config,args):
         report['failure']=str(e); flush(False); raise
     def vals(g):
         return [sum(float(d.get('bond_order', d['bond_type'])) for _,_,d in g.edges(v,data=True)) for v in range(len(g))]
-    report['diagnostics']={'node_type_preservation_rate':float(np.mean([
-        all(a.nodes[v]['atomic_num']==b.nodes[v]['atomic_num'] for v in a) for a,b in zip(sources,finals)])),
-        'ordinary_degree_preservation_rate':float(np.mean([dict(a.degree())==dict(b.degree()) for a,b in zip(sources,finals)])),
-        'bond_type_counts_preservation_rate':float(np.mean([
+    def mean_or_none(values): return float(np.mean(values)) if values else None
+    report['diagnostics']={'node_type_preservation_rate':mean_or_none([
+        all(a.nodes[v]['atomic_num']==b.nodes[v]['atomic_num'] for v in a) for a,b in zip(sources,finals)]),
+        'ordinary_degree_preservation_rate':mean_or_none([dict(a.degree())==dict(b.degree()) for a,b in zip(sources,finals)]),
+        'bond_type_counts_preservation_rate':mean_or_none([
             Counter(d['bond_type'] for _,_,d in a.edges(data=True))==Counter(d['bond_type'] for _,_,d in b.edges(data=True))
-            for a,b in zip(sources,finals)])),
-        'weighted_valence_preservation_rate':float(np.mean([np.allclose(vals(a),vals(b)) for a,b in zip(sources,finals)])),
-        'typed_degree_preservation_rate' :float(np.mean([r['typed_degree_preserved'] for r in records])),
-        'connectedness_rate':float(np.mean([r['connected'] for r in records])),
-        'mean_accepted_steps':float(np.mean([r['accepted_steps'] for r in records])),
-        'mean_bridge_prediction_calls':float(np.mean([r['bridge']['prediction_calls'] for r in records])),
+            for a,b in zip(sources,finals)]),
+        'weighted_valence_preservation_rate':mean_or_none([np.allclose(vals(a),vals(b)) for a,b in zip(sources,finals)]),
+        'typed_degree_preservation_rate' :mean_or_none([r['typed_degree_preserved'] for r in records]),
+        'connectedness_rate':mean_or_none([r['connected'] for r in records]),
+        'mean_accepted_steps':mean_or_none([r['accepted_steps'] for r in records]),
+        'mean_bridge_prediction_calls':mean_or_none([r['bridge']['prediction_calls'] for r in records]),
         'scoring_weights':config['attributed_refiner']['weights'],
         'diffusion':model.diffusion_metadata()}
-    flush(True); print(f'Saved molecular graphs: {output}/molecular_graphs.pkl',flush=True)
+    flush(True)
+    print(f'Generation finished: requested={num} generated={len(finals)} skipped={len(skipped_graphs)}',flush=True)
+    print(f'Saved molecular graphs: {output}/molecular_graphs.pkl',flush=True)

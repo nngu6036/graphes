@@ -234,11 +234,13 @@ most 128 training parent draws here, each with the existing candidate budget.
 Failed draws are logged immediately with their parent index, candidate count,
 and rejection reasons. A successful draw must pass every existing constraint;
 there is no unchanged-parent fallback in this mode. Exhausting the parent budget
-still raises an error and saves partial outputs. Once an invariant is accepted,
-subsequent source construction retries continue to use that fixed invariant.
+now logs and skips that graph slot, then continues with the next slot. Once an
+invariant is accepted, subsequent source construction retries continue to use
+that fixed invariant; exhausting those retries also skips the slot.
 
 The default `generation.invariant_failure_policy=error` retains the original
-one-parent behavior. `resample_parent` requires
+one-parent sampling behavior; a failed request skips its graph slot.
+`resample_parent` requires
 `degree_perturbation.failure_policy=error` and an active typed empirical sampler;
 it cannot be combined with `keep_original` or applied to the learned prior.
 The parent stream remains reproducible and independent of denoising/rewiring,
@@ -253,10 +255,31 @@ Each record includes `returned`, `output_index` (zero-based), and `parent_attemp
 and `num_returned_samples`, and includes `returned_record_indices` and
 `returned_*` fingerprints/fractions. Existing unprefixed prior metrics describe
 all attempts; the `returned_*` metrics describe accepted sampler outputs.
-`sampled_typed_invariants.json` and the top-level generation fingerprints contain
-only returned sampler outputs. `num_returned` in the prior report and
+The prior additionally records `completed_records`, `completed_record_indices`,
+and `completed_*` fingerprints for samples that produced completed graphs.
+`sampled_typed_invariants.json` and the top-level generation fingerprints now
+contain only those completed samples. `num_returned` in the prior report and
 `num_generated` in `report.json` count completed generated graphs; these may be
-smaller than the number of accepted invariants if a later generation stage fails.
+smaller than the number of accepted invariants when a source is skipped or a
+later generation stage fails.
+
+### Skipping exhausted attributed generation slots
+
+Both generation paths dispatched by `run_attributed_grapher.py` now skip a graph
+slot when its expected sampling, construction, or molecular-validity attempts
+are exhausted. Each skip logs its slot index, failure stage, attempt count, and
+reason. The joint path includes learned typed-DH-VAE feasibility-budget failures
+and empirical perturbation failures. Unexpected model, invariant, and
+configuration errors remain errors.
+
+No new command-line option is needed. `--num-generate` specifies the number of
+slots to process, so skipped slots reduce the final batch size. Original slot
+indices and per-slot random seeds are preserved after skips. `report.json`
+includes `num_requested`, `num_attempted`, `num_generated`, `num_skipped`,
+`skipped_graphs`, and `generation_success_fraction`. `complete=true` means the
+loop finished; `requested_count_reached` indicates whether every slot succeeded.
+Normal output filenames are written even when every slot is skipped; empty
+batches have empty graph lists and valid JSON diagnostics rather than NaN.
 
 ## Validation scope
 

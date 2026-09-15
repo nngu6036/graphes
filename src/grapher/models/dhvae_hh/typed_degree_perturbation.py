@@ -325,8 +325,10 @@ class PerturbedEmpiricalTypedDegreeSampler:
             try:
                 summary=self.perturb_parent(int(rng.integers(len(self.invariants))))
             except DegreePerturbationError as exc:
-                # Only recorded sampling failures are eligible for rejection.
-                if len(self.records)==before or self.parent_failure_policy=='error':
+                # A previous failed record must not make an unrelated error
+                # look like another rejectable parent draw.
+                if (not exc.sampling_failure or self.parent_failure_policy=='error'
+                        or len(self.records)!=before+1 or self.records[-1]['returned']):
                     raise
                 record=self.records[-1]; record['parent_attempt']=attempt
                 reason=record['output_failure'] or record['failure_reason']
@@ -338,7 +340,8 @@ class PerturbedEmpiricalTypedDegreeSampler:
                     raise DegreePerturbationError(
                         f'Typed {self.config.method} exhausted {budget} training parent draws for '
                         f'output {self._num_returned+1} under invariant_failure_policy=resample_parent. '
-                        f'Last failure: {exc} Rejected draws are recorded; no constraints were relaxed.'
+                        f'Last failure: {exc} Rejected draws are recorded; no constraints were relaxed.',
+                        sampling_failure=True,
                     ) from exc
             else:
                 summary['sampling_diagnostics']['parent_attempt']=attempt
@@ -358,10 +361,10 @@ class PerturbedEmpiricalTypedDegreeSampler:
         current=parent; visited={typed_key(parent)}; operations=[];failure=None;checks=0;rejections=Counter()
         if selected:
             for _ in range(cfg.steps):
-                try:
-                    candidate,count,info,failure=self._one_step(current,parent,visited,rng,rejections)
-                except DegreePerturbationError as exc:
-                    candidate,count,info,failure=None,self._step_checks,{},'catalogue_budget_exceeded: '+str(exc)
+                # Catalogue/programming errors are unrecorded failures and
+                # propagate; only an explicit unsuccessful step can reject a
+                # parent or invoke the configured identity transition.
+                candidate,count,info,failure=self._one_step(current,parent,visited,rng,rejections)
                 checks+=count
                 if candidate is None:break
                 current=candidate;visited.add(typed_key(current));operations.append(info)
@@ -397,7 +400,7 @@ class PerturbedEmpiricalTypedDegreeSampler:
         if output_failure or (failed and cfg.failure_policy=='error'):
             raise DegreePerturbationError(f'Typed {cfg.method} failed for training parent {self.train_indices[parent_index]}: '
                 f'{output_failure or failure}; candidate_checks={checks}, proposal_rejections={dict(rejections)}. '
-                'This parent attempt used no degree repair or untyped fallback.')
+                'This parent attempt used no degree repair or untyped fallback.', sampling_failure=True)
         summary=degree_summary(current.degree_sequence)
         record['returned']=True
         self._num_returned+=1
