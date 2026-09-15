@@ -317,8 +317,16 @@ def main() -> None:
     )
     if num_generate <= 0:
         raise ValueError("num_generate must be positive.")
-    refiner_graph_seeds = refiner_seed_sequence.spawn(num_generate)
-    enrichment_graph_seeds = enrichment_seed_sequence.spawn(num_generate)
+    max_total_graph_attempts = generation_cfg.get("max_total_graph_attempts", 10 * num_generate)
+    if (isinstance(max_total_graph_attempts, bool)
+            or not isinstance(max_total_graph_attempts, (int, np.integer))
+            or max_total_graph_attempts < num_generate):
+        raise ValueError("generation.max_total_graph_attempts must be an integer >= num_generate.")
+    max_total_graph_attempts = int(max_total_graph_attempts)
+    # Extending the child streams preserves the original first num_generate
+    # seeds and gives every replacement attempt its own refinement randomness.
+    refiner_graph_seeds = refiner_seed_sequence.spawn(max_total_graph_attempts)
+    enrichment_graph_seeds = enrichment_seed_sequence.spawn(max_total_graph_attempts)
 
     predictor_cfg = dict(config.get("topology_predictor", {}) or {})
     checkpoint_path = args.checkpoint or predictor_cfg.get("checkpoint_path")
@@ -645,9 +653,30 @@ def main() -> None:
     pipeline_records: list[dict[str, Any]] = []
     skipped_graphs: list[dict[str, Any]] = []
     source_rejection_totals: Counter[str] = Counter()
+    num_attempted = 0
     max_attempts_per_graph = int(generation_cfg.get("max_attempts_per_graph", 8))
     if max_attempts_per_graph <= 0:
         raise ValueError("generation.max_attempts_per_graph must be positive.")
+
+    def generation_completion():
+        return {
+            "num_requested": num_generate, "num_attempted": num_attempted,
+            "num_generated": len(refined_graphs), "num_skipped": len(skipped_graphs),
+            "skipped_graphs": skipped_graphs,
+            "requested_count_reached": len(refined_graphs) == num_generate,
+            "max_total_graph_attempts": max_total_graph_attempts,
+            "replacement_attempts": max(0, num_attempted - num_generate),
+            "replacement_budget_exhausted": (
+                len(refined_graphs) < num_generate and num_attempted >= max_total_graph_attempts
+            ),
+            "generation_success_fraction": len(refined_graphs) / max(num_attempted, 1),
+            "generation_rejections": dict(sorted(source_rejection_totals.items())),
+            "completed_parent_distribution": (
+                "conditioned_on_successful_generation"
+                if degree_source in {"empirical", "train_empirical", "train_empirical_perturbed",
+                                     "edge_relocation", "test_empirical"} else None
+            ),
+        }
 
     def skip_graph(index, stage, attempts_used, reason, rejections):
         skipped_graphs.append({
@@ -655,8 +684,10 @@ def main() -> None:
             "reason": str(reason), "generation_rejections": dict(rejections),
             "runtime_seconds": float(time.perf_counter() - graph_started),
         })
-        print(f"graph={index + 1}/{num_generate} skipped=True stage={stage} "
-              f"attempts={attempts_used} reason={reason}; continuing with the next graph slot.", flush=True)
+        action = ("resampling a replacement" if num_attempted < max_total_graph_attempts
+                  else "total graph attempt budget exhausted")
+        print(f"attempt={index + 1}/{max_total_graph_attempts} generated={len(refined_graphs)}/{num_generate} "
+              f"skipped=True stage={stage} attempts={attempts_used} reason={reason}; {action}.", flush=True)
 
     def save_source_failure(error, index, rejections):
         output_dir = ensure_dir(args.output_dir)
@@ -664,8 +695,9 @@ def main() -> None:
             degree_sampler, degree_source=degree_source, seed=seed, degree_rng_mode=degree_rng_mode,
             degree_sampling_records=degree_sampling_records, target_degree_sequences=target_degree_sequences,
         )
-        failed_report.update(generation_aborted=True, failure=str(error), num_requested=num_generate,
-                             num_skipped=len(skipped_graphs), skipped_graphs=skipped_graphs)
+        completion = generation_completion()
+        completion["generation_rejections"] = dict(sorted((source_rejection_totals + Counter(rejections)).items()))
+        failed_report.update(completion, complete=False, generation_aborted=True, failure=str(error))
         save_json(failed_report, output_dir / "degree_prior_report.json")
         save_pickle(coarse_graphs, output_dir / "partial_coarse_graphs.pkl")
         save_pickle(refined_graphs, output_dir / "partial_topology_refined_graphs.pkl")
@@ -674,10 +706,9 @@ def main() -> None:
         save_json(target_degree_sequences, output_dir / "partial_sampled_degree_sequences.json")
         save_json({
             "format": "topology_partial_generation_v1", "complete": False,
+            **completion,
             "failure": str(error), "failed_generation_index": index,
-            "generation_rejections": dict(rejections), "num_requested": num_generate,
-            "num_skipped": len(skipped_graphs), "skipped_graphs": skipped_graphs,
-            "num_generated": len(refined_graphs), "seed": seed, "degree_source": degree_source,
+            "seed": seed, "degree_source": degree_source,
             "degree_rng_mode": degree_rng_mode, "checkpoint_path": str(checkpoint_path),
             "checkpoint_sha256": checkpoint_file_sha256, "config": config,
             "degree_prior_report_file": "degree_prior_report.json",
@@ -686,7 +717,10 @@ def main() -> None:
             "pipeline_records": pipeline_records, "traces": traces,
         }, output_dir / "partial_report.json")
 
-    for index in range(num_generate):
+    for index in range(max_total_graph_attempts):
+        if len(refined_graphs) == num_generate:
+            break
+        num_attempted = index + 1
         graph_started = time.perf_counter()
         generation_rejections: Counter[str] = Counter()
         source_ready = False
@@ -707,13 +741,16 @@ def main() -> None:
                 if not exc.sampling_failure:
                     save_source_failure(exc, index, generation_rejections)
                     raise
-                # The sampler has exhausted this request. Skip the slot without
-                # discarding outputs or admitting an unchanged degree sequence.
+                # The sampler has exhausted this request. A later attempt will
+                # draw a replacement while preserving every sampling constraint.
                 draws = len(degree_sampler.records) - prior_draws_before
                 generation_rejections["degree_prior_rejected"] += draws
                 skip_graph(index, "degree_prior", draws, exc, generation_rejections)
                 break
-            except RuntimeError:
+            except RuntimeError as exc:
+                if not str(exc).startswith("Degree generator exhausted "):
+                    save_source_failure(exc, index, generation_rejections)
+                    raise
                 generation_rejections["degree_prior_rejected"] += 1
                 continue
 
@@ -740,6 +777,8 @@ def main() -> None:
 
         if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
             degree_summary["sampling_diagnostics"]["returned_generation_index"] = index
+        generation_context = (f"output={len(refined_graphs) + 1}/{num_generate} "
+                              f"attempt={index + 1}/{max_total_graph_attempts}")
         base_graph = coarse
         enrichment_trace: list[dict[str, Any]] = []
         if source_enrichment_enabled:
@@ -774,7 +813,7 @@ def main() -> None:
                 return_trace=True,
                 conditioning_graph=coarse,
                 debug_context=(
-                    f"graph={index + 1}/{num_generate} "
+                    f"{generation_context} "
                     f"n={base_graph.number_of_nodes()} m={base_graph.number_of_edges()}"
                 ),
             )
@@ -800,7 +839,7 @@ def main() -> None:
                     rng=np.random.default_rng(refiner_graph_seeds[index]),
                     return_trace=True,
                     debug_context=(
-                        f"graph={index + 1}/{num_generate} "
+                        f"{generation_context} "
                         f"n={coarse.number_of_nodes()} m={coarse.number_of_edges()}"
                     ),
                 )
@@ -930,7 +969,8 @@ def main() -> None:
             pipeline_record["proposals_per_accepted_swap"] = float(proposals / accepted)
         pipeline_records.append(pipeline_record)
         print(
-            f"graph={index + 1}/{num_generate} guidance={guidance_mode} "
+            f"generated={len(refined_graphs)}/{num_generate} attempt={index + 1}/{max_total_graph_attempts} "
+            f"guidance={guidance_mode} "
             f"n={refined.number_of_nodes()} m={refined.number_of_edges()} "
             f"enrichment_steps={enrichment_accepted} accepted_steps={accepted} "
             f"prediction_calls={prediction_calls} "
@@ -1189,13 +1229,7 @@ def main() -> None:
         degree_sampler, degree_source=degree_source, seed=seed, degree_rng_mode=degree_rng_mode,
         degree_sampling_records=degree_sampling_records, target_degree_sequences=target_degree_sequences,
     )
-    completion = {
-        "num_requested": num_generate, "num_attempted": num_generate,
-        "num_generated": len(refined_graphs), "num_skipped": len(skipped_graphs),
-        "skipped_graphs": skipped_graphs, "requested_count_reached": len(refined_graphs) == num_generate,
-        "generation_success_fraction": len(refined_graphs) / num_generate,
-        "generation_rejections": dict(sorted(source_rejection_totals.items())),
-    }
+    completion = generation_completion()
     degree_prior_report.update(completion, complete=True, generation_aborted=False)
     if isinstance(degree_sampler, PerturbedEmpiricalDegreeSampler):
         diagnostics.update({
@@ -1283,7 +1317,10 @@ def main() -> None:
     save_json(target_degree_sequences, output_dir / "sampled_degree_sequences.json")
     save_json(report, output_dir / "report.json")
     print(f"Generation finished: requested={num_generate} generated={len(refined_graphs)} "
-          f"skipped={len(skipped_graphs)}", flush=True)
+          f"attempted={num_attempted}/{max_total_graph_attempts} skipped={len(skipped_graphs)}", flush=True)
+    if completion["replacement_budget_exhausted"]:
+        print(f"Replacement budget exhausted: generation.max_total_graph_attempts={max_total_graph_attempts}; "
+              f"saved {len(refined_graphs)} of {num_generate} requested graphs.", flush=True)
     print("Topology generation diagnostics", flush=True)
     for key, value in diagnostics.items():
         print(f"  {key}: {value}", flush=True)

@@ -113,7 +113,16 @@ for MODE in learned edge_relocation; do
     --json-out "$GEN/evaluation_val/induced_graphlets345.json"
 done
 
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_val                        0.018696          0.019628      0.012698
+hh_source_to_val                    0.019768          0.020074      0.008708
+topology_final_to_val               0.019768          0.015183      0.008883
 
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD
+train_to_val                        0.018696          0.019628      0.012698
+hh_source_to_val                    0.055582          0.021257      0.014943
+topology_final_to_val               0.055582          0.021411      0.015616
 
 CFG=configs/experiments/grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned.yaml
 TRAIN=outputs/attributed_grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned/seed_42
@@ -147,6 +156,26 @@ PYTHONPATH=src python scripts/run_attributed_grapher.py \
   --set generation.degree_perturbation.max_distance=4.0 \
   --set generation.degree_perturbation.require_novel=true
 
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+    --config "$CFG" \
+    --generated-dir "$GEN" \
+    --reference-split val \
+    --output-dir "$GEN/evaluation_val"
+
+
+PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
+    --config "$CFG" \
+    --checkpoint "$TRAIN/checkpoint.pt" \
+    --generated-graphs "$GEN/molecular_graphs.pkl" \
+    --reference-split val \
+    --max-reference-graphs 1024 \
+    --max-generated-graphs 1024 \
+    --seed 42 \
+    --json-out "$GEN/evaluation_val/attributed_graphlets345.json"
+
+
+
+
 
 GEN="$GENROOT/learned"
 PYTHONPATH=src python scripts/run_attributed_grapher.py \
@@ -163,13 +192,3 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
     --generated-dir "$GEN" \
     --reference-split val \
     --output-dir "$GEN/evaluation_val"
-PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
-    --config "$CFG" \
-    --checkpoint "$TRAIN/checkpoint.pt" \
-    --generated-graphs "$GEN/molecular_graphs.pkl" \
-    --reference-split val \
-    --max-reference-graphs 1024 \
-    --max-generated-graphs 1024 \
-    --seed 42 \
-    --json-out "$GEN/evaluation_val/attributed_graphlets345.json"
-

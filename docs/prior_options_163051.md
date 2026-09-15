@@ -229,28 +229,32 @@ PYTHONPATH=src python scripts/run_attributed_grapher.py \
   --set generation.degree_perturbation.require_novel=true
 ```
 
-Use a fresh output directory for a retry of a failed run. Each output gets at
-most 128 training parent draws here, each with the existing candidate budget.
+Use a fresh output directory for a retry of a failed run. Each graph trial makes
+at most 128 training parent draws here, each with the existing candidate budget.
 Failed draws are logged immediately with their parent index, candidate count,
 and rejection reasons. A successful draw must pass every existing constraint;
 there is no unchanged-parent fallback in this mode. Exhausting the parent budget
-now logs and skips that graph slot, then continues with the next slot. Once an
-invariant is accepted, subsequent source construction retries continue to use
-that fixed invariant; exhausting those retries also skips the slot.
+logs the failed trial and starts a replacement trial with a fresh parent draw.
+Once an invariant is accepted, subsequent source construction retries continue
+to use that fixed invariant; exhausting those retries also starts a replacement
+trial. The total graph-trial budget described below bounds these replacements.
 
 The default `generation.invariant_failure_policy=error` retains the original
-one-parent sampling behavior; a failed request skips its graph slot.
+one-parent behavior within each graph trial; a failed request is recorded and
+the generation runner tries a replacement trial.
 `resample_parent` requires
 `degree_perturbation.failure_policy=error` and an active typed empirical sampler;
 it cannot be combined with `keep_original` or applied to the learned prior.
 The parent stream remains reproducible and independent of denoising/rewiring,
-but returned parents are now conditioned on successful sampling. They must not
-be described as matched empirical parent draws across perturbation methods.
+but parents of completed graphs are conditioned on successful sampling and
+construction under either policy. They must not be described as matched
+empirical parent draws across perturbation methods.
 `diagnose_typed_degree_perturbations.py` explicitly disables parent retries for
 its paired-method audit and logs this choice when given a retry-enabled config.
 
 `typed_degree_prior_report.json` retains every attempted parent in `records`.
-Each record includes `returned`, `output_index` (zero-based), and `parent_attempt`
+Each record includes `returned`, `output_index` (the zero-based sampler-output
+index, which is not necessarily a completed-graph index), and `parent_attempt`
 (one-based). The report separates `num_parent_draws`, `num_rejected_parent_draws`,
 and `num_returned_samples`, and includes `returned_record_indices` and
 `returned_*` fingerprints/fractions. Existing unprefixed prior metrics describe
@@ -260,26 +264,53 @@ and `completed_*` fingerprints for samples that produced completed graphs.
 `sampled_typed_invariants.json` and the top-level generation fingerprints now
 contain only those completed samples. `num_returned` in the prior report and
 `num_generated` in `report.json` count completed generated graphs; these may be
-smaller than the number of accepted invariants when a source is skipped or a
+smaller than the number of accepted invariants when a source trial fails or a
 later generation stage fails.
 
-### Skipping exhausted attributed generation slots
+### Replacing exhausted generation trials
 
-Both generation paths dispatched by `run_attributed_grapher.py` now skip a graph
-slot when its expected sampling, construction, or molecular-validity attempts
-are exhausted. Each skip logs its slot index, failure stage, attempt count, and
-reason. The joint path includes learned typed-DH-VAE feasibility-budget failures
-and empirical perturbation failures. Unexpected model, invariant, and
-configuration errors remain errors.
+`run_topology_grapher.py` and both generation paths dispatched by
+`run_attributed_grapher.py` target the number of completed graphs given by
+`--num-generate`. When expected sampling, construction, or molecular-validity
+attempts are exhausted, the runner records the failed trial and draws a
+replacement parent or invariant. Each failure logs its trial index, failure
+stage, attempt count, and reason. The joint attributed path includes learned
+typed-DH-VAE feasibility-budget failures and empirical perturbation failures.
+Unexpected model, invariant, and configuration errors remain errors.
 
-No new command-line option is needed. `--num-generate` specifies the number of
-slots to process, so skipped slots reduce the final batch size. Original slot
-indices and per-slot random seeds are preserved after skips. `report.json`
-includes `num_requested`, `num_attempted`, `num_generated`, `num_skipped`,
-`skipped_graphs`, and `generation_success_fraction`. `complete=true` means the
-loop finished; `requested_count_reached` indicates whether every slot succeeded.
-Normal output filenames are written even when every slot is skipped; empty
-batches have empty graph lists and valid JSON diagnostics rather than NaN.
+Existing commands need no changes. Generation stops when it has produced the
+requested count or reaches `generation.max_total_graph_attempts`, which defaults
+to ten times `--num-generate`. The override must be an integer at least as large
+as the requested count. For example, with `--num-generate 1024`, append this
+option to allow up to 20,480 total graph trials instead of the default 10,240:
+
+```bash
+--set generation.max_total_graph_attempts=20480
+```
+
+This limit counts graph trials, including successful trials. Existing limits
+on candidate checks, parent draws within a trial, and source construction
+retries remain unchanged. Replacement trials advance the random stream using
+fresh trial indices, and every failed trial remains in the reports. Sampling
+continues to use the checkpoint's training pool and existing constraints.
+The parents of completed graphs are conditioned on successful generation.
+
+`report.json` records `num_requested`, `num_attempted` (actual graph trials),
+`num_generated` (completed graphs), `num_skipped` (failed trials), and
+`skipped_graphs`. `generation_success_fraction` is the fraction of attempted
+graph trials that completed. `replacement_attempts` counts attempts beyond the
+original requested number: `max(0, num_attempted - num_requested)`. It does not
+count every trial initiated after a failure. `max_total_graph_attempts` records
+the resolved cap, and `replacement_budget_exhausted` indicates that this cap
+was reached before producing the requested number of graphs.
+
+`complete=true` means the generation loop ended; `requested_count_reached`
+indicates whether the requested number of graphs was produced. Failed trials
+can coexist with `requested_count_reached=true` when replacements succeed.
+Reaching the total trial cap saves all completed graphs without raising an
+expected sampling error. Normal output filenames are written even when every
+trial fails; empty batches contain empty graph lists and valid JSON diagnostics
+rather than NaN.
 
 ## Validation scope
 

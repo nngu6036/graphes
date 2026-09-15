@@ -1,4 +1,4 @@
-"""Finite legacy molecular generation slots, using real typed construction."""
+"""Bounded legacy molecular replacements, using real typed construction."""
 from __future__ import annotations
 
 import importlib.util
@@ -9,6 +9,7 @@ import sys
 from types import SimpleNamespace
 
 import networkx as nx
+import numpy as np
 import pytest
 import torch
 import yaml
@@ -20,7 +21,7 @@ def _carbon_graph(graph):
     return graph
 
 
-def _setup(tmp_path, monkeypatch, *, train=None, source="train_empirical"):
+def _setup(tmp_path, monkeypatch, *, train=None, source="train_empirical", total_budget=3):
     tmp_path.mkdir(parents=True, exist_ok=True)
     path = Path(__file__).resolve().parents[1] / "scripts" / "run_attributed_grapher.py"
     spec = importlib.util.spec_from_file_location("_legacy_generation", path)
@@ -33,6 +34,8 @@ def _setup(tmp_path, monkeypatch, *, train=None, source="train_empirical"):
                        "require_rdkit_final_validity": True},
         "constructor": {"randomize_assignment": False, "max_ordinary_degree": 4},
     }
+    if total_budget is not None:
+        config["generation"]["max_total_graph_attempts"] = total_budget
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
     output = tmp_path / "generation"
@@ -104,6 +107,8 @@ def test_legacy_constructor_budget_skips_slot_and_preserves_later_seed(tmp_path,
     assert report["complete"] is True and report["requested_count_reached"] is False
     assert report["num_requested"] == report["num_attempted"] == 3
     assert report["num_generated"] == 2 and report["num_skipped"] == 1
+    assert report["max_total_graph_attempts"] == 3 and report["replacement_budget_exhausted"] is True
+    assert report["replacement_attempts"] == 0
     assert report["generated_indices"] == [0, 2]
     assert [row["generation_index"] for row in report["source_metadata"]] == [0, 2]
     assert [graph.graph["constructor_call"] for graph in graphs] == [1, 5]
@@ -216,3 +221,97 @@ def test_incorrect_constructor_config_is_fatal_without_retry(tmp_path, monkeypat
     partial = _json(context.output / "partial_report.json")
     assert partial["num_attempted"] == partial["generation_attempts"] == 1
     assert partial["num_generated"] == partial["num_skipped"] == 0
+
+
+@pytest.mark.parametrize("failed_trials", [1, 2])
+def test_default_budget_resamples_replacements_until_requested_count(tmp_path, monkeypatch, failed_trials):
+    context = _setup(tmp_path, monkeypatch, total_budget=None)
+    construct = context.runner.construct_typed_graph
+    sample = context.runner._sample_invariant
+    construction_calls = []
+    sampled_trials = []
+
+    def track_sample(*args, **kwargs):
+        sampled_trials.append(kwargs["index"])
+        return sample(*args, **kwargs)
+
+    def reject_then_recover(*args, **kwargs):
+        construction_calls.append(len(construction_calls) + 1)
+        if 2 <= construction_calls[-1] <= 1 + 3 * failed_trials:
+            raise context.runner.TypedConstructionError("fixture budget", {"failure_reason": "search_budget_exhausted"})
+        return construct(*args, **kwargs)
+
+    monkeypatch.setattr(context.runner, "_sample_invariant", track_sample)
+    monkeypatch.setattr(context.runner, "construct_typed_graph", reject_then_recover)
+    context.runner.main()
+    report, graphs = _outputs(context)
+    expected_indices = [0, failed_trials + 1, failed_trials + 2]
+    assert len(graphs) == report["num_generated"] == report["num_requested"] == 3
+    assert report["num_attempted"] == 3 + failed_trials
+    assert report["num_skipped"] == report["replacement_attempts"] == failed_trials
+    assert report["max_total_graph_attempts"] == 30
+    assert report["complete"] is True and report["requested_count_reached"] is True
+    assert report["replacement_budget_exhausted"] is False
+    assert report["generated_indices"] == expected_indices
+    assert len(construction_calls) == report["generation_attempts"] == 3 + 3 * failed_trials
+    assert sampled_trials == [0] + [trial for trial in range(1, failed_trials + 1) for _ in range(3)] + expected_indices[1:]
+    assert report["generation_success_fraction"] == 3 / (3 + failed_trials)
+    assert [graph.graph["refiner_random_value"] for graph in graphs] == [
+        float(np.random.default_rng(np.random.SeedSequence([5, index, 1, 7919])).random())
+        for index in expected_indices
+    ]
+    partial = _json(context.output / "partial_report.json")
+    assert partial["num_generated"] == 3 and partial["num_attempted"] == 3 + failed_trials
+    assert partial["replacement_attempts"] == failed_trials
+    assert partial["max_total_graph_attempts"] == 30 and partial["replacement_budget_exhausted"] is False
+
+
+def test_total_replacement_budget_exhaustion_saves_completed_outputs(tmp_path, monkeypatch, capsys):
+    context = _setup(tmp_path, monkeypatch, total_budget=5)
+    construct = context.runner.construct_typed_graph
+    calls = []
+
+    def only_first_succeeds(*args, **kwargs):
+        calls.append(len(calls) + 1)
+        if len(calls) > 1:
+            raise context.runner.TypedConstructionError("fixture budget", {"failure_reason": "search_budget_exhausted"})
+        return construct(*args, **kwargs)
+
+    monkeypatch.setattr(context.runner, "construct_typed_graph", only_first_succeeds)
+    context.runner.main()
+    report, graphs = _outputs(context)
+    assert len(graphs) == 1 and report["generated_indices"] == [0]
+    assert report["num_attempted"] == report["max_total_graph_attempts"] == 5
+    assert report["num_requested"] == 3 and report["replacement_attempts"] == 2
+    assert report["complete"] is True and report["requested_count_reached"] is False
+    assert report["replacement_budget_exhausted"] is True
+    assert report["num_skipped"] == 4 and report["generation_attempts"] == len(calls) == 13
+    assert [row["generation_index"] for row in report["skipped_graphs"]] == [1, 2, 3, 4]
+    assert report["generation_rejections"] == {"constructor:search_budget_exhausted": 12}
+    partial = _json(context.output / "partial_report.json")
+    assert partial["replacement_budget_exhausted"] is True and partial["num_generated"] == 1
+    assert partial["num_attempted"] == 5 and partial["generation_attempts"] == 13
+    assert "total graph-attempt budget exhausted (5); saved 1/3" in capsys.readouterr().out
+
+
+def test_default_replacement_budget_does_not_change_successful_rng_stream(tmp_path, monkeypatch):
+    bounded = _setup(tmp_path / "bounded", monkeypatch)
+    bounded.runner.main()
+    _, original_graphs = _outputs(bounded)
+    default = _setup(tmp_path / "default", monkeypatch, total_budget=None)
+    default.runner.main()
+    report, graphs = _outputs(default)
+    assert report["num_attempted"] == report["num_generated"] == 3
+    assert report["replacement_attempts"] == 0 and report["replacement_budget_exhausted"] is False
+    assert [nx.to_dict_of_dicts(graph) for graph in graphs] == [nx.to_dict_of_dicts(graph) for graph in original_graphs]
+    assert [graph.graph["refiner_random_value"] for graph in graphs] == [
+        graph.graph["refiner_random_value"] for graph in original_graphs
+    ]
+
+
+@pytest.mark.parametrize("budget", [0, 2, True, 3.0, "6"])
+def test_total_replacement_budget_requires_integer_at_least_requested(tmp_path, monkeypatch, budget):
+    context = _setup(tmp_path, monkeypatch, total_budget=budget)
+    with pytest.raises(ValueError, match="max_total_graph_attempts.*integer"):
+        context.runner.main()
+    assert not context.output.exists()

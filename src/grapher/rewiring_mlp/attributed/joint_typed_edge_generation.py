@@ -257,8 +257,16 @@ def refine_typed_graph(source,targets,model,config,*,seed):
                     'connected':nx.is_connected(current),'candidate_search_totals':dict(search_totals),'target_scope':'single_frozen_soft_bridge_endpoint'}
 
 
+def _max_total_graph_attempts(config, num_generate):
+    budget = config.get('generation', {}).get('max_total_graph_attempts', 10 * num_generate)
+    if isinstance(budget, bool) or not isinstance(budget, (int, np.integer)) or budget < num_generate:
+        raise ValueError('generation.max_total_graph_attempts must be an integer >= num_generate.')
+    return int(budget)
+
+
 def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_sampler=None,sampling_counts=None,skipped_graphs=None):
-    """Independent source RNG; optional shared counts include unfinished outputs."""
+    """Yield the requested sources, resampling failed trials within a total budget."""
+    max_total_attempts = _max_total_graph_attempts(config, num_generate)
     gc=config.get('generation',{}); source_mode=gc.get('invariant_source','learned')
     if source_mode not in ('learned','train_empirical','train_empirical_perturbed','edge_relocation'): raise ValueError('invariant_source must be learned, train_empirical, train_empirical_perturbed, or edge_relocation (training only).')
     if config.get('degree_generator',{}).get('checkpoint_path'):
@@ -274,6 +282,7 @@ def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_s
     if mode not in ('empirical','model'): raise ValueError('sample_num_nodes must be empirical or model.')
     counter=Counter() if sampling_counts is None else sampling_counts
     counter['requested_graphs']=num_generate
+    generated_sources=0
     skipped_graphs=[] if skipped_graphs is None else skipped_graphs
     max_attempts=int(gc.get('max_attempts_per_graph',128))
     if max_attempts<1: raise ValueError('generation.max_attempts_per_graph must be positive.')
@@ -284,9 +293,12 @@ def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_s
         skipped_graphs.append({'generation_index':index,'stage':stage,'attempts_used':attempts,
             'reason':str(reason),'generation_rejections':rejections,'runtime_seconds':time.perf_counter()-started})
         counter['skipped_graphs']+=1
-        print(f'[JointTypedEdge] graph={index+1}/{num_generate} skipped=True stage={stage} '
-              f'attempts={attempts} reason={reason}; continuing with the next graph slot.',flush=True)
-    for index in range(num_generate):
+        next_action=('resampling a replacement' if index+1 < max_total_attempts else 'total graph-attempt budget exhausted')
+        print(f'[JointTypedEdge] trial={index+1}/{max_total_attempts} generated={generated_sources}/{num_generate} '
+              f'skipped=True stage={stage} attempts={attempts} reason={reason}; {next_action}.',flush=True)
+    for index in range(max_total_attempts):
+        if generated_sources >= num_generate:
+            break
         source_started=time.perf_counter()
         before=counter.copy(); counter['attempted_graphs']+=1
         rng=np.random.default_rng(np.random.SeedSequence([int(seed),index,1907]))
@@ -355,6 +367,7 @@ def generation_sources(model,train_graphs,config,*,seed,num_generate,empirical_s
                    or counter['rdkit_source_rejections']>before['rdkit_source_rejections'] else 'invariant_sampling')
             skip(index,stage,max_attempts,last_failure or 'Source sampling budget exhausted.',before,source_started)
             continue
+        generated_sources+=1
         yield result
 
 
@@ -382,6 +395,7 @@ def generate_joint_typed_edge(config,args):
         raise ValueError('Processed dataset fingerprint differs from the joint training checkpoint. Refusing stale-dataset generation.')
     num=int(args.num_generate if args.num_generate is not None else config.get('generation',{}).get('num_generate',64))
     if num<1: raise ValueError('num_generate must be positive.')
+    max_total_attempts=_max_total_graph_attempts(config,num)
     output=Path(args.output_dir)
     if output.exists() and any(output.iterdir()): raise FileExistsError(f'Use a fresh generation directory: {output}')
     output.mkdir(parents=True,exist_ok=True)
@@ -414,12 +428,17 @@ def generate_joint_typed_edge(config,args):
     def flush(complete=False):
         completion={'num_requested':num,'num_attempted':sampling_counts['attempted_graphs'],
             'num_generated':len(finals),'num_skipped':len(skipped_graphs),'skipped_graphs':skipped_graphs,
-            'requested_count_reached':len(finals)==num,'generation_success_fraction':len(finals)/num}
+            'requested_count_reached':len(finals)==num,
+            'generation_success_fraction':len(finals)/max(sampling_counts['attempted_graphs'],1),
+            'max_total_graph_attempts':max_total_attempts,
+            'replacement_attempts':max(0,sampling_counts['attempted_graphs']-num),
+            'replacement_budget_exhausted':len(finals)<num and sampling_counts['attempted_graphs']>=max_total_attempts}
         if empirical_sampler is not None:
             prior=empirical_sampler.report();prior['num_returned']=len(finals)
             completed=[r['sampling'] for r in records]
             prior.update(completion,complete=complete)
             prior.update(completed_records=completed,completed_record_indices=[r['sample_index'] for r in completed],
+                completed_parent_distribution='conditioned_on_successful_generation',
                 completed_parent_typed_fingerprint=typed_fingerprint([TypedInvariant.from_dict(r['parent_typed_invariant']) for r in completed]),
                 completed_sampled_typed_fingerprint=typed_fingerprint([TypedInvariant.from_dict(r['typed_invariant']) for r in completed]))
             sampling_counts['invariant_proposals']=prior['num_parent_draws']
@@ -427,6 +446,7 @@ def generate_joint_typed_edge(config,args):
             atomic_json(prior,output/'typed_degree_prior_report.json')
             atomic_json([r['typed_invariant'] for r in completed],output/'sampled_typed_invariants.json')
             report['parent_typed_fingerprint']=prior['completed_parent_typed_fingerprint']
+            report['completed_parent_distribution']=prior['completed_parent_distribution']
             report['sampled_typed_fingerprint']=prior['completed_sampled_typed_fingerprint']
             report['typed_degree_prior']={k:v for k,v in prior.items() if k not in ('records','parent_exclusions','completed_records')}
         for name,obj in [('coarse_graphs.pkl',sources),('molecular_graphs.pkl',finals),('soft_endpoints.pkl',targets_saved)]:
@@ -448,9 +468,10 @@ def generate_joint_typed_edge(config,args):
             soft_seconds=time.perf_counter()-t0
             records.append({**src_report,'bridge':bridge,**refinement,'soft_sampling_and_rewiring_seconds':soft_seconds,
                             'seconds':src_report['source_seconds']+soft_seconds})
-            print(f'[JointTypedEdge] graph={i+1}/{num} n={len(final)} soft_steps={bridge["sampling_steps"]} '
+            print(f'[JointTypedEdge] graph={len(finals)}/{num} trial={i+1} n={len(final)} soft_steps={bridge["sampling_steps"]} '
                   f'accepted_swaps={refinement["accepted_steps"]} typed_preserved={refinement["typed_degree_preserved"]}',flush=True)
-            if (i+1)%int(config.get('generation',{}).get('checkpoint_every',16))==0: flush()
+            checkpoint_every=int(config.get('generation',{}).get('checkpoint_every',16))
+            if checkpoint_every>0 and len(finals)%checkpoint_every==0: flush()
     except Exception as e:
         report['failure']=str(e); flush(False); raise
     def vals(g):
@@ -470,5 +491,8 @@ def generate_joint_typed_edge(config,args):
         'scoring_weights':config['attributed_refiner']['weights'],
         'diffusion':model.diffusion_metadata()}
     flush(True)
+    if report['replacement_budget_exhausted']:
+        print(f'[JointTypedEdge] Total graph-attempt budget exhausted after {max_total_attempts} trials; '
+              f'saved {len(finals)}/{num} requested graphs.',flush=True)
     print(f'Generation finished: requested={num} generated={len(finals)} skipped={len(skipped_graphs)}',flush=True)
     print(f'Saved molecular graphs: {output}/molecular_graphs.pkl',flush=True)

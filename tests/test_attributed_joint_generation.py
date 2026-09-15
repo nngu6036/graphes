@@ -130,32 +130,37 @@ def _outputs(context, *, partial=False):
 
 
 @pytest.mark.parametrize("retry", [False, True])
-def test_parent_exhaustion_skips_middle_slot_and_preserves_later_seed(tmp_path, monkeypatch, retry):
-    parents = [1, 0, 0, 0, 1] if retry else [1, 0, 1]
+def test_parent_exhaustion_resamples_replacement_and_preserves_trial_seeds(tmp_path, monkeypatch, retry):
+    parents = [1, 0, 0, 0, 1, 1] if retry else [1, 0, 1, 1]
     context = _setup(tmp_path, monkeypatch, parents=parents, retry=retry)
     generation.generate_joint_typed_edge(context.config, context.args)
     report, prior, graphs = _outputs(context)
-    assert report["num_requested"] == report["num_attempted"] == 3
-    assert report["num_generated"] == len(graphs) == 2
+    assert report["num_requested"] == report["num_generated"] == len(graphs) == 3
+    assert report["num_attempted"] == 4
     assert report["num_skipped"] == 1 and report["complete"] is True
-    assert report["requested_count_reached"] is False
-    assert [row["source_index"] for row in report["records"]] == [0, 2]
-    assert context.bridge_seeds == [42 + 7043 + i * 1009 for i in (0, 2)]
-    assert context.refiner_seeds == [42 + 9049 + i * 1009 for i in (0, 2)]
+    assert report["requested_count_reached"] is True
+    assert report["max_total_graph_attempts"] == 30
+    assert report["replacement_attempts"] == 1 and report["replacement_budget_exhausted"] is False
+    assert report["generation_success_fraction"] == 3 / 4
+    assert report["completed_parent_distribution"] == "conditioned_on_successful_generation"
+    assert [row["source_index"] for row in report["records"]] == [0, 2, 3]
+    assert context.bridge_seeds == [42 + 7043 + i * 1009 for i in (0, 2, 3)]
+    assert context.refiner_seeds == [42 + 9049 + i * 1009 for i in (0, 2, 3)]
     skipped = report["skipped_graphs"][0]
     assert skipped["generation_index"] == 1 and skipped["stage"] == "invariant_sampling"
     assert skipped["attempts_used"] == (3 if retry else 1)
     assert prior["num_parent_draws"] == len(parents)
-    assert prior["num_rejected_parent_draws"] == len(parents) - 2
-    assert prior["completed_record_indices"] == [0, len(parents) - 1]
-    assert report["sampling_counts"]["attempted_graphs"] == 3
+    assert prior["num_rejected_parent_draws"] == len(parents) - 3
+    assert prior["completed_record_indices"] == [0, len(parents) - 2, len(parents) - 1]
+    assert report["sampling_counts"]["attempted_graphs"] == 4
     assert report["sampling_counts"]["skipped_graphs"] == 1
     assert not list(context.output.glob("partial_*"))
 
 
 @pytest.mark.parametrize("stage", ["invariant_sampling", "source_construction"])
 def test_all_skipped_outputs_are_empty_complete_and_finite(tmp_path, monkeypatch, stage):
-    context = _setup(tmp_path, monkeypatch, parents=([0] * 9 if stage == "invariant_sampling" else [1] * 3), retry=True)
+    context = _setup(tmp_path, monkeypatch, parents=([0] * 12 if stage == "invariant_sampling" else [1] * 4), retry=True)
+    context.config["generation"]["max_total_graph_attempts"] = 4
     if stage == "source_construction":
         def reject(*args, **kwargs):
             raise TypedConstructionError("fixture source budget exhausted", {"failure_reason": "budget_exhausted"})
@@ -163,22 +168,25 @@ def test_all_skipped_outputs_are_empty_complete_and_finite(tmp_path, monkeypatch
     generation.generate_joint_typed_edge(context.config, context.args)
     report, prior, graphs = _outputs(context)
     assert graphs == [] and report["num_generated"] == 0
-    assert report["num_requested"] == report["num_attempted"] == report["num_skipped"] == 3
+    assert report["num_requested"] == 3
+    assert report["num_attempted"] == report["num_skipped"] == report["max_total_graph_attempts"] == 4
+    assert report["replacement_budget_exhausted"] is True and report["replacement_attempts"] == 1
     assert report["complete"] is True and report["requested_count_reached"] is False
-    assert [row["generation_index"] for row in report["skipped_graphs"]] == [0, 1, 2]
+    assert [row["generation_index"] for row in report["skipped_graphs"]] == [0, 1, 2, 3]
     assert all(row["stage"] == stage and row["attempts_used"] == 3 for row in report["skipped_graphs"])
     assert context.bridge_seeds == context.refiner_seeds == []
     assert prior["completed_record_indices"] == []
     # Successful prior draws are not completed outputs if construction later fails.
-    assert prior["num_returned_samples"] == (3 if stage == "source_construction" else 0)
-    assert prior["num_parent_draws"] == (3 if stage == "source_construction" else 9)
+    assert prior["num_returned_samples"] == (4 if stage == "source_construction" else 0)
+    assert prior["num_parent_draws"] == (4 if stage == "source_construction" else 12)
     assert (context.output / "coarse_graphs.pkl").exists()
     assert (context.output / "soft_endpoints.pkl").exists()
     assert not list(context.output.glob("partial_*"))
 
 
-def test_source_budget_skip_exports_only_completed_invariants(tmp_path, monkeypatch):
-    context = _setup(tmp_path, monkeypatch, parents=[1, 1, 1])
+def test_source_budget_replacement_exports_only_completed_invariants(tmp_path, monkeypatch):
+    context = _setup(tmp_path, monkeypatch, parents=[1, 1, 1, 1])
+    context.config["generation"]["checkpoint_every"] = 2
     original = generation.construct_typed_graph
     invariants = []
 
@@ -191,18 +199,21 @@ def test_source_budget_skip_exports_only_completed_invariants(tmp_path, monkeypa
     monkeypatch.setattr(generation, "construct_typed_graph", construct)
     generation.generate_joint_typed_edge(context.config, context.args)
     report, prior, graphs = _outputs(context)
-    assert len(invariants) == 5 and len(graphs) == 2
-    assert len(context.captured[0].returned_records) == 3
-    assert prior["num_returned_samples"] == 3 and prior["num_returned"] == 2
-    assert prior["completed_record_indices"] == [0, 2]
+    assert len(invariants) == 6 and len(graphs) == 3
+    assert len(context.captured[0].returned_records) == 4
+    assert prior["num_returned_samples"] == 4 and prior["num_returned"] == 3
+    assert prior["completed_record_indices"] == [0, 2, 3]
     rejected = TypedInvariant.from_dict(context.captured[0].returned_records[1]["typed_invariant"])
     assert all(invariant == rejected for invariant in invariants[1:4])
-    assert [row["source_index"] for row in report["records"]] == [0, 2]
+    assert [row["source_index"] for row in report["records"]] == [0, 2, 3]
     skipped = report["skipped_graphs"][0]
     assert skipped["generation_index"] == 1 and skipped["stage"] == "source_construction"
     assert skipped["attempts_used"] == 3
     assert report["sampling_counts"]["constructor_failures"] == 3
-    assert context.refiner_seeds == [42 + 9049 + i * 1009 for i in (0, 2)]
+    assert context.refiner_seeds == [42 + 9049 + i * 1009 for i in (0, 2, 3)]
+    assert report["num_attempted"] == 4 and report["replacement_attempts"] == 1
+    with (context.output / "partial_molecular_graphs.pkl").open("rb") as handle:
+        assert len(pickle.load(handle)) == 2
 
 
 def test_rdkit_source_budget_skips_and_attempts_later_slots(tmp_path, monkeypatch):
@@ -224,12 +235,85 @@ def test_rdkit_source_budget_skips_and_attempts_later_slots(tmp_path, monkeypatc
         context.model, context.train, context.config, seed=42, num_generate=3,
         skipped_graphs=skipped, sampling_counts=counts,
     ))
-    assert len(calls) == 5 and len(outputs) == 2
-    assert [report["source_index"] for _, report, _ in outputs] == [1, 2]
+    assert len(calls) == 6 and len(outputs) == 3
+    assert [report["source_index"] for _, report, _ in outputs] == [1, 2, 3]
     assert len(skipped) == 1 and skipped[0]["generation_index"] == 0
     assert skipped[0]["stage"] == "source_construction" and skipped[0]["attempts_used"] == 3
-    assert counts["rdkit_source_rejections"] == 3 and counts["constructed_sources"] == 5
-    assert counts["attempted_graphs"] == 3 and counts["skipped_graphs"] == 1
+    assert counts["rdkit_source_rejections"] == 3 and counts["constructed_sources"] == 6
+    assert counts["attempted_graphs"] == 4 and counts["skipped_graphs"] == 1
+
+
+def test_failed_replacements_are_resampled_until_target(tmp_path, monkeypatch):
+    context = _setup(tmp_path, monkeypatch, parents=[1, 0, 0, 0, 1, 0, 1])
+    generation.generate_joint_typed_edge(context.config, context.args)
+    report, prior, graphs = _outputs(context)
+    assert len(graphs) == 3 and report['num_attempted'] == 7
+    assert report['num_skipped'] == report['replacement_attempts'] == 4
+    assert [row['source_index'] for row in report['records']] == [0, 4, 6]
+    assert [row['generation_index'] for row in report['skipped_graphs']] == [1, 2, 3, 5]
+    assert report['requested_count_reached'] is True
+    assert prior['completed_record_indices'] == [0, 4, 6]
+
+
+def test_total_budget_saves_completed_graphs_when_replacement_fails(tmp_path, monkeypatch):
+    context = _setup(tmp_path, monkeypatch, parents=[1, 0, 1, 0])
+    context.config['generation']['max_total_graph_attempts'] = 4
+    generation.generate_joint_typed_edge(context.config, context.args)
+    report, prior, graphs = _outputs(context)
+    assert len(graphs) == 2 and report['num_attempted'] == 4
+    assert report['replacement_budget_exhausted'] is True
+    assert report['requested_count_reached'] is False
+    assert prior['completed_record_indices'] == [0, 2]
+
+
+def test_no_failures_stop_at_requested_count_without_extra_draw(tmp_path, monkeypatch):
+    context = _setup(tmp_path, monkeypatch, parents=[1, 1, 1])
+    generation.generate_joint_typed_edge(context.config, context.args)
+    report, prior, graphs = _outputs(context)
+    assert len(graphs) == report['num_attempted'] == prior['num_parent_draws'] == 3
+    assert report['num_skipped'] == report['replacement_attempts'] == 0
+    assert report['generation_success_fraction'] == 1.0
+    assert context.refiner_seeds == [42 + 9049 + i * 1009 for i in range(3)]
+
+
+@pytest.mark.parametrize('budget', [0, 2, True, 3.5, '4', None])
+def test_invalid_total_budget_fails_before_sampling_or_output_creation(tmp_path, monkeypatch, budget):
+    context = _setup(tmp_path, monkeypatch, parents=[])
+    context.config['generation']['max_total_graph_attempts'] = budget
+    with pytest.raises(ValueError, match='max_total_graph_attempts'):
+        generation.generate_joint_typed_edge(context.config, context.args)
+    assert context.captured == [] and not context.output.exists()
+
+
+def test_learned_prior_resamples_fresh_proposals_after_exhaustion(tmp_path, monkeypatch):
+    context = _setup(tmp_path, monkeypatch)
+    context.config['generation'].update(invariant_source='learned', max_invariant_resample=5)
+    context.config['generation'].pop('degree_perturbation')
+    invariant = extract_typed_invariant(context.train[1], edge_types=(1,))
+    draws = []
+
+    def sample(*args, **kwargs):
+        proposal = len(draws)
+        draws.append(proposal)
+        return proposal
+
+    def summaries(outputs, **kwargs):
+        if 1 <= outputs <= 3:
+            raise RuntimeError('Typed invariant sampling exhausted its feasibility budget: fixture infeasible')
+        return [{'typed_invariant': invariant.to_dict(), 'sampling_diagnostics': {'attempts_used': 1}}]
+
+    context.model.degree_model = SimpleNamespace(sample_outputs=sample)
+    context.model.vectorizer.sample_empirical_node_count = lambda _: 4
+    context.model.vectorizer.outputs_to_summaries = summaries
+    counts, skipped = Counter(), []
+    outputs = list(generation.generation_sources(
+        context.model, context.train, context.config, seed=42, num_generate=3,
+        sampling_counts=counts, skipped_graphs=skipped,
+    ))
+    assert len(outputs) == 3 and draws == list(range(6))
+    assert [row['source_index'] for _, row, _ in outputs] == [0, 2, 3]
+    assert counts['attempted_graphs'] == 4 and counts['skipped_graphs'] == 1
+    assert skipped[0]['stage'] == 'invariant_sampling'
 
 
 @pytest.mark.parametrize("expected_exhaustion", [True, False])
@@ -238,6 +322,7 @@ def test_learned_histogram_budget_is_skippable_but_internal_errors_are_not(tmp_p
     context.config["generation"] = {
         "invariant_source": "learned", "require_rdkit_source_validity": False,
         "max_attempts_per_graph": 3, "max_invariant_resample": 5,
+        "max_total_graph_attempts": 3,
     }
     calls = []
     message = ("Typed invariant sampling exhausted its feasibility budget: fixture infeasible"

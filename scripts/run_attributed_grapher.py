@@ -274,7 +274,9 @@ def _partial_report(
     skipped_graphs: list[dict[str, Any]] | None = None,
     rejection_reasons: Counter[str] | None = None,
     generated_indices: list[int] | None = None,
+    max_total_graph_attempts: int | None = None,
 ) -> dict[str, Any]:
+    total_budget = 10 * requested if max_total_graph_attempts is None else max_total_graph_attempts
     return {
         "format": "attributed_spectral_graphlet_partial_generation_v2",
         "complete": False,
@@ -287,6 +289,9 @@ def _partial_report(
         "skipped_graphs": list(skipped_graphs or []),
         "generated_indices": list(generated_indices or []),
         "requested_count_reached": generated == requested,
+        "max_total_graph_attempts": total_budget,
+        "replacement_attempts": max(0, len(attempts) - requested),
+        "replacement_budget_exhausted": generated < requested and len(attempts) >= total_budget,
         "generation_success_fraction": float(generated / max(len(attempts), 1)),
         "generation_rejections": dict(sorted((rejection_reasons or {}).items())),
         "generation_attempts": int(sum(attempts)),
@@ -407,6 +412,12 @@ def main() -> None:
     )
     if num_generate <= 0:
         raise ValueError("num_generate must be positive.")
+    max_total_graph_attempts = generation_cfg.get("max_total_graph_attempts", 10 * num_generate)
+    if (isinstance(max_total_graph_attempts, bool)
+            or not isinstance(max_total_graph_attempts, (int, np.integer))
+            or max_total_graph_attempts < num_generate):
+        raise ValueError("generation.max_total_graph_attempts must be an integer >= num_generate.")
+    max_total_graph_attempts = int(max_total_graph_attempts)
     max_attempts = int(generation_cfg.get("max_attempts_per_graph", 32))
     if max_attempts < 1:
         raise ValueError("generation.max_attempts_per_graph must be positive.")
@@ -524,13 +535,16 @@ def main() -> None:
             generated=len(final_graphs), requested=num_generate,
             attempts=attempts_per_slot, started=started, skipped_graphs=skipped_graphs,
             rejection_reasons=rejection_reasons, generated_indices=generated_indices,
+            max_total_graph_attempts=max_total_graph_attempts,
         )
         if error is not None:
             partial.update(failure=str(error), failed_generation_index=len(attempts_per_slot) - 1,
                            failure_stage=stage)
         _atomic_json(partial, output_dir / "partial_report.json")
 
-    for graph_index in range(num_generate):
+    for graph_index in range(max_total_graph_attempts):
+        if len(final_graphs) >= num_generate:
+            break
         graph_started = time.perf_counter()
         succeeded = False
         attempts_per_slot.append(0)
@@ -614,7 +628,8 @@ def main() -> None:
                         device=model_device,
                         rng=enrichment_rng,
                         return_trace=True,
-                        debug_context=f"graph={graph_index + 1}/{num_generate}",
+                        debug_context=(f"graph={len(final_graphs) + 1}/{num_generate} "
+                                       f"trial={graph_index + 1}/{max_total_graph_attempts}"),
                     )
                     base_graph = _complete_molecular_aliases(
                         base_graph,
@@ -641,7 +656,8 @@ def main() -> None:
                     device=model_device,
                     rng=attempt_rng,
                     return_trace=True,
-                    debug_context=f"graph={graph_index + 1}/{num_generate}",
+                    debug_context=(f"graph={len(final_graphs) + 1}/{num_generate} "
+                                   f"trial={graph_index + 1}/{max_total_graph_attempts}"),
                     conditioning_graph=source,
                 )
                 refined = _complete_molecular_aliases(
@@ -715,7 +731,8 @@ def main() -> None:
                     (int(row.get("prediction_calls", 0)) for row in trace), default=0
                 )
                 print(
-                    f"graph={graph_index + 1}/{num_generate} guidance=attributed_spectral_graphlet "
+                    f"graph={len(final_graphs)}/{num_generate} "
+                    f"trial={graph_index + 1}/{max_total_graph_attempts} guidance=attributed_spectral_graphlet "
                     f"n={refined.number_of_nodes()} m={refined.number_of_edges()} "
                     f"enrichment_steps={enrichment_accepted} accepted_steps={accepted} "
                     f"prediction_calls={prediction_calls} "
@@ -759,17 +776,19 @@ def main() -> None:
                 "runtime_seconds": float(time.perf_counter() - graph_started),
             })
             print(
-                f"[GraphER/AttributedSpectralGraphlet] graph={graph_index + 1}/{num_generate} "
+                f"[GraphER/AttributedSpectralGraphlet] graph={len(final_graphs) + 1}/{num_generate} "
+                f"trial={graph_index + 1}/{max_total_graph_attempts} "
                 f"skipped=True attempts={attempt} stage={last_failure.get('stage')} "
-                f"reason={last_failure.get('reason')} rejections={dict(slot_rejections)}",
+                f"reason={last_failure.get('reason')} rejections={dict(slot_rejections)} "
+                f"action={'resample_replacement' if graph_index + 1 < max_total_graph_attempts else 'stop_total_budget_exhausted'}",
                 flush=True,
             )
 
         if checkpoint_every > 0 and (graph_index + 1) % checkpoint_every == 0:
             save_partial()
             print(
-                f"Saved atomic partial generation checkpoint: attempted={graph_index + 1}/{num_generate} "
-                f"generated={len(final_graphs)} skipped={len(skipped_graphs)}",
+                f"Saved atomic partial generation checkpoint: attempted={graph_index + 1}/{max_total_graph_attempts} "
+                f"generated={len(final_graphs)}/{num_generate} skipped={len(skipped_graphs)}",
                 flush=True,
             )
 
@@ -841,6 +860,10 @@ def main() -> None:
         "skipped_graphs": skipped_graphs,
         "generated_indices": generated_indices,
         "requested_count_reached": len(final_graphs) == num_generate,
+        "max_total_graph_attempts": max_total_graph_attempts,
+        "replacement_attempts": max(0, len(attempts_per_slot) - num_generate),
+        "replacement_budget_exhausted": (len(final_graphs) < num_generate
+                                         and len(attempts_per_slot) >= max_total_graph_attempts),
         "generation_success_fraction": float(len(final_graphs) / max(len(attempts_per_slot), 1)),
         "generation_attempts": int(sum(attempts_per_slot)),
         "end_to_end_yield": float(len(final_graphs) / max(sum(attempts_per_slot), 1)),
@@ -1042,6 +1065,13 @@ def main() -> None:
         "config": config,
     }
     save_json(report, output_dir / "report.json")
+    if generation_summary["replacement_budget_exhausted"]:
+        print(
+            f"[GraphER/AttributedSpectralGraphlet] total graph-attempt budget exhausted "
+            f"({max_total_graph_attempts}); saved {len(final_graphs)}/{num_generate} requested graphs "
+            f"to {output_dir}.",
+            flush=True,
+        )
     print("Attributed generation diagnostics", flush=True)
     for key, value in diagnostics.items():
         print(f"  {key}: {value}", flush=True)

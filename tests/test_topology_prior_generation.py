@@ -17,8 +17,11 @@ import yaml
 from grapher.models.dhvae_hh.degree_perturbation import DegreePerturbationError
 
 
+_UNSET = object()
+
+
 def _setup_cli(tmp_path, monkeypatch, *, train=None, retry=True, budget=3,
-               forced_parents=None, inline_evaluation=False):
+               forced_parents=None, inline_evaluation=False, total_budget=_UNSET):
     tmp_path.mkdir(parents=True, exist_ok=True)
     path = Path(__file__).resolve().parents[1] / "scripts" / "run_topology_grapher.py"
     spec = importlib.util.spec_from_file_location("_topology_prior_generation", path)
@@ -31,6 +34,8 @@ def _setup_cli(tmp_path, monkeypatch, *, train=None, retry=True, budget=3,
                        "max_attempts_per_graph": 3},
         "evaluation": {"inline_during_generation": inline_evaluation},
     }
+    if total_budget is not _UNSET:
+        config["generation"]["max_total_graph_attempts"] = total_budget
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
     checkpoint_path = tmp_path / "checkpoint.pt"
@@ -97,6 +102,7 @@ def test_topology_cli_retries_and_keeps_completed_graphs_auditable(tmp_path, mon
         # Slot0 succeeds; slot1 exhausts its budget; slot2 must still run.
         forced_parents=[1, 0, 0, 0, 1] if outcome == "parent_budget" else None,
         inline_evaluation=outcome == "constructor_budget",
+        total_budget=_UNSET if outcome == "complete" else 3,
     )
     if outcome == "constructor_budget":
         def reject(*args, **kwargs):
@@ -117,6 +123,10 @@ def test_topology_cli_retries_and_keeps_completed_graphs_auditable(tmp_path, mon
         assert audit["num_requested"] == audit["num_attempted"] == 3
         assert audit["num_generated"] == expected_count
         assert audit["num_skipped"] == len(audit["skipped_graphs"]) == 3 - expected_count
+        assert audit["max_total_graph_attempts"] == (30 if outcome == "complete" else 3)
+        assert audit["replacement_attempts"] == 0
+        assert audit["replacement_budget_exhausted"] is (expected_count < 3)
+        assert audit["generation_success_fraction"] == expected_count / 3
     assert report["complete"] is True
     assert report["requested_count_reached"] is (expected_count == 3)
     assert not prior.get("generation_aborted", False)
@@ -157,7 +167,7 @@ def test_topology_cli_retries_and_keeps_completed_graphs_auditable(tmp_path, mon
 
 
 def test_strict_sampler_failure_skips_only_current_generation_slot(tmp_path, monkeypatch):
-    context = _setup_cli(tmp_path, monkeypatch, retry=False, forced_parents=[0, 1, 1])
+    context = _setup_cli(tmp_path, monkeypatch, retry=False, forced_parents=[0, 1, 1], total_budget=3)
     context.runner.main()
     prior, report, graphs, _sequences = _read_completed_output(context)
     assert context.captured[0].parent_failure_policy == "error"
@@ -171,11 +181,11 @@ def test_strict_sampler_failure_skips_only_current_generation_slot(tmp_path, mon
 
 
 def test_constructor_budget_skip_recovers_without_reusing_previous_graph_or_refiner_seed(tmp_path, monkeypatch):
-    baseline = _setup_cli(tmp_path / "baseline", monkeypatch, train=[nx.star_graph(3)])
+    baseline = _setup_cli(tmp_path / "baseline", monkeypatch, train=[nx.star_graph(3)], total_budget=3)
     baseline.runner.main()
     _, _, baseline_graphs, _ = _read_completed_output(baseline)
 
-    context = _setup_cli(tmp_path / "skipped", monkeypatch, train=[nx.star_graph(3)])
+    context = _setup_cli(tmp_path / "skipped", monkeypatch, train=[nx.star_graph(3)], total_budget=3)
     original_construct = context.runner.construct_coarse_graph
     calls = []
 
@@ -201,7 +211,98 @@ def test_constructor_budget_skip_recovers_without_reusing_previous_graph_or_refi
     assert report["num_skipped"] == 1 and report["skipped_graphs"][0]["generation_index"] == 1
 
 
-def test_unrecorded_degree_error_remains_fatal_after_a_completed_output(tmp_path, monkeypatch):
+@pytest.mark.parametrize("parents, successful_indices", [
+    ([0, 1, 0, 1, 1], [1, 3, 4]),
+    ([0, 0, 0, 0, 1, 0, 1, 1], [4, 6, 7]),
+])
+def test_failed_slots_generate_replacements_until_requested_count_is_reached(
+    tmp_path, monkeypatch, capsys, parents, successful_indices,
+):
+    context = _setup_cli(tmp_path, monkeypatch, retry=False, forced_parents=parents)
+    context.runner.main()
+    prior, report, graphs, sequences = _read_completed_output(context)
+    assert len(graphs) == len(sequences) == 3
+    assert [row["generation_index"] for row in prior["returned_records"]] == successful_indices
+    assert len(context.captured[0].records) == len(parents)
+    for audit in (prior, report):
+        assert audit["num_requested"] == audit["num_generated"] == 3
+        assert audit["num_attempted"] == len(parents)
+        assert audit["num_skipped"] == audit["replacement_attempts"] == len(parents) - 3
+        assert audit["max_total_graph_attempts"] == 30
+        assert audit["requested_count_reached"] and not audit["replacement_budget_exhausted"]
+        assert audit["generation_success_fraction"] == pytest.approx(3 / len(parents))
+        assert audit["completed_parent_distribution"] == "conditioned_on_successful_generation"
+    assert all(nx.is_connected(graph) for graph in graphs)
+    assert all(sorted(dict(graph.degree()).values(), reverse=True) == sequence
+               for graph, sequence in zip(graphs, sequences))
+    logs = capsys.readouterr().out
+    assert "resampling a replacement" in logs
+    assert "graph=4/3" not in logs
+
+
+def test_replacement_budget_stops_all_failed_run_and_saves_empty_outputs(tmp_path, monkeypatch, capsys):
+    context = _setup_cli(tmp_path, monkeypatch, train=[nx.complete_graph(3)], retry=False, total_budget=5)
+    context.runner.main()
+    prior, report, graphs, sequences = _read_completed_output(context)
+    assert graphs == sequences == []
+    assert len(context.captured[0].records) == 5
+    for audit in (prior, report):
+        assert audit["complete"] and audit["replacement_budget_exhausted"]
+        assert not audit["requested_count_reached"]
+        assert audit["num_requested"] == 3 and audit["num_generated"] == 0
+        assert audit["num_attempted"] == audit["max_total_graph_attempts"] == audit["num_skipped"] == 5
+        assert audit["replacement_attempts"] == 2 and audit["generation_success_fraction"] == 0.0
+        assert [row["generation_index"] for row in audit["skipped_graphs"]] == list(range(5))
+    assert "Replacement budget exhausted" in capsys.readouterr().out
+
+
+def test_larger_total_budget_preserves_seeded_outputs_when_no_replacement_is_needed(tmp_path, monkeypatch):
+    bounded = _setup_cli(tmp_path / "bounded", monkeypatch, train=[nx.star_graph(3)], total_budget=3)
+    bounded.runner.main()
+    bounded_prior, _, bounded_graphs, _ = _read_completed_output(bounded)
+    default = _setup_cli(tmp_path / "default", monkeypatch, train=[nx.star_graph(3)])
+    default.runner.main()
+    default_prior, default_report, default_graphs, _ = _read_completed_output(default)
+    assert len(default.captured[0].records) == default_report["num_attempted"] == 3
+    assert default_report["max_total_graph_attempts"] == 30 and default_report["replacement_attempts"] == 0
+    assert default_prior["returned_records"] == bounded_prior["returned_records"]
+    assert all(nx.utils.graphs_equal(left, right) for left, right in zip(default_graphs, bounded_graphs))
+
+
+def test_constructor_budget_failures_are_replaced_after_the_original_requested_slots(tmp_path, monkeypatch):
+    context = _setup_cli(tmp_path, monkeypatch, train=[nx.star_graph(3)])
+    original_construct = context.runner.construct_coarse_graph
+    calls = []
+
+    def construct(*args, **kwargs):
+        calls.append(1)
+        if len(calls) <= 6:
+            raise RuntimeError("fixture first two source attempts cannot be constructed")
+        return original_construct(*args, **kwargs)
+
+    monkeypatch.setattr(context.runner, "construct_coarse_graph", construct)
+    context.runner.main()
+    prior, report, graphs, _ = _read_completed_output(context)
+    assert len(calls) == prior["num_accepted_samples"] == 9
+    assert len(graphs) == report["num_generated"] == 3
+    assert [row["generation_index"] for row in prior["returned_records"]] == [2, 3, 4]
+    assert report["num_attempted"] == 5 and report["replacement_attempts"] == 2
+    assert report["num_skipped"] == 2 and report["requested_count_reached"]
+    assert report["generation_rejections"] == {"constructor_rejected": 6}
+    assert all(row["stage"] == "source_construction" for row in report["skipped_graphs"])
+
+
+@pytest.mark.parametrize("budget", [0, 2, True, 3.5, "6", None])
+def test_total_replacement_budget_requires_an_integer_at_least_the_requested_count(tmp_path, monkeypatch, budget):
+    context = _setup_cli(tmp_path, monkeypatch, total_budget=budget)
+    with pytest.raises(ValueError, match="generation.max_total_graph_attempts"):
+        context.runner.main()
+    assert context.captured == []
+    assert not context.output.exists()
+
+
+@pytest.mark.parametrize("error_type", [DegreePerturbationError, RuntimeError])
+def test_unrecorded_degree_error_remains_fatal_after_a_completed_output(tmp_path, monkeypatch, error_type):
     context = _setup_cli(tmp_path, monkeypatch, train=[nx.star_graph(3)])
     original_build = context.runner._build_generation_degree_sampler
 
@@ -213,14 +314,14 @@ def test_unrecorded_degree_error_remains_fatal_after_a_completed_output(tmp_path
         def sample(rng):
             calls.append(1)
             if len(calls) == 2:
-                raise DegreePerturbationError("fixture unrecorded internal degree error")
+                raise error_type("fixture unrecorded internal degree error")
             return original_sample(rng)
 
         sampler.sample = sample
         return sampler
 
     monkeypatch.setattr(context.runner, "_build_generation_degree_sampler", build)
-    with pytest.raises(DegreePerturbationError, match="unrecorded internal"):
+    with pytest.raises(error_type, match="unrecorded internal"):
         context.runner.main()
     assert len(context.captured[0].records) == 1
     assert not (context.output / "report.json").exists()

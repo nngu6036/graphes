@@ -452,8 +452,10 @@ def test_later_source_constructor_failure_retries_the_fixed_invariant_only(monke
     monkeypatch.setattr(generation, "construct_typed_graph", fail_construction)
     sampling_counts = Counter()
     skipped_graphs = []
+    config = _generation_config()
+    config['generation']['max_total_graph_attempts'] = 5
     outputs = list(generation.generation_sources(
-        _generation_model(), _bank(), _generation_config(), seed=42, num_generate=5,
+        _generation_model(), _bank(), config, seed=42, num_generate=5,
         empirical_sampler=sampler, sampling_counts=sampling_counts, skipped_graphs=skipped_graphs,
     ))
     assert outputs == []
