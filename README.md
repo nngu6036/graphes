@@ -562,7 +562,7 @@ Set `NTRAIN=20000` for a smaller development experiment.
 CFG=configs/experiments/grapher/zinc_joint_typed_edge_laplacian_graphlets345_learned.yaml
 TRAIN=outputs/attributed_grapher/zinc_joint_typed_edge_laplacian_graphlets345_learned/seed_42
 GENROOT=outputs/attributed_generation/zinc_joint_typed_edge_laplacian_graphlets345/seed_42
-NTRAIN=0
+NTRAIN=100000
 NGEN=1024
 
 PYTHONPATH=src python scripts/train_attributed_grapher.py \
@@ -648,6 +648,12 @@ settings, batch size and sampler settings. **Do not pass an epoch override just
 to match DeFoG's raw epoch count.** Use explicit CLI overrides only for a
 separately named experiment.
 
+All ``scripts/run_<model>_baseline.py`` launchers are uniform thin shims over
+``grapher.models.external_cli``.  Every maintained baseline therefore supports
+``--stage train``, ``--stage generate`` and ``--stage all``; ``all`` is the
+default and performs training followed by generation.  Model-specific legacy
+flags remain accepted, but their translation is centralized in the shared CLI.
+
 The examples below use Community-small, seed 42 and 1,024 generated graphs.
 For all commands, run from the GraphER repository root with:
 
@@ -709,8 +715,9 @@ profile. The corresponding YAML records this status and its budget provenance.
 
 ### DeFoG
 
-`run_defog_baseline.py` performs training and generation in one invocation.
-Community-small uses the DeFoG reference budget from
+`run_defog_baseline.py` uses the shared baseline lifecycle; the command below
+omits ``--stage all`` because ``all`` is the default. Community-small uses the
+DeFoG reference budget from
 `common_community_small.yaml`.
 
 ```bash
@@ -735,8 +742,8 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 ### DiGress
 
-`run_digress_baseline.py` also trains and generates in one invocation. Its
-Community-small model config retains the released `comm20` training horizon
+`run_digress_baseline.py` uses the same shared lifecycle. Its Community-small
+model config retains the released `comm20` training horizon
 rather than inheriting a generic cross-model epoch count.
 
 ```bash
@@ -762,8 +769,8 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 ### GDSS
 
-GDSS likewise trains and generates in one command. The model-specific YAML keeps
-GDSS's released optimizer and training horizon.
+GDSS uses the same shared lifecycle; the example uses the default ``--stage all``.
+The model-specific YAML keeps GDSS's released optimizer and training horizon.
 
 ```bash
 RUN=seed_42
@@ -788,8 +795,8 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 ### GraphRNN
 
-GraphRNN's wrapper performs training and generation together. Its native budget
-is expressed as epochs times sampled mini-batches per epoch; do not compare the
+GraphRNN also uses the shared lifecycle. Its native budget is expressed as
+epochs times sampled mini-batches per epoch; do not compare the
 raw epoch integer directly with DeFoG.
 
 ```bash
@@ -816,8 +823,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 ### HOG-Diff
 
 HOG-Diff is a two-stage model. The Community-small config uses the released
-6,000 higher-order iterations followed by 22,000 OU iterations. One invocation
-runs both training stages and then generates the requested batch.
+6,000 higher-order iterations followed by 22,000 OU iterations. With the
+default ``--stage all``, one invocation runs both training stages and then
+generates the requested batch; ``--stage train`` and ``--stage generate`` are
+also available.
 
 ```bash
 RUN=seed_42
@@ -840,12 +849,13 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir "$GEN_DIR/evaluation_report"
 ```
 
-To generate another batch from an already completed managed HOG-Diff run, add
-`--generation-only` and choose a new `--generation-id`.
+To generate another batch from an already completed managed HOG-Diff run, use
+``--stage generate`` and choose a new ``--generation-id``. ``--generation-only``
+remains accepted as a compatibility alias.
 
 ### CatFlow
 
-CatFlow exposes separate training and generation stages. Community-small uses
+CatFlow uses the same shared training/generation stages. Community-small uses
 the GraphER `linear_v2` adapter config; this is explicitly marked as an adapted
 budget because the supplied CatFlow release does not provide a native generic
 Community-small profile.
@@ -920,7 +930,7 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 ### EDGE
 
-EDGE uses separate train/generate stages. Its model YAML retains the released
+EDGE uses the same shared train/generate stages. Its model YAML retains the released
 generic training horizon and degree-guided diffusion settings rather than the
 DeFoG epoch fallback.
 
@@ -957,7 +967,7 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 ### SPECTRE
 
-SPECTRE also exposes separate stages and retains the released Community training
+SPECTRE uses the same shared stages and retains the released Community training
 schedule, including the GAN-specific optimizer settings in its model YAML.
 
 ```bash

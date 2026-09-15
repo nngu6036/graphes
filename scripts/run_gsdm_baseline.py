@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train/generate GSDM with common-reference then model-specific config precedence."""
+"""Compatibility alias for GSDM/GDSM through the shared GraphER baseline CLI."""
 from grapher.models.external_cli import main
 
 if __name__ == "__main__":

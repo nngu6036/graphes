@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train/generate EDGE with common-reference then model-specific config precedence."""
+"""Run edge through the shared GraphER baseline CLI."""
 from grapher.models.external_cli import main
 
 if __name__ == "__main__":

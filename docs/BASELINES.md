@@ -149,13 +149,36 @@ Do not regenerate or reshuffle splits between methods.
 
 ## Runner behavior
 
-Every maintained external runner accepts:
+Every ``scripts/run_<model>_baseline.py`` file is now the same thin shim over
+``grapher.models.external_cli``.  Baseline-specific parsing and option
+translation live in that shared module rather than in individual scripts.
+
+All maintained runners share the same lifecycle:
+
+```text
+--stage train
+--stage generate
+--stage all        # default: train then generate
+```
+
+They also share the common comparison controls:
 
 ```text
 --common-config PATH
 --no-common-config
 --wrapper-config PATH
+--seed-id N
+--generation-seed N
+--run-id ID
+--generation-id ID
+--num-samples N
+--device DEVICE
 ```
+
+Model-specific compatibility flags such as ``--n-epochs`` (DeFoG/DiGress),
+``--batch-ratio`` (GraphRNN), and ``--ho-iters``/``--ou-iters`` (HOG-Diff) are
+accepted by the same shared parser and translated centrally into wrapper
+options.
 
 For Community-small/Ego-small/QM9/ZINC the common config is auto-discovered when
 not supplied. Model YAMLs are also auto-discovered. This means the normal command
@@ -221,7 +244,7 @@ export PYTHONPATH=src
 
 ## Separate train/generate example
 
-Source-backed models expose explicit stages:
+Every maintained model exposes the same explicit stages.  For example:
 
 ```bash
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
@@ -232,8 +255,10 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples 1024 --device gpu
 ```
 
-Dedicated lifecycle runners train then generate in one invocation. HOG-Diff also
-supports `--generation-only` for an already completed managed run.
+Omitting ``--stage`` is equivalent to ``--stage all`` for every model.  A
+``--stage generate`` command reuses the managed checkpoint recorded under the
+selected ``--run-id``.  HOG-Diff retains ``--generation-only`` as a backward-
+compatible alias for ``--stage generate``.
 
 ## Evaluation
 

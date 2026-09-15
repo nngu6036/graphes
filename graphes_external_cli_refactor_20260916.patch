@@ -1,0 +1,3643 @@
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/README.md b/README.md
+--- a/README.md	2026-09-15 19:35:43.463049289 +0000
++++ b/README.md	2026-09-15 19:34:49.561386508 +0000
+@@ -648,6 +648,12 @@
+ to match DeFoG's raw epoch count.** Use explicit CLI overrides only for a
+ separately named experiment.
+ 
++All ``scripts/run_<model>_baseline.py`` launchers are uniform thin shims over
++``grapher.models.external_cli``.  Every maintained baseline therefore supports
++``--stage train``, ``--stage generate`` and ``--stage all``; ``all`` is the
++default and performs training followed by generation.  Model-specific legacy
++flags remain accepted, but their translation is centralized in the shared CLI.
++
+ The examples below use Community-small, seed 42 and 1,024 generated graphs.
+ For all commands, run from the GraphER repository root with:
+ 
+@@ -709,8 +715,9 @@
+ 
+ ### DeFoG
+ 
+-`run_defog_baseline.py` performs training and generation in one invocation.
+-Community-small uses the DeFoG reference budget from
++`run_defog_baseline.py` uses the shared baseline lifecycle; the command below
++omits ``--stage all`` because ``all`` is the default. Community-small uses the
++DeFoG reference budget from
+ `common_community_small.yaml`.
+ 
+ ```bash
+@@ -735,8 +742,8 @@
+ 
+ ### DiGress
+ 
+-`run_digress_baseline.py` also trains and generates in one invocation. Its
+-Community-small model config retains the released `comm20` training horizon
++`run_digress_baseline.py` uses the same shared lifecycle. Its Community-small
++model config retains the released `comm20` training horizon
+ rather than inheriting a generic cross-model epoch count.
+ 
+ ```bash
+@@ -762,8 +769,8 @@
+ 
+ ### GDSS
+ 
+-GDSS likewise trains and generates in one command. The model-specific YAML keeps
+-GDSS's released optimizer and training horizon.
++GDSS uses the same shared lifecycle; the example uses the default ``--stage all``.
++The model-specific YAML keeps GDSS's released optimizer and training horizon.
+ 
+ ```bash
+ RUN=seed_42
+@@ -788,8 +795,8 @@
+ 
+ ### GraphRNN
+ 
+-GraphRNN's wrapper performs training and generation together. Its native budget
+-is expressed as epochs times sampled mini-batches per epoch; do not compare the
++GraphRNN also uses the shared lifecycle. Its native budget is expressed as
++epochs times sampled mini-batches per epoch; do not compare the
+ raw epoch integer directly with DeFoG.
+ 
+ ```bash
+@@ -816,8 +823,10 @@
+ ### HOG-Diff
+ 
+ HOG-Diff is a two-stage model. The Community-small config uses the released
+-6,000 higher-order iterations followed by 22,000 OU iterations. One invocation
+-runs both training stages and then generates the requested batch.
++6,000 higher-order iterations followed by 22,000 OU iterations. With the
++default ``--stage all``, one invocation runs both training stages and then
++generates the requested batch; ``--stage train`` and ``--stage generate`` are
++also available.
+ 
+ ```bash
+ RUN=seed_42
+@@ -840,12 +849,13 @@
+   --output-dir "$GEN_DIR/evaluation_report"
+ ```
+ 
+-To generate another batch from an already completed managed HOG-Diff run, add
+-`--generation-only` and choose a new `--generation-id`.
++To generate another batch from an already completed managed HOG-Diff run, use
++``--stage generate`` and choose a new ``--generation-id``. ``--generation-only``
++remains accepted as a compatibility alias.
+ 
+ ### CatFlow
+ 
+-CatFlow exposes separate training and generation stages. Community-small uses
++CatFlow uses the same shared training/generation stages. Community-small uses
+ the GraphER `linear_v2` adapter config; this is explicitly marked as an adapted
+ budget because the supplied CatFlow release does not provide a native generic
+ Community-small profile.
+@@ -920,7 +930,7 @@
+ 
+ ### EDGE
+ 
+-EDGE uses separate train/generate stages. Its model YAML retains the released
++EDGE uses the same shared train/generate stages. Its model YAML retains the released
+ generic training horizon and degree-guided diffusion settings rather than the
+ DeFoG epoch fallback.
+ 
+@@ -957,7 +967,7 @@
+ 
+ ### SPECTRE
+ 
+-SPECTRE also exposes separate stages and retains the released Community training
++SPECTRE uses the same shared stages and retains the released Community training
+ schedule, including the GAN-specific optimizer settings in its model YAML.
+ 
+ ```bash
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/docs/BASELINES.md b/docs/BASELINES.md
+--- a/docs/BASELINES.md	2026-09-14 09:57:36.000000000 +0000
++++ b/docs/BASELINES.md	2026-09-15 19:34:38.157713906 +0000
+@@ -149,14 +149,37 @@
+ 
+ ## Runner behavior
+ 
+-Every maintained external runner accepts:
++Every ``scripts/run_<model>_baseline.py`` file is now the same thin shim over
++``grapher.models.external_cli``.  Baseline-specific parsing and option
++translation live in that shared module rather than in individual scripts.
++
++All maintained runners share the same lifecycle:
++
++```text
++--stage train
++--stage generate
++--stage all        # default: train then generate
++```
++
++They also share the common comparison controls:
+ 
+ ```text
+ --common-config PATH
+ --no-common-config
+ --wrapper-config PATH
++--seed-id N
++--generation-seed N
++--run-id ID
++--generation-id ID
++--num-samples N
++--device DEVICE
+ ```
+ 
++Model-specific compatibility flags such as ``--n-epochs`` (DeFoG/DiGress),
++``--batch-ratio`` (GraphRNN), and ``--ho-iters``/``--ou-iters`` (HOG-Diff) are
++accepted by the same shared parser and translated centrally into wrapper
++options.
++
+ For Community-small/Ego-small/QM9/ZINC the common config is auto-discovered when
+ not supplied. Model YAMLs are also auto-discovered. This means the normal command
+ is intentionally short:
+@@ -221,7 +244,7 @@
+ 
+ ## Separate train/generate example
+ 
+-Source-backed models expose explicit stages:
++Every maintained model exposes the same explicit stages.  For example:
+ 
+ ```bash
+ PYTHONPATH=src python scripts/run_catflow_baseline.py \
+@@ -232,8 +255,10 @@
+   --num-samples 1024 --device gpu
+ ```
+ 
+-Dedicated lifecycle runners train then generate in one invocation. HOG-Diff also
+-supports `--generation-only` for an already completed managed run.
++Omitting ``--stage`` is equivalent to ``--stage all`` for every model.  A
++``--stage generate`` command reuses the managed checkpoint recorded under the
++selected ``--run-id``.  HOG-Diff retains ``--generation-only`` as a backward-
++compatible alias for ``--stage generate``.
+ 
+ ## Evaluation
+ 
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/scripts/run_catflow_baseline.py b/scripts/run_catflow_baseline.py
+--- a/scripts/run_catflow_baseline.py	2026-09-14 09:56:52.000000000 +0000
++++ b/scripts/run_catflow_baseline.py	2026-09-15 19:32:32.987399834 +0000
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env python3
+-"""Train/generate CATFLOW with common-reference then model-specific config precedence."""
++"""Run catflow through the shared GraphER baseline CLI."""
+ from grapher.models.external_cli import main
+ 
+ if __name__ == "__main__":
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/scripts/run_defog_baseline.py b/scripts/run_defog_baseline.py
+--- a/scripts/run_defog_baseline.py	2026-09-14 09:53:14.000000000 +0000
++++ b/scripts/run_defog_baseline.py	2026-09-15 19:32:32.993589223 +0000
+@@ -1,485 +1,6 @@
+-#!/usr/bin/env python
+-"""Train DeFoG on a prepared GraphER dataset and generate one raw batch.
+-
+-The script is intentionally a thin orchestration layer. Dataset conversion,
+-isolated upstream execution, checkpoint publication, exact-count generation,
+-validation, hashing, and manifests remain the responsibility of
+-``DeFoGWrapper``.
+-"""
+-
+-from __future__ import annotations
+-
+-import argparse
+-import json
+-import os
+-import sys
+-from dataclasses import dataclass
+-from datetime import datetime, timezone
+-from pathlib import Path
+-from typing import Any, Sequence
+-
+-
+-from grapher.models import (
+-    DatasetReference,
+-    GenerateRequest,
+-    RunSpec,
+-    TrainRequest,
+-    create_baseline,
+-)
+-from grapher.models.comparison import (
+-    comparison_request_options,
+-    resolve_common_config,
+-    resolve_wrapper_config,
+-)
+-
+-
+-@dataclass(frozen=True)
+-class DatasetProfile:
+-    """GraphER storage identity and DeFoG-native dataset identity."""
+-
+-    serialized_id: str
+-    native_id: str
+-
+-
+-DATASET_PROFILES: dict[str, DatasetProfile] = {
+-    "community_small": DatasetProfile(serialized_id="sbm", native_id="comm20"),
+-    "ego_small": DatasetProfile(serialized_id="ego_small", native_id="comm20"),
+-    "qm9": DatasetProfile(serialized_id="qm9_attributed", native_id="qm9"),
+-    "zinc": DatasetProfile(serialized_id="zinc", native_id="zinc"),
+-}
+-
+-def _positive_int(raw: str) -> int:
+-    value = int(raw)
+-    if value <= 0:
+-        raise argparse.ArgumentTypeError("value must be a positive integer")
+-    return value
+-
+-
+-def _nonnegative_int(raw: str) -> int:
+-    value = int(raw)
+-    if value < 0:
+-        raise argparse.ArgumentTypeError("value must be a non-negative integer")
+-    return value
+-
+-
+-def _positive_float(raw: str) -> float:
+-    value = float(raw)
+-    if value <= 0:
+-        raise argparse.ArgumentTypeError("value must be positive")
+-    return value
+-
+-
+-def _status(message: str, *, enabled: bool = True) -> None:
+-    """Write human-readable progress to stderr without corrupting JSON stdout."""
+-
+-    if not enabled:
+-        return
+-    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+-    print(f"[run_defog_baseline {timestamp}] {message}", file=sys.stderr, flush=True)
+-
+-
+-def build_parser() -> argparse.ArgumentParser:
+-    parser = argparse.ArgumentParser(
+-        description=(
+-            "Train the DeFoG baseline through its GraphER wrapper, then generate "
+-            "and serialize an exact raw graph batch."
+-        )
+-    )
+-    parser.add_argument(
+-        "--dataset",
+-        required=True,
+-        choices=tuple(DATASET_PROFILES),
+-        help="Prepared GraphER benchmark to use.",
+-    )
+-    parser.add_argument(
+-        "--num-samples",
+-        required=True,
+-        type=_positive_int,
+-        help="Exact number of graphs to generate after training.",
+-    )
+-    parser.add_argument(
+-        "--seed-id",
+-        "--seed",
+-        dest="seed_id",
+-        required=True,
+-        type=_nonnegative_int,
+-        help=(
+-            "Seed used for both training and this generation batch. The two "
+-            "roles remain separately recorded in the wrapper manifests."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--dataset-root",
+-        type=Path,
+-        default=Path("outputs/datasets"),
+-        help="Root containing the prepared train.pkl, val.pkl, and test.pkl files.",
+-    )
+-    parser.add_argument(
+-        "--output-root",
+-        type=Path,
+-        default=Path("outputs/baselines"),
+-        help="Root for trained checkpoints and generated batches.",
+-    )
+-    parser.add_argument(
+-        "--run-id",
+-        default=None,
+-        help="Optional run identifier; defaults to seed_<seed-id>.",
+-    )
+-    parser.add_argument(
+-        "--generation-id",
+-        default=None,
+-        help=(
+-            "Optional generation identifier; defaults to "
+-            "seed_<seed-id>_n_<num-samples>."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--wrapper-config",
+-        type=Path,
+-        default=None,
+-        help="Optional YAML file containing DeFoG-specific wrapper options.",
+-    )
+-    parser.add_argument(
+-        "--common-config",
+-        type=Path,
+-        default=None,
+-        help=(
+-            "DeFoG-reference common profile; defaults to "
+-            "configs/baselines/common_<dataset>.yaml. Common values are "
+-            "fallbacks; model YAML and explicit CLI overrides take precedence."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--no-common-config",
+-        action="store_true",
+-        help="Disable automatic common-profile loading for a native-only diagnostic run.",
+-    )
+-    parser.add_argument(
+-        "--resume-from",
+-        type=Path,
+-        default=None,
+-        help="Optional DeFoG checkpoint from which training should resume.",
+-    )
+-    parser.add_argument(
+-        "--defog-root",
+-        type=Path,
+-        default=None,
+-        help=(
+-            "Optional DeFoG source root; otherwise use the DEFOG "
+-            "environment variable."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--defog-python",
+-        type=Path,
+-        default=None,
+-        help=(
+-            "Optional Python executable for DeFoG; otherwise use "
+-            "the DEFOG_PYTHON environment variable."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--device",
+-        choices=("auto", "cpu", "gpu"),
+-        default="auto",
+-        help=(
+-            "Execution device for both training and generation. Use 'gpu' to "
+-            "require CUDA and fail immediately instead of silently falling "
+-            "back to CPU."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--gpu-id",
+-        type=_nonnegative_int,
+-        default=None,
+-        help=(
+-            "Physical CUDA device index exposed to DeFoG when --device gpu "
+-            "is used. Defaults to 0."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--overwrite",
+-        action="store_true",
+-        help=(
+-            "Explicitly allow replacement of matching artifacts. Training "
+-            "overwrite remains forbidden when the run already has generations."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--progress-interval-seconds",
+-        type=_positive_float,
+-        default=15.0,
+-        help=(
+-            "Heartbeat interval while DeFoG subprocesses are running. Progress "
+-            "is written to stderr; the final JSON summary remains on stdout."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--epoch-progress-interval",
+-        type=_positive_int,
+-        default=None,
+-        help=(
+-            "Optional number of training epochs between stable progress lines. "
+-            "By default the worker chooses an interval that emits about 100 "
+-            "lines over the configured horizon."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--generation-progress-every-batches",
+-        type=_positive_int,
+-        default=1,
+-        help="Report generation progress every N completed sampling batches.",
+-    )
+-    parser.add_argument(
+-        "--no-stream-subprocess-output",
+-        action="store_true",
+-        help=(
+-            "Show stage transitions and heartbeats only instead of mirroring "
+-            "the complete DeFoG subprocess output to the terminal."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--quiet",
+-        action="store_true",
+-        help="Suppress progress output and print only the final JSON summary.",
+-    )
+-    parser.add_argument(
+-        "--n-epochs",
+-        type=_positive_int,
+-        default=None,
+-        help=(
+-            "Total DeFoG training horizon in epochs. This value overrides "
+-            "n_epochs from --wrapper-config and the upstream experiment "
+-            "default. When resuming, it is the total horizon rather than the "
+-            "number of additional epochs."
+-        ),
+-    )
+-    return parser
+-
+-
+-def _configure_upstream_environment(args: argparse.Namespace) -> None:
+-    if args.defog_root is not None:
+-        os.environ["DEFOG"] = str(args.defog_root.expanduser().resolve())
+-    if args.defog_python is not None:
+-        os.environ["DEFOG_PYTHON"] = str(
+-            args.defog_python.expanduser().resolve()
+-        )
+-
+-
+-def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
+-    """Run one train-then-generate transaction and return its artifact summary."""
+-
+-    _configure_upstream_environment(args)
+-    progress_enabled = not args.quiet
+-    # getattr keeps run_pipeline compatible with tests or internal callers that
+-    # construct argparse.Namespace objects created before --n-epochs existed.
+-    n_epochs_override = getattr(args, "n_epochs", None)
+-    common = resolve_common_config(
+-        args.dataset,
+-        getattr(args, "common_config", None),
+-        disabled=getattr(args, "no_common_config", False),
+-    )
+-    wrapper_config = resolve_wrapper_config("defog", args.dataset, args.wrapper_config)
+-    if common is not None:
+-        _status(
+-            f"loaded common comparison config: {common.path}",
+-            enabled=progress_enabled,
+-        )
+-    progress_options: dict[str, object] = {
+-        "enabled": progress_enabled,
+-        "stream_output": (
+-            progress_enabled and not args.no_stream_subprocess_output
+-        ),
+-        "interval_seconds": args.progress_interval_seconds,
+-        "generation_batch_interval": args.generation_progress_every_batches,
+-    }
+-    if args.epoch_progress_interval is not None:
+-        progress_options["epoch_interval"] = args.epoch_progress_interval
+-
+-    # Comparison defaults are merged before the model YAML inside DeFoGWrapper;
+-    # explicit CLI values are placed at top level and therefore remain highest
+-    # priority. This mirrors every other external baseline runner.
+-    requested_device = str(getattr(args, "device", "auto")).lower()
+-    gpu_id = getattr(args, "gpu_id", None)
+-    runtime_options: dict[str, object] = {"progress": progress_options}
+-    if requested_device == "gpu":
+-        resolved_gpu_id = 0 if gpu_id is None else int(gpu_id)
+-        runtime_options.update(
+-            {
+-                "gpus": 1,
+-                "device": "cuda",
+-                "cuda_visible_devices": str(resolved_gpu_id),
+-                "require_cuda": True,
+-            }
+-        )
+-    elif requested_device == "cpu":
+-        runtime_options.update({"gpus": 0, "device": "cpu"})
+-    elif gpu_id is not None:
+-        raise ValueError("--gpu-id requires --device gpu.")
+-
+-    training_options: dict[str, Any] = comparison_request_options(
+-        "defog", common, model_config=wrapper_config
+-    )
+-    training_options.update({
+-        "training_estimates": {"enabled": True},
+-        "runtime": runtime_options,
+-    })
+-    if n_epochs_override is not None:
+-        # Explicit CLI controls always win over the common comparison profile.
+-        training_options["n_epochs"] = n_epochs_override
+-
+-    profile = DATASET_PROFILES[args.dataset]
+-    run = RunSpec.for_seed(
+-        model_id="defog",
+-        dataset_id=args.dataset,
+-        seed=args.seed_id,
+-        run_id=args.run_id,
+-        output_root=args.output_root,
+-    )
+-    dataset = DatasetReference(
+-        benchmark_id=args.dataset,
+-        root=args.dataset_root,
+-        serialized_id=profile.serialized_id,
+-        native_id=profile.native_id,
+-    )
+-    _status(
+-        "resolved run: "
+-        f"dataset={args.dataset}, serialized={profile.serialized_id}, "
+-        f"native={profile.native_id}, run_id={run.run_id}, seed={args.seed_id}",
+-        enabled=progress_enabled,
+-    )
+-    if n_epochs_override is not None:
+-        _status(
+-            f"using CLI training-horizon override: n_epochs={n_epochs_override}",
+-            enabled=progress_enabled,
+-        )
+-    elif common is not None:
+-        common_epochs = (training_options.get("comparison_defaults") or {}).get("n_epochs")
+-        if common_epochs is not None:
+-            _status(
+-                f"using DeFoG reference training horizon: n_epochs={common_epochs}",
+-                enabled=progress_enabled,
+-            )
+-    else:
+-        _status(
+-            "no explicit/common training-horizon override; using n_epochs from "
+-            "the wrapper config or the upstream DeFoG experiment default",
+-            enabled=progress_enabled,
+-        )
+-    _status(
+-        f"checking prepared splits under {dataset.dataset_dir.resolve()}",
+-        enabled=progress_enabled,
+-    )
+-    # Fail before launching the external training process when preparation is
+-    # incomplete or the selected dataset alias points to the wrong directory.
+-    dataset.require_prepared()
+-    _status(
+-        "prepared dataset found; starting DeFoG training. Durable log will be "
+-        f"published at {run.layout.training_log_path.resolve()}",
+-        enabled=progress_enabled,
+-    )
+-
+-    wrapper = create_baseline("defog")
+-    training = wrapper.train(
+-        TrainRequest(
+-            run=run,
+-            dataset=dataset,
+-            config_path=wrapper_config,
+-            options=training_options,
+-            resume_from=args.resume_from,
+-            overwrite=args.overwrite,
+-        )
+-    )
+-    _status(
+-        "training completed and artifacts were published: "
+-        f"checkpoint={training.checkpoint_path.resolve()}, "
+-        f"log={training.log_path.resolve() if training.log_path else None}",
+-        enabled=progress_enabled,
+-    )
+-    _status(
+-        "starting final raw-batch generation: "
+-        f"requested={args.num_samples}, seed={args.seed_id}",
+-        enabled=progress_enabled,
+-    )
+-    generation = wrapper.generate(
+-        GenerateRequest(
+-            run=run,
+-            checkpoint_path=training.checkpoint_path,
+-            num_graphs=args.num_samples,
+-            generation_seed=args.seed_id,
+-            generation_id=args.generation_id,
+-            options={"runtime": dict(runtime_options)},
+-            overwrite=args.overwrite,
+-        )
+-    )
+-    if generation.num_generated != args.num_samples:
+-        raise RuntimeError(
+-            "DeFoG generation count mismatch after wrapper validation: "
+-            f"requested {args.num_samples}, received {generation.num_generated}."
+-        )
+-    _status(
+-        "generation completed: "
+-        f"graphs={generation.graphs_path.resolve()}, "
+-        f"log={generation.log_path.resolve() if generation.log_path else None}",
+-        enabled=progress_enabled,
+-    )
+-
+-    return {
+-        "status": "complete",
+-        "model": "defog",
+-        "dataset": args.dataset,
+-        "serialized_dataset": profile.serialized_id,
+-        "native_dataset": profile.native_id,
+-        "seed_id": args.seed_id,
+-        "device": requested_device,
+-        "gpu_id": (0 if requested_device == "gpu" and gpu_id is None else gpu_id),
+-        "n_epochs_cli_override": n_epochs_override,
+-        "wrapper_config": str(wrapper_config) if wrapper_config is not None else None,
+-        "common_config": (
+-            {"path": str(common.path), "sha256": common.provenance["sha256"]}
+-            if common is not None else None
+-        ),
+-        "run_id": run.run_id,
+-        "generation_id": args.generation_id
+-        or generation.generation_dir.name,
+-        "num_samples": generation.num_generated,
+-        "run_dir": str(training.run_dir.resolve()),
+-        "checkpoint": str(training.checkpoint_path.resolve()),
+-        "training_manifest": str(training.manifest_path.resolve()),
+-        "training_estimated_graphs": (
+-            str(training.estimated_graphs_path.resolve())
+-            if training.estimated_graphs_path is not None
+-            else None
+-        ),
+-        "training_ground_truth_graphs": (
+-            str(training.ground_truth_graphs_path.resolve())
+-            if training.ground_truth_graphs_path is not None
+-            else None
+-        ),
+-        "training_ground_truth_model_view": (
+-            str(training.ground_truth_model_view_graphs_path.resolve())
+-            if training.ground_truth_model_view_graphs_path is not None
+-            else None
+-        ),
+-        "generated_graphs": str(generation.graphs_path.resolve()),
+-        "generation_manifest": str(generation.manifest_path.resolve()),
+-        "graphs_sha256": generation.graphs_sha256,
+-    }
+-
+-
+-def main(argv: Sequence[str] | None = None) -> int:
+-    args = build_parser().parse_args(argv)
+-    try:
+-        summary = run_pipeline(args)
+-    except Exception as exc:
+-        _status(
+-            f"FAILED: {type(exc).__name__}: {exc}",
+-            enabled=not args.quiet,
+-        )
+-        raise
+-    print(json.dumps(summary, indent=2, sort_keys=True))
+-    return 0
+-
++#!/usr/bin/env python3
++"""Run defog through the shared GraphER baseline CLI."""
++from grapher.models.external_cli import main
+ 
+ if __name__ == "__main__":
+-    raise SystemExit(main())
++    raise SystemExit(main("defog"))
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/scripts/run_dhvae_hh_baseline.py b/scripts/run_dhvae_hh_baseline.py
+--- a/scripts/run_dhvae_hh_baseline.py	2026-09-14 08:35:12.000000000 +0000
++++ b/scripts/run_dhvae_hh_baseline.py	2026-09-15 19:32:32.997596635 +0000
+@@ -1,251 +1,6 @@
+-#!/usr/bin/env python
+-"""Train DH-VAE+HH and publish one ordered raw generation batch.
+-
+-The script is a thin command-line layer over :class:`DHVAEHHWrapper`. The
+-wrapper remains responsible for configuration resolution, checkpoint and
+-manifest publication, exact-count generation, checksums, and collision-safe
+-artifact paths.
+-"""
+-
+-from __future__ import annotations
+-
+-import argparse
+-import json
+-from dataclasses import dataclass
+-from pathlib import Path
+-from typing import Sequence
+-
+-from grapher.models import (
+-    DatasetReference,
+-    GenerateRequest,
+-    RunSpec,
+-    TrainRequest,
+-    create_baseline,
+-)
+-
+-
+-@dataclass(frozen=True)
+-class DatasetProfile:
+-    serialized_id: str
+-    config_path: Path
+-
+-
+-DATASET_PROFILES: dict[str, DatasetProfile] = {
+-    "community_small": DatasetProfile(
+-        serialized_id="sbm",
+-        config_path=Path("configs/datasets/community_small.yaml"),
+-    ),
+-    "ego_small": DatasetProfile(
+-        serialized_id="ego_small",
+-        config_path=Path("configs/datasets/ego_small.yaml"),
+-    ),
+-    "grid": DatasetProfile(
+-        serialized_id="grid",
+-        config_path=Path("configs/datasets/grid.yaml"),
+-    ),
+-    "qm9": DatasetProfile(
+-        serialized_id="qm9_attributed",
+-        config_path=Path("configs/datasets/qm9.yaml"),
+-    ),
+-    "zinc": DatasetProfile(
+-        serialized_id="zinc",
+-        config_path=Path("configs/datasets/zinc.yaml"),
+-    ),
+-}
+-
+-
+-def _positive_int(raw: str) -> int:
+-    value = int(raw)
+-    if value <= 0:
+-        raise argparse.ArgumentTypeError("value must be a positive integer")
+-    return value
+-
+-
+-def _nonnegative_int(raw: str) -> int:
+-    value = int(raw)
+-    if value < 0:
+-        raise argparse.ArgumentTypeError("value must be a non-negative integer")
+-    return value
+-
+-
+-def build_parser() -> argparse.ArgumentParser:
+-    parser = argparse.ArgumentParser(
+-        description=(
+-            "Train the DH-VAE invariant prior, construct graphs with randomized "
+-            "Havel--Hakimi, and save one exact raw batch."
+-        )
+-    )
+-    parser.add_argument(
+-        "--dataset",
+-        required=True,
+-        choices=tuple(DATASET_PROFILES),
+-        help="Prepared GraphER benchmark.",
+-    )
+-    parser.add_argument(
+-        "--num-samples",
+-        required=True,
+-        type=_positive_int,
+-        help="Exact number of graphs to generate after training.",
+-    )
+-    parser.add_argument(
+-        "--seed-id",
+-        "--seed",
+-        dest="seed_id",
+-        required=True,
+-        type=_nonnegative_int,
+-        help="Seed used for training and for the requested raw batch.",
+-    )
+-    parser.add_argument(
+-        "--dataset-root",
+-        type=Path,
+-        default=Path("outputs/datasets"),
+-        help="Root containing prepared train.pkl, val.pkl, and test.pkl files.",
+-    )
+-    parser.add_argument(
+-        "--output-root",
+-        type=Path,
+-        default=Path("outputs/baselines"),
+-        help="Root for managed baseline checkpoints and generated batches.",
+-    )
+-    parser.add_argument(
+-        "--experiment-config",
+-        type=Path,
+-        default=None,
+-        help=(
+-            "Optional DH-VAE experiment YAML. If omitted, the wrapper chooses "
+-            "the project configuration for the selected benchmark."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--device",
+-        default="auto",
+-        help="Torch device for training and generation, for example auto or cpu.",
+-    )
+-    parser.add_argument(
+-        "--run-id",
+-        default=None,
+-        help="Training run identifier; defaults to seed_<seed-id>.",
+-    )
+-    parser.add_argument(
+-        "--generation-id",
+-        default=None,
+-        help=(
+-            "Generation identifier; defaults to "
+-            "seed_<seed-id>_n_<num-samples>."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--training-estimate-count",
+-        type=_positive_int,
+-        default=None,
+-        help=(
+-            "Optional size of the unpaired post-training estimate pool. "
+-            "Defaults to the full generic train split and at most 1024 molecules."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--disable-training-estimates",
+-        action="store_true",
+-        help="Do not sample the optional post-training estimate pool.",
+-    )
+-    parser.add_argument(
+-        "--overwrite",
+-        action="store_true",
+-        help=(
+-            "Explicitly replace matching artifacts. Training cannot be replaced "
+-            "after generations have been attached to that run."
+-        ),
+-    )
+-    return parser
+-
+-
+-def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
+-    profile = DATASET_PROFILES[args.dataset]
+-    run = RunSpec.for_seed(
+-        model_id="dhvae_hh",
+-        dataset_id=args.dataset,
+-        seed=args.seed_id,
+-        run_id=args.run_id,
+-        output_root=args.output_root,
+-    )
+-    dataset = DatasetReference(
+-        benchmark_id=args.dataset,
+-        root=args.dataset_root,
+-        serialized_id=profile.serialized_id,
+-        config_path=profile.config_path,
+-    )
+-    dataset.require_prepared()
+-
+-    estimate_options: dict[str, object] = {
+-        "enabled": not args.disable_training_estimates,
+-    }
+-    if args.training_estimate_count is not None:
+-        estimate_options["num_graphs"] = args.training_estimate_count
+-
+-    wrapper = create_baseline("dhvae_hh")
+-    training = wrapper.train(
+-        TrainRequest(
+-            run=run,
+-            dataset=dataset,
+-            config_path=args.experiment_config,
+-            options={
+-                "runtime": {"device": args.device},
+-                "training_estimates": estimate_options,
+-            },
+-            overwrite=args.overwrite,
+-        )
+-    )
+-    generation = wrapper.generate(
+-        GenerateRequest(
+-            run=run,
+-            checkpoint_path=training.checkpoint_path,
+-            num_graphs=args.num_samples,
+-            generation_seed=args.seed_id,
+-            generation_id=args.generation_id,
+-            options={"runtime": {"device": args.device}},
+-            overwrite=args.overwrite,
+-        )
+-    )
+-    if generation.num_generated != args.num_samples:
+-        raise RuntimeError(
+-            "DH-VAE+HH generation count mismatch: "
+-            f"requested {args.num_samples}, received {generation.num_generated}."
+-        )
+-
+-    return {
+-        "status": "complete",
+-        "model": "dhvae_hh",
+-        "dataset": args.dataset,
+-        "serialized_dataset": profile.serialized_id,
+-        "seed_id": args.seed_id,
+-        "run_id": run.run_id,
+-        "generation_id": generation.generation_dir.name,
+-        "num_samples": generation.num_generated,
+-        "run_dir": str(training.run_dir.resolve()),
+-        "checkpoint": str(training.checkpoint_path.resolve()),
+-        "training_manifest": str(training.manifest_path.resolve()),
+-        "training_estimated_graphs": (
+-            str(training.estimated_graphs_path.resolve())
+-            if training.estimated_graphs_path is not None
+-            else None
+-        ),
+-        "training_ground_truth_graphs": (
+-            str(training.ground_truth_graphs_path.resolve())
+-            if training.ground_truth_graphs_path is not None
+-            else None
+-        ),
+-        "generated_graphs": str(generation.graphs_path.resolve()),
+-        "generation_manifest": str(generation.manifest_path.resolve()),
+-        "graphs_sha256": generation.graphs_sha256,
+-    }
+-
+-
+-def main(argv: Sequence[str] | None = None) -> int:
+-    args = build_parser().parse_args(argv)
+-    summary = run_pipeline(args)
+-    print(json.dumps(summary, indent=2, sort_keys=True))
+-    return 0
+-
+-
+-if __name__ == "__main__":
+-    raise SystemExit(main())
++#!/usr/bin/env python3
++"""Run dhvae_hh through the shared GraphER baseline CLI."""
++from grapher.models.external_cli import main
++
++if __name__ == "__main__":
++    raise SystemExit(main("dhvae_hh"))
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/scripts/run_digress_baseline.py b/scripts/run_digress_baseline.py
+--- a/scripts/run_digress_baseline.py	2026-09-14 09:47:26.000000000 +0000
++++ b/scripts/run_digress_baseline.py	2026-09-15 19:32:33.001085495 +0000
+@@ -1,347 +1,6 @@
+-#!/usr/bin/env python
+-"""Train DiGress on a prepared GraphER dataset and generate one raw batch."""
+-
+-from __future__ import annotations
+-
+-import argparse
+-import json
+-import os
+-import sys
+-from dataclasses import dataclass
+-from datetime import datetime, timezone
+-from pathlib import Path
+-from typing import Sequence
+-
+-from grapher.models import (
+-    DatasetReference,
+-    GenerateRequest,
+-    RunSpec,
+-    TrainRequest,
+-    create_baseline,
+-)
+-from grapher.models.comparison import (
+-    comparison_request_options,
+-    resolve_common_config,
+-    resolve_wrapper_config,
+-)
+-
+-
+-@dataclass(frozen=True)
+-class DatasetProfile:
+-    serialized_id: str
+-    native_id: str
+-    experiment: str
+-
+-
+-DATASET_PROFILES: dict[str, DatasetProfile] = {
+-    "community_small": DatasetProfile("sbm", "comm20", "comm20"),
+-    "ego_small": DatasetProfile("ego_small", "comm20", "comm20"),
+-    "grid": DatasetProfile("grid", "planar", "planar"),
+-    "qm9": DatasetProfile("qm9_attributed", "qm9", "qm9_no_h"),
+-    "zinc": DatasetProfile("zinc", "zinc", "zinc_no_h"),
+-}
+-
+-
+-def _positive_int(raw: str) -> int:
+-    value = int(raw)
+-    if value <= 0:
+-        raise argparse.ArgumentTypeError("value must be a positive integer")
+-    return value
+-
+-
+-def _nonnegative_int(raw: str) -> int:
+-    value = int(raw)
+-    if value < 0:
+-        raise argparse.ArgumentTypeError("value must be non-negative")
+-    return value
+-
+-
+-def _positive_float(raw: str) -> float:
+-    value = float(raw)
+-    if value <= 0:
+-        raise argparse.ArgumentTypeError("value must be positive")
+-    return value
+-
+-
+-def _status(message: str, *, enabled: bool = True) -> None:
+-    if not enabled:
+-        return
+-    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+-    print(
+-        f"[run_digress_baseline {timestamp}] {message}",
+-        file=sys.stderr,
+-        flush=True,
+-    )
+-
+-
+-def build_parser() -> argparse.ArgumentParser:
+-    parser = argparse.ArgumentParser(
+-        description=(
+-            "Train the DiGress baseline through its isolated GraphER wrapper, "
+-            "then generate and serialize an exact raw graph batch."
+-        )
+-    )
+-    parser.add_argument(
+-        "--dataset", required=True, choices=tuple(DATASET_PROFILES)
+-    )
+-    parser.add_argument("--num-samples", required=True, type=_positive_int)
+-    parser.add_argument(
+-        "--seed-id", "--seed", dest="seed_id", required=True, type=_nonnegative_int
+-    )
+-    parser.add_argument(
+-        "--dataset-root", type=Path, default=Path("outputs/datasets")
+-    )
+-    parser.add_argument(
+-        "--output-root", type=Path, default=Path("outputs/baselines")
+-    )
+-    parser.add_argument("--run-id", default=None)
+-    parser.add_argument("--generation-id", default=None)
+-    parser.add_argument("--wrapper-config", type=Path, default=None, help="Model-specific YAML; defaults to configs/baselines/digress_<dataset>.yaml.")
+-    parser.add_argument("--common-config", type=Path, default=None, help="DeFoG-reference common profile; defaults to configs/baselines/common_<dataset>.yaml.")
+-    parser.add_argument("--no-common-config", action="store_true", help="Disable automatic common-profile loading for a native-only diagnostic run.")
+-    parser.add_argument("--resume-from", type=Path, default=None)
+-    parser.add_argument("--digress-root", type=Path, default=None)
+-    parser.add_argument("--digress-python", type=Path, default=None)
+-    parser.add_argument(
+-        "--device",
+-        choices=("auto", "cpu", "gpu"),
+-        default="auto",
+-        help=(
+-            "Execution device for both training and generation. Use 'gpu' to "
+-            "require CUDA and fail immediately instead of silently falling "
+-            "back to CPU."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--gpu-id",
+-        type=_nonnegative_int,
+-        default=None,
+-        help=(
+-            "Physical CUDA device index exposed to DiGress when --device gpu "
+-            "is used. Defaults to 0."
+-        ),
+-    )
+-    parser.add_argument("--overwrite", action="store_true")
+-    parser.add_argument(
+-        "--n-epochs",
+-        type=_positive_int,
+-        default=None,
+-        help=(
+-            "Total DiGress training horizon. When resuming, this is the total "
+-            "horizon rather than the number of additional epochs."
+-        ),
+-    )
+-    parser.add_argument("--batch-size", type=_positive_int, default=None)
+-    parser.add_argument(
+-        "--generation-batch-size", type=_positive_int, default=None
+-    )
+-    parser.add_argument("--num-workers", type=_nonnegative_int, default=None)
+-    parser.add_argument(
+-        "--check-val-every-n-epochs", type=_positive_int, default=None
+-    )
+-    parser.add_argument("--save-every-n-epochs", type=_positive_int, default=None)
+-    parser.add_argument(
+-        "--skip-training-estimates",
+-        action="store_true",
+-        help="Do not generate the independent post-training source pool.",
+-    )
+-    parser.add_argument(
+-        "--training-estimate-count", type=_positive_int, default=None
+-    )
+-    parser.add_argument(
+-        "--progress-interval-seconds", type=_positive_float, default=15.0
+-    )
+-    parser.add_argument("--epoch-progress-interval", type=_positive_int, default=None)
+-    parser.add_argument(
+-        "--generation-progress-every-batches", type=_positive_int, default=1
+-    )
+-    parser.add_argument("--no-stream-subprocess-output", action="store_true")
+-    parser.add_argument("--quiet", action="store_true")
+-    return parser
+-
+-
+-def _configure_environment(args: argparse.Namespace) -> None:
+-    if args.digress_root is not None:
+-        os.environ["DIGRESS"] = str(args.digress_root.expanduser().resolve())
+-    if args.digress_python is not None:
+-        os.environ["DIGRESS_PYTHON"] = str(
+-            args.digress_python.expanduser().resolve()
+-        )
+-
+-
+-def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
+-    _configure_environment(args)
+-    progress_enabled = not args.quiet
+-    profile = DATASET_PROFILES[args.dataset]
+-    common = resolve_common_config(args.dataset, getattr(args, "common_config", None), disabled=getattr(args, "no_common_config", False))
+-    wrapper_config = resolve_wrapper_config("digress", args.dataset, args.wrapper_config)
+-    progress: dict[str, object] = {
+-        "enabled": progress_enabled,
+-        "stream_output": (
+-            progress_enabled and not args.no_stream_subprocess_output
+-        ),
+-        "interval_seconds": args.progress_interval_seconds,
+-        "generation_batch_interval": args.generation_progress_every_batches,
+-    }
+-    if args.epoch_progress_interval is not None:
+-        progress["epoch_interval"] = args.epoch_progress_interval
+-
+-    training_estimates: dict[str, object] = {
+-        "enabled": not args.skip_training_estimates
+-    }
+-    if args.training_estimate_count is not None:
+-        training_estimates["num_graphs"] = args.training_estimate_count
+-    requested_device = str(getattr(args, "device", "auto")).lower()
+-    gpu_id = getattr(args, "gpu_id", None)
+-    runtime_options: dict[str, object] = {"progress": progress}
+-    if requested_device == "gpu":
+-        resolved_gpu_id = 0 if gpu_id is None else int(gpu_id)
+-        runtime_options.update(
+-            {
+-                "gpus": 1,
+-                "device": "gpu",
+-                "cuda_visible_devices": str(resolved_gpu_id),
+-                "require_cuda": True,
+-            }
+-        )
+-    elif requested_device == "cpu":
+-        runtime_options.update({"gpus": 0, "device": "cpu"})
+-    elif gpu_id is not None:
+-        raise ValueError("--gpu-id requires --device gpu.")
+-
+-    training_options: dict[str, object] = comparison_request_options("digress", common, model_config=wrapper_config)
+-    training_options.update({
+-        "experiment": profile.experiment,
+-        "training_estimates": training_estimates,
+-        "runtime": runtime_options,
+-    })
+-    for key in (
+-        "n_epochs",
+-        "batch_size",
+-        "num_workers",
+-        "check_val_every_n_epochs",
+-        "save_every_n_epochs",
+-        "generation_batch_size",
+-    ):
+-        value = getattr(args, key)
+-        if value is not None:
+-            training_options[key] = value
+-
+-    run = RunSpec.for_seed(
+-        model_id="digress",
+-        dataset_id=args.dataset,
+-        seed=args.seed_id,
+-        run_id=args.run_id,
+-        output_root=args.output_root,
+-    )
+-    dataset = DatasetReference(
+-        benchmark_id=args.dataset,
+-        root=args.dataset_root,
+-        serialized_id=profile.serialized_id,
+-        native_id=profile.native_id,
+-    )
+-    _status(
+-        "resolved run: "
+-        f"dataset={args.dataset}, serialized={profile.serialized_id}, "
+-        f"native={profile.native_id}, experiment={profile.experiment}, "
+-        f"run_id={run.run_id}, seed={args.seed_id}",
+-        enabled=progress_enabled,
+-    )
+-    dataset.require_prepared()
+-    wrapper = create_baseline("digress")
+-    _status(
+-        "prepared dataset found; starting DiGress training. Durable log will be "
+-        f"published at {run.layout.training_log_path.resolve()}",
+-        enabled=progress_enabled,
+-    )
+-    training = wrapper.train(
+-        TrainRequest(
+-            run=run,
+-            dataset=dataset,
+-            config_path=wrapper_config,
+-            options=training_options,
+-            resume_from=args.resume_from,
+-            overwrite=args.overwrite,
+-        )
+-    )
+-    _status(
+-        f"training completed: checkpoint={training.checkpoint_path.resolve()}",
+-        enabled=progress_enabled,
+-    )
+-    generation_options: dict[str, object] = {"runtime": dict(runtime_options)}
+-    if args.generation_batch_size is not None:
+-        generation_options["generation_batch_size"] = args.generation_batch_size
+-    generation = wrapper.generate(
+-        GenerateRequest(
+-            run=run,
+-            checkpoint_path=training.checkpoint_path,
+-            num_graphs=args.num_samples,
+-            generation_seed=args.seed_id,
+-            generation_id=args.generation_id,
+-            options=generation_options,
+-            overwrite=args.overwrite,
+-        )
+-    )
+-    if generation.num_generated != args.num_samples:
+-        raise RuntimeError(
+-            f"DiGress generated {generation.num_generated}; expected "
+-            f"{args.num_samples}."
+-        )
+-    _status(
+-        f"generation completed: graphs={generation.graphs_path.resolve()}",
+-        enabled=progress_enabled,
+-    )
+-    return {
+-        "status": "complete",
+-        "model": "digress",
+-        "dataset": args.dataset,
+-        "serialized_dataset": profile.serialized_id,
+-        "native_dataset": profile.native_id,
+-        "experiment": profile.experiment,
+-        "wrapper_config": str(wrapper_config) if wrapper_config is not None else None,
+-        "common_config": str(common.path) if common is not None else None,
+-        "seed_id": args.seed_id,
+-        "device": requested_device,
+-        "gpu_id": (0 if requested_device == "gpu" and gpu_id is None else gpu_id),
+-        "run_id": run.run_id,
+-        "generation_id": generation.generation_dir.name,
+-        "num_samples": generation.num_generated,
+-        "run_dir": str(training.run_dir.resolve()),
+-        "checkpoint": str(training.checkpoint_path.resolve()),
+-        "training_manifest": str(training.manifest_path.resolve()),
+-        "training_estimated_graphs": (
+-            str(training.estimated_graphs_path.resolve())
+-            if training.estimated_graphs_path is not None
+-            else None
+-        ),
+-        "training_ground_truth_graphs": (
+-            str(training.ground_truth_graphs_path.resolve())
+-            if training.ground_truth_graphs_path is not None
+-            else None
+-        ),
+-        "training_ground_truth_model_view": (
+-            str(training.ground_truth_model_view_graphs_path.resolve())
+-            if training.ground_truth_model_view_graphs_path is not None
+-            else None
+-        ),
+-        "generated_graphs": str(generation.graphs_path.resolve()),
+-        "generation_manifest": str(generation.manifest_path.resolve()),
+-        "graphs_sha256": generation.graphs_sha256,
+-    }
+-
+-
+-def main(argv: Sequence[str] | None = None) -> int:
+-    args = build_parser().parse_args(argv)
+-    try:
+-        summary = run_pipeline(args)
+-    except Exception as exc:
+-        _status(
+-            f"FAILED: {type(exc).__name__}: {exc}", enabled=not args.quiet
+-        )
+-        raise
+-    print(json.dumps(summary, indent=2, sort_keys=True))
+-    return 0
+-
++#!/usr/bin/env python3
++"""Run digress through the shared GraphER baseline CLI."""
++from grapher.models.external_cli import main
+ 
+ if __name__ == "__main__":
+-    raise SystemExit(main())
++    raise SystemExit(main("digress"))
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/scripts/run_edge_baseline.py b/scripts/run_edge_baseline.py
+--- a/scripts/run_edge_baseline.py	2026-09-14 09:56:52.000000000 +0000
++++ b/scripts/run_edge_baseline.py	2026-09-15 19:32:33.005344055 +0000
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env python3
+-"""Train/generate EDGE with common-reference then model-specific config precedence."""
++"""Run edge through the shared GraphER baseline CLI."""
+ from grapher.models.external_cli import main
+ 
+ if __name__ == "__main__":
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/scripts/run_gdsm_baseline.py b/scripts/run_gdsm_baseline.py
+--- a/scripts/run_gdsm_baseline.py	2026-09-14 09:56:52.000000000 +0000
++++ b/scripts/run_gdsm_baseline.py	2026-09-15 19:32:33.008737681 +0000
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env python3
+-"""Train/generate GDSM with common-reference then model-specific config precedence."""
++"""Run gdsm through the shared GraphER baseline CLI."""
+ from grapher.models.external_cli import main
+ 
+ if __name__ == "__main__":
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/scripts/run_gdss_baseline.py b/scripts/run_gdss_baseline.py
+--- a/scripts/run_gdss_baseline.py	2026-09-14 09:46:56.000000000 +0000
++++ b/scripts/run_gdss_baseline.py	2026-09-15 19:32:33.012165387 +0000
+@@ -1,242 +1,6 @@
+ #!/usr/bin/env python3
+-"""Train and sample GDSS through GraphER's common baseline wrapper."""
+-
+-from __future__ import annotations
+-
+-import argparse
+-import json
+-import os
+-import sys
+-from dataclasses import dataclass
+-from datetime import datetime, timezone
+-from pathlib import Path
+-from typing import Sequence
+-
+-from grapher.models import DatasetReference, GenerateRequest, RunSpec, TrainRequest, create_baseline
+-from grapher.models.comparison import (
+-    comparison_request_options,
+-    resolve_common_config,
+-    resolve_wrapper_config,
+-)
+-
+-
+-@dataclass(frozen=True)
+-class DatasetProfile:
+-    serialized_id: str
+-    native_id: str
+-
+-
+-DATASET_PROFILES: dict[str, DatasetProfile] = {
+-    "community_small": DatasetProfile(serialized_id="sbm", native_id="community_small"),
+-    "ego_small": DatasetProfile(serialized_id="ego_small", native_id="ego_small"),
+-    "grid": DatasetProfile(serialized_id="grid", native_id="grid"),
+-    "qm9": DatasetProfile(serialized_id="qm9_attributed", native_id="QM9"),
+-    "zinc": DatasetProfile(serialized_id="zinc", native_id="ZINC250k"),
+-}
+-
+-
+-def _positive_int(raw: str) -> int:
+-    value = int(raw)
+-    if value <= 0:
+-        raise argparse.ArgumentTypeError("value must be a positive integer")
+-    return value
+-
+-
+-def _nonnegative_int(raw: str) -> int:
+-    value = int(raw)
+-    if value < 0:
+-        raise argparse.ArgumentTypeError("value must be a non-negative integer")
+-    return value
+-
+-
+-def _positive_float(raw: str) -> float:
+-    value = float(raw)
+-    if value <= 0:
+-        raise argparse.ArgumentTypeError("value must be positive")
+-    return value
+-
+-
+-def _status(message: str, *, enabled: bool = True) -> None:
+-    if not enabled:
+-        return
+-    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+-    print(f"[run_gdss_baseline {timestamp}] {message}", file=sys.stderr, flush=True)
+-
+-
+-def build_parser() -> argparse.ArgumentParser:
+-    parser = argparse.ArgumentParser(
+-        description="Train the attached GDSS baseline on GraphER splits and publish an exact raw graph batch."
+-    )
+-    parser.add_argument("--dataset", required=True, choices=tuple(DATASET_PROFILES))
+-    parser.add_argument("--num-samples", required=True, type=_positive_int)
+-    parser.add_argument("--seed-id", "--seed", dest="seed_id", required=True, type=_nonnegative_int)
+-    parser.add_argument("--dataset-root", type=Path, default=Path("outputs/datasets"))
+-    parser.add_argument("--output-root", type=Path, default=Path("outputs/baselines"))
+-    parser.add_argument("--run-id", default=None)
+-    parser.add_argument("--generation-id", default=None)
+-    parser.add_argument("--wrapper-config", type=Path, default=None, help="Model-specific YAML; defaults to configs/baselines/gdss_<dataset>.yaml.")
+-    parser.add_argument("--common-config", type=Path, default=None, help="DeFoG-reference common profile; defaults to configs/baselines/common_<dataset>.yaml.")
+-    parser.add_argument("--no-common-config", action="store_true", help="Disable automatic common-profile loading for a native-only diagnostic run.")
+-    parser.add_argument("--gdss-root", type=Path, default=None)
+-    parser.add_argument("--gdss-python", type=Path, default=None)
+-    parser.add_argument("--overwrite", action="store_true")
+-
+-    parser.add_argument("--num-epochs", type=_positive_int, default=None)
+-    parser.add_argument("--batch-size", type=_positive_int, default=None)
+-    parser.add_argument("--num-workers", type=_nonnegative_int, default=None)
+-    parser.add_argument("--generation-batch-size", type=_positive_int, default=None)
+-    parser.add_argument(
+-        "--device",
+-        choices=("auto", "cpu", "gpu", "cuda", "cuda:0", "cuda:1", "cuda:2", "cuda:3"),
+-        default=None,
+-    )
+-    parser.add_argument("--cuda-visible-devices", default=None)
+-    parser.add_argument("--timeout-seconds", type=_positive_float, default=None)
+-    parser.add_argument("--skip-training-estimates", action="store_true")
+-    parser.add_argument("--training-estimate-count", type=_positive_int, default=None)
+-    parser.add_argument("--progress-interval-seconds", type=_positive_float, default=15.0)
+-    parser.add_argument("--epoch-progress-interval", type=_positive_int, default=None)
+-    parser.add_argument("--generation-progress-every-batches", type=_positive_int, default=1)
+-    parser.add_argument("--no-stream-subprocess-output", action="store_true")
+-    parser.add_argument("--quiet", action="store_true")
+-    return parser
+-
+-
+-def _configure_environment(args: argparse.Namespace) -> None:
+-    if args.gdss_root is not None:
+-        os.environ["GDSS"] = str(args.gdss_root.expanduser().resolve())
+-    if args.gdss_python is not None:
+-        os.environ["GDSS_PYTHON"] = str(args.gdss_python.expanduser().resolve())
+-
+-
+-def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
+-    _configure_environment(args)
+-    progress_enabled = not args.quiet
+-    profile = DATASET_PROFILES[args.dataset]
+-    common = resolve_common_config(args.dataset, getattr(args, "common_config", None), disabled=getattr(args, "no_common_config", False))
+-    wrapper_config = resolve_wrapper_config("gdss", args.dataset, args.wrapper_config)
+-    progress: dict[str, object] = {
+-        "enabled": progress_enabled,
+-        "stream_output": progress_enabled and not args.no_stream_subprocess_output,
+-        "interval_seconds": args.progress_interval_seconds,
+-        "generation_batch_interval": args.generation_progress_every_batches,
+-    }
+-    if args.epoch_progress_interval is not None:
+-        progress["epoch_interval"] = args.epoch_progress_interval
+-
+-    runtime: dict[str, object] = {"progress": progress}
+-    for key in ("device", "cuda_visible_devices", "timeout_seconds"):
+-        value = getattr(args, key)
+-        if value is not None:
+-            runtime[key] = value
+-
+-    training_estimates: dict[str, object] = {"enabled": not args.skip_training_estimates}
+-    if args.training_estimate_count is not None:
+-        training_estimates["num_graphs"] = args.training_estimate_count
+-
+-    options: dict[str, object] = comparison_request_options("gdss", common, model_config=wrapper_config)
+-    options.update({
+-        "runtime": runtime,
+-        "training_estimates": training_estimates,
+-    })
+-    if args.num_epochs is not None:
+-        options["train"] = {"num_epochs": args.num_epochs}
+-    if args.batch_size is not None:
+-        options["batch_size"] = args.batch_size
+-    if args.num_workers is not None:
+-        options["num_workers"] = args.num_workers
+-    if args.generation_batch_size is not None:
+-        options["generation_batch_size"] = args.generation_batch_size
+-
+-    run = RunSpec.for_seed(
+-        model_id="gdss",
+-        dataset_id=args.dataset,
+-        seed=args.seed_id,
+-        output_root=args.output_root,
+-        run_id=args.run_id,
+-    )
+-    dataset = DatasetReference(
+-        benchmark_id=args.dataset,
+-        root=args.dataset_root,
+-        serialized_id=profile.serialized_id,
+-        native_id=profile.native_id,
+-    )
+-    _status(
+-        f"resolved run: dataset={args.dataset}, serialized={profile.serialized_id}, "
+-        f"native={profile.native_id}, run_id={run.run_id}, seed={args.seed_id}",
+-        enabled=progress_enabled,
+-    )
+-    dataset.require_prepared()
+-    wrapper = create_baseline("gdss")
+-    _status(
+-        f"prepared dataset found; starting GDSS training. Durable log: {run.layout.training_log_path.resolve()}",
+-        enabled=progress_enabled,
+-    )
+-    training = wrapper.train(
+-        TrainRequest(
+-            run=run,
+-            dataset=dataset,
+-            config_path=wrapper_config,
+-            options=options,
+-            overwrite=args.overwrite,
+-        )
+-    )
+-    _status(f"training completed: checkpoint={training.checkpoint_path.resolve()}", enabled=progress_enabled)
+-
+-    generation_options: dict[str, object] = {"runtime": runtime}
+-    if args.generation_batch_size is not None:
+-        generation_options["generation_batch_size"] = args.generation_batch_size
+-    generation = wrapper.generate(
+-        GenerateRequest(
+-            run=run,
+-            checkpoint_path=training.checkpoint_path,
+-            num_graphs=args.num_samples,
+-            generation_seed=args.seed_id,
+-            generation_id=args.generation_id,
+-            options=generation_options,
+-            overwrite=args.overwrite,
+-        )
+-    )
+-    if generation.num_generated != args.num_samples:
+-        raise RuntimeError(f"GDSS generated {generation.num_generated}; expected {args.num_samples}.")
+-    _status(f"generation completed: graphs={generation.graphs_path.resolve()}", enabled=progress_enabled)
+-    return {
+-        "status": "complete",
+-        "model": "gdss",
+-        "dataset": args.dataset,
+-        "serialized_dataset": profile.serialized_id,
+-        "native_dataset": profile.native_id,
+-        "wrapper_config": str(wrapper_config) if wrapper_config is not None else None,
+-        "common_config": str(common.path) if common is not None else None,
+-        "seed_id": args.seed_id,
+-        "run_id": run.run_id,
+-        "generation_id": generation.generation_dir.name,
+-        "num_samples": generation.num_generated,
+-        "run_dir": str(training.run_dir.resolve()),
+-        "checkpoint": str(training.checkpoint_path.resolve()),
+-        "training_manifest": str(training.manifest_path.resolve()),
+-        "training_estimated_graphs": (
+-            str(training.estimated_graphs_path.resolve()) if training.estimated_graphs_path is not None else None
+-        ),
+-        "training_ground_truth_graphs": (
+-            str(training.ground_truth_graphs_path.resolve()) if training.ground_truth_graphs_path is not None else None
+-        ),
+-        "generated_graphs": str(generation.graphs_path.resolve()),
+-        "generation_manifest": str(generation.manifest_path.resolve()),
+-        "graphs_sha256": generation.graphs_sha256,
+-    }
+-
+-
+-def main(argv: Sequence[str] | None = None) -> int:
+-    args = build_parser().parse_args(argv)
+-    try:
+-        summary = run_pipeline(args)
+-    except Exception as exc:
+-        _status(f"FAILED: {type(exc).__name__}: {exc}", enabled=not args.quiet)
+-        raise
+-    print(json.dumps(summary, indent=2, sort_keys=True))
+-    return 0
+-
++"""Run gdss through the shared GraphER baseline CLI."""
++from grapher.models.external_cli import main
+ 
+ if __name__ == "__main__":
+-    raise SystemExit(main())
++    raise SystemExit(main("gdss"))
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/scripts/run_graphrnn_baseline.py b/scripts/run_graphrnn_baseline.py
+--- a/scripts/run_graphrnn_baseline.py	2026-09-14 09:47:26.000000000 +0000
++++ b/scripts/run_graphrnn_baseline.py	2026-09-15 19:32:33.015814009 +0000
+@@ -1,438 +1,6 @@
+-#!/usr/bin/env python
+-"""Train GraphRNN on a prepared GraphES dataset and generate one raw batch.
+-
+-The script mirrors ``run_defog_baseline.py`` and deliberately remains a thin
+-orchestration layer. Dataset conversion, isolated execution of the attached
+-GraphRNN modules, checkpoint publication, exact-count generation, validation,
+-hashing, and manifests are handled by ``GraphRNNWrapper``.
+-"""
+-
+-from __future__ import annotations
+-
+-import argparse
+-import json
+-import os
+-import sys
+-from dataclasses import dataclass
+-from datetime import datetime, timezone
+-from pathlib import Path
+-from typing import Sequence
+-
+-from grapher.models import (
+-    DatasetReference,
+-    GenerateRequest,
+-    RunSpec,
+-    TrainRequest,
+-    create_baseline,
+-)
+-from grapher.models.comparison import (
+-    comparison_request_options,
+-    resolve_common_config,
+-    resolve_wrapper_config,
+-)
+-
+-
+-@dataclass(frozen=True)
+-class DatasetProfile:
+-    """GraphES storage identity for a supported generic benchmark."""
+-
+-    serialized_id: str
+-    native_id: str
+-
+-
+-DATASET_PROFILES: dict[str, DatasetProfile] = {
+-    "community_small": DatasetProfile(serialized_id="sbm", native_id="community_small"),
+-    "ego_small": DatasetProfile(serialized_id="ego_small", native_id="ego_small"),
+-    "grid": DatasetProfile(serialized_id="grid", native_id="grid"),
+-}
+-
+-
+-def _positive_int(raw: str) -> int:
+-    value = int(raw)
+-    if value <= 0:
+-        raise argparse.ArgumentTypeError("value must be a positive integer")
+-    return value
+-
+-
+-def _nonnegative_int(raw: str) -> int:
+-    value = int(raw)
+-    if value < 0:
+-        raise argparse.ArgumentTypeError("value must be a non-negative integer")
+-    return value
+-
+-
+-def _positive_float(raw: str) -> float:
+-    value = float(raw)
+-    if value <= 0:
+-        raise argparse.ArgumentTypeError("value must be positive")
+-    return value
+-
+-
+-def _status(message: str, *, enabled: bool = True) -> None:
+-    """Write progress to stderr while preserving JSON-only stdout."""
+-
+-    if not enabled:
+-        return
+-    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+-    print(
+-        f"[run_graphrnn_baseline {timestamp}] {message}",
+-        file=sys.stderr,
+-        flush=True,
+-    )
+-
+-
+-def build_parser() -> argparse.ArgumentParser:
+-    parser = argparse.ArgumentParser(
+-        description=(
+-            "Train the GraphRNN baseline through its isolated GraphES wrapper, "
+-            "then generate and serialize an exact raw graph batch."
+-        )
+-    )
+-    parser.add_argument(
+-        "--dataset",
+-        required=True,
+-        choices=tuple(DATASET_PROFILES),
+-        help="Prepared generic GraphES benchmark to use.",
+-    )
+-    parser.add_argument(
+-        "--num-samples",
+-        required=True,
+-        type=_positive_int,
+-        help="Exact number of graphs to generate after training.",
+-    )
+-    parser.add_argument(
+-        "--seed-id",
+-        "--seed",
+-        dest="seed_id",
+-        required=True,
+-        type=_nonnegative_int,
+-        help="Seed used for training and the requested generation batch.",
+-    )
+-    parser.add_argument(
+-        "--dataset-root",
+-        type=Path,
+-        default=Path("outputs/datasets"),
+-        help="Root containing prepared train.pkl, val.pkl, and test.pkl files.",
+-    )
+-    parser.add_argument(
+-        "--output-root",
+-        type=Path,
+-        default=Path("outputs/baselines"),
+-        help="Root for managed GraphRNN checkpoints and raw generations.",
+-    )
+-    parser.add_argument(
+-        "--run-id",
+-        default=None,
+-        help="Optional run identifier; defaults to seed_<seed-id>.",
+-    )
+-    parser.add_argument(
+-        "--generation-id",
+-        default=None,
+-        help=(
+-            "Optional generation identifier; defaults to "
+-            "seed_<seed-id>_n_<num-samples>."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--wrapper-config",
+-        type=Path,
+-        default=None,
+-        help="Model-specific YAML; defaults to configs/baselines/graphrnn_<dataset>.yaml.",
+-    )
+-    parser.add_argument(
+-        "--common-config",
+-        type=Path,
+-        default=None,
+-        help="DeFoG-reference common profile; defaults to configs/baselines/common_<dataset>.yaml.",
+-    )
+-    parser.add_argument(
+-        "--no-common-config",
+-        action="store_true",
+-        help="Disable automatic common-profile loading for a native-only diagnostic run.",
+-    )
+-    parser.add_argument(
+-        "--resume-from",
+-        type=Path,
+-        default=None,
+-        help="Optional managed GraphRNN checkpoint from which to resume.",
+-    )
+-    parser.add_argument(
+-        "--graphrnn-root",
+-        type=Path,
+-        default=None,
+-        help=(
+-            "Attached GraphRNN source root; otherwise use the GRAPHRNN "
+-            "environment variable."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--graphrnn-python",
+-        type=Path,
+-        default=None,
+-        help=(
+-            "Python executable containing torch and numpy; otherwise use "
+-            "GRAPHRNN_PYTHON or the current interpreter."
+-        ),
+-    )
+-    parser.add_argument(
+-        "--overwrite",
+-        action="store_true",
+-        help=(
+-            "Explicitly replace matching artifacts. A trained run with existing "
+-            "generation batches cannot be overwritten."
+-        ),
+-    )
+-
+-    # High-value model/training overrides. All remaining settings stay in YAML.
+-    parser.add_argument(
+-        "--variant",
+-        choices=("GraphRNN_RNN", "GraphRNN_MLP"),
+-        default=None,
+-        help="Dependent-output-RNN (paper default) or independent-output MLP.",
+-    )
+-    parser.add_argument(
+-        "--n-epochs",
+-        "--epochs",
+-        dest="epochs",
+-        type=_positive_int,
+-        default=None,
+-        help=(
+-            "Total GraphRNN training horizon. When resuming, this is the total "
+-            "horizon rather than a number of additional epochs."
+-        ),
+-    )
+-    parser.add_argument("--batch-size", type=_positive_int, default=None)
+-    parser.add_argument(
+-        "--batch-ratio",
+-        type=_positive_int,
+-        default=None,
+-        help="Number of sampled mini-batches per GraphRNN epoch.",
+-    )
+-    parser.add_argument(
+-        "--max-prev-node",
+-        type=_positive_int,
+-        default=None,
+-        help="Maximum BFS look-back width used by the adjacency sequence.",
+-    )
+-    parser.add_argument("--num-workers", type=_nonnegative_int, default=None)
+-    parser.add_argument(
+-        "--generation-batch-size", type=_positive_int, default=None
+-    )
+-    parser.add_argument(
+-        "--sample-time",
+-        type=_positive_int,
+-        default=None,
+-        help="Bernoulli retry count for GraphRNN_MLP sampling.",
+-    )
+-    parser.add_argument(
+-        "--device",
+-        default=None,
+-        help="Runtime device override, for example auto, cpu, cuda, or cuda:0.",
+-    )
+-    parser.add_argument(
+-        "--cuda-visible-devices",
+-        default=None,
+-        help="Optional CUDA_VISIBLE_DEVICES value passed to isolated workers.",
+-    )
+-    parser.add_argument(
+-        "--timeout-seconds",
+-        type=_positive_float,
+-        default=None,
+-        help="Optional timeout applied separately to training and generation.",
+-    )
+-    parser.add_argument(
+-        "--skip-training-estimates",
+-        action="store_true",
+-        help="Do not generate the optional independent post-training source pool.",
+-    )
+-    parser.add_argument(
+-        "--training-estimate-count",
+-        type=_positive_int,
+-        default=None,
+-        help="Size of the optional independent post-training source pool.",
+-    )
+-
+-    # Stable progress controls shared with the other baseline runners.
+-    parser.add_argument(
+-        "--progress-interval-seconds", type=_positive_float, default=15.0
+-    )
+-    parser.add_argument("--epoch-progress-interval", type=_positive_int, default=None)
+-    parser.add_argument(
+-        "--generation-progress-every-batches", type=_positive_int, default=1
+-    )
+-    parser.add_argument("--no-stream-subprocess-output", action="store_true")
+-    parser.add_argument("--quiet", action="store_true")
+-    return parser
+-
+-
+-def _configure_environment(args: argparse.Namespace) -> None:
+-    if args.graphrnn_root is not None:
+-        os.environ["GRAPHRNN"] = str(args.graphrnn_root.expanduser().resolve())
+-    if args.graphrnn_python is not None:
+-        os.environ["GRAPHRNN_PYTHON"] = str(
+-            args.graphrnn_python.expanduser().resolve()
+-        )
+-
+-
+-def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
+-    """Run one managed train-then-generate transaction."""
+-
+-    _configure_environment(args)
+-    progress_enabled = not args.quiet
+-    profile = DATASET_PROFILES[args.dataset]
+-    common = resolve_common_config(args.dataset, getattr(args, "common_config", None), disabled=getattr(args, "no_common_config", False))
+-    wrapper_config = resolve_wrapper_config("graphrnn", args.dataset, args.wrapper_config)
+-    progress: dict[str, object] = {
+-        "enabled": progress_enabled,
+-        "stream_output": (
+-            progress_enabled and not args.no_stream_subprocess_output
+-        ),
+-        "interval_seconds": args.progress_interval_seconds,
+-        "generation_batch_interval": args.generation_progress_every_batches,
+-    }
+-    if args.epoch_progress_interval is not None:
+-        progress["epoch_interval"] = args.epoch_progress_interval
+-
+-    training_estimates: dict[str, object] = {
+-        "enabled": not args.skip_training_estimates
+-    }
+-    if args.training_estimate_count is not None:
+-        training_estimates["num_graphs"] = args.training_estimate_count
+-
+-    runtime_options: dict[str, object] = {"progress": progress}
+-    for key in ("device", "cuda_visible_devices", "timeout_seconds"):
+-        value = getattr(args, key)
+-        if value is not None:
+-            runtime_options[key] = value
+-
+-    training_options: dict[str, object] = comparison_request_options("graphrnn", common, model_config=wrapper_config)
+-    training_options.update({
+-        "training_estimates": training_estimates,
+-        "runtime": runtime_options,
+-    })
+-    for key in (
+-        "variant",
+-        "epochs",
+-        "batch_size",
+-        "batch_ratio",
+-        "max_prev_node",
+-        "num_workers",
+-        "generation_batch_size",
+-        "sample_time",
+-    ):
+-        value = getattr(args, key)
+-        if value is not None:
+-            training_options[key] = value
+-
+-    run = RunSpec.for_seed(
+-        model_id="graphrnn",
+-        dataset_id=args.dataset,
+-        seed=args.seed_id,
+-        run_id=args.run_id,
+-        output_root=args.output_root,
+-    )
+-    dataset = DatasetReference(
+-        benchmark_id=args.dataset,
+-        root=args.dataset_root,
+-        serialized_id=profile.serialized_id,
+-        native_id=profile.native_id,
+-    )
+-    _status(
+-        "resolved run: "
+-        f"dataset={args.dataset}, serialized={profile.serialized_id}, "
+-        f"run_id={run.run_id}, seed={args.seed_id}",
+-        enabled=progress_enabled,
+-    )
+-    dataset.require_prepared()
+-
+-    wrapper = create_baseline("graphrnn")
+-    _status(
+-        "prepared dataset found; starting isolated GraphRNN training. "
+-        f"Durable log: {run.layout.training_log_path.resolve()}",
+-        enabled=progress_enabled,
+-    )
+-    training = wrapper.train(
+-        TrainRequest(
+-            run=run,
+-            dataset=dataset,
+-            config_path=wrapper_config,
+-            options=training_options,
+-            resume_from=args.resume_from,
+-            overwrite=args.overwrite,
+-        )
+-    )
+-    _status(
+-        f"training completed: checkpoint={training.checkpoint_path.resolve()}",
+-        enabled=progress_enabled,
+-    )
+-
+-    generation_options: dict[str, object] = {"runtime": runtime_options}
+-    if args.generation_batch_size is not None:
+-        generation_options["generation_batch_size"] = args.generation_batch_size
+-    if args.sample_time is not None:
+-        generation_options["sample_time"] = args.sample_time
+-    generation = wrapper.generate(
+-        GenerateRequest(
+-            run=run,
+-            checkpoint_path=training.checkpoint_path,
+-            num_graphs=args.num_samples,
+-            generation_seed=args.seed_id,
+-            generation_id=args.generation_id,
+-            options=generation_options,
+-            overwrite=args.overwrite,
+-        )
+-    )
+-    if generation.num_generated != args.num_samples:
+-        raise RuntimeError(
+-            f"GraphRNN generated {generation.num_generated}; expected "
+-            f"{args.num_samples}."
+-        )
+-    _status(
+-        f"generation completed: graphs={generation.graphs_path.resolve()}",
+-        enabled=progress_enabled,
+-    )
+-
+-    return {
+-        "status": "complete",
+-        "model": "graphrnn",
+-        "dataset": args.dataset,
+-        "serialized_dataset": profile.serialized_id,
+-        "native_dataset": profile.native_id,
+-        "wrapper_config": str(wrapper_config) if wrapper_config is not None else None,
+-        "common_config": str(common.path) if common is not None else None,
+-        "seed_id": args.seed_id,
+-        "run_id": run.run_id,
+-        "generation_id": generation.generation_dir.name,
+-        "num_samples": generation.num_generated,
+-        "run_dir": str(training.run_dir.resolve()),
+-        "checkpoint": str(training.checkpoint_path.resolve()),
+-        "training_manifest": str(training.manifest_path.resolve()),
+-        "training_estimated_graphs": (
+-            str(training.estimated_graphs_path.resolve())
+-            if training.estimated_graphs_path is not None
+-            else None
+-        ),
+-        "training_ground_truth_graphs": (
+-            str(training.ground_truth_graphs_path.resolve())
+-            if training.ground_truth_graphs_path is not None
+-            else None
+-        ),
+-        "generated_graphs": str(generation.graphs_path.resolve()),
+-        "generation_manifest": str(generation.manifest_path.resolve()),
+-        "graphs_sha256": generation.graphs_sha256,
+-    }
+-
+-
+-def main(argv: Sequence[str] | None = None) -> int:
+-    args = build_parser().parse_args(argv)
+-    try:
+-        summary = run_pipeline(args)
+-    except Exception as exc:
+-        _status(f"FAILED: {type(exc).__name__}: {exc}", enabled=not args.quiet)
+-        raise
+-    print(json.dumps(summary, indent=2, sort_keys=True))
+-    return 0
+-
++#!/usr/bin/env python3
++"""Run graphrnn through the shared GraphER baseline CLI."""
++from grapher.models.external_cli import main
+ 
+ if __name__ == "__main__":
+-    raise SystemExit(main())
++    raise SystemExit(main("graphrnn"))
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/scripts/run_gsdm_baseline.py b/scripts/run_gsdm_baseline.py
+--- a/scripts/run_gsdm_baseline.py	2026-09-14 09:56:52.000000000 +0000
++++ b/scripts/run_gsdm_baseline.py	2026-09-15 19:32:33.025264208 +0000
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env python3
+-"""Train/generate GSDM with common-reference then model-specific config precedence."""
++"""Compatibility alias for GSDM/GDSM through the shared GraphER baseline CLI."""
+ from grapher.models.external_cli import main
+ 
+ if __name__ == "__main__":
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/scripts/run_hog_diff_baseline.py b/scripts/run_hog_diff_baseline.py
+--- a/scripts/run_hog_diff_baseline.py	2026-09-16 05:17:42.000000000 +0000
++++ b/scripts/run_hog_diff_baseline.py	2026-09-15 19:32:33.019067668 +0000
+@@ -1,331 +1,6 @@
+-#!/usr/bin/env python
+-"""Train HOG-Diff on a prepared GraphER dataset and generate one raw batch."""
+-
+-from __future__ import annotations
+-
+-import argparse
+-import json
+-import os
+-import sys
+-from dataclasses import dataclass
+-from datetime import datetime, timezone
+-from pathlib import Path
+-from typing import Sequence
+-
+-from grapher.models import (
+-    DatasetReference,
+-    GenerateRequest,
+-    RunSpec,
+-    TrainRequest,
+-    create_baseline,
+-)
+-from grapher.models.comparison import (
+-    comparison_request_options,
+-    resolve_common_config,
+-    resolve_wrapper_config,
+-)
+-
+-def positive(raw: str) -> int:
+-    n = int(raw)
+-    if n <= 0:
+-        raise argparse.ArgumentTypeError("Expected a positive integer.")
+-    return n
+-
+-@dataclass(frozen=True)
+-class DatasetProfile:
+-    serialized_id: str
+-    native_id: str
+-
+-
+-DATASET_PROFILES: dict[str, DatasetProfile] = {
+-    "community_small": DatasetProfile(serialized_id="sbm", native_id="community_small"),
+-    "ego_small": DatasetProfile(serialized_id="ego_small", native_id="ego_small"),
+-    "qm9": DatasetProfile(serialized_id="qm9_attributed", native_id="qm9"),
+-    "zinc": DatasetProfile(serialized_id="zinc", native_id="zinc250k"),
+-}
+-
+-
+-def _positive_int(raw: str) -> int:
+-    value = int(raw)
+-    if value <= 0:
+-        raise argparse.ArgumentTypeError("value must be a positive integer")
+-    return value
+-
+-
+-def _nonnegative_int(raw: str) -> int:
+-    value = int(raw)
+-    if value < 0:
+-        raise argparse.ArgumentTypeError("value must be a non-negative integer")
+-    return value
+-
+-
+-def _positive_float(raw: str) -> float:
+-    value = float(raw)
+-    if value <= 0:
+-        raise argparse.ArgumentTypeError("value must be positive")
+-    return value
+-
+-
+-def _status(message: str, *, enabled: bool = True) -> None:
+-    if not enabled:
+-        return
+-    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+-    print(f"[run_hog_diff_baseline {timestamp}] {message}", file=sys.stderr, flush=True)
+-
+-
+-def build_parser() -> argparse.ArgumentParser:
+-    parser = argparse.ArgumentParser(
+-        description=(
+-            "Train the attached two-stage HOG-Diff baseline through GraphER's "
+-            "isolated wrapper and publish an exact raw graph batch."
+-        )
+-    )
+-    parser.add_argument("--dataset", required=True, choices=tuple(DATASET_PROFILES))
+-    parser.add_argument("--num-samples", type=positive, default=1024)
+-    parser.add_argument("--seed-id", "--seed", dest="seed_id", required=True, type=_nonnegative_int)
+-    parser.add_argument("--dataset-root", type=Path, default=Path("outputs/datasets"))
+-    parser.add_argument("--output-root", type=Path, default=Path("outputs/baselines"))
+-    parser.add_argument("--run-id", default=None)
+-    parser.add_argument("--generation-id", default=None)
+-    parser.add_argument("--wrapper-config", type=Path, default=None, help="Model-specific YAML; defaults to configs/baselines/hog_diff_<dataset>.yaml.")
+-    parser.add_argument("--common-config", type=Path, default=None, help="DeFoG-reference common profile. HOG-Diff keeps its two native stage budgets from the model YAML.")
+-    parser.add_argument("--no-common-config", action="store_true", help="Disable automatic common-profile loading for a native-only diagnostic run.")
+-    parser.add_argument("--resume-from", type=Path, default=None)
+-    parser.add_argument(
+-        "--hogdiff-root",
+-        type=Path,
+-        default=None,
+-        help="HOG-Diff source root; otherwise use HOGDIFF.",
+-    )
+-    parser.add_argument(
+-        "--hogdiff-python",
+-        type=Path,
+-        default=None,
+-        help="Python executable with HOG-Diff dependencies; otherwise use HOGDIFF_PYTHON.",
+-    )
+-    parser.add_argument("--overwrite", action="store_true")
+-
+-    parser.add_argument(
+-        "--ho-iters",
+-        type=_nonnegative_int,
+-        default=None,
+-        help="Override higher-order VPSDE training.n_iters.",
+-    )
+-    parser.add_argument(
+-        "--ou-iters",
+-        type=_nonnegative_int,
+-        default=None,
+-        help="Override conditional OU-bridge training.n_iters.",
+-    )
+-    parser.add_argument("--ho-batch-size", type=_positive_int, default=None)
+-    parser.add_argument("--ou-batch-size", type=_positive_int, default=None)
+-    parser.add_argument("--num-workers", type=_nonnegative_int, default=None)
+-    parser.add_argument("--generation-batch-size", type=_positive_int, default=None)
+-    parser.add_argument(
+-        "--generation-max-retries",
+-        type=_nonnegative_int,
+-        default=None,
+-        help="Retry an upstream generation batch that produces NaNs (default: 8).",
+-    )
+-    parser.add_argument(
+-        "--generation-only",
+-        action="store_true",
+-        help="Reuse this run's completed managed checkpoint and skip both training stages.",
+-    )
+-    parser.add_argument(
+-        "--device",
+-        choices=("auto", "cpu", "gpu", "cuda", "cuda:0", "cuda:1", "cuda:2", "cuda:3"),
+-        default=None,
+-    )
+-    parser.add_argument("--cuda-visible-devices", default=None)
+-    parser.add_argument("--timeout-seconds", type=_positive_float, default=None)
+-    parser.add_argument("--skip-training-estimates", action="store_true")
+-    parser.add_argument("--training-estimate-count", type=_positive_int, default=None)
+-    parser.add_argument("--progress-interval-seconds", type=_positive_float, default=15.0)
+-    parser.add_argument("--iteration-progress-interval", type=_positive_int, default=None)
+-    parser.add_argument("--generation-progress-every-batches", type=_positive_int, default=1)
+-    parser.add_argument("--no-stream-subprocess-output", action="store_true")
+-    parser.add_argument("--quiet", action="store_true")
+-    return parser
+-
+-
+-def _configure_environment(args: argparse.Namespace) -> None:
+-    if args.hogdiff_root is not None:
+-        os.environ["HOGDIFF"] = str(args.hogdiff_root.expanduser().resolve())
+-    if args.hogdiff_python is not None:
+-        os.environ["HOGDIFF_PYTHON"] = str(args.hogdiff_python.expanduser().resolve())
+-
+-
+-def run_pipeline(args: argparse.Namespace) -> dict[str, object]:
+-    _configure_environment(args)
+-    progress_enabled = not args.quiet
+-    profile = DATASET_PROFILES[args.dataset]
+-    common = resolve_common_config(args.dataset, getattr(args, "common_config", None), disabled=getattr(args, "no_common_config", False))
+-    wrapper_config = resolve_wrapper_config("hog_diff", args.dataset, args.wrapper_config)
+-    progress: dict[str, object] = {
+-        "enabled": progress_enabled,
+-        "stream_output": progress_enabled and not args.no_stream_subprocess_output,
+-        "interval_seconds": args.progress_interval_seconds,
+-        "generation_batch_interval": args.generation_progress_every_batches,
+-    }
+-    if args.iteration_progress_interval is not None:
+-        progress["iteration_interval"] = args.iteration_progress_interval
+-
+-    runtime: dict[str, object] = {"progress": progress}
+-    for key in ("device", "cuda_visible_devices", "timeout_seconds"):
+-        value = getattr(args, key)
+-        if value is not None:
+-            runtime[key] = value
+-
+-    training_estimates: dict[str, object] = {"enabled": not args.skip_training_estimates}
+-    if args.training_estimate_count is not None:
+-        training_estimates["num_graphs"] = args.training_estimate_count
+-
+-    options: dict[str, object] = comparison_request_options("hog_diff", common, model_config=wrapper_config)
+-    options.update({
+-        "runtime": runtime,
+-        "training_estimates": training_estimates,
+-    })
+-    if args.num_workers is not None:
+-        options["num_workers"] = args.num_workers
+-    if args.generation_batch_size is not None:
+-        options["generation_batch_size"] = args.generation_batch_size
+-    if args.generation_max_retries is not None:
+-        options["generation_max_retries"] = args.generation_max_retries
+-    higher_order: dict[str, object] = {}
+-    if args.ho_iters is not None:
+-        higher_order["n_iters"] = args.ho_iters
+-    if args.ho_batch_size is not None:
+-        higher_order["batch_size"] = args.ho_batch_size
+-    if higher_order:
+-        options["higher_order"] = higher_order
+-    ou: dict[str, object] = {}
+-    if args.ou_iters is not None:
+-        ou["n_iters"] = args.ou_iters
+-    if args.ou_batch_size is not None:
+-        ou["batch_size"] = args.ou_batch_size
+-    if ou:
+-        options["ou"] = ou
+-
+-    run = RunSpec.for_seed(
+-        model_id="hog_diff",
+-        dataset_id=args.dataset,
+-        seed=args.seed_id,
+-        output_root=args.output_root,
+-        run_id=args.run_id,
+-    )
+-    dataset = DatasetReference(
+-        benchmark_id=args.dataset,
+-        root=args.dataset_root,
+-        serialized_id=profile.serialized_id,
+-        native_id=profile.native_id,
+-    )
+-    _status(
+-        f"resolved run: dataset={args.dataset}, serialized={profile.serialized_id}, "
+-        f"native={profile.native_id}, run_id={run.run_id}, seed={args.seed_id}",
+-        enabled=progress_enabled,
+-    )
+-    wrapper = create_baseline("hog_diff")
+-    if args.generation_only:
+-        checkpoint_path = run.layout.checkpoints_dir / "hog_diff.pth"
+-        if not checkpoint_path.is_file() or not run.layout.training_manifest_path.is_file():
+-            raise RuntimeError(
+-                "--generation-only requires an existing completed managed HOG-Diff run at "
+-                f"{run.layout.run_dir.resolve()}."
+-            )
+-        _status(
+-            f"reusing completed managed checkpoint: {checkpoint_path.resolve()}",
+-            enabled=progress_enabled,
+-        )
+-    else:
+-        dataset.require_prepared()
+-        _status(
+-            "prepared dataset found; starting higher-order then OU HOG-Diff training. "
+-            f"Durable log: {run.layout.training_log_path.resolve()}",
+-            enabled=progress_enabled,
+-        )
+-        training = wrapper.train(
+-            TrainRequest(
+-                run=run,
+-                dataset=dataset,
+-                config_path=wrapper_config,
+-                options=options,
+-                resume_from=args.resume_from,
+-                overwrite=args.overwrite,
+-            )
+-        )
+-        checkpoint_path = training.checkpoint_path
+-        _status(
+-            f"training completed: checkpoint={checkpoint_path.resolve()}",
+-            enabled=progress_enabled,
+-        )
+-
+-    generation_options: dict[str, object] = {"runtime": runtime}
+-    if args.generation_batch_size is not None:
+-        generation_options["generation_batch_size"] = args.generation_batch_size
+-    if args.generation_max_retries is not None:
+-        generation_options["generation_max_retries"] = args.generation_max_retries
+-    generation = wrapper.generate(
+-        GenerateRequest(
+-            run=run,
+-            checkpoint_path=checkpoint_path,
+-            num_graphs=args.num_samples,
+-            generation_seed=args.seed_id,
+-            generation_id=args.generation_id,
+-            options=generation_options,
+-            overwrite=args.overwrite,
+-        )
+-    )
+-    if generation.num_generated != args.num_samples:
+-        raise RuntimeError(
+-            f"HOG-Diff generated {generation.num_generated}; expected {args.num_samples}."
+-        )
+-    _status(
+-        f"generation completed: graphs={generation.graphs_path.resolve()}",
+-        enabled=progress_enabled,
+-    )
+-    return {
+-        "status": "complete",
+-        "model": "hog_diff",
+-        "dataset": args.dataset,
+-        "serialized_dataset": profile.serialized_id,
+-        "native_dataset": profile.native_id,
+-        "wrapper_config": str(wrapper_config) if wrapper_config is not None else None,
+-        "common_config": str(common.path) if common is not None else None,
+-        "seed_id": args.seed_id,
+-        "run_id": run.run_id,
+-        "generation_id": generation.generation_dir.name,
+-        "num_samples": generation.num_generated,
+-        "training_reused": bool(args.generation_only),
+-        "run_dir": str(run.layout.run_dir.resolve()),
+-        "checkpoint": str(checkpoint_path.resolve()),
+-        "training_manifest": str(run.layout.training_manifest_path.resolve()),
+-        "training_estimated_graphs": (
+-            str(run.layout.estimated_training_graphs_path.resolve())
+-            if run.layout.estimated_training_graphs_path.is_file()
+-            else None
+-        ),
+-        "training_ground_truth_graphs": (
+-            str(run.layout.ground_truth_training_graphs_path.resolve())
+-            if run.layout.ground_truth_training_graphs_path.is_file()
+-            else None
+-        ),
+-        "generated_graphs": str(generation.graphs_path.resolve()),
+-        "generation_manifest": str(generation.manifest_path.resolve()),
+-        "graphs_sha256": generation.graphs_sha256,
+-    }
+-
+-
+-def main(argv: Sequence[str] | None = None) -> int:
+-    args = build_parser().parse_args(argv)
+-    try:
+-        summary = run_pipeline(args)
+-    except Exception as exc:
+-        _status(f"FAILED: {type(exc).__name__}: {exc}", enabled=not args.quiet)
+-        raise
+-    print(json.dumps(summary, indent=2, sort_keys=True))
+-    return 0
+-
++#!/usr/bin/env python3
++"""Run hog_diff through the shared GraphER baseline CLI."""
++from grapher.models.external_cli import main
+ 
+ if __name__ == "__main__":
+-    raise SystemExit(main())
++    raise SystemExit(main("hog_diff"))
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/scripts/run_spectre_baseline.py b/scripts/run_spectre_baseline.py
+--- a/scripts/run_spectre_baseline.py	2026-09-14 09:56:52.000000000 +0000
++++ b/scripts/run_spectre_baseline.py	2026-09-15 19:32:33.022202774 +0000
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env python3
+-"""Train/generate SPECTRE with common-reference then model-specific config precedence."""
++"""Run spectre through the shared GraphER baseline CLI."""
+ from grapher.models.external_cli import main
+ 
+ if __name__ == "__main__":
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/src/grapher/models/external_cli.py b/src/grapher/models/external_cli.py
+--- a/src/grapher/models/external_cli.py	2026-09-14 09:50:34.000000000 +0000
++++ b/src/grapher/models/external_cli.py	2026-09-15 19:33:43.257948739 +0000
+@@ -1,127 +1,915 @@
+-"""Uniform separate train/generate entry points for source-backed baselines."""
++"""Uniform command-line orchestration for GraphER baseline wrappers.
++
++Every ``scripts/run_<model>_baseline.py`` entry point is intentionally a tiny
++shim over :func:`main`.  Dataset identity, common/model config precedence,
++model-specific CLI compatibility flags, runtime controls, managed checkpoint
++reuse, and train/generate orchestration live here so baseline launchers cannot
++drift apart.
++"""
+ from __future__ import annotations
+ 
+ import argparse
+ import json
+ import os
++import sys
++from dataclasses import dataclass
++from datetime import datetime, timezone
+ from pathlib import Path
+-from typing import Sequence
+-
+-import yaml
++from typing import Any, Mapping, Sequence
+ 
+-from grapher.models import DatasetReference, GenerateRequest, RunSpec, TrainRequest, create_baseline, normalize_baseline_id
+-from grapher.models.external_codec import PROFILES
++from grapher.models import (
++    DatasetReference,
++    GenerateRequest,
++    RunSpec,
++    TrainRequest,
++    create_baseline,
++    normalize_baseline_id,
++)
+ from grapher.models.comparison import (
+     comparison_request_options,
+     resolve_common_config,
+     resolve_wrapper_config,
+ )
++from grapher.models.external_codec import PROFILES
+ 
+ 
+-def positive(raw: str) -> int:
+-    n = int(raw)
+-    if n <= 0:
+-        raise argparse.ArgumentTypeError("Expected a positive integer.")
+-    return n
++@dataclass(frozen=True)
++class DatasetCLIProfile:
++    serialized_id: str
++    native_id: str | None = None
++    experiment: str | None = None
++    dataset_config: str | None = None
+ 
+ 
+-def build_parser(model: str) -> argparse.ArgumentParser:
+-    wrapper = create_baseline(model)
+-    parser = argparse.ArgumentParser(description=f"Train/generate {wrapper.display_name} on frozen GraphER splits.")
+-    parser.add_argument("--stage", choices=("train", "generate", "all"), default="all")
+-    parser.add_argument("--dataset", required=True, choices=sorted(wrapper.supported_datasets))
+-    parser.add_argument("--seed-id", "--seed", dest="seed_id", type=int, default=42)
+-    parser.add_argument("--generation-seed", type=int)
+-    parser.add_argument("--num-samples", type=positive, default=1024)
+-    parser.add_argument("--run-id")
+-    parser.add_argument("--generation-id")
+-    parser.add_argument("--dataset-root", type=Path, default=Path("outputs/datasets"))
+-    parser.add_argument("--serialized-dataset")
+-    parser.add_argument("--output-root", type=Path, default=Path("outputs/baselines"))
+-    parser.add_argument("--wrapper-config", type=Path, help="Model-specific YAML; defaults to configs/baselines/<model>_<dataset>.yaml.")
+-    parser.add_argument("--common-config", type=Path, help="DeFoG-reference common profile; defaults to configs/baselines/common_<dataset>.yaml when available.")
+-    parser.add_argument("--no-common-config", action="store_true", help="Disable automatic common-profile loading for a native-only diagnostic run.")
+-    parser.add_argument("--source-root", f"--{model}-root", dest="source_root", type=Path)
+-    parser.add_argument("--python", f"--{model}-python", dest="python", type=Path)
+-    parser.add_argument("--checkpoint", type=Path)
+-    parser.add_argument("--epochs", "--num-epochs", "--n-epochs", dest="epochs", type=positive)
+-    parser.add_argument("--batch-size", type=positive)
+-    parser.add_argument("--generation-batch-size", type=positive)
+-    parser.add_argument("--epoch-progress-interval", type=positive)
+-    parser.add_argument("--device", default=None, help="auto, cpu, gpu, cuda or cuda:N")
+-    parser.add_argument("--cuda-visible-devices")
+-    parser.add_argument("--timeout-seconds", type=float)
+-    parser.add_argument("--max-nodes", type=positive)
++_SOURCE_BACKED = frozenset({"catflow", "gdsm", "edge", "spectre"})
++
++_MODEL_DATASETS: dict[str, dict[str, DatasetCLIProfile]] = {
++    "catflow": {
++        key: DatasetCLIProfile(value.serialized_id)
++        for key, value in PROFILES.items()
++    },
++    "gdsm": {
++        key: DatasetCLIProfile(PROFILES[key].serialized_id)
++        for key in ("community_small", "ego_small", "grid")
++    },
++    "edge": {
++        key: DatasetCLIProfile(PROFILES[key].serialized_id)
++        for key in ("community_small", "ego_small", "grid")
++    },
++    "spectre": {
++        key: DatasetCLIProfile(PROFILES[key].serialized_id)
++        for key in ("community_small", "ego_small", "grid", "qm9")
++    },
++    "defog": {
++        "community_small": DatasetCLIProfile("sbm", "comm20"),
++        "ego_small": DatasetCLIProfile("ego_small", "comm20"),
++        "qm9": DatasetCLIProfile("qm9_attributed", "qm9"),
++        "zinc": DatasetCLIProfile("zinc", "zinc"),
++    },
++    "digress": {
++        "community_small": DatasetCLIProfile("sbm", "comm20", "comm20"),
++        "ego_small": DatasetCLIProfile("ego_small", "comm20", "comm20"),
++        "grid": DatasetCLIProfile("grid", "planar", "planar"),
++        "qm9": DatasetCLIProfile("qm9_attributed", "qm9", "qm9_no_h"),
++        "zinc": DatasetCLIProfile("zinc", "zinc", "zinc_no_h"),
++    },
++    "gdss": {
++        "community_small": DatasetCLIProfile("sbm", "community_small"),
++        "ego_small": DatasetCLIProfile("ego_small", "ego_small"),
++        "grid": DatasetCLIProfile("grid", "grid"),
++        "qm9": DatasetCLIProfile("qm9_attributed", "QM9"),
++        "zinc": DatasetCLIProfile("zinc", "ZINC250k"),
++    },
++    "graphrnn": {
++        "community_small": DatasetCLIProfile("sbm", "community_small"),
++        "ego_small": DatasetCLIProfile("ego_small", "ego_small"),
++        "grid": DatasetCLIProfile("grid", "grid"),
++    },
++    "hog_diff": {
++        "community_small": DatasetCLIProfile("sbm", "community_small"),
++        "ego_small": DatasetCLIProfile("ego_small", "ego_small"),
++        "qm9": DatasetCLIProfile("qm9_attributed", "qm9"),
++        "zinc": DatasetCLIProfile("zinc", "zinc250k"),
++    },
++    "dhvae_hh": {
++        "community_small": DatasetCLIProfile(
++            "sbm", dataset_config="configs/datasets/community_small.yaml"
++        ),
++        "ego_small": DatasetCLIProfile(
++            "ego_small", dataset_config="configs/datasets/ego_small.yaml"
++        ),
++        "grid": DatasetCLIProfile(
++            "grid", dataset_config="configs/datasets/grid.yaml"
++        ),
++        "qm9": DatasetCLIProfile(
++            "qm9_attributed", dataset_config="configs/datasets/qm9.yaml"
++        ),
++        "zinc": DatasetCLIProfile(
++            "zinc", dataset_config="configs/datasets/zinc.yaml"
++        ),
++    },
++}
++
++_SOURCE_ENVS: dict[str, tuple[str, str]] = {
++    "catflow": ("CATFLOW", "CATFLOW_PYTHON"),
++    "gdsm": ("GDSM", "GDSM_PYTHON"),
++    "edge": ("EDGE", "EDGE_PYTHON"),
++    "spectre": ("SPECTRE", "SPECTRE_PYTHON"),
++    "defog": ("DEFOG", "DEFOG_PYTHON"),
++    "digress": ("DIGRESS", "DIGRESS_PYTHON"),
++    "gdss": ("GDSS", "GDSS_PYTHON"),
++    "graphrnn": ("GRAPHRNN", "GRAPHRNN_PYTHON"),
++    "hog_diff": ("HOGDIFF", "HOGDIFF_PYTHON"),
++}
++
++# Preserve the historical runner behaviour.  Source-backed adapters intentionally
++# defer to their YAML instead of forcing a training-estimate pool.
++_TRAINING_ESTIMATE_DEFAULT: dict[str, bool | None] = {
++    "defog": True,
++    "digress": True,
++    "gdss": True,
++    "graphrnn": True,
++    "hog_diff": True,
++    "dhvae_hh": True,
++    "catflow": None,
++    "gdsm": None,
++    "edge": None,
++    "spectre": None,
++}
++
++
++def _positive_int(raw: str) -> int:
++    value = int(raw)
++    if value <= 0:
++        raise argparse.ArgumentTypeError("value must be a positive integer")
++    return value
++
++
++def _nonnegative_int(raw: str) -> int:
++    value = int(raw)
++    if value < 0:
++        raise argparse.ArgumentTypeError("value must be a non-negative integer")
++    return value
++
++
++def _positive_float(raw: str) -> float:
++    value = float(raw)
++    if value <= 0:
++        raise argparse.ArgumentTypeError("value must be positive")
++    return value
++
++
++def _status(model: str, message: str, *, enabled: bool) -> None:
++    if not enabled:
++        return
++    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
++    print(
++        f"[run_{model}_baseline {timestamp}] {message}",
++        file=sys.stderr,
++        flush=True,
++    )
++
++
++def _source_flag_names(model: str, suffix: str) -> tuple[str, ...]:
++    names = [f"--{model}-{suffix}"]
++    compact = model.replace("_", "")
++    dashed = model.replace("_", "-")
++    for candidate in (f"--{compact}-{suffix}", f"--{dashed}-{suffix}"):
++        if candidate not in names:
++            names.append(candidate)
++    if model == "gdsm":
++        for candidate in (f"--gsdm-{suffix}",):
++            if candidate not in names:
++                names.append(candidate)
++    return tuple(names)
++
++
++def _add_common_arguments(parser: argparse.ArgumentParser, model: str) -> None:
++    parser.add_argument(
++        "--stage",
++        choices=("train", "generate", "all"),
++        default="all",
++        help="Run training only, generation only, or training followed by generation.",
++    )
++    parser.add_argument(
++        "--dataset",
++        required=True,
++        choices=tuple(sorted(_MODEL_DATASETS[model])),
++        help="Prepared GraphER benchmark.",
++    )
++    parser.add_argument(
++        "--seed-id",
++        "--seed",
++        dest="seed_id",
++        type=_nonnegative_int,
++        default=42,
++        help="Training seed. Defaults to 42.",
++    )
++    parser.add_argument(
++        "--generation-seed",
++        type=_nonnegative_int,
++        default=None,
++        help="Generation seed; defaults to --seed-id.",
++    )
++    parser.add_argument(
++        "--num-samples",
++        type=_positive_int,
++        default=1024,
++        help="Exact number of graphs to generate for generate/all stages.",
++    )
++    parser.add_argument("--run-id", default=None)
++    parser.add_argument("--generation-id", default=None)
++    parser.add_argument(
++        "--dataset-root", type=Path, default=Path("outputs/datasets")
++    )
++    parser.add_argument("--serialized-dataset", default=None)
++    parser.add_argument(
++        "--output-root", type=Path, default=Path("outputs/baselines")
++    )
++    if model == "dhvae_hh":
++        parser.add_argument(
++            "--wrapper-config",
++            "--experiment-config",
++            dest="wrapper_config",
++            type=Path,
++            default=None,
++            help="DH-VAE experiment YAML.",
++        )
++    else:
++        parser.add_argument(
++            "--wrapper-config",
++            type=Path,
++            default=None,
++            help=(
++                "Model-specific YAML; defaults to "
++                f"configs/baselines/{model}_<dataset>.yaml when present."
++            ),
++        )
++        parser.add_argument(
++            "--common-config",
++            type=Path,
++            default=None,
++            help=(
++                "DeFoG-reference common profile; defaults to "
++                "configs/baselines/common_<dataset>.yaml when present."
++            ),
++        )
++        parser.add_argument(
++            "--no-common-config",
++            action="store_true",
++            help="Disable automatic common-profile loading.",
++        )
++
++    if model in _SOURCE_ENVS:
++        parser.add_argument(
++            "--source-root",
++            *_source_flag_names(model, "root"),
++            dest="source_root",
++            type=Path,
++            default=None,
++            help="Upstream source root; otherwise use the model-specific environment variable.",
++        )
++        parser.add_argument(
++            "--python",
++            *_source_flag_names(model, "python"),
++            dest="python",
++            type=Path,
++            default=None,
++            help="Upstream Python executable; otherwise use the model-specific environment variable.",
++        )
++
++    parser.add_argument(
++        "--resume-from",
++        type=Path,
++        default=None,
++        help="Optional training checkpoint for wrappers that support optimizer-state resume.",
++    )
++    parser.add_argument(
++        "--checkpoint",
++        type=Path,
++        default=None,
++        help="Checkpoint for --stage generate; defaults to the managed run checkpoint.",
++    )
+     parser.add_argument("--overwrite", action="store_true")
+-    parser.add_argument("--skip-training-estimates", action="store_true", help="Compatibility flag: training-estimate export is disabled by default.")
++
++    parser.add_argument(
++        "--device",
++        default=None,
++        help="auto, cpu, gpu, cuda or cuda:N. Model wrappers perform final validation.",
++    )
++    parser.add_argument(
++        "--gpu-id",
++        type=_nonnegative_int,
++        default=None,
++        help="Compatibility alias for selecting one visible physical GPU.",
++    )
++    parser.add_argument("--cuda-visible-devices", default=None)
++    parser.add_argument("--timeout-seconds", type=_positive_float, default=None)
++
++    parser.add_argument(
++        "--epochs",
++        "--n-epochs",
++        "--num-epochs",
++        dest="epochs",
++        type=_positive_int,
++        default=None,
++        help="Model-native epoch horizon where the wrapper has a single epoch-based stage.",
++    )
++    parser.add_argument("--batch-size", type=_positive_int, default=None)
++    parser.add_argument("--generation-batch-size", type=_positive_int, default=None)
++    parser.add_argument("--num-workers", type=_nonnegative_int, default=None)
++    parser.add_argument("--max-nodes", type=_positive_int, default=None)
++
++    estimates = parser.add_mutually_exclusive_group()
++    estimates.add_argument(
++        "--training-estimates",
++        dest="training_estimates",
++        action="store_true",
++        help="Enable the independent post-training source pool.",
++    )
++    estimates.add_argument(
++        "--skip-training-estimates",
++        "--disable-training-estimates",
++        dest="training_estimates",
++        action="store_false",
++        help="Disable the independent post-training source pool.",
++    )
++    parser.set_defaults(training_estimates=None)
++    parser.add_argument("--training-estimate-count", type=_positive_int, default=None)
++
++    parser.add_argument(
++        "--progress-interval-seconds", type=_positive_float, default=15.0
++    )
++    parser.add_argument("--epoch-progress-interval", type=_positive_int, default=None)
++    parser.add_argument(
++        "--generation-progress-every-batches", type=_positive_int, default=1
++    )
++    parser.add_argument("--no-stream-subprocess-output", action="store_true")
+     parser.add_argument("--quiet", action="store_true")
+-    return parser
+ 
+ 
+-def main(model_id: str, argv: Sequence[str] | None = None) -> int:
++def _add_model_arguments(parser: argparse.ArgumentParser, model: str) -> None:
++    if model == "digress":
++        parser.add_argument("--check-val-every-n-epochs", type=_positive_int)
++        parser.add_argument("--save-every-n-epochs", type=_positive_int)
++    elif model == "graphrnn":
++        parser.add_argument("--variant", default=None)
++        parser.add_argument("--batch-ratio", type=_positive_int, default=None)
++        parser.add_argument("--max-prev-node", type=_positive_int, default=None)
++        parser.add_argument("--sample-time", type=_positive_int, default=None)
++    elif model == "hog_diff":
++        parser.add_argument("--ho-iters", type=_nonnegative_int, default=None)
++        parser.add_argument("--ou-iters", type=_nonnegative_int, default=None)
++        parser.add_argument("--ho-batch-size", type=_positive_int, default=None)
++        parser.add_argument("--ou-batch-size", type=_positive_int, default=None)
++        parser.add_argument("--generation-max-retries", type=_positive_int, default=None)
++        parser.add_argument(
++            "--iteration-progress-interval", type=_positive_int, default=None
++        )
++        parser.add_argument(
++            "--generation-only",
++            action="store_true",
++            help="Compatibility alias for --stage generate.",
++        )
++    elif model == "dhvae_hh":
++        parser.add_argument("--max-attempts-per-graph", type=_positive_int, default=None)
++
++
++def build_parser(model_id: str) -> argparse.ArgumentParser:
+     model = normalize_baseline_id(model_id)
+-    args = build_parser(model).parse_args(argv)
+-    if args.seed_id < 0 or (args.generation_seed is not None and args.generation_seed < 0):
+-        raise ValueError("Seeds must be nonnegative.")
+-    if args.stage == "generate" and any(v is not None for v in (args.epochs, args.batch_size, args.max_nodes)):
+-        raise ValueError("Generation uses the trained architecture; training overrides require --stage train/all.")
+-    for name, value in ((model.upper(), args.source_root), (model.upper() + "_PYTHON", args.python)):
+-        if value is not None:
+-            os.environ[name] = str(value.expanduser().absolute())
+-    profile = PROFILES[args.dataset]
+-    run = RunSpec.for_seed(model_id=model, dataset_id=args.dataset, seed=args.seed_id,
+-                           output_root=args.output_root, run_id=args.run_id)
+-    common = resolve_common_config(args.dataset, args.common_config, disabled=args.no_common_config)
+-    config = resolve_wrapper_config(model, args.dataset, args.wrapper_config)
+-    options = comparison_request_options(model, common, model_config=config)
+-    options["runtime"] = {"progress": {"enabled": not args.quiet, "stream_output": not args.quiet}}
++    if model not in _MODEL_DATASETS:
++        raise KeyError(f"No external CLI profile is registered for {model!r}.")
++    wrapper = create_baseline(model)
++    parser = argparse.ArgumentParser(
++        description=(
++            f"Train/generate {wrapper.display_name} through the shared GraphER "
++            "baseline orchestration CLI."
++        )
++    )
++    _add_common_arguments(parser, model)
++    _add_model_arguments(parser, model)
++    return parser
++
++
++def _configure_source_environment(model: str, args: argparse.Namespace) -> None:
++    if model not in _SOURCE_ENVS:
++        return
++    root_env, python_env = _SOURCE_ENVS[model]
+     if args.source_root is not None:
+-        options["source_root"] = str(args.source_root.expanduser().absolute())
++        os.environ[root_env] = str(args.source_root.expanduser().resolve())
+     if args.python is not None:
+-        options["python"] = str(args.python.expanduser().absolute())
+-    if args.checkpoint is not None and args.stage != "generate":
+-        raise ValueError("--checkpoint is for --stage generate; training writes a managed checkpoint.")
+-    for key in ("device", "cuda_visible_devices", "timeout_seconds"):
+-        value = getattr(args, key)
+-        if value is not None: options["runtime"][key] = value
+-    if args.generation_batch_size is not None: options["generation_batch_size"] = args.generation_batch_size
++        os.environ[python_env] = str(args.python.expanduser().resolve())
++
++
++def _runtime_options(model: str, args: argparse.Namespace) -> dict[str, Any]:
++    progress: dict[str, Any] = {
++        "enabled": not args.quiet,
++        "stream_output": not args.quiet and not args.no_stream_subprocess_output,
++        "interval_seconds": float(args.progress_interval_seconds),
++        "generation_batch_interval": int(args.generation_progress_every_batches),
++    }
++    if args.epoch_progress_interval is not None:
++        progress["epoch_interval"] = int(args.epoch_progress_interval)
++    if model == "hog_diff" and args.iteration_progress_interval is not None:
++        progress["iteration_interval"] = int(args.iteration_progress_interval)
++
++    runtime: dict[str, Any] = {"progress": progress}
++    device = None if args.device is None else str(args.device).lower()
++
++    visible = args.cuda_visible_devices
++    if args.gpu_id is not None:
++        gpu_visible = str(args.gpu_id)
++        if visible is not None and str(visible) != gpu_visible:
++            raise ValueError("--gpu-id conflicts with --cuda-visible-devices.")
++        visible = gpu_visible
++        if device not in (None, "gpu", "cuda"):
++            raise ValueError("--gpu-id requires a GPU device.")
++        device = "gpu"
++
++    if model in {"defog", "digress"}:
++        resolved = device or "auto"
++        if resolved in {"gpu", "cuda"}:
++            runtime.update(
++                {
++                    "gpus": 1,
++                    "device": "cuda" if model == "defog" else "gpu",
++                    "cuda_visible_devices": str(visible or "0"),
++                    "require_cuda": True,
++                }
++            )
++        elif resolved == "cpu":
++            runtime.update({"gpus": 0, "device": "cpu"})
++            if visible is not None:
++                raise ValueError("CUDA visibility cannot be set with --device cpu.")
++        elif resolved != "auto":
++            raise ValueError(
++                f"{model} accepts --device auto/cpu/gpu through the shared CLI, got {device!r}."
++            )
++        elif visible is not None:
++            runtime["cuda_visible_devices"] = str(visible)
++    else:
++        if device is not None:
++            runtime["device"] = device
++        if visible is not None:
++            runtime["cuda_visible_devices"] = str(visible)
++
++    if args.timeout_seconds is not None:
++        runtime["timeout_seconds"] = float(args.timeout_seconds)
++    return runtime
++
++
++def _training_estimate_options(model: str, args: argparse.Namespace) -> dict[str, Any] | None:
++    enabled = args.training_estimates
++    if enabled is None:
++        enabled = _TRAINING_ESTIMATE_DEFAULT.get(model)
++    if enabled is None and args.training_estimate_count is None:
++        return None
++    result: dict[str, Any] = {}
++    if enabled is not None:
++        result["enabled"] = bool(enabled)
++    if args.training_estimate_count is not None:
++        result["num_graphs"] = int(args.training_estimate_count)
++        result.setdefault("enabled", True)
++    return result
++
++
++def _training_options(
++    model: str,
++    args: argparse.Namespace,
++    *,
++    common: Any,
++    wrapper_config: Path | None,
++    profile: DatasetCLIProfile,
++) -> dict[str, Any]:
++    if model == "dhvae_hh":
++        options: dict[str, Any] = {}
++    else:
++        options = comparison_request_options(
++            model, common, model_config=wrapper_config
++        )
++
++    runtime = _runtime_options(model, args)
++    options["runtime"] = runtime
++
++    estimate_options = _training_estimate_options(model, args)
++    if estimate_options is not None:
++        options["training_estimates"] = estimate_options
++
++    if model in _SOURCE_ENVS:
++        if args.source_root is not None and model in _SOURCE_BACKED:
++            options["source_root"] = str(args.source_root.expanduser().resolve())
++        if args.python is not None and model in _SOURCE_BACKED:
++            options["python"] = str(args.python.expanduser().resolve())
++
++    if model in _SOURCE_BACKED:
++        train: dict[str, Any] = {}
++        if args.epochs is not None:
++            train["epochs"] = int(args.epochs)
++        if args.batch_size is not None:
++            train["batch_size"] = int(args.batch_size)
++        if args.epoch_progress_interval is not None:
++            train["log_every"] = int(args.epoch_progress_interval)
++        if train:
++            options["train"] = train
++        if args.generation_batch_size is not None:
++            options["generation_batch_size"] = int(args.generation_batch_size)
++        if args.max_nodes is not None:
++            options["max_nodes"] = int(args.max_nodes)
++        if args.num_workers is not None:
++            # None of the current source-backed workers consumes this generic
++            # field. Refuse to silently pretend otherwise.
++            raise ValueError(
++                f"--num-workers is not a supported shared override for {model}; "
++                "set the model YAML if the upstream implementation exposes it."
++            )
++        return options
++
++    if args.max_nodes is not None:
++        raise ValueError(f"--max-nodes is only supported by source-backed adapters, not {model}.")
++
++    if model == "defog":
++        if args.epochs is not None:
++            options["n_epochs"] = int(args.epochs)
++        if args.batch_size is not None:
++            options["batch_size"] = int(args.batch_size)
++        if args.num_workers is not None:
++            options["num_workers"] = int(args.num_workers)
++        if args.generation_batch_size is not None:
++            options["generation_batch_size"] = int(args.generation_batch_size)
++        return options
++
++    if model == "digress":
++        if profile.experiment is not None:
++            options["experiment"] = profile.experiment
++        for key, value in (
++            ("n_epochs", args.epochs),
++            ("batch_size", args.batch_size),
++            ("num_workers", args.num_workers),
++            ("check_val_every_n_epochs", args.check_val_every_n_epochs),
++            ("save_every_n_epochs", args.save_every_n_epochs),
++            ("generation_batch_size", args.generation_batch_size),
++        ):
++            if value is not None:
++                options[key] = int(value)
++        return options
++
++    if model == "gdss":
++        if args.epochs is not None:
++            options["train"] = {"num_epochs": int(args.epochs)}
++        if args.batch_size is not None:
++            options["batch_size"] = int(args.batch_size)
++        if args.num_workers is not None:
++            options["num_workers"] = int(args.num_workers)
++        if args.generation_batch_size is not None:
++            options["generation_batch_size"] = int(args.generation_batch_size)
++        return options
++
++    if model == "graphrnn":
++        for key, value in (
++            ("variant", args.variant),
++            ("epochs", args.epochs),
++            ("batch_size", args.batch_size),
++            ("batch_ratio", args.batch_ratio),
++            ("max_prev_node", args.max_prev_node),
++            ("num_workers", args.num_workers),
++            ("generation_batch_size", args.generation_batch_size),
++            ("sample_time", args.sample_time),
++        ):
++            if value is not None:
++                options[key] = value if key == "variant" else int(value)
++        return options
++
++    if model == "hog_diff":
++        if args.epochs is not None:
++            raise ValueError(
++                "HOG-Diff has two native training horizons; use --ho-iters and --ou-iters, not --epochs."
++            )
++        if args.batch_size is not None:
++            raise ValueError(
++                "HOG-Diff has two stage-specific batch sizes; use --ho-batch-size and --ou-batch-size."
++            )
++        if args.num_workers is not None:
++            options["num_workers"] = int(args.num_workers)
++        if args.generation_batch_size is not None:
++            options["generation_batch_size"] = int(args.generation_batch_size)
++        if args.generation_max_retries is not None:
++            options["generation_max_retries"] = int(args.generation_max_retries)
++        higher_order: dict[str, Any] = {}
++        if args.ho_iters is not None:
++            higher_order["n_iters"] = int(args.ho_iters)
++        if args.ho_batch_size is not None:
++            higher_order["batch_size"] = int(args.ho_batch_size)
++        if higher_order:
++            options["higher_order"] = higher_order
++        ou: dict[str, Any] = {}
++        if args.ou_iters is not None:
++            ou["n_iters"] = int(args.ou_iters)
++        if args.ou_batch_size is not None:
++            ou["batch_size"] = int(args.ou_batch_size)
++        if ou:
++            options["ou"] = ou
++        return options
++
++    if model == "dhvae_hh":
++        if any(value is not None for value in (args.epochs, args.batch_size, args.num_workers)):
++            raise ValueError(
++                "DH-VAE training hyperparameters belong in --experiment-config; "
++                "the shared CLI does not reinterpret generic epoch/batch flags."
++            )
++        # DHVAEHHWrapper accepts only device/timeout in training runtime.
++        dh_runtime: dict[str, Any] = {}
++        if args.device is not None:
++            dh_runtime["device"] = str(args.device)
++        if args.timeout_seconds is not None:
++            dh_runtime["timeout_seconds"] = float(args.timeout_seconds)
++        options["runtime"] = dh_runtime
++        return options
++
++    raise KeyError(model)
++
++
++def _generation_options(model: str, args: argparse.Namespace) -> dict[str, Any]:
++    runtime = _runtime_options(model, args)
++
++    if model == "dhvae_hh":
++        # The DH-VAE generator accepts device only; timeout is a training concern.
++        result: dict[str, Any] = {"runtime": {}}
++        if args.device is not None:
++            result["runtime"]["device"] = str(args.device)
++        if args.max_attempts_per_graph is not None:
++            result["max_attempts_per_graph"] = int(args.max_attempts_per_graph)
++        return result
++
++    result = {"runtime": runtime}
++    if args.generation_batch_size is not None:
++        result["generation_batch_size"] = int(args.generation_batch_size)
++    if model == "graphrnn" and args.sample_time is not None:
++        result["sample_time"] = int(args.sample_time)
++    if model == "hog_diff" and args.generation_max_retries is not None:
++        result["generation_max_retries"] = int(args.generation_max_retries)
++    if model in _SOURCE_BACKED:
++        if args.source_root is not None:
++            result["source_root"] = str(args.source_root.expanduser().resolve())
++        if args.python is not None:
++            result["python"] = str(args.python.expanduser().resolve())
++    return result
++
++
++def _dataset_reference(
++    model: str,
++    args: argparse.Namespace,
++    profile: DatasetCLIProfile,
++) -> DatasetReference:
++    config_path = Path(profile.dataset_config) if profile.dataset_config else None
++    return DatasetReference(
++        benchmark_id=args.dataset,
++        root=args.dataset_root,
++        serialized_id=args.serialized_dataset or profile.serialized_id,
++        native_id=profile.native_id,
++        config_path=config_path,
++    )
++
++
++def _managed_checkpoint(run: RunSpec) -> Path:
++    manifest_path = run.layout.training_manifest_path
++    if not manifest_path.is_file():
++        raise FileNotFoundError(
++            "No managed training manifest exists for generation: "
++            f"{manifest_path}. Train the run first or select the correct --run-id."
++        )
++    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
++    checkpoint = raw.get("checkpoint")
++    if not isinstance(checkpoint, Mapping) or not checkpoint.get("path"):
++        raise RuntimeError(
++            f"Managed training manifest has no checkpoint record: {manifest_path}"
++        )
++    value = Path(str(checkpoint["path"]))
++    if not value.is_absolute():
++        value = run.layout.train_dir / value
++    return value
++
++
++def _reject_training_overrides_during_generation(model: str, args: argparse.Namespace) -> None:
++    fields = {
++        "epochs": args.epochs,
++        "batch_size": args.batch_size,
++        "num_workers": args.num_workers,
++        "max_nodes": args.max_nodes,
++        "resume_from": args.resume_from,
++    }
++    if model == "digress":
++        fields.update(
++            check_val_every_n_epochs=args.check_val_every_n_epochs,
++            save_every_n_epochs=args.save_every_n_epochs,
++        )
++    if model == "graphrnn":
++        fields.update(
++            variant=args.variant,
++            batch_ratio=args.batch_ratio,
++            max_prev_node=args.max_prev_node,
++        )
++    if model == "hog_diff":
++        fields.update(
++            ho_iters=args.ho_iters,
++            ou_iters=args.ou_iters,
++            ho_batch_size=args.ho_batch_size,
++            ou_batch_size=args.ou_batch_size,
++        )
++    present = [key for key, value in fields.items() if value is not None]
++    if present:
++        raise ValueError(
++            "Generation reuses the managed trained architecture/config; training-only "
++            f"overrides are not allowed with --stage generate: {present}."
++        )
++
++
++def _artifact_summary(training: Any | None) -> dict[str, Any]:
++    if training is None:
++        return {}
++    return {
++        "training_manifest": str(training.manifest_path.resolve()),
++        "training_estimated_graphs": (
++            str(training.estimated_graphs_path.resolve())
++            if training.estimated_graphs_path is not None
++            else None
++        ),
++        "training_ground_truth_graphs": (
++            str(training.ground_truth_graphs_path.resolve())
++            if training.ground_truth_graphs_path is not None
++            else None
++        ),
++        "training_ground_truth_model_view": (
++            str(training.ground_truth_model_view_graphs_path.resolve())
++            if training.ground_truth_model_view_graphs_path is not None
++            else None
++        ),
++    }
++
++
++def run(model_id: str, args: argparse.Namespace) -> dict[str, Any]:
++    model = normalize_baseline_id(model_id)
++    if model not in _MODEL_DATASETS:
++        raise KeyError(f"No external CLI profile is registered for {model!r}.")
++    if model == "hog_diff" and getattr(args, "generation_only", False):
++        if args.stage == "train":
++            raise ValueError("--generation-only conflicts with --stage train.")
++        args.stage = "generate"
++
++    _configure_source_environment(model, args)
++    profile = _MODEL_DATASETS[model][args.dataset]
++    progress_enabled = not args.quiet
++
++    if model == "dhvae_hh":
++        common = None
++        wrapper_config = (
++            args.wrapper_config.expanduser().resolve()
++            if args.wrapper_config is not None
++            else None
++        )
++        if wrapper_config is not None and not wrapper_config.is_file():
++            raise FileNotFoundError(f"Missing DH-VAE experiment config: {wrapper_config}")
++    else:
++        common = resolve_common_config(
++            args.dataset,
++            args.common_config,
++            disabled=args.no_common_config,
++        )
++        wrapper_config = resolve_wrapper_config(model, args.dataset, args.wrapper_config)
++
++    run_spec = RunSpec.for_seed(
++        model_id=model,
++        dataset_id=args.dataset,
++        seed=args.seed_id,
++        output_root=args.output_root,
++        run_id=args.run_id,
++    )
++    dataset = _dataset_reference(model, args, profile)
+     wrapper = create_baseline(model)
+-    summary = {
+-        "model": model, "dataset": args.dataset, "run_dir": str(run.layout.run_dir), "stage": args.stage,
+-        "wrapper_config": str(config) if config is not None else None,
++
++    summary: dict[str, Any] = {
++        "status": "complete",
++        "model": model,
++        "dataset": args.dataset,
++        "serialized_dataset": dataset.serialized_id,
++        "native_dataset": dataset.native_id,
++        "experiment": profile.experiment,
++        "seed_id": args.seed_id,
++        "generation_seed": (
++            args.generation_seed if args.generation_seed is not None else args.seed_id
++        ),
++        "stage": args.stage,
++        "run_id": run_spec.run_id,
++        "run_dir": str(run_spec.layout.run_dir.resolve()),
++        "wrapper_config": str(wrapper_config) if wrapper_config is not None else None,
+         "common_config": str(common.path) if common is not None else None,
+     }
+-    if args.stage in ("train", "all"):
+-        training_options = dict(options)
+-        train = {}
+-        for key, value in (("epochs", args.epochs), ("batch_size", args.batch_size), ("log_every", args.epoch_progress_interval)):
+-            if value is not None: train[key] = value
+-        if train: training_options["train"] = train
+-        if args.max_nodes is not None: training_options["max_nodes"] = args.max_nodes
+-        result = wrapper.train(TrainRequest(run=run,
+-                dataset=DatasetReference(args.dataset, root=args.dataset_root, serialized_id=args.serialized_dataset or profile.serialized_id),
+-                config_path=config, options=training_options, overwrite=args.overwrite))
+-        checkpoint = result.checkpoint_path
+-        summary["training_manifest"] = str(result.manifest_path)
+-        # Generation may only change runtime/sampling controls. The trained
+-        # model-specific/common settings are already frozen in the manifest.
+-        options = {k: v for k, v in options.items() if k in {"runtime", "generation_batch_size", "sample", "source_root", "python"}}
++
++    checkpoint: Path
++    training = None
++    if args.stage in {"train", "all"}:
++        if args.checkpoint is not None:
++            raise ValueError("--checkpoint is only valid with --stage generate.")
++        dataset.require_prepared()
++        training_options = _training_options(
++            model,
++            args,
++            common=common,
++            wrapper_config=wrapper_config,
++            profile=profile,
++        )
++        _status(
++            model,
++            f"starting training: dataset={args.dataset}, run_id={run_spec.run_id}, seed={args.seed_id}",
++            enabled=progress_enabled,
++        )
++        training = wrapper.train(
++            TrainRequest(
++                run=run_spec,
++                dataset=dataset,
++                config_path=wrapper_config,
++                options=training_options,
++                resume_from=args.resume_from,
++                overwrite=args.overwrite,
++            )
++        )
++        checkpoint = training.checkpoint_path
++        summary["checkpoint"] = str(checkpoint.resolve())
++        summary.update(_artifact_summary(training))
++        _status(
++            model,
++            f"training completed: checkpoint={checkpoint.resolve()}",
++            enabled=progress_enabled,
++        )
+     else:
+-        checkpoint = args.checkpoint or run.layout.checkpoints_dir / (model + ".pt")
+-        # Runtime/sample options may be overridden at generation, but never
+-        # silently replace model hyperparameters stored with the checkpoint.
+-        raw = (yaml.safe_load(config.read_text()) or {}) if config is not None else {}
+-        section = raw.get(model, raw.get("gsdm", raw) if model == "gdsm" else raw)
+-        from grapher.models.external_wrapper import merge
+-        generated = {k: v for k, v in section.items() if k in {"runtime", "sample", "generation_batch_size"}}
+-        runtime_only = {k: v for k, v in options.items() if k in {"runtime", "generation_batch_size", "sample", "source_root", "python"}}
+-        options = merge(generated, runtime_only)
+-    summary["checkpoint"] = str(checkpoint)
+-    if args.stage in ("generate", "all"):
+-        result = wrapper.generate(GenerateRequest(run=run, checkpoint_path=checkpoint, num_graphs=args.num_samples,
+-                     generation_seed=args.generation_seed if args.generation_seed is not None else args.seed_id,
+-                     generation_id=args.generation_id, options=options, overwrite=args.overwrite))
+-        summary.update(generated_graphs=str(result.graphs_path), generation_manifest=str(result.manifest_path),
+-                       num_generated=result.num_generated, graphs_sha256=result.graphs_sha256)
+-    print(json.dumps(summary, indent=2))
++        _reject_training_overrides_during_generation(model, args)
++        checkpoint = (
++            args.checkpoint.expanduser().resolve()
++            if args.checkpoint is not None
++            else _managed_checkpoint(run_spec).resolve()
++        )
++        summary["checkpoint"] = str(checkpoint)
++        if run_spec.layout.training_manifest_path.is_file():
++            summary["training_manifest"] = str(
++                run_spec.layout.training_manifest_path.resolve()
++            )
++
++    if args.stage in {"generate", "all"}:
++        generation_seed = (
++            args.generation_seed if args.generation_seed is not None else args.seed_id
++        )
++        generation_options = _generation_options(model, args)
++        _status(
++            model,
++            f"starting generation: requested={args.num_samples}, seed={generation_seed}",
++            enabled=progress_enabled,
++        )
++        generation = wrapper.generate(
++            GenerateRequest(
++                run=run_spec,
++                checkpoint_path=checkpoint,
++                num_graphs=args.num_samples,
++                generation_seed=generation_seed,
++                generation_id=args.generation_id,
++                options=generation_options,
++                overwrite=args.overwrite,
++            )
++        )
++        if generation.num_generated != args.num_samples:
++            raise RuntimeError(
++                f"{wrapper.display_name} generated {generation.num_generated}; "
++                f"expected {args.num_samples}."
++            )
++        summary.update(
++            generation_id=generation.generation_dir.name,
++            num_samples=generation.num_generated,
++            generated_graphs=str(generation.graphs_path.resolve()),
++            generation_manifest=str(generation.manifest_path.resolve()),
++            graphs_sha256=generation.graphs_sha256,
++        )
++        _status(
++            model,
++            f"generation completed: graphs={generation.graphs_path.resolve()}",
++            enabled=progress_enabled,
++        )
++
++    return summary
++
++
++def main(model_id: str, argv: Sequence[str] | None = None) -> int:
++    model = normalize_baseline_id(model_id)
++    parser = build_parser(model)
++    args = parser.parse_args(argv)
++    try:
++        summary = run(model, args)
++    except Exception as exc:
++        _status(
++            model,
++            f"FAILED: {type(exc).__name__}: {exc}",
++            enabled=not getattr(args, "quiet", False),
++        )
++        raise
++    print(json.dumps(summary, indent=2, sort_keys=True))
+     return 0
++
++
++__all__ = ["build_parser", "main", "run"]
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' a/tests/test_external_cli.py b/tests/test_external_cli.py
+--- a/tests/test_external_cli.py	1970-01-01 00:00:00.000000000 +0000
++++ b/tests/test_external_cli.py	2026-09-15 19:34:03.579379976 +0000
+@@ -0,0 +1,255 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from grapher.models.base import RunSpec
++from grapher.models.external_cli import (
++    _MODEL_DATASETS,
++    _generation_options,
++    _managed_checkpoint,
++    _training_options,
++    build_parser,
++)
++from grapher.models.comparison import resolve_common_config, resolve_wrapper_config
++
++
++MODELS = (
++    "catflow",
++    "defog",
++    "dhvae_hh",
++    "digress",
++    "edge",
++    "gdsm",
++    "gdss",
++    "graphrnn",
++    "hog_diff",
++    "spectre",
++)
++
++
++def _resolved(model: str, argv: list[str]):
++    args = build_parser(model).parse_args(argv)
++    if model == "dhvae_hh":
++        common = None
++        config = Path(args.wrapper_config).resolve() if args.wrapper_config else None
++    else:
++        common = resolve_common_config(
++            args.dataset, args.common_config, disabled=args.no_common_config
++        )
++        config = resolve_wrapper_config(model, args.dataset, args.wrapper_config)
++    options = _training_options(
++        model,
++        args,
++        common=common,
++        wrapper_config=config,
++        profile=_MODEL_DATASETS[model][args.dataset],
++    )
++    return args, options
++
++
++def test_all_model_runners_are_thin_shared_cli_shims() -> None:
++    repo = Path(__file__).resolve().parents[1]
++    for model in MODELS:
++        path = repo / "scripts" / f"run_{model}_baseline.py"
++        text = path.read_text(encoding="utf-8")
++        assert "from grapher.models.external_cli import main" in text
++        assert f'main("{model}")' in text
++        assert len(text.splitlines()) <= 8
++    alias = (repo / "scripts" / "run_gsdm_baseline.py").read_text(encoding="utf-8")
++    assert "from grapher.models.external_cli import main" in alias
++    assert 'main("gsdm")' in alias
++    assert len(alias.splitlines()) <= 8
++
++
++def test_shared_stage_and_common_arguments_exist_for_every_external_model() -> None:
++    for model in MODELS:
++        parser = build_parser(model)
++        args = parser.parse_args(["--dataset", next(iter(_MODEL_DATASETS[model]))])
++        assert args.stage == "all"
++        assert args.seed_id == 42
++        assert args.num_samples == 1024
++        assert args.output_root == Path("outputs/baselines")
++
++
++def test_legacy_source_and_python_aliases_are_preserved() -> None:
++    cases = {
++        "defog": ("--defog-root", "--defog-python"),
++        "digress": ("--digress-root", "--digress-python"),
++        "gdss": ("--gdss-root", "--gdss-python"),
++        "graphrnn": ("--graphrnn-root", "--graphrnn-python"),
++        "hog_diff": ("--hogdiff-root", "--hogdiff-python"),
++        "gdsm": ("--gsdm-root", "--gsdm-python"),
++    }
++    for model, (root_flag, python_flag) in cases.items():
++        dataset = next(iter(_MODEL_DATASETS[model]))
++        args = build_parser(model).parse_args(
++            [
++                "--dataset",
++                dataset,
++                root_flag,
++                "/tmp/source",
++                python_flag,
++                "/tmp/python",
++            ]
++        )
++        assert args.source_root == Path("/tmp/source")
++        assert args.python == Path("/tmp/python")
++
++
++def test_defog_gpu_and_epoch_compatibility_translation() -> None:
++    _args, options = _resolved(
++        "defog",
++        [
++            "--dataset",
++            "community_small",
++            "--n-epochs",
++            "123",
++            "--device",
++            "gpu",
++            "--gpu-id",
++            "2",
++        ],
++    )
++    assert options["n_epochs"] == 123
++    assert options["runtime"]["gpus"] == 1
++    assert options["runtime"]["device"] == "cuda"
++    assert options["runtime"]["cuda_visible_devices"] == "2"
++    assert options["runtime"]["require_cuda"] is True
++
++
++def test_digress_legacy_training_controls_translate_to_wrapper_options() -> None:
++    _args, options = _resolved(
++        "digress",
++        [
++            "--dataset",
++            "community_small",
++            "--n-epochs",
++            "123",
++            "--batch-size",
++            "17",
++            "--num-workers",
++            "3",
++            "--check-val-every-n-epochs",
++            "9",
++            "--save-every-n-epochs",
++            "11",
++        ],
++    )
++    assert options["experiment"] == "comm20"
++    assert options["n_epochs"] == 123
++    assert options["batch_size"] == 17
++    assert options["num_workers"] == 3
++    assert options["check_val_every_n_epochs"] == 9
++    assert options["save_every_n_epochs"] == 11
++
++
++def test_gdss_epoch_override_stays_nested_in_train_section() -> None:
++    _args, options = _resolved(
++        "gdss", ["--dataset", "community_small", "--num-epochs", "123"]
++    )
++    assert options["train"] == {"num_epochs": 123}
++
++
++def test_graphrnn_controls_and_generation_sample_time_are_preserved() -> None:
++    args, options = _resolved(
++        "graphrnn",
++        [
++            "--dataset",
++            "community_small",
++            "--epochs",
++            "123",
++            "--batch-ratio",
++            "7",
++            "--max-prev-node",
++            "19",
++            "--sample-time",
++            "2",
++        ],
++    )
++    assert options["epochs"] == 123
++    assert options["batch_ratio"] == 7
++    assert options["max_prev_node"] == 19
++    assert options["sample_time"] == 2
++    assert _generation_options("graphrnn", args)["sample_time"] == 2
++
++
++def test_hog_diff_keeps_separate_stage_budgets() -> None:
++    _args, options = _resolved(
++        "hog_diff",
++        [
++            "--dataset",
++            "community_small",
++            "--ho-iters",
++            "12",
++            "--ou-iters",
++            "34",
++            "--ho-batch-size",
++            "5",
++            "--ou-batch-size",
++            "6",
++        ],
++    )
++    assert options["higher_order"] == {"n_iters": 12, "batch_size": 5}
++    assert options["ou"] == {"n_iters": 34, "batch_size": 6}
++
++
++def test_hog_diff_rejects_ambiguous_single_epoch_override() -> None:
++    parser = build_parser("hog_diff")
++    args = parser.parse_args(
++        ["--dataset", "community_small", "--epochs", "100"]
++    )
++    common = resolve_common_config("community_small", None, disabled=False)
++    config = resolve_wrapper_config("hog_diff", "community_small", None)
++    with pytest.raises(ValueError, match="two native training horizons"):
++        _training_options(
++            "hog_diff",
++            args,
++            common=common,
++            wrapper_config=config,
++            profile=_MODEL_DATASETS["hog_diff"]["community_small"],
++        )
++
++
++def test_dhvae_experiment_config_alias_and_estimate_count() -> None:
++    _args, options = _resolved(
++        "dhvae_hh",
++        [
++            "--dataset",
++            "community_small",
++            "--experiment-config",
++            "configs/experiments/dhvae/community_small.yaml",
++            "--training-estimate-count",
++            "8",
++        ],
++    )
++    assert options["training_estimates"] == {"enabled": True, "num_graphs": 8}
++
++
++def test_source_backed_cli_overrides_model_train_section_not_common_budget() -> None:
++    _args, options = _resolved(
++        "catflow",
++        ["--dataset", "community_small", "--n-epochs", "123", "--batch-size", "17"],
++    )
++    assert options["train"] == {"epochs": 123, "batch_size": 17}
++    assert options["comparison_defaults"]["train"]["epochs"] == 1_000_000
++
++
++def test_managed_checkpoint_is_resolved_relative_to_train_dir(tmp_path: Path) -> None:
++    run = RunSpec.for_seed(
++        model_id="gdss",
++        dataset_id="community_small",
++        seed=42,
++        output_root=tmp_path,
++    )
++    run.layout.train_dir.mkdir(parents=True)
++    run.layout.checkpoints_dir.mkdir(parents=True)
++    checkpoint = run.layout.checkpoints_dir / "gdss.pth"
++    checkpoint.write_bytes(b"checkpoint")
++    run.layout.training_manifest_path.write_text(
++        json.dumps({"checkpoint": {"path": "checkpoints/gdss.pth"}}),
++        encoding="utf-8",
++    )
++    assert _managed_checkpoint(run) == checkpoint
