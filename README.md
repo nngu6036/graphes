@@ -562,7 +562,7 @@ Set `NTRAIN=20000` for a smaller development experiment.
 CFG=configs/experiments/grapher/zinc_joint_typed_edge_laplacian_graphlets345_learned.yaml
 TRAIN=outputs/attributed_grapher/zinc_joint_typed_edge_laplacian_graphlets345_learned/seed_42
 GENROOT=outputs/attributed_generation/zinc_joint_typed_edge_laplacian_graphlets345/seed_42
-NTRAIN=0
+NTRAIN=100000
 NGEN=1024
 
 PYTHONPATH=src python scripts/train_attributed_grapher.py \
@@ -573,7 +573,8 @@ PYTHONPATH=src python scripts/train_attributed_grapher.py \
   --device gpu \
   --graphlet-progress-interval 100 \
   --batch-progress-interval 10 \
-  --progress-interval-seconds 10
+  --progress-interval-seconds 10 \
+  --set joint_typed_degree.initialize_degree_checkpoint=null \--set joint_typed_degree.freeze_epochs=0
 ```
 
 Generate learned and edge-relocated typed sequences:
@@ -678,7 +679,7 @@ export GRAPHRNN=/home/quang/GraphRNN
 export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/graphrnn/bin/python
 
 export HOGDIFF=/home/quang/HOG-Diff
-export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hog_diff/bin/python
+export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
@@ -1226,3 +1227,15 @@ Current canonical documents:
 Short-lived integration audits, generated validation logs and per-wrapper setup
 documents are intentionally not kept in `docs/`; current operational guidance
 belongs in this README or `docs/BASELINES.md`.
+
+### Guidance factorial ablation
+
+For the controlled Community-small comparison **HH**, **HH + spectra**, **HH + graphlet**, and **HH + spectra + graphlet**, run:
+
+```bash
+PYTHONPATH=src python scripts/run_guidance_factorial_ablation.py \
+  --profile configs/experiments/grapher/ablations/community_small_guidance_factorial.yaml \
+  --degree-source learned
+```
+
+See [`docs/GUIDANCE_FACTORIAL_ABLATION.md`](docs/GUIDANCE_FACTORIAL_ABLATION.md) for the controlled degree-source variant and interpretation.

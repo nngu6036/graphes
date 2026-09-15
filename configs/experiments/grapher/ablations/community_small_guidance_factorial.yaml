@@ -1,0 +1,59 @@
+experiment: community_small_guidance_factorial
+base_config: configs/experiments/grapher/community_small_joint_edge_laplacian_graphlets345_learned.yaml
+checkpoint: outputs/topology_grapher/community_small_joint_edge_laplacian_graphlets345_learned/seed_42/checkpoint.pt
+output_root: outputs/topology_generation/community_small_joint_edge_laplacian_graphlets345/seed_42/guidance_ablation
+reference_split: test
+num_generate: 1024
+seed: 42
+device: gpu
+
+# This is a generation-guidance ablation. All modes reuse the same jointly
+# trained checkpoint. The shared predictor was trained with edge, Laplacian,
+# clustering, orbit and induced-graphlet heads; only the candidate-ranking
+# energy is changed below.
+protocol:
+  require_identical_hh_sources: true
+  require_degree_preservation: true
+  component_normalization: initial
+  proposal_budget: 1024
+  valid_candidate_budget: 256
+  steps: 32
+
+# Disable edge, clustering and orbit energies in every refined mode so the
+# comparison isolates spectral versus induced-graphlet guidance.
+modes:
+  spectral:
+    label: HH + spectra
+    weights:
+      edge: 0.0
+      spectral: 1.0
+      clustering: 0.0
+      orbit: 0.0
+      graphlet: 0.0
+  graphlet:
+    label: HH + graphlet
+    weights:
+      edge: 0.0
+      spectral: 0.0
+      clustering: 0.0
+      orbit: 0.0
+      graphlet: 1.0
+  spectral_graphlet:
+    label: HH + spectra + graphlet
+    weights:
+      edge: 0.0
+      spectral: 1.0
+      clustering: 0.0
+      orbit: 0.0
+      graphlet: 1.0
+
+degree_sources:
+  learned:
+    overrides: []
+  edge_relocation:
+    overrides:
+      - generation.degree_source=edge_relocation
+      - generation.degree_rng_mode=independent
+      - generation.degree_perturbation.max_attempts=256
+      - generation.degree_perturbation.max_distance=4.0
+      - generation.degree_perturbation.require_novel=false
