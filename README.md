@@ -562,7 +562,7 @@ Set `NTRAIN=20000` for a smaller development experiment.
 CFG=configs/experiments/grapher/zinc_joint_typed_edge_laplacian_graphlets345_learned.yaml
 TRAIN=outputs/attributed_grapher/zinc_joint_typed_edge_laplacian_graphlets345_learned/seed_42
 GENROOT=outputs/attributed_generation/zinc_joint_typed_edge_laplacian_graphlets345/seed_42
-NTRAIN=100000
+NTRAIN=0
 NGEN=1024
 
 PYTHONPATH=src python scripts/train_attributed_grapher.py \
@@ -678,7 +678,7 @@ export GRAPHRNN=/home/quang/GraphRNN
 export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/graphrnn/bin/python
 
 export HOGDIFF=/home/quang/HOG-Diff
-export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hog_diff/bin/python
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python

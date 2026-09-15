@@ -108,28 +108,7 @@ def validate_config(config):
         raise ValueError('The joint edge source currently supports uniform typed constructor ranking only.')
 
 
-def _validate_typed_initializer(config):
-    joint=config['joint_typed_degree']
-    checkpoint=joint.get('initialize_degree_checkpoint')
-    if checkpoint:
-        path=Path(checkpoint)
-        if not path.is_file():
-            raise FileNotFoundError(
-                f'Typed warm-start missing: {path}. Train typed-DH-VAE first, or point '
-                'joint_typed_degree.initialize_degree_checkpoint to an existing typed checkpoint. '
-                'To train the prior from scratch, pass '
-                '--set joint_typed_degree.initialize_degree_checkpoint=null '
-                '--set joint_typed_degree.freeze_epochs=0.'
-            )
-    elif int(joint.get('freeze_epochs',0))>0:
-        raise ValueError(
-            'A randomly initialized typed prior must not be frozen; pass '
-            '--set joint_typed_degree.freeze_epochs=0.'
-        )
-
-
 def build_model(config,train_graphs,device):
-    _validate_typed_initializer(config)
     cat=config['categorical_state']; joint=config['joint_typed_degree']; pc=config['attributed_predictor']
     edge_types=tuple(cat['edge_categories']); atoms=tuple(cat['node_categories'])
     if cat.get('node_attribute','atomic_num')!='atomic_num' or cat.get('edge_attribute','bond_type')!='bond_type':
@@ -141,6 +120,7 @@ def build_model(config,train_graphs,device):
           f'checkpoint={path or "none"}', flush=True)
     if path:
         path=Path(path)
+        if not path.is_file(): raise FileNotFoundError(f'Typed warm-start missing: {path}. Train typed-DH-VAE first, or explicitly set initialization=null and freeze_epochs=0.')
         ckpt=torch.load(path,map_location='cpu',weights_only=True)
         if ckpt.get('format')!=TYPED_CHECKPOINT_FORMAT: raise ValueError('Initializer must be a typed-signature VAE, not ordinary DH-VAE.')
         vectorizer=TypedSignatureVectorizer.from_dict(ckpt['vectorizer'])
@@ -159,6 +139,8 @@ def build_model(config,train_graphs,device):
         vectorizer.empirical_node_counts=[len(g) for g in train_graphs]
         vectorizer.empirical_invariants=[]  # fallback is disabled; avoid duplicating whole datasets in each checkpoint
     else:
+        if int(joint.get('freeze_epochs',0))>0:
+            raise ValueError('A randomly initialized typed prior must not be frozen; set freeze_epochs=0.')
         sig=config.get('typed_signature',{})
         vectorizer=TypedSignatureVectorizer.fit(train_graphs,edge_types=edge_types,
           require_connected=True,max_ordinary_degree=sig.get('max_ordinary_degree'),
@@ -332,7 +314,6 @@ def run_epoch(model,store,config,*,batch_size,device,optimizer=None,seed=0,beta=
 
 def train_joint_typed_edge(config,args):
     validate_config(config); config=deepcopy(config)
-    _validate_typed_initializer(config)
     seed=int(args.seed if args.seed is not None else config.get('seed',42)); config['seed']=seed
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
     pc=config['attributed_predictor']; j=config['joint_typed_degree']

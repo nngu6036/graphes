@@ -38,30 +38,20 @@ for MODE in learned edge_relocation; do
   PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
     --config "$CFG" \
     --generated-dir "$GEN" \
-    --reference-split val \
-    --output-dir "$GEN/evaluation_val"
+    --reference-split test \
+    --output-dir "$GEN/evaluation_test"
 
-  PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
-    --config "$CFG" \
-    --generated-graphs "$GEN/topology_refined_graphs.pkl" \
-    --reference-split val \
-    --json-out "$GEN/evaluation_val/induced_graphlets345.json"
 done
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_val                        0.064707          0.055468      0.004454
-hh_source_to_val                    0.063798          0.119766      0.095328
-topology_final_to_val               0.063798          0.057264      0.017999
-
+train_to_test                       0.004733          0.009889      0.000399
+hh_source_to_test                   0.009433          0.090692      0.121366
+topology_final_to_test              0.009433          0.027206      0.026957
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_val                        0.064707          0.055468      0.004454
-hh_source_to_val                    0.064304          0.175175      0.134373
-topology_final_to_val               0.064304          0.062973      0.020346
-
-
-
-
+train_to_test                       0.004733          0.009889      0.000399
+hh_source_to_test                   0.004734          0.190756      0.166243
+topology_final_to_test              0.004734          0.026768      0.029705
 
 CFG=configs/experiments/grapher/ego_small_joint_edge_laplacian_graphlets345_learned.yaml
 TRAIN=outputs/topology_grapher/ego_small_joint_edge_laplacian_graphlets345_learned/seed_42
@@ -103,14 +93,8 @@ for MODE in learned edge_relocation; do
   PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
     --config "$CFG" \
     --generated-dir "$GEN" \
-    --reference-split val \
-    --output-dir "$GEN/evaluation_val"
+    --output-dir "$GEN/evaluation_report"
 
-  PYTHONPATH=src python scripts/evaluate_induced_graphlets.py \
-    --config "$CFG" \
-    --generated-graphs "$GEN/topology_refined_graphs.pkl" \
-    --reference-split val \
-    --json-out "$GEN/evaluation_val/induced_graphlets345.json"
 done
 
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD
@@ -283,3 +267,74 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --hogdiff-compatible-metrics \
   --require-fcd \
   --output-dir "$GEN/evaluation_molecules"
+
+
+Molecular evaluation
+  validity: 1.0
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 1.0
+  validity_without_correction: 1.0
+  fcd: 2.1350128970592372
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1024
+  num_invalid_generated_molecules: 0
+  num_valid_generated_molecules_with_projected_formal_charges: 1024
+  num_invalid_generated_molecules_after_projected_formal_charges: 0
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 1.0
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 0
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: corrected_valid
+  hogdiff_compatible_distribution_metrics: True
+  uniqueness_rate: 0.9912109375
+  unique_valid_count: 1015
+  novelty_rate: 0.7527093596059113
+  novel_unique_valid_count: 764
+  nspdk_mmd: 0.0050254945957516495
+  nspdk_mmd_valid_only: 0.0050254945957516495
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.00020037658750982323
+  nspdk_proxy_mmd_metric_source: 0.00020029561842934074
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1024
+  fcd_generated_smiles_source: valid_with_correction
+
+
+CFG=configs/experiments/grapher/zinc_joint_typed_edge_laplacian_graphlets345_learned.yaml
+TRAIN=outputs/attributed_grapher/zinc_joint_typed_edge_laplacian_graphlets345_learned/seed_42
+GENROOT=outputs/attributed_generation/zinc_joint_typed_edge_laplacian_graphlets345/seed_42
+NTRAIN=100000
+NGEN=1024
+
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --num-train-graphs "$NTRAIN" \
+  --seed 42 \
+  --device gpu \
+  --graphlet-progress-interval 100 \
+  --batch-progress-interval 10 \
+  --progress-interval-seconds 10 \
+  --set joint_typed_degree.initialize_degree_checkpoint=null\ 
+  --set joint_typed_degree.freeze_epochs=0
+
+
+
+  CFG=configs/experiments/grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned.yaml
+TRAIN=outputs/attributed_grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned/seed_43
+GENROOT=outputs/attributed_generation/qm9_joint_typed_edge_laplacian_graphlets345/seed_43
+NGEN=1024
+
+PYTHONPATH=src python scripts/train_attributed_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --seed 43 \
+  --device gpu \
+  --graphlet-progress-interval 100 \
+  --batch-progress-interval 10 \
+  --progress-interval-seconds 10

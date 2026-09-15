@@ -259,26 +259,26 @@ Molecular evaluation
 RUN=seed_44
 N=1024
 
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
+PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
   --stage train \
   --dataset qm9 \
   --common-config configs/baselines/common_qm9.yaml \
-  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --wrapper-config configs/baselines/hog_diff_qm9.yaml \
   --seed-id 44 \
   --run-id "$RUN" \
   --device gpu
 
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
+PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
   --stage generate \
   --dataset qm9 \
   --common-config configs/baselines/common_qm9.yaml \
-  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --wrapper-config configs/baselines/hog_diff_qm9.yaml \
   --seed-id 44 \
   --run-id "$RUN" \
   --num-samples "$N" \
   --device gpu
 
-GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_44_n_${N}"
+GEN_DIR="outputs/baselines/hog_diff/qm9/$RUN/generations/seed_44_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
