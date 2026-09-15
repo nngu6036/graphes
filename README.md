@@ -678,7 +678,7 @@ export GRAPHRNN=/home/quang/GraphRNN
 export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/graphrnn/bin/python
 
 export HOGDIFF=/home/quang/HOG-Diff
-export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hog_diff/bin/python
+export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
