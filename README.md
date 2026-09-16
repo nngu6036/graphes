@@ -784,6 +784,7 @@ can simply be `$(command -v python)`.
 | HOG-Diff | yes | yes | — | yes | yes |
 | CatFlow | yes* | yes* | yes* | yes | yes |
 | GSDM/GDSM | yes | yes* | yes | — | — |
+| GSDM-Simple | yes | yes* | yes* | — | — |
 | EDGE | yes* | yes* | yes* | — | — |
 | SPECTRE | yes | yes* | yes | yes* | — |
 
@@ -1004,6 +1005,70 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 ```
+
+### GSDM-Simple: project-owned reference ladder
+
+`gdsm_simple` is a compact in-repository reference used for controlled GraphER
+ablations. It is **not** presented as a reproduction of the released GSDM
+implementation. The base stage intentionally contains only the core spectral
+mechanism:
+
+1. compute the sorted eigenvalues/eigenvectors of each training adjacency;
+2. train a masked Transformer DDPM epsilon-predictor on the eigenvalues only;
+3. at generation, sample a node count and eigenvector basis jointly from a
+   training graph;
+4. reverse-diffuse a new eigenvalue sequence;
+5. reconstruct `A_soft = U diag(lambda) U^T` and threshold at a fixed value.
+
+No degree conditioning, HH construction, rewiring, graphlet target, clustering
+summary, or orbit summary is enabled in the reference stage. Those switches are
+recorded under `extensions` and deliberately rejected if enabled so future
+GraphER additions must be introduced as explicitly named ablations.
+
+```bash
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdsm_simple_community_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdsm_simple_community_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/gdsm_simple/community_small/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+```
+
+The intended progressive ladder is:
+
+```text
+S0  GSDM-Simple: lambda diffusion + empirical U + direct reconstruction
+S1  + empirical/learned degree conditioning
+S2  + HH degree-constrained source
+S3  + degree-preserving rewiring realization
+S4  + permutation-invariant spectral/eigenspace summary
+S5  + graphlet / local structural guidance
+```
+
+Keep each stage in a separate config/run ID so gains can be attributed to one
+GraphER component at a time.
 
 ### EDGE
 

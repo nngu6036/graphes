@@ -179,7 +179,7 @@ def common_defaults_for_model(
         if val_every is not None: train["validation_every"] = val_every
         return {"train": train}
 
-    if model == "gdsm":
+    if model in {"gdsm", "gdsm_simple"}:
         train = {}
         for key, value in (
             ("epochs", epochs), ("batch_size", batch), ("lr", lr),

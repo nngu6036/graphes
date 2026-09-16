@@ -52,6 +52,10 @@ _MODEL_DATASETS: dict[str, dict[str, DatasetCLIProfile]] = {
         key: DatasetCLIProfile(PROFILES[key].serialized_id)
         for key in ("community_small", "ego_small", "grid")
     },
+    "gdsm_simple": {
+        key: DatasetCLIProfile(PROFILES[key].serialized_id)
+        for key in ("community_small", "ego_small", "grid")
+    },
     "edge": {
         key: DatasetCLIProfile(PROFILES[key].serialized_id)
         for key in ("community_small", "ego_small", "grid")
@@ -133,6 +137,7 @@ _TRAINING_ESTIMATE_DEFAULT: dict[str, bool | None] = {
     "dhvae_hh": True,
     "catflow": None,
     "gdsm": None,
+    "gdsm_simple": None,
     "edge": None,
     "spectre": None,
 }
@@ -526,6 +531,18 @@ def _training_options(
 
     if args.max_nodes is not None:
         raise ValueError(f"--max-nodes is only supported by source-backed adapters, not {model}.")
+
+    if model == "gdsm_simple":
+        train = options.setdefault("train", {})
+        if args.epochs is not None:
+            train["epochs"] = int(args.epochs)
+        if args.batch_size is not None:
+            train["batch_size"] = int(args.batch_size)
+        if args.num_workers is not None:
+            raise ValueError("gdsm_simple is an in-process tensor baseline and does not use DataLoader workers yet")
+        if args.generation_batch_size is not None:
+            options["generation_batch_size"] = int(args.generation_batch_size)
+        return options
 
     if model == "defog":
         if args.epochs is not None:

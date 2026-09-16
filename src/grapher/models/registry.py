@@ -16,6 +16,7 @@ _WRAPPER_PATHS: Final[dict[str, str]] = {
     "gdss": "grapher.models.gdss:GDSSWrapper",
     "hog_diff": "grapher.models.hog_diff:HOGDiffWrapper",
     "gdsm": "grapher.models.gdsm:GDSMWrapper",
+    "gdsm_simple": "grapher.models.gdsm_simple.wrapper:GDSMSimpleWrapper",
     "edge": "grapher.models.edge:EDGEWrapper",
     "spectre": "grapher.models.spectre:SPECTREWrapper",
     "flagg": "grapher.models.flagg:FLAGGWrapper",
@@ -34,6 +35,8 @@ _ALIASES: Final[dict[str, str]] = {
     "gsdm": "gdsm",
     "gs-dm": "gdsm",
     "gd-sm": "gdsm",
+    "gdsm-simple": "gdsm_simple",
+    "gsdm-simple": "gdsm_simple",
 }
 
 

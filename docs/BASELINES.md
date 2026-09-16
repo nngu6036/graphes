@@ -291,3 +291,27 @@ For each reported result retain:
 - exact requested/generated sample count;
 - evaluator configuration;
 - wall-clock/hardware metadata for compute comparisons.
+
+
+## Project-owned GSDM-Simple reference
+
+`gdsm_simple` is a deliberately minimal, in-process spectral reference for
+GraphER component ablations. It diffuses sorted adjacency eigenvalues, samples
+an eigenvector basis (and therefore graph size) from the training split, and
+reconstructs a graph by `U diag(lambda) U^T` followed by a fixed threshold. It
+does not use HH, degree-preserving rewiring, or structural summaries.
+
+The reference is invoked through the same shared baseline CLI:
+
+```bash
+PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdsm_simple_community_small.yaml \
+  --seed-id 42 --run-id seed_42 --device gpu
+```
+
+The manifest labels it as a project-owned simplified reference rather than an
+upstream GSDM reproduction. GraphER features should be added only in new named
+configs so the reference path remains unchanged.

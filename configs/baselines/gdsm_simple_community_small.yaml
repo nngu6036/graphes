@@ -1,0 +1,54 @@
+comparison:
+  model: gdsm_simple
+  dataset: community_small
+  common_config: common_community_small.yaml
+  status: project_owned_minimal_gdsm_reference
+  budget:
+    basis: matched_to_released_gdsm_reference_horizon
+    unit: epochs
+    epochs: 200
+    batch_size: 64
+  fairness_note: >-
+    This is a deliberately compact project-owned reference, not a reproduction
+    claim for released GSDM. It isolates eigenvalue diffusion + empirical
+    training eigenbasis reconstruction so GraphER components can be added
+    incrementally.
+
+gdsm_simple:
+  train:
+    epochs: 200
+    batch_size: 64
+    lr: 0.0002
+    weight_decay: 1.0e-6
+    grad_norm: 1.0
+    validation_every: 5
+    log_every: 10
+
+  model:
+    max_nodes: 20
+    hidden_dim: 128
+    num_layers: 4
+    num_heads: 4
+    ff_dim: 256
+    dropout: 0.0
+
+  diffusion:
+    steps: 1000
+    beta_start: 0.0001
+    beta_end: 0.02
+
+  sample:
+    steps: 100
+    threshold: 0.5
+    sort_eigenvalues: true
+
+  generation_batch_size: 128
+
+  runtime:
+    device: auto
+
+  extensions:
+    degree_conditioning: false
+    hh_initialization: false
+    degree_preserving_rewiring: false
+    structural_summary: none
