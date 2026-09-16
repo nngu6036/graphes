@@ -44,6 +44,8 @@ from grapher.models.gdsm_simple.model import (
 )
 from grapher.models.gdsm_simple.refiner import (
     SpectralRewireConfig,
+    adjacency_spectral_rmse,
+    initial_lambda_gate,
     refine_graph_toward_adjacency_spectrum,
 )
 from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
@@ -162,7 +164,7 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
     implementation_note = (
         "Project-owned reference: adjacency-eigenvalue DDPM/DDIM with empirical "
         "training eigenbases, UΛU^T threshold reconstruction, and optional "
-        "degree-preserving spectral rewiring at generation."
+        "source-preserving degree-constrained spectral refinement at generation."
     )
     supported_datasets = frozenset({"community_small", "ego_small", "grid"})
 
@@ -201,13 +203,23 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             "hh_initialization": False,
             "degree_preserving_rewiring": False,
             "rewiring": {
-                "max_steps": 32,
+                "mode": "source_preserving",
+                "max_steps": 4,
                 "proposal_budget": 256,
                 "valid_candidate_budget": 128,
                 "min_relative_improvement": 1.0e-6,
                 "relative_improvement_epsilon": 1.0e-12,
                 "preserve_connectivity_if_source_connected": True,
                 "reject_revisited_states": True,
+                "lambda_weight": 1.0,
+                "projector_weight": 1.0,
+                "source_weight": 0.1,
+                "projector_rank": 4,
+                "projector_normalization_floor": 0.05,
+                "projector_relative_worsening_tolerance": 0.10,
+                "require_lambda_improvement": True,
+                "gate_enabled": True,
+                "gate_initial_lambda_quantile": 0.75,
             },
             "structural_summary": "none",
         },
@@ -413,7 +425,15 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                     "eigenvectors": "sampled_empirically_from_training_split_and_not_diffused",
                     "reconstruction": "U_diag_lambda_Ut_then_fixed_threshold",
                     "generation_extension": (
-                        "degree_preserving_spectral_rewiring_from_threshold_graph"
+                        (
+                            "source_preserving_spectral_refinement_from_threshold_graph"
+                            if str(
+                                options.get("extensions", {})
+                                .get("rewiring", {})
+                                .get("mode", "lambda_only")
+                            ).lower() == "source_preserving"
+                            else "degree_preserving_spectral_rewiring_from_threshold_graph"
+                        )
                         if bool(options.get("extensions", {}).get("degree_preserving_rewiring", False))
                         else "none"
                     ),
@@ -505,15 +525,23 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         graphs: list[nx.Graph] = []
         threshold_graphs: list[nx.Graph] = []
         target_spectra: list[np.ndarray] = []
+        sampled_basis_indices: list[int] = []
+        sampled_bases: list[np.ndarray] = []
         rewiring_diagnostics: list[dict[str, Any]] = []
         max_nodes = int(state["max_nodes"])
         start = time.monotonic()
-        while len(graphs) < request.num_graphs:
-            b = min(batch_size, request.num_graphs - len(graphs))
+
+        # Stage A: generate the exact S0 threshold samples first.  Refinement is
+        # deliberately delayed until the whole batch exists so the optional
+        # residual-quantile gate is independent of generation_batch_size.
+        while len(threshold_graphs) < request.num_graphs:
+            b = min(batch_size, request.num_graphs - len(threshold_graphs))
             # Sampling one training basis index jointly samples graph size and U.
             indices = basis_rng.integers(0, len(bases), size=b)
             sizes = basis_n[indices]
-            mask = torch.arange(max_nodes, device=device).unsqueeze(0) < torch.tensor(sizes, device=device).unsqueeze(1)
+            mask = torch.arange(max_nodes, device=device).unsqueeze(0) < torch.tensor(
+                sizes, device=device
+            ).unsqueeze(1)
             num_nodes = torch.tensor(sizes, dtype=torch.long, device=device)
             normalized = ddim_sample(
                 model,
@@ -528,40 +556,87 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                 values = normalized[row, :n] * np.sqrt(float(n))
                 if bool(sample_cfg.get("sort_eigenvalues", True)):
                     values = torch.sort(values).values
-                basis = torch.tensor(bases[basis_index], dtype=torch.float32, device=device).unsqueeze(0)
+                basis_array = np.asarray(bases[basis_index], dtype=np.float64)
+                basis = torch.tensor(
+                    basis_array, dtype=torch.float32, device=device
+                ).unsqueeze(0)
                 soft = reconstruct_soft_adjacency(basis, values.unsqueeze(0))[0]
                 soft = 0.5 * (soft + soft.T)
                 soft.fill_diagonal_(0.0)
-                adjacency = (soft > float(sample_cfg.get("threshold", 0.5))).cpu().numpy()
-                graph = nx.from_numpy_array(adjacency.astype(np.int8), create_using=nx.Graph)
-                threshold_graphs.append(graph.copy())
+                adjacency = (
+                    soft > float(sample_cfg.get("threshold", 0.5))
+                ).cpu().numpy()
+                graph = nx.from_numpy_array(
+                    adjacency.astype(np.int8), create_using=nx.Graph
+                )
                 target_normalized = np.sort(
                     normalized[row, :n].detach().cpu().numpy().astype(np.float64)
                 )
+                threshold_graphs.append(graph)
                 target_spectra.append(target_normalized.copy())
-                if rewiring_enabled:
-                    graph, diagnostics = refine_graph_toward_adjacency_spectrum(
-                        graph,
-                        target_normalized,
-                        rng=rewiring_rng,
-                        config=rewiring_cfg,
-                    )
-                else:
-                    diagnostics = {
-                        "enabled": False,
-                        "accepted_steps": 0,
-                        "degree_preserved": True,
-                        "source_connected": bool(
-                            graph.number_of_nodes() <= 1 or nx.is_connected(graph)
-                        ),
-                        "final_connected": bool(
-                            graph.number_of_nodes() <= 1 or nx.is_connected(graph)
-                        ),
-                        "stop_reason": "disabled",
-                    }
-                rewiring_diagnostics.append(diagnostics)
-                graphs.append(graph)
-            print(f"GSDM-Simple generated {len(graphs)}/{request.num_graphs}", flush=True)
+                sampled_basis_indices.append(int(basis_index))
+                sampled_bases.append(basis_array.copy())
+            print(
+                f"GSDM-Simple threshold-generated {len(threshold_graphs)}/{request.num_graphs}",
+                flush=True,
+            )
+
+        # Stage B: conservative, source-preserving spectral refinement.  The
+        # high-residual gate leaves already-good GSDM samples untouched.
+        initial_lambda_errors = [
+            adjacency_spectral_rmse(graph, target)
+            for graph, target in zip(threshold_graphs, target_spectra)
+        ]
+        gate_mask, gate_threshold = initial_lambda_gate(
+            initial_lambda_errors,
+            enabled=bool(rewiring_enabled and rewiring_cfg.gate_enabled),
+            quantile=rewiring_cfg.gate_initial_lambda_quantile,
+        )
+
+        for index, (source_graph, target_normalized, sampled_basis) in enumerate(
+            zip(threshold_graphs, target_spectra, sampled_bases)
+        ):
+            graph = source_graph.copy()
+            if rewiring_enabled:
+                graph, diagnostics = refine_graph_toward_adjacency_spectrum(
+                    graph,
+                    target_normalized,
+                    rng=rewiring_rng,
+                    config=rewiring_cfg,
+                    target_eigenvectors=(
+                        sampled_basis
+                        if rewiring_cfg.mode == "source_preserving"
+                        else None
+                    ),
+                    gate_passed=bool(gate_mask[index]),
+                    gate_threshold=gate_threshold,
+                )
+            else:
+                connected = bool(
+                    graph.number_of_nodes() <= 1 or nx.is_connected(graph)
+                )
+                diagnostics = {
+                    "enabled": False,
+                    "mode": "disabled",
+                    "gate_passed": False,
+                    "gate_threshold": None,
+                    "initial_error": float(initial_lambda_errors[index]),
+                    "final_error": float(initial_lambda_errors[index]),
+                    "accepted_steps": 0,
+                    "degree_preserved": True,
+                    "source_connected": connected,
+                    "final_connected": connected,
+                    "stop_reason": "disabled",
+                }
+            rewiring_diagnostics.append(diagnostics)
+            graphs.append(graph)
+            if (index + 1) % max(1, min(128, request.num_graphs)) == 0 or (
+                index + 1 == request.num_graphs
+            ):
+                print(
+                    f"GSDM-Simple refined {index + 1}/{request.num_graphs}",
+                    flush=True,
+                )
         generation_id = request.resolved_generation_id
         target = layout.generation_dir(generation_id)
         ArtifactLayout.require_available(target, overwrite=request.overwrite)
@@ -579,6 +654,9 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             target_spectrum_path = staging / "target_adjacency_eigenvalues.pkl"
             with target_spectrum_path.open("wb") as handle:
                 pickle.dump(target_spectra, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            basis_index_path = staging / "sampled_basis_indices.pkl"
+            with basis_index_path.open("wb") as handle:
+                pickle.dump(sampled_basis_indices, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
             initial_errors = [
                 float(d["initial_error"]) for d in rewiring_diagnostics if "initial_error" in d
@@ -587,8 +665,35 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                 float(d["final_error"]) for d in rewiring_diagnostics if "final_error" in d
             ]
             accepted_steps = [int(d.get("accepted_steps", 0)) for d in rewiring_diagnostics]
+            gate_passed = [bool(d.get("gate_passed", False)) for d in rewiring_diagnostics]
+            initial_projector_errors = [
+                float(d["initial_projector_error"])
+                for d in rewiring_diagnostics
+                if "initial_projector_error" in d
+            ]
+            final_projector_errors = [
+                float(d["final_projector_error"])
+                for d in rewiring_diagnostics
+                if "final_projector_error" in d
+            ]
+            final_source_distances = [
+                float(d["final_source_distance"])
+                for d in rewiring_diagnostics
+                if "final_source_distance" in d
+            ]
+            initial_energies = [
+                float(d["initial_energy"])
+                for d in rewiring_diagnostics
+                if "initial_energy" in d
+            ]
+            final_energies = [
+                float(d["final_energy"])
+                for d in rewiring_diagnostics
+                if "final_energy" in d
+            ]
             aggregate_rewiring = {
                 "enabled": rewiring_enabled,
+                "mode": rewiring_cfg.mode if rewiring_enabled else "disabled",
                 "num_graphs": len(graphs),
                 "degree_preservation_rate": float(
                     np.mean([bool(d.get("degree_preserved", False)) for d in rewiring_diagnostics])
@@ -599,7 +704,17 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                 "final_connected_rate": float(
                     np.mean([bool(d.get("final_connected", False)) for d in rewiring_diagnostics])
                 ),
+                "gate_enabled": bool(rewiring_enabled and rewiring_cfg.gate_enabled),
+                "gate_initial_lambda_quantile": (
+                    rewiring_cfg.gate_initial_lambda_quantile if rewiring_enabled else None
+                ),
+                "gate_threshold": gate_threshold if rewiring_enabled else None,
+                "gate_pass_rate": float(np.mean(gate_passed)) if gate_passed else 0.0,
                 "mean_accepted_steps": float(np.mean(accepted_steps)) if accepted_steps else 0.0,
+                "mean_accepted_steps_on_gated": (
+                    float(np.mean([v for v, passed in zip(accepted_steps, gate_passed) if passed]))
+                    if any(gate_passed) else 0.0
+                ),
                 "changed_graph_rate": float(np.mean([v > 0 for v in accepted_steps])) if accepted_steps else 0.0,
                 "mean_initial_spectral_rmse": float(np.mean(initial_errors)) if initial_errors else None,
                 "mean_final_spectral_rmse": float(np.mean(final_errors)) if final_errors else None,
@@ -607,7 +722,25 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                     float(np.mean(np.asarray(initial_errors) - np.asarray(final_errors)))
                     if initial_errors else None
                 ),
-                "all_accepted_steps_improve": bool(
+                "mean_initial_projector_error": (
+                    float(np.mean(initial_projector_errors))
+                    if initial_projector_errors else None
+                ),
+                "mean_final_projector_error": (
+                    float(np.mean(final_projector_errors))
+                    if final_projector_errors else None
+                ),
+                "mean_final_source_edge_distance": (
+                    float(np.mean(final_source_distances))
+                    if final_source_distances else None
+                ),
+                "mean_initial_joint_energy": (
+                    float(np.mean(initial_energies)) if initial_energies else None
+                ),
+                "mean_final_joint_energy": (
+                    float(np.mean(final_energies)) if final_energies else None
+                ),
+                "all_accepted_steps_improve_lambda": bool(
                     all(bool(d.get("all_accepted_steps_improve", True)) for d in rewiring_diagnostics)
                 ),
                 "config": _jsonable(extensions.get("rewiring", {})),
@@ -637,6 +770,11 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                     "sha256": _sha256(target_spectrum_path),
                     "normalization": "eigenvalues_div_sqrt_num_nodes",
                 },
+                "sampled_basis_indices": {
+                    "path": "sampled_basis_indices.pkl",
+                    "sha256": _sha256(basis_index_path),
+                    "role": "indices_into_checkpoint_empirical_training_eigenbasis_bank",
+                },
                 "checkpoint": {"path": str(request.checkpoint_path.resolve()), "sha256": _sha256(request.checkpoint_path)},
                 "empirical_prior": {
                     "node_count": "jointly_sampled_with_training_eigenbasis",
@@ -645,7 +783,11 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                 },
                 "reconstruction": {
                     "type": (
-                        "spectral_threshold_then_degree_preserving_spectral_rewiring"
+                        (
+                            "spectral_threshold_then_source_preserving_spectral_refinement"
+                            if rewiring_cfg.mode == "source_preserving"
+                            else "spectral_threshold_then_degree_preserving_spectral_rewiring"
+                        )
                         if rewiring_enabled
                         else "spectral_threshold"
                     ),

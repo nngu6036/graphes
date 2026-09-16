@@ -1,0 +1,47 @@
+comparison:
+  model: gdsm_simple
+  dataset: community_small
+  common_config: common_community_small.yaml
+  status: graphes_native_high_budget_s1_lambda_only_archive
+
+gdsm_simple:
+  train:
+    epochs: 5000
+    batch_size: 16
+    lr: 0.0002
+    weight_decay: 1.0e-6
+
+  model:
+    max_nodes: 20
+    hidden_dim: 128
+    num_layers: 4
+    num_heads: 4
+    ff_dim: 256
+
+  diffusion:
+    steps: 1000
+    beta_start: 0.0001
+    beta_end: 0.02
+
+  sample:
+    steps: 1000
+    threshold: 0.5
+    sort_eigenvalues: true
+
+  generation_batch_size: 128
+
+  extensions:
+    degree_conditioning: false
+    hh_initialization: false
+    degree_preserving_rewiring: true
+    rewiring:
+      mode: lambda_only
+      max_steps: 32
+      proposal_budget: 256
+      valid_candidate_budget: 128
+      min_relative_improvement: 1.0e-6
+      relative_improvement_epsilon: 1.0e-12
+      preserve_connectivity_if_source_connected: true
+      reject_revisited_states: true
+      gate_enabled: false
+    structural_summary: none

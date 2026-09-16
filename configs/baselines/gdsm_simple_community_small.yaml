@@ -2,7 +2,7 @@ comparison:
   model: gdsm_simple
   dataset: community_small
   common_config: common_community_small.yaml
-  status: graphes_native_high_budget_s1_spectral_rewire
+  status: graphes_native_high_budget_s1_source_preserving_refinement
 
 gdsm_simple:
   train:
@@ -14,7 +14,7 @@ gdsm_simple:
     weight_decay: 1.0e-6
 
   model:
-    # Keep the S0 denoiser capacity unchanged. S1 changes generation only.
+    # Keep the S0 denoiser capacity unchanged. This stage changes generation only.
     max_nodes: 20
     hidden_dim: 128
     num_layers: 4
@@ -38,17 +38,33 @@ gdsm_simple:
     degree_conditioning: false
     hh_initialization: false
 
-    # S1: take the degree sequence from the threshold-reconstructed GSDM graph
-    # and search only within that degree fibre. Each accepted double-edge swap
-    # must reduce RMSE to the diffusion-predicted adjacency eigenvalues.
+    # Source-preserving spectral refinement. Start from the exact GSDM threshold
+    # graph, freeze its degree sequence, and only make a few conservative swaps.
     degree_preserving_rewiring: true
     rewiring:
-      max_steps: 32
+      mode: source_preserving
+
+      # Keep the correction local: the original GSDM output is already strong.
+      max_steps: 4
       proposal_budget: 256
       valid_candidate_budget: 128
       min_relative_improvement: 1.0e-6
       relative_improvement_epsilon: 1.0e-12
       preserve_connectivity_if_source_connected: true
       reject_revisited_states: true
+
+      # Joint spectral/source objective. Lambda must improve monotonically; the
+      # sampled empirical U is preserved through a low-rank projector target.
+      lambda_weight: 1.0
+      projector_weight: 1.0
+      source_weight: 0.1
+      projector_rank: 4
+      projector_normalization_floor: 0.05
+      projector_relative_worsening_tolerance: 0.10
+      require_lambda_improvement: true
+
+      # Refine only the highest-residual quarter of GSDM threshold samples.
+      gate_enabled: true
+      gate_initial_lambda_quantile: 0.75
 
     structural_summary: none

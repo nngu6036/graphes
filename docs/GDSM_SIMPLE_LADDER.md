@@ -19,46 +19,83 @@ The retained high-budget S0 config is:
 
 `configs/baselines/gdsm_simple_community_small_s0.yaml`
 
-## S1: threshold graph + degree-preserving spectral rewiring (implemented)
+## S1a: lambda-only degree-preserving rewiring (archived ablation)
 
-The default `configs/baselines/gdsm_simple_community_small.yaml` now implements
-S1. Training is identical to S0. Only generation changes:
+The previous S1 experiment started from the S0 threshold graph `G0`, froze its
+indexed degree sequence, and accepted double-edge swaps only when they reduced
+RMSE to the diffusion-predicted adjacency eigenvalues.  It approximately solved
+
+`argmin_{G : deg(G)=deg(G0)} RMSE(lambda(G), lambda_hat)`.
+
+This isolated discrete realization but discarded part of the information used
+by GSDM to build `G0`: the sampled empirical eigenbasis `U`.  On
+Community-small the lambda-only refiner reduced its own spectral objective but
+worsened clustering/orbit MMD, motivating a conservative source-preserving
+variant.
+
+The archived config is:
+
+`configs/baselines/gdsm_simple_community_small_s1_lambda_only.yaml`
+
+## S1b: source-preserving spectral refinement (current default)
+
+The default `configs/baselines/gdsm_simple_community_small.yaml` keeps training
+identical to S0. Only generation changes.
+
+For every generated sample:
 
 1. sample an empirical training eigenbasis `U` and diffuse a target adjacency
    spectrum `lambda_hat`;
-2. reconstruct `A_soft = U diag(lambda_hat) U^T` and threshold at 0.5;
-3. call the resulting graph `G0` and extract/freeze its indexed degree sequence;
-4. propose ordinary double-edge swaps inside that degree fibre;
-5. compute each candidate graph's sorted adjacency eigenvalues, normalized by
-   `sqrt(n)` exactly as during training;
-6. accept the best candidate only if its spectral RMSE to `lambda_hat` strictly
-   improves;
-7. repeat up to the configured rewiring budget.
+2. reconstruct `A_soft = U diag(lambda_hat) U^T` and threshold at 0.5, giving
+   the trusted source graph `G0`;
+3. freeze the indexed degree sequence of `G0`;
+4. compute the initial spectral residual
+   `D_lambda(G0, lambda_hat)` for the whole generated batch;
+5. refine only high-residual samples (default: top 25% by residual);
+6. for a selected sample, propose ordinary double-edge swaps, but accept a move
+   only when the generated eigenvalue target improves;
+7. rank candidates with a joint source-preserving energy using:
+   - normalized eigenvalue RMSE to `lambda_hat`;
+   - a low-rank adjacency-eigenspace projector derived from the same sampled
+     `U` used in the GSDM reconstruction;
+   - an edge symmetric-difference penalty from `G0`;
+8. cap correction at four accepted swaps by default.
 
-Thus S1 approximately solves
+The sampled basis is represented by a projector rather than raw eigenvectors so
+column sign flips do not change the target.  The dominant mode positions are
+selected from `|lambda_hat|`, and the same sorted spectral positions are used
+for each candidate graph.
 
-`argmin_{G : deg(G)=deg(G0)} RMSE(lambda(G), lambda_hat)`
+The default source-preserving energy is
 
-without changing the learned GSDM-Simple denoiser. If `G0` is connected, the
-default config also requires accepted swaps to keep it connected; a disconnected
-threshold reconstruction is not artificially forced to be connected.
+`E(G) = w_lambda D_lambda_rel(G) + w_P D_P_rel(G) + w_src D_edge(G, G0)`
+
+with `w_lambda = 1`, `w_P = 1`, and `w_src = 0.1`.  In addition, a hard
+projector-worsening tolerance prevents a small lambda gain from destroying the
+sampled eigenspace.  Every accepted move must still improve lambda when
+`require_lambda_improvement: true`.
+
+Thus the refiner is a **local corrector**, not a second graph generator.
+Already-good GSDM samples remain unchanged.
 
 Generation writes:
 
-- `threshold_graphs.pkl`: original S0 threshold graphs;
-- `base_graphs.pkl`: final S1 refined graphs (used by the common evaluator);
+- `threshold_graphs.pkl`: original paired S0 threshold graphs;
+- `base_graphs.pkl`: final refined graphs used by the common evaluator;
 - `target_adjacency_eigenvalues.pkl`: frozen generated spectral targets;
-- `rewiring_diagnostics.json`: per-graph and aggregate spectral improvements.
+- `sampled_basis_indices.pkl`: indices into the checkpoint's empirical basis bank;
+- `rewiring_diagnostics.json`: spectral/projector/source/gating diagnostics.
 
-Because rewiring is generation-only, an existing compatible S0 checkpoint can
-be reused with the S1 YAML; retraining is not required.
+Because S1b is generation-only, an existing compatible S0/S1 checkpoint can be
+reused; retraining is not required.
 
 ## One-change-at-a-time ladder
 
 | Stage | Change relative to previous stage | Question isolated |
 | --- | --- | --- |
 | S0 | spectral diffusion + empirical `U` + threshold | How well does the simple spectral generator work? |
-| S1 | + post-threshold degree-preserving spectral rewiring | Does discrete realization move the final graph closer to its generated spectrum? |
+| S1a | + lambda-only post-threshold rewiring | Does matching generated eigenvalues alone help? |
+| S1b | + source-preserving gated `lambda + P(U)` refinement | Can rewiring improve lambda without destroying information already in GSDM's source? |
 | S2 | + explicit generated degree sequence and HH source | Is a structured degree-realizable source better than inheriting degrees from thresholding? |
 | S3 | + degree-conditioned spectral model / endpoint bridge | Does coupling `D` and `lambda` improve target consistency? |
 | S4 | + permutation-invariant eigenspace summary | Does additional global structure improve constrained search? |
@@ -67,9 +104,10 @@ be reused with the S1 YAML; retraining is not required.
 Keep the same dataset split, evaluation code, sample count and seed set for
 paired comparisons.
 
-## S1 commands
+## S1b commands
 
-An already-trained run can be reused because S1 is generation-only:
+An already-trained run can be reused because source-preserving refinement is
+generation-only:
 
 ```bash
 RUN=seed_42_high_budget
@@ -91,4 +129,5 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 ```
 
 To reproduce S0 from the same checkpoint, generate with
-`gdsm_simple_community_small_s0.yaml` and a different `--generation-id`.
+`gdsm_simple_community_small_s0.yaml`. To reproduce the old lambda-only refiner,
+use `gdsm_simple_community_small_s1_lambda_only.yaml`.
