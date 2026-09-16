@@ -18,6 +18,7 @@ from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.layers import TopologyMPNNLayer
 from grapher.rewiring_mlp.generic.spectral_data import TopologySpectralBatch
+from grapher.rewiring_mlp.generic.spectral_distance_histogram import SpectralDistanceHistogramSpec
 from grapher.utils.device import resolve_torch_device
 from grapher.utils.io import ensure_dir
 
@@ -60,6 +61,10 @@ class TopologySpectralTransformerPredictor(nn.Module):
         heat_kernel_times: Sequence[float] = (0.25, 1.0, 4.0),
         heat_kernel_projection_iterations: int = 6,
         projector_rank: int = 4,
+        eigenspace_rank: int = 4,
+        eigenspace_histogram_bins: int = 16,
+        eigenspace_histogram_degree_max: int = 19,
+        eigenspace_histogram_max_distance: float = 3.0,
         use_graph_context: bool = True,
         predict_clustering_coefficient: bool = False,
         predict_clustering_histogram: bool = False,
@@ -94,8 +99,18 @@ class TopologySpectralTransformerPredictor(nn.Module):
             self.spectral_representation = "heat_kernel"
         if self.spectral_representation in {"eigenspace", "lambda_projector", "eigenvalues_projector", "lambda+p", "lambda_p"}:
             self.spectral_representation = "lambda_projector"
-        if self.spectral_representation not in {"eigenvalues", "heat_kernel", "lambda_projector"}:
-            raise ValueError("spectral_representation must be eigenvalues, heat_kernel, or lambda_projector.")
+        if self.spectral_representation in {
+            "eigenspace_histogram", "lambda_eigenspace_histogram",
+            "degree_spectral_histogram", "spectral_distance_histogram",
+        }:
+            self.spectral_representation = "lambda_eigenspace_histogram"
+        if self.spectral_representation not in {
+            "eigenvalues", "heat_kernel", "lambda_projector", "lambda_eigenspace_histogram"
+        }:
+            raise ValueError(
+                "spectral_representation must be eigenvalues, heat_kernel, lambda_projector, "
+                "or lambda_eigenspace_histogram."
+            )
         self.heat_kernel_times = tuple(float(value) for value in heat_kernel_times)
         if not self.heat_kernel_times or any(value <= 0.0 for value in self.heat_kernel_times):
             raise ValueError("heat_kernel_times must contain positive values.")
@@ -105,6 +120,12 @@ class TopologySpectralTransformerPredictor(nn.Module):
         self.projector_rank = int(projector_rank)
         if self.projector_rank < 1:
             raise ValueError("projector_rank must be positive.")
+        self.eigenspace_histogram_spec = SpectralDistanceHistogramSpec(
+            rank=int(eigenspace_rank),
+            bins=int(eigenspace_histogram_bins),
+            degree_max=int(eigenspace_histogram_degree_max),
+            max_normalized_distance=float(eigenspace_histogram_max_distance),
+        )
         self.use_graph_context = bool(use_graph_context)
         if self.spectral_representation in {"heat_kernel", "lambda_projector"} and not self.use_graph_context:
             raise ValueError("Pairwise eigenspace spectral diffusion requires use_graph_context=true.")
@@ -212,6 +233,22 @@ class TopologySpectralTransformerPredictor(nn.Module):
                 nn.Linear(self.edge_dim, 1),
             )
             if self.spectral_representation == "lambda_projector" else None
+        )
+        self.eigenspace_histogram_state_encoder = (
+            nn.Sequential(
+                nn.Linear(2 * self.eigenspace_histogram_spec.width, self.spectral_dim),
+                nn.SiLU(),
+                nn.Linear(self.spectral_dim, self.spectral_dim),
+            )
+            if self.spectral_representation == "lambda_eigenspace_histogram" else None
+        )
+        self.clean_eigenspace_histogram_head = (
+            nn.Sequential(
+                nn.Linear(self.spectral_dim, self.spectral_dim),
+                nn.SiLU(),
+                nn.Linear(self.spectral_dim, self.eigenspace_histogram_spec.width),
+            )
+            if self.spectral_representation == "lambda_eigenspace_histogram" else None
         )
 
         # [normalized current lambda_i, normalized source lambda_i,
@@ -495,6 +532,23 @@ class TopologySpectralTransformerPredictor(nn.Module):
             tokens = tokens + degree_context.unsqueeze(1)
         if graph_hidden is not None:
             tokens = tokens + self.graph_to_spectral(graph_hidden).unsqueeze(1)
+        if self.spectral_representation == "lambda_eigenspace_histogram":
+            if (
+                batch.current_eigenspace_histogram is None
+                or batch.source_eigenspace_histogram is None
+                or batch.eigenspace_histogram_block_mask is None
+            ):
+                raise ValueError(
+                    "Lambda+eigenspace-histogram model received a batch without histogram bridge states."
+                )
+            expected = self.eigenspace_histogram_spec.width
+            if batch.current_eigenspace_histogram.shape[-1] != expected:
+                raise ValueError("Eigenspace-histogram bridge width differs from the checkpoint.")
+            hist_state = torch.cat(
+                [batch.current_eigenspace_histogram, batch.source_eigenspace_histogram], dim=-1
+            )
+            assert self.eigenspace_histogram_state_encoder is not None
+            tokens = tokens + self.eigenspace_histogram_state_encoder(hist_state).unsqueeze(1)
         tokens = tokens * mask.unsqueeze(-1).to(tokens.dtype)
         encoded = self.spectral_transformer(
             tokens,
@@ -514,9 +568,24 @@ class TopologySpectralTransformerPredictor(nn.Module):
             or self.orbit_summary_head is not None
             or self.cycle_graphlet_histogram_head is not None
             or self.induced_graphlet_histogram_head is not None
+            or self.clean_eigenspace_histogram_head is not None
         ):
             weights = mask.unsqueeze(-1).to(encoded.dtype)
             pooled = (encoded * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
+        if self.clean_eigenspace_histogram_head is not None:
+            if batch.eigenspace_histogram_block_mask is None:
+                raise ValueError("Eigenspace histogram head requires a block mask.")
+            raw_logits = self.clean_eigenspace_histogram_head(pooled)
+            blocks = raw_logits.view(
+                raw_logits.shape[0],
+                self.eigenspace_histogram_spec.num_blocks,
+                self.eigenspace_histogram_spec.bins,
+            )
+            probabilities = torch.softmax(blocks, dim=-1)
+            block_mask = batch.eigenspace_histogram_block_mask.bool().unsqueeze(-1)
+            probabilities = probabilities * block_mask.to(probabilities.dtype)
+            result["clean_eigenspace_histogram_logits"] = blocks
+            result["clean_eigenspace_histogram"] = probabilities.reshape(raw_logits.shape[0], -1)
         if self.clustering_histogram_head is not None:
             logits = self.clustering_histogram_head(pooled)
             result["clean_clustering_histogram_logits"] = logits
@@ -795,6 +864,45 @@ class TopologySpectralTransformerPredictor(nn.Module):
                     "projector_trace_mae": float(trace_mae.detach().cpu()),
                 }
 
+        eigenspace_histogram_metrics: dict[str, float] = {}
+        if self.spectral_representation == "lambda_eigenspace_histogram":
+            if (
+                batch.clean_eigenspace_histogram_target is None
+                or batch.eigenspace_histogram_block_mask is None
+                or batch.eigenspace_histogram_block_weights is None
+                or "clean_eigenspace_histogram" not in outputs
+            ):
+                raise ValueError(
+                    "Lambda+eigenspace-histogram model requires clean histogram targets and block metadata."
+                )
+            predicted_hist = outputs["clean_eigenspace_histogram"].view(
+                -1, self.eigenspace_histogram_spec.num_blocks, self.eigenspace_histogram_spec.bins
+            )
+            target_hist = batch.clean_eigenspace_histogram_target.to(predicted_hist.dtype).view_as(predicted_hist)
+            block_weights = batch.eigenspace_histogram_block_weights.to(predicted_hist.dtype)
+            block_mask = batch.eigenspace_histogram_block_mask.to(predicted_hist.dtype)
+            cdf_delta = torch.abs(
+                torch.cumsum(predicted_hist, dim=-1) - torch.cumsum(target_hist, dim=-1)
+            )
+            per_block_w1 = cdf_delta.sum(dim=-1) * float(self.eigenspace_histogram_spec.bin_width)
+            active_weights = block_weights * block_mask
+            per_graph_w1 = (per_block_w1 * active_weights).sum(dim=-1) / active_weights.sum(dim=-1).clamp_min(1.0e-12)
+            eig_hist_loss = per_graph_w1.mean()
+            total = total + float(weights.get("eigenspace_histogram", 1.0)) * eig_hist_loss
+            with torch.no_grad():
+                tv = 0.5 * torch.abs(predicted_hist - target_hist).sum(dim=-1)
+                per_graph_tv = (tv * active_weights).sum(dim=-1) / active_weights.sum(dim=-1).clamp_min(1.0e-12)
+                rmse = torch.sqrt(
+                    ((predicted_hist - target_hist).square() * block_mask.unsqueeze(-1)).sum()
+                    / (block_mask.sum().clamp_min(1.0) * float(self.eigenspace_histogram_spec.bins))
+                )
+                eigenspace_histogram_metrics = {
+                    "eigenspace_histogram_loss": float(eig_hist_loss.detach().cpu()),
+                    "eigenspace_histogram_w1": float(eig_hist_loss.detach().cpu()),
+                    "eigenspace_histogram_tv": float(per_graph_tv.mean().detach().cpu()),
+                    "eigenspace_histogram_rmse": float(rmse.detach().cpu()),
+                }
+
         edge_metrics: dict[str, float] = {}
         if self.predict_edge_state:
             if batch.clean_edge_labels_target is None or batch.clean_edge_logits_target is None:
@@ -995,6 +1103,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
             )
         metrics.update(heat_kernel_metrics)
         metrics.update(projector_metrics)
+        metrics.update(eigenspace_histogram_metrics)
         metrics.update(histogram_metrics)
         metrics.update(orbit_metrics)
         metrics.update(cycle_metrics)
@@ -1033,6 +1142,10 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "heat_kernel_times": list(self.heat_kernel_times),
             "heat_kernel_projection_iterations": self.heat_kernel_projection_iterations,
             "projector_rank": self.projector_rank,
+            "eigenspace_rank": self.eigenspace_histogram_spec.rank,
+            "eigenspace_histogram_bins": self.eigenspace_histogram_spec.bins,
+            "eigenspace_histogram_degree_max": self.eigenspace_histogram_spec.degree_max,
+            "eigenspace_histogram_max_distance": self.eigenspace_histogram_spec.max_normalized_distance,
             "use_graph_context": self.use_graph_context,
             "predict_clustering_coefficient": self.predict_clustering_coefficient,
             "predict_clustering_histogram": self.predict_clustering_histogram,

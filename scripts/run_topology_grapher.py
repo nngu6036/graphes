@@ -341,6 +341,7 @@ def main() -> None:
     predictor_orbit_log_error: float | None = None
     predictor_spectral_error: float | None = None
     predictor_projector_error: float | None = None
+    predictor_eigenspace_histogram_error: float | None = None
     if checkpoint_format == TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT:
         guidance_mode = "spectral_graphlet"
         model, graphlet_basis, summary_config, checkpoint = (
@@ -391,6 +392,20 @@ def main() -> None:
                 )
             predictor_projector_error = float(projector_error_raw)
             missing_message = "val_spectral_normalized_rmse/mae"
+        elif representation == "lambda_eigenspace_histogram":
+            predictor_spectral_error_raw = predictor_report.get(
+                "val_spectral_normalized_rmse", predictor_report.get("val_spectral_normalized_mae")
+            )
+            histogram_error_raw = predictor_report.get(
+                "val_eigenspace_histogram_w1", predictor_report.get("val_eigenspace_histogram_loss")
+            )
+            if histogram_error_raw is None:
+                raise ValueError(
+                    "The lambda+eigenspace-histogram checkpoint is missing held-out "
+                    "val_eigenspace_histogram_w1/loss."
+                )
+            predictor_eigenspace_histogram_error = float(histogram_error_raw)
+            missing_message = "val_spectral_normalized_rmse/mae"
         else:
             predictor_spectral_error_raw = predictor_report.get(
                 "val_spectral_normalized_rmse",
@@ -433,7 +448,9 @@ def main() -> None:
         guidance_mode == "spectral"
         and (
             getattr(model, "predict_edge_state", False)
-            or str(getattr(model, "spectral_representation", "eigenvalues")) in {"heat_kernel", "lambda_projector"}
+            or str(getattr(model, "spectral_representation", "eigenvalues")) in {
+                "heat_kernel", "lambda_projector", "lambda_eigenspace_histogram"
+            }
         )
     )
 
@@ -1216,8 +1233,15 @@ def main() -> None:
                 "predictor_projector_error": (
                     None if predictor_projector_error is None else float(predictor_projector_error)
                 ),
+                "predictor_eigenspace_histogram_error": (
+                    None if predictor_eigenspace_histogram_error is None
+                    else float(predictor_eigenspace_histogram_error)
+                ),
                 "mean_accepted_lambda_gain": _mean_or_zero(accepted_rows, "lambda_gain"),
                 "mean_accepted_projector_gain": _mean_or_zero(accepted_rows, "projector_gain"),
+                "mean_accepted_eigenspace_histogram_gain": _mean_or_zero(
+                    accepted_rows, "eigenspace_histogram_gain"
+                ),
                 "spectral_representation": str(getattr(model, "spectral_representation", "eigenvalues")),
                 "spectral_distance": refiner_settings.distance,
                 "spectral_normalization": refiner_settings.normalization,
@@ -1310,13 +1334,24 @@ def main() -> None:
             if str(getattr(model, "spectral_representation", "eigenvalues")) == "lambda_projector"
             else None
         ),
+        "eigenspace_histogram_metadata": (
+            getattr(model, "eigenspace_histogram_spec").metadata()
+            if str(getattr(model, "spectral_representation", "eigenvalues")) == "lambda_eigenspace_histogram"
+            else None
+        ),
         "laplacian_eigenvalue_diffusion": bool(
             guidance_mode == "spectral"
-            and str(getattr(model, "spectral_representation", "eigenvalues")) in {"eigenvalues", "lambda_projector"}
+            and str(getattr(model, "spectral_representation", "eigenvalues")) in {
+                "eigenvalues", "lambda_projector", "lambda_eigenspace_histogram"
+            }
         ),
         "laplacian_eigenspace_projector_diffusion": bool(
             guidance_mode == "spectral"
             and str(getattr(model, "spectral_representation", "eigenvalues")) == "lambda_projector"
+        ),
+        "laplacian_eigenspace_histogram_diffusion": bool(
+            guidance_mode == "spectral"
+            and str(getattr(model, "spectral_representation", "eigenvalues")) == "lambda_eigenspace_histogram"
         ),
         "degree_prior_report_file": "degree_prior_report.json",
         "parent_degree_fingerprint": degree_prior_report["returned_parent_degree_fingerprint"],

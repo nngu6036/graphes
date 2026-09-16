@@ -1,5 +1,9 @@
 # Heat-kernel spectral-space diffusion
 
+> **Legacy representation.** Direct heat-kernel prediction is retained for reproducibility only.
+> The maintained permutation-invariant eigenspace extension is documented in
+> `EIGENSPACE_HISTOGRAM_SPECTRAL_DIFFUSION.md`.
+
 ## Motivation
 
 The legacy GraphER spectral bridge represents each graph only by the

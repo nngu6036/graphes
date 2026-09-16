@@ -42,6 +42,7 @@ from grapher.rewiring_mlp.generic.summary_diffusion import (
     sample_graphlet_clr_bridge_marginal,
     sample_heat_kernel_bridge_marginal,
     sample_eigenspace_projector_bridge_marginal,
+    sample_eigenspace_histogram_bridge_marginal,
     sample_spectral_bridge_marginal,
 )
 from grapher.rewiring_mlp.generic.heat_kernel import (
@@ -54,6 +55,12 @@ from grapher.rewiring_mlp.generic.eigenspace import (
     eigenspace_projector_distance,
     laplacian_eigenspace_projector,
     projector_node_signatures,
+)
+from grapher.rewiring_mlp.generic.spectral_distance_histogram import (
+    SpectralDistanceHistogramSpec,
+    extract_degree_conditioned_spectral_histogram,
+    spectral_histogram_wasserstein,
+    validate_histogram as validate_spectral_distance_histogram,
 )
 from grapher.rewiring_mlp.generic.spectral import (
     degree_spectral_moments,
@@ -78,6 +85,11 @@ class TopologySpectralExample:
     current_projector: np.ndarray | None = None
     source_projector: np.ndarray | None = None
     clean_projector_target: np.ndarray | None = None
+    current_eigenspace_histogram: np.ndarray | None = None
+    source_eigenspace_histogram: np.ndarray | None = None
+    clean_eigenspace_histogram_target: np.ndarray | None = None
+    eigenspace_histogram_block_mask: np.ndarray | None = None
+    eigenspace_histogram_block_weights: np.ndarray | None = None
     # Optional clean structural summary target. For the minimal spectral debug
     # model this is the graph-average local clustering coefficient in [0, 1].
     # It is predicted as an auxiliary x0 target but is NOT itself diffused.
@@ -134,6 +146,11 @@ class TopologySpectralBatch:
     current_projector: torch.Tensor | None = None
     source_projector: torch.Tensor | None = None
     clean_projector_target: torch.Tensor | None = None
+    current_eigenspace_histogram: torch.Tensor | None = None
+    source_eigenspace_histogram: torch.Tensor | None = None
+    clean_eigenspace_histogram_target: torch.Tensor | None = None
+    eigenspace_histogram_block_mask: torch.Tensor | None = None
+    eigenspace_histogram_block_weights: torch.Tensor | None = None
     current_edge_logits: torch.Tensor | None = None
     source_edge_logits: torch.Tensor | None = None
     clean_edge_logits_target: torch.Tensor | None = None
@@ -230,6 +247,44 @@ def collate_spectral_examples(
     clean_projector = (
         np.zeros((batch_size, max_nodes, max_nodes), dtype=np.float32)
         if projector_enabled else None
+    )
+
+    eig_hist_widths = {
+        int(np.asarray(example.current_eigenspace_histogram).size)
+        for example in examples
+        if example.current_eigenspace_histogram is not None
+    }
+    if len(eig_hist_widths) > 1:
+        raise ValueError("Eigenspace-histogram examples in one batch must share one width.")
+    eig_hist_width = next(iter(eig_hist_widths), 0)
+    eig_hist_enabled = eig_hist_width > 0
+    if eig_hist_enabled and any(
+        example.current_eigenspace_histogram is None
+        or example.source_eigenspace_histogram is None
+        or example.clean_eigenspace_histogram_target is None
+        or example.eigenspace_histogram_block_mask is None
+        or example.eigenspace_histogram_block_weights is None
+        for example in examples
+    ):
+        raise ValueError("Cannot mix examples with and without eigenspace-histogram diffusion states.")
+    eig_hist_blocks = (
+        int(np.asarray(examples[0].eigenspace_histogram_block_mask).size)
+        if eig_hist_enabled else 0
+    )
+    current_eigenspace_histogram = (
+        np.zeros((batch_size, eig_hist_width), dtype=np.float32) if eig_hist_enabled else None
+    )
+    source_eigenspace_histogram = (
+        np.zeros((batch_size, eig_hist_width), dtype=np.float32) if eig_hist_enabled else None
+    )
+    clean_eigenspace_histogram = (
+        np.zeros((batch_size, eig_hist_width), dtype=np.float32) if eig_hist_enabled else None
+    )
+    eigenspace_histogram_block_mask = (
+        np.zeros((batch_size, eig_hist_blocks), dtype=np.bool_) if eig_hist_enabled else None
+    )
+    eigenspace_histogram_block_weights = (
+        np.zeros((batch_size, eig_hist_blocks), dtype=np.float32) if eig_hist_enabled else None
     )
 
     edge_enabled = any(example.current_edge_logits is not None for example in examples)
@@ -412,6 +467,28 @@ def collate_spectral_examples(
             current_projector[index, :n, :n] = projector_arrays[0]
             source_projector[index, :n, :n] = projector_arrays[1]
             clean_projector[index, :n, :n] = projector_arrays[2]
+        if eig_hist_enabled:
+            assert current_eigenspace_histogram is not None
+            assert source_eigenspace_histogram is not None
+            assert clean_eigenspace_histogram is not None
+            assert eigenspace_histogram_block_mask is not None
+            assert eigenspace_histogram_block_weights is not None
+            arrays = [
+                np.asarray(example.current_eigenspace_histogram, dtype=np.float32).reshape(-1),
+                np.asarray(example.source_eigenspace_histogram, dtype=np.float32).reshape(-1),
+                np.asarray(example.clean_eigenspace_histogram_target, dtype=np.float32).reshape(-1),
+            ]
+            mask_value = np.asarray(example.eigenspace_histogram_block_mask, dtype=np.bool_).reshape(-1)
+            weights_value = np.asarray(example.eigenspace_histogram_block_weights, dtype=np.float32).reshape(-1)
+            if any(array.size != eig_hist_width for array in arrays):
+                raise ValueError("Eigenspace-histogram width mismatch during collation.")
+            if mask_value.size != eig_hist_blocks or weights_value.size != eig_hist_blocks:
+                raise ValueError("Eigenspace-histogram block metadata width mismatch during collation.")
+            current_eigenspace_histogram[index] = arrays[0]
+            source_eigenspace_histogram[index] = arrays[1]
+            clean_eigenspace_histogram[index] = arrays[2]
+            eigenspace_histogram_block_mask[index] = mask_value
+            eigenspace_histogram_block_weights[index] = weights_value
         if edge_enabled:
             arrays = [
                 np.asarray(example.current_edge_logits,dtype=np.float32),
@@ -497,6 +574,26 @@ def collate_spectral_examples(
         ),
         clean_projector_target=(
             torch.from_numpy(clean_projector) if clean_projector is not None else None
+        ),
+        current_eigenspace_histogram=(
+            torch.from_numpy(current_eigenspace_histogram)
+            if current_eigenspace_histogram is not None else None
+        ),
+        source_eigenspace_histogram=(
+            torch.from_numpy(source_eigenspace_histogram)
+            if source_eigenspace_histogram is not None else None
+        ),
+        clean_eigenspace_histogram_target=(
+            torch.from_numpy(clean_eigenspace_histogram)
+            if clean_eigenspace_histogram is not None else None
+        ),
+        eigenspace_histogram_block_mask=(
+            torch.from_numpy(eigenspace_histogram_block_mask)
+            if eigenspace_histogram_block_mask is not None else None
+        ),
+        eigenspace_histogram_block_weights=(
+            torch.from_numpy(eigenspace_histogram_block_weights)
+            if eigenspace_histogram_block_weights is not None else None
         ),
         current_edge_logits=(torch.from_numpy(current_edge_logits) if current_edge_logits is not None else None),
         source_edge_logits=(torch.from_numpy(source_edge_logits) if source_edge_logits is not None else None),
@@ -1410,6 +1507,11 @@ class TopologySpectralDiffusionEndpoint:
     clean_projector: np.ndarray | None = None
     projector_rank: int = 0
     projector_alignment_cost: float = 0.0
+    source_eigenspace_histogram: np.ndarray | None = None
+    clean_eigenspace_histogram: np.ndarray | None = None
+    eigenspace_histogram_block_mask: np.ndarray | None = None
+    eigenspace_histogram_block_weights: np.ndarray | None = None
+    eigenspace_histogram_spec: dict[str, Any] | None = None
     source_edge_logits: np.ndarray | None = None
     clean_edge_logits: np.ndarray | None = None
     clean_edge_labels: np.ndarray | None = None
@@ -1449,13 +1551,29 @@ def _prepare_spectral_diffusion_endpoint(
         representation = "heat_kernel"
     if representation in {"eigenspace", "lambda_projector", "eigenvalues_projector", "lambda+p", "lambda_p"}:
         representation = "lambda_projector"
-    if representation not in {"eigenvalues", "heat_kernel", "lambda_projector"}:
-        raise ValueError("spectral_prediction.representation must be eigenvalues, heat_kernel, or lambda_projector.")
+    if representation in {
+        "eigenspace_histogram", "lambda_eigenspace_histogram",
+        "degree_spectral_histogram", "spectral_distance_histogram",
+    }:
+        representation = "lambda_eigenspace_histogram"
+    if representation not in {"eigenvalues", "heat_kernel", "lambda_projector", "lambda_eigenspace_histogram"}:
+        raise ValueError(
+            "spectral_prediction.representation must be eigenvalues, heat_kernel, "
+            "lambda_projector, or lambda_eigenspace_histogram."
+        )
     heat_times = validate_heat_times(spectral_config.get("heat_kernel_times", [0.25, 1.0, 4.0]))
     heat_normalization = str(spectral_config.get("heat_kernel_normalization", spectral_config.get("normalization", "mean_degree")))
     projector_rank = int(spectral_config.get("projector_rank", 4))
     if projector_rank < 1:
         raise ValueError("spectral_prediction.projector_rank must be positive.")
+    eig_hist_spec = None
+    if representation == "lambda_eigenspace_histogram":
+        if "eigenspace_histogram_degree_max" not in spectral_config:
+            raise ValueError(
+                "lambda_eigenspace_histogram requires spectral_prediction.eigenspace_histogram_degree_max "
+                "so all variable-size graphs share one fixed histogram vocabulary."
+            )
+        eig_hist_spec = SpectralDistanceHistogramSpec.from_config(spectral_config)
     edge_cfg=dict(edge_diffusion_config or {})
     edge_enabled=bool(edge_cfg.get("enabled",False))
     projector_alignment_cost = 0.0
@@ -1479,6 +1597,24 @@ def _prepare_spectral_diffusion_endpoint(
     if representation == "lambda_projector":
         source_projector = laplacian_eigenspace_projector(source, rank=projector_rank)
         clean_projector = laplacian_eigenspace_projector(target, rank=projector_rank)
+    source_eigenspace_histogram = clean_eigenspace_histogram = None
+    eigenspace_histogram_block_mask = eigenspace_histogram_block_weights = None
+    if representation == "lambda_eigenspace_histogram":
+        assert eig_hist_spec is not None
+        source_eigenspace_histogram, source_block_mask, source_block_weights = (
+            extract_degree_conditioned_spectral_histogram(source, eig_hist_spec)
+        )
+        clean_eigenspace_histogram, clean_block_mask, clean_block_weights = (
+            extract_degree_conditioned_spectral_histogram(target, eig_hist_spec)
+        )
+        # Source and clean graphs lie in the same degree fibre, so the degree-pair
+        # histogram support and weights are exact invariants of the pair.
+        if not np.array_equal(source_block_mask, clean_block_mask):
+            raise AssertionError("Same-degree source/target graphs must share eigenspace histogram blocks.")
+        if not np.allclose(source_block_weights, clean_block_weights, rtol=0.0, atol=1.0e-12):
+            raise AssertionError("Same-degree source/target graphs must share eigenspace histogram block weights.")
+        eigenspace_histogram_block_mask = source_block_mask
+        eigenspace_histogram_block_weights = source_block_weights
     source_edge_logits=clean_edge_logits=clean_edge_labels=None
     if edge_enabled:
         smoothing=float(edge_cfg.get("smoothing",0.01))
@@ -1535,6 +1671,19 @@ def _prepare_spectral_diffusion_endpoint(
         clean_projector=clean_projector,
         projector_rank=(effective_projector_rank(source.number_of_nodes(), projector_rank) if representation == "lambda_projector" else 0),
         projector_alignment_cost=float(projector_alignment_cost),
+        source_eigenspace_histogram=(
+            None if source_eigenspace_histogram is None else source_eigenspace_histogram.astype(np.float32)
+        ),
+        clean_eigenspace_histogram=(
+            None if clean_eigenspace_histogram is None else clean_eigenspace_histogram.astype(np.float32)
+        ),
+        eigenspace_histogram_block_mask=(
+            None if eigenspace_histogram_block_mask is None else eigenspace_histogram_block_mask.astype(np.bool_)
+        ),
+        eigenspace_histogram_block_weights=(
+            None if eigenspace_histogram_block_weights is None else eigenspace_histogram_block_weights.astype(np.float32)
+        ),
+        eigenspace_histogram_spec=(None if eig_hist_spec is None else eig_hist_spec.metadata()),
         source_edge_logits=source_edge_logits,
         clean_edge_logits=clean_edge_logits,
         clean_edge_labels=clean_edge_labels,
@@ -1575,11 +1724,24 @@ def _prepare_spectral_diffusion_endpoint(
                     metric=str(spectral_config.get("projector_distance", "chordal")),
                 )
                 if representation == "lambda_projector"
-                else spectral_distance(
-                    source_spectrum, clean_spectrum,
-                    metric=str(spectral_config.get("distance", "rmse")), scale=scale,
-                    low_frequency_weight=float(spectral_config.get("low_frequency_weight", 1.0)),
-                    low_frequency_cutoff=int(spectral_config.get("low_frequency_cutoff", 0)),
+                else (
+                    float(spectral_config.get("lambda_weight", 1.0)) * spectral_distance(
+                        source_spectrum, clean_spectrum,
+                        metric=str(spectral_config.get("distance", "rmse")), scale=scale,
+                        low_frequency_weight=float(spectral_config.get("low_frequency_weight", 1.0)),
+                        low_frequency_cutoff=int(spectral_config.get("low_frequency_cutoff", 0)),
+                    )
+                    + float(spectral_config.get("eigenspace_histogram_weight", 1.0)) * spectral_histogram_wasserstein(
+                        source_eigenspace_histogram, clean_eigenspace_histogram, eig_hist_spec,
+                        block_weights=eigenspace_histogram_block_weights,
+                    )
+                    if representation == "lambda_eigenspace_histogram"
+                    else spectral_distance(
+                        source_spectrum, clean_spectrum,
+                        metric=str(spectral_config.get("distance", "rmse")), scale=scale,
+                        low_frequency_weight=float(spectral_config.get("low_frequency_weight", 1.0)),
+                        low_frequency_cutoff=int(spectral_config.get("low_frequency_cutoff", 0)),
+                    )
                 )
             )
         ),
@@ -1601,6 +1763,7 @@ def _sample_spectral_diffusion_endpoint_examples(
     spectral_noise_rms: list[float] = []
     heat_kernel_noise_rms: list[float] = []
     projector_noise_rms: list[float] = []
+    eigenspace_histogram_noise_rms: list[float] = []
     graphlet_noise_rms: list[float] = []
     edge_noise_rms: list[float] = []
     examples: list[TopologySpectralExample] = []
@@ -1610,6 +1773,7 @@ def _sample_spectral_diffusion_endpoint_examples(
         for local_index, progress in enumerate(progresses):
             current_heat_kernel = None
             current_projector = None
+            current_eigenspace_histogram = None
             if endpoint.source_heat_kernel is not None:
                 assert endpoint.clean_heat_kernel is not None
                 current_heat_kernel, heat_diag = sample_heat_kernel_bridge_marginal(
@@ -1648,6 +1812,22 @@ def _sample_spectral_diffusion_endpoint_examples(
                         schedule=diff_cfg, rng=rng,
                     )
                     projector_noise_rms.append(float(projector_diag["noise_rms"]))
+                if endpoint.source_eigenspace_histogram is not None:
+                    assert endpoint.clean_eigenspace_histogram is not None
+                    assert endpoint.eigenspace_histogram_block_mask is not None
+                    assert endpoint.eigenspace_histogram_spec is not None
+                    bins = int(endpoint.eigenspace_histogram_spec["bins"])
+                    current_eigenspace_histogram, eig_hist_diag = sample_eigenspace_histogram_bridge_marginal(
+                        endpoint.source_eigenspace_histogram,
+                        endpoint.clean_eigenspace_histogram,
+                        progress=float(progress),
+                        sigma=diff_cfg.eigenspace_histogram_sigma,
+                        block_mask=endpoint.eigenspace_histogram_block_mask,
+                        bins=bins,
+                        schedule=diff_cfg,
+                        rng=rng,
+                    )
+                    eigenspace_histogram_noise_rms.append(float(eig_hist_diag["noise_rms"]))
 
             current_edge_logits=None
             if endpoint.source_edge_logits is not None:
@@ -1701,6 +1881,21 @@ def _sample_spectral_diffusion_endpoint_examples(
                     ),
                     clean_projector_target=(
                         None if endpoint.clean_projector is None else endpoint.clean_projector.astype(np.float32)
+                    ),
+                    current_eigenspace_histogram=(
+                        None if current_eigenspace_histogram is None else current_eigenspace_histogram.astype(np.float32)
+                    ),
+                    source_eigenspace_histogram=(
+                        None if endpoint.source_eigenspace_histogram is None else endpoint.source_eigenspace_histogram.astype(np.float32)
+                    ),
+                    clean_eigenspace_histogram_target=(
+                        None if endpoint.clean_eigenspace_histogram is None else endpoint.clean_eigenspace_histogram.astype(np.float32)
+                    ),
+                    eigenspace_histogram_block_mask=(
+                        None if endpoint.eigenspace_histogram_block_mask is None else endpoint.eigenspace_histogram_block_mask.astype(np.bool_)
+                    ),
+                    eigenspace_histogram_block_weights=(
+                        None if endpoint.eigenspace_histogram_block_weights is None else endpoint.eigenspace_histogram_block_weights.astype(np.float32)
                     ),
                     current_edge_logits=current_edge_logits,
                     source_edge_logits=(None if endpoint.source_edge_logits is None else endpoint.source_edge_logits.astype(np.float32)),
@@ -1780,17 +1975,29 @@ def _sample_spectral_diffusion_endpoint_examples(
         "spectral_sigma": diff_cfg.spectral_sigma,
         "heat_kernel_sigma": (diff_cfg.heat_kernel_sigma if endpoint.source_heat_kernel is not None else None),
         "projector_sigma": (diff_cfg.projector_sigma if endpoint.source_projector is not None else None),
+        "eigenspace_histogram_sigma": (
+            diff_cfg.eigenspace_histogram_sigma if endpoint.source_eigenspace_histogram is not None else None
+        ),
         "graphlet_sigma": diff_cfg.graphlet_sigma if graphlet_basis is not None else None,
         "preserve_spectral_trace": diff_cfg.preserve_spectral_trace,
         "fix_spectral_lambda1": diff_cfg.fix_spectral_lambda1,
         "mean_spectral_noise_rms": float(np.mean(spectral_noise_rms)) if spectral_noise_rms else 0.0,
         "mean_heat_kernel_noise_rms": float(np.mean(heat_kernel_noise_rms)) if heat_kernel_noise_rms else 0.0,
         "mean_projector_noise_rms": float(np.mean(projector_noise_rms)) if projector_noise_rms else 0.0,
+        "mean_eigenspace_histogram_noise_rms": (
+            float(np.mean(eigenspace_histogram_noise_rms)) if eigenspace_histogram_noise_rms else 0.0
+        ),
         "projector_alignment_cost": float(endpoint.projector_alignment_cost),
         "projector_rank": int(endpoint.projector_rank),
         "spectral_representation": (
             "heat_kernel" if endpoint.source_heat_kernel is not None
-            else ("lambda_projector" if endpoint.source_projector is not None else "eigenvalues")
+            else (
+                "lambda_projector" if endpoint.source_projector is not None
+                else (
+                    "lambda_eigenspace_histogram"
+                    if endpoint.source_eigenspace_histogram is not None else "eigenvalues"
+                )
+            )
         ),
         "mean_graphlet_noise_rms": float(np.mean(graphlet_noise_rms)) if graphlet_noise_rms else 0.0,
         "mean_edge_noise_rms": float(np.mean(edge_noise_rms)) if edge_noise_rms else 0.0,
@@ -1855,6 +2062,11 @@ def build_spectral_diffusion_examples(
         representation = "heat_kernel"
     if representation in {"eigenspace", "lambda_projector", "eigenvalues_projector", "lambda+p", "lambda_p"}:
         representation = "lambda_projector"
+    if representation in {
+        "eigenspace_histogram", "lambda_eigenspace_histogram",
+        "degree_spectral_histogram", "spectral_distance_histogram",
+    }:
+        representation = "lambda_eigenspace_histogram"
     diagnostics = {
         "format": "summary_diffusion_training_states_v2",
         "training_state_source": "continuous_summary_diffusion",
@@ -1871,6 +2083,9 @@ def build_spectral_diffusion_examples(
         "spectral_sigma": diff_cfg.spectral_sigma,
         "heat_kernel_sigma": diff_cfg.heat_kernel_sigma if representation == "heat_kernel" else None,
         "projector_sigma": diff_cfg.projector_sigma if representation == "lambda_projector" else None,
+        "eigenspace_histogram_sigma": (
+            diff_cfg.eigenspace_histogram_sigma if representation == "lambda_eigenspace_histogram" else None
+        ),
         "graphlet_sigma": diff_cfg.graphlet_sigma if graphlet_basis is not None else None,
         "preserve_spectral_trace": diff_cfg.preserve_spectral_trace,
         "fix_spectral_lambda1": diff_cfg.fix_spectral_lambda1,
@@ -1878,6 +2093,7 @@ def build_spectral_diffusion_examples(
         "mean_heat_kernel_noise_rms": float(np.mean([row.get("mean_heat_kernel_noise_rms", 0.0) for row in reports])) if reports else 0.0,
         "mean_projector_noise_rms": float(np.mean([row.get("mean_projector_noise_rms", 0.0) for row in reports])) if reports else 0.0,
         "mean_projector_alignment_cost": float(np.mean([row.get("projector_alignment_cost", 0.0) for row in reports])) if reports else 0.0,
+        "mean_eigenspace_histogram_noise_rms": float(np.mean([row.get("mean_eigenspace_histogram_noise_rms", 0.0) for row in reports])) if reports else 0.0,
         "mean_graphlet_noise_rms": float(np.mean([row.get("mean_graphlet_noise_rms", 0.0) for row in reports])) if reports else 0.0,
         "mean_edge_noise_rms": float(np.mean([row.get("mean_edge_noise_rms", 0.0) for row in reports])) if reports else 0.0,
         "edge_diffusion_enabled": bool((edge_diffusion_config or {}).get("enabled", False)),

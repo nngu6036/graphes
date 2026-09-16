@@ -49,6 +49,12 @@ from grapher.rewiring_mlp.generic.eigenspace import (
     project_to_eigenspace_projector,
     validate_eigenspace_projector,
 )
+from grapher.rewiring_mlp.generic.spectral_distance_histogram import (
+    SpectralDistanceHistogramSpec,
+    extract_degree_conditioned_spectral_histogram,
+    spectral_histogram_wasserstein,
+    validate_histogram as validate_spectral_distance_histogram,
+)
 from grapher.rewiring_mlp.generic.spectral import (
     laplacian_eigenvalues,
     spectral_distance,
@@ -194,6 +200,57 @@ def _advance_projector(
     return result
 
 
+def _advance_eigenspace_histogram(
+    current: np.ndarray,
+    clean: np.ndarray,
+    t: float,
+    s: float,
+    *,
+    sigma: float,
+    block_mask: np.ndarray,
+    bins: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    if not (0.0 <= t < s <= 1.0):
+        raise ValueError("Eigenspace-histogram bridge transition requires 0 <= t < s <= 1.")
+    current = np.asarray(current, dtype=np.float64).reshape(-1)
+    clean = np.asarray(clean, dtype=np.float64).reshape(-1)
+    mask = np.asarray(block_mask, dtype=bool).reshape(-1)
+    if current.shape != clean.shape or current.size % int(bins) != 0:
+        raise ValueError("Current and predicted clean eigenspace histograms must have matching block width.")
+    num_blocks = current.size // int(bins)
+    if mask.shape != (num_blocks,):
+        raise ValueError("Eigenspace-histogram block mask has the wrong shape.")
+    if not np.isfinite(sigma) or sigma < 0.0:
+        raise ValueError("eigenspace_histogram_sigma must be finite and nonnegative.")
+    alpha = (s - t) / max(1.0 - t, 1.0e-12)
+    std = float(sigma) * math.sqrt(
+        max((s - t) * (1.0 - s) / max(1.0 - t, 1.0e-12), 0.0)
+    )
+    result = current + alpha * (clean - current)
+    blocks = result.reshape(num_blocks, int(bins))
+    if std > 0.0:
+        noise = rng.normal(size=blocks.shape).astype(np.float64)
+        for block in range(num_blocks):
+            if mask[block]:
+                row = noise[block] - float(noise[block].mean())
+                rms = float(np.sqrt(np.mean(row * row)))
+                if rms > 1.0e-12:
+                    row /= rms
+                noise[block] = row
+            else:
+                noise[block] = 0.0
+        blocks = blocks + std * noise
+    blocks[~mask] = 0.0
+    for block in np.flatnonzero(mask):
+        blocks[block] += (1.0 - float(blocks[block].sum())) / float(bins)
+    # At the terminal endpoint use the model's valid clean histogram exactly.
+    if s >= 1.0 - 1.0e-12:
+        blocks = clean.reshape(num_blocks, int(bins)).copy()
+        blocks[~mask] = 0.0
+    return blocks.reshape(-1)
+
+
 @dataclass(frozen=True)
 class JointEdgeSpectralRefinerConfig:
     steps: int = 32
@@ -321,6 +378,7 @@ def _predict(
     time: float,
     heat_kernel_state: np.ndarray | None = None,
     projector_state: np.ndarray | None = None,
+    eigenspace_histogram_state: np.ndarray | None = None,
 ):
     device = next(model.parameters()).device
     n = source.number_of_nodes()
@@ -332,6 +390,7 @@ def _predict(
     representation = str(getattr(model, "spectral_representation", "eigenvalues"))
     source_heat = clean_heat = None
     source_projector = clean_projector = None
+    source_eig_hist = clean_eig_hist = eig_hist_mask = eig_hist_weights = None
     if representation == "heat_kernel":
         source_heat = heat_kernel_stack(
             source,
@@ -348,6 +407,19 @@ def _predict(
         if projector_state is None:
             projector_state = source_projector
         clean_projector = np.zeros_like(source_projector, dtype=np.float32)
+    elif representation == "lambda_eigenspace_histogram":
+        spec = getattr(model, "eigenspace_histogram_spec", None)
+        if spec is None:
+            raise ValueError("Checkpoint is missing its eigenspace histogram specification.")
+        source_eig_hist, eig_hist_mask, eig_hist_weights = extract_degree_conditioned_spectral_histogram(
+            source, spec
+        )
+        source_eig_hist = source_eig_hist.astype(np.float32)
+        eig_hist_mask = eig_hist_mask.astype(np.bool_)
+        eig_hist_weights = eig_hist_weights.astype(np.float32)
+        if eigenspace_histogram_state is None:
+            eigenspace_histogram_state = source_eig_hist
+        clean_eig_hist = np.zeros_like(source_eig_hist, dtype=np.float32)
     example = TopologySpectralExample(
         current_graph=source,
         time=float(time),
@@ -360,6 +432,13 @@ def _predict(
         current_projector=(None if projector_state is None else np.asarray(projector_state, dtype=np.float32)),
         source_projector=source_projector,
         clean_projector_target=clean_projector,
+        current_eigenspace_histogram=(
+            None if eigenspace_histogram_state is None else np.asarray(eigenspace_histogram_state, dtype=np.float32)
+        ),
+        source_eigenspace_histogram=source_eig_hist,
+        clean_eigenspace_histogram_target=clean_eig_hist,
+        eigenspace_histogram_block_mask=eig_hist_mask,
+        eigenspace_histogram_block_weights=eig_hist_weights,
         current_edge_logits=(current_logits if getattr(model, "predict_edge_state", False) else None),
         source_edge_logits=(source_logits if getattr(model, "predict_edge_state", False) else None),
         clean_edge_logits_target=(source_logits if getattr(model, "predict_edge_state", False) else None),
@@ -382,6 +461,7 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
     sigma_spec = float(diff_cfg.get("spectral_sigma", 0.2))
     sigma_heat = float(diff_cfg.get("heat_kernel_sigma", sigma_spec))
     sigma_projector = float(diff_cfg.get("projector_sigma", sigma_spec))
+    sigma_eig_hist = float(diff_cfg.get("eigenspace_histogram_sigma", sigma_spec))
     smoothing = float(edge_cfg.get("smoothing", getattr(model, "edge_smoothing", 0.01)))
     if not math.isclose(smoothing, float(getattr(model, "edge_smoothing", smoothing)), rel_tol=0, abs_tol=1e-12):
         raise ValueError("edge_diffusion.smoothing differs from the trained checkpoint.")
@@ -393,6 +473,8 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
     spectrum_state = laplacian_eigenvalues(source).astype(np.float64)
     heat_state = None
     projector_state = None
+    eigenspace_histogram_state = None
+    eigenspace_histogram_block_mask = None
     if representation == "heat_kernel":
         heat_state = heat_kernel_stack(
             source,
@@ -405,6 +487,13 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
         projector_state = laplacian_eigenspace_projector(
             source, rank=int(getattr(model, "projector_rank", 4))
         )
+    elif representation == "lambda_eigenspace_histogram":
+        spec = getattr(model, "eigenspace_histogram_spec", None)
+        if spec is None:
+            raise ValueError("Checkpoint is missing its eigenspace histogram specification.")
+        eigenspace_histogram_state, eigenspace_histogram_block_mask, _weights = (
+            extract_degree_conditioned_spectral_histogram(source, spec)
+        )
     scale = spectral_scale(source, mode=str(config.get("spectral_prediction", {}).get("normalization", "mean_degree")))
     rng = np.random.default_rng(int(seed))
     generator = torch.Generator(device=device).manual_seed(int(seed))
@@ -413,7 +502,8 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
         t = step / steps
         next_t = (step + 1) / steps
         outputs, _batch = _predict(
-            model, source, edge_state, spectrum_state, t, heat_state, projector_state
+            model, source, edge_state, spectrum_state, t, heat_state, projector_state,
+            eigenspace_histogram_state
         )
         if getattr(model, "predict_edge_state", False):
             clean_edge = outputs["clean_edge_logits"]
@@ -437,11 +527,27 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
                     sigma=sigma_projector, rank=int(getattr(model, "projector_rank", 4)), rng=rng,
                 )
                 projector_rms = float(np.sqrt(np.mean(np.square(projector_state)))) if projector_state.size else 0.0
+                eig_hist_rms = None
                 state_rms = float(np.sqrt(
                     0.5 * np.mean(np.square(spectrum_state)) + 0.5 * np.mean(np.square(projector_state))
                 ))
+            elif representation == "lambda_eigenspace_histogram":
+                clean_hist = outputs["clean_eigenspace_histogram"][0].detach().cpu().numpy().astype(np.float64)
+                spec = model.eigenspace_histogram_spec
+                eigenspace_histogram_state = _advance_eigenspace_histogram(
+                    eigenspace_histogram_state, clean_hist, t, next_t,
+                    sigma=sigma_eig_hist, block_mask=eigenspace_histogram_block_mask,
+                    bins=spec.bins, rng=rng,
+                )
+                eig_hist_rms = float(np.sqrt(np.mean(np.square(eigenspace_histogram_state))))
+                projector_rms = None
+                state_rms = float(np.sqrt(
+                    0.5 * np.mean(np.square(spectrum_state))
+                    + 0.5 * np.mean(np.square(eigenspace_histogram_state))
+                ))
             else:
                 projector_rms = None
+                eig_hist_rms = None
                 state_rms = float(np.sqrt(np.mean(np.square(spectrum_state)))) if spectrum_state.size else 0.0
         trajectory.append({
             "step": step + 1,
@@ -449,11 +555,15 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
             "edge_logit_rms": float(edge_state.square().mean().sqrt().cpu()),
             "spectral_state_rms": state_rms,
             "projector_state_rms": (projector_rms if representation == "lambda_projector" else None),
+            "eigenspace_histogram_state_rms": (
+                eig_hist_rms if representation == "lambda_eigenspace_histogram" else None
+            ),
             "spectral_representation": representation,
         })
 
     final_outputs, _ = _predict(
-        model, source, edge_state, spectrum_state, 1.0, heat_state, projector_state
+        model, source, edge_state, spectrum_state, 1.0, heat_state, projector_state,
+        eigenspace_histogram_state
     )
     n = source.number_of_nodes()
     targets: dict[str, Any] = {
@@ -468,6 +578,13 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
         if representation == "lambda_projector":
             targets["projector"] = np.asarray(projector_state, dtype=np.float64)
             targets["projector_rank"] = int(getattr(model, "projector_rank", 4))
+        elif representation == "lambda_eigenspace_histogram":
+            spec = model.eigenspace_histogram_spec
+            targets["eigenspace_histogram"] = np.asarray(eigenspace_histogram_state, dtype=np.float64)
+            targets["eigenspace_histogram_block_mask"] = np.asarray(eigenspace_histogram_block_mask, dtype=bool)
+            _source_hist, _source_mask, source_weights = extract_degree_conditioned_spectral_histogram(source, spec)
+            targets["eigenspace_histogram_block_weights"] = source_weights
+            targets["eigenspace_histogram_metadata"] = spec.metadata()
     if getattr(model, "predict_clustering_histogram", False):
         targets["clustering_histogram"] = final_outputs["clean_clustering_histogram"][0].detach().cpu().numpy()
     if getattr(model, "predict_orbit_summary", False):
@@ -479,9 +596,14 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
         "prediction_calls": steps + 1,
         "sampling_steps": steps,
         "edge_sigma": sigma_edge,
-        "spectral_sigma": (sigma_spec if representation in {"eigenvalues", "lambda_projector"} else None),
+        "spectral_sigma": (
+            sigma_spec if representation in {"eigenvalues", "lambda_projector", "lambda_eigenspace_histogram"} else None
+        ),
         "heat_kernel_sigma": (sigma_heat if representation == "heat_kernel" else None),
         "projector_sigma": (sigma_projector if representation == "lambda_projector" else None),
+        "eigenspace_histogram_sigma": (
+            sigma_eig_hist if representation == "lambda_eigenspace_histogram" else None
+        ),
         "projector_rank": (int(getattr(model, "projector_rank", 4)) if representation == "lambda_projector" else None),
         "spectral_representation": representation,
         "heat_kernel_times": (list(getattr(model, "heat_kernel_times", ())) if representation == "heat_kernel" else None),
@@ -489,6 +611,7 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
         "independent_laplacian_eigenvalue_diffusion": representation == "eigenvalues",
         "joint_laplacian_heat_kernel_diffusion": representation == "heat_kernel",
         "joint_laplacian_lambda_projector_diffusion": representation == "lambda_projector",
+        "joint_laplacian_eigenspace_histogram_diffusion": representation == "lambda_eigenspace_histogram",
     }
 
 
@@ -514,6 +637,8 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
     target_spectrum = None
     target_heat_kernel = None
     target_projector = None
+    target_eigenspace_histogram = None
+    eigenspace_histogram_block_weights = None
     if representation == "heat_kernel":
         target_heat_kernel = validate_heat_kernel_stack(
             targets.get("heat_kernel"), n=n, num_scales=len(getattr(model, "heat_kernel_times", ()))
@@ -525,6 +650,17 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
         if representation == "lambda_projector":
             target_projector = validate_eigenspace_projector(
                 targets.get("projector"), n=n
+            )
+        elif representation == "lambda_eigenspace_histogram":
+            spec = getattr(model, "eigenspace_histogram_spec", None)
+            if spec is None or targets.get("eigenspace_histogram_metadata") != spec.metadata():
+                raise ValueError("Eigenspace-histogram target metadata differs from the checkpoint.")
+            target_eigenspace_histogram = validate_spectral_distance_histogram(
+                targets.get("eigenspace_histogram"), spec,
+                block_mask=targets.get("eigenspace_histogram_block_mask"),
+            )
+            eigenspace_histogram_block_weights = np.asarray(
+                targets.get("eigenspace_histogram_block_weights"), dtype=np.float64
             )
     target_hist = targets.get("clustering_histogram")
     target_orbit = targets.get("orbit")
@@ -539,10 +675,15 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
     spectral_cfg = dict(config.get("spectral_prediction", {}) or {})
     lambda_weight = float(spectral_cfg.get("lambda_weight", 1.0))
     projector_weight = float(spectral_cfg.get("projector_weight", 1.0))
+    eigenspace_histogram_weight = float(spectral_cfg.get("eigenspace_histogram_weight", 1.0))
     projector_distance_name = str(spectral_cfg.get("projector_distance", "chordal"))
     projector_rank = int(getattr(model, "projector_rank", spectral_cfg.get("projector_rank", 4)))
-    if lambda_weight < 0.0 or projector_weight < 0.0 or lambda_weight + projector_weight <= 0.0:
-        raise ValueError("lambda_weight and projector_weight must be nonnegative with positive sum.")
+    if lambda_weight < 0.0 or projector_weight < 0.0 or eigenspace_histogram_weight < 0.0:
+        raise ValueError("Spectral subcomponent weights must be nonnegative.")
+    if representation == "lambda_projector" and lambda_weight + projector_weight <= 0.0:
+        raise ValueError("lambda_weight and projector_weight must have positive total weight.")
+    if representation == "lambda_eigenspace_histogram" and lambda_weight + eigenspace_histogram_weight <= 0.0:
+        raise ValueError("lambda_weight and eigenspace_histogram_weight must have positive total weight.")
 
     weights = {
         "edge": cfg.edge_weight,
@@ -587,6 +728,28 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
                 ) / max(lambda_weight + projector_weight, 1.0e-12)
                 out["lambda"] = lambda_discrepancy
                 out["projector"] = projector_discrepancy
+            elif representation == "lambda_eigenspace_histogram":
+                lambda_discrepancy = spectral_distance(
+                    laplacian_eigenvalues(graph), target_spectrum,
+                    metric=cfg.distance, scale=scale,
+                )
+                spec = model.eigenspace_histogram_spec
+                candidate_histogram, candidate_mask, candidate_weights = (
+                    extract_degree_conditioned_spectral_histogram(graph, spec)
+                )
+                if not np.array_equal(candidate_mask, targets["eigenspace_histogram_block_mask"]):
+                    raise AssertionError("Degree-preserving rewiring changed eigenspace histogram block support.")
+                if not np.allclose(candidate_weights, eigenspace_histogram_block_weights, atol=1.0e-12, rtol=0.0):
+                    raise AssertionError("Degree-preserving rewiring changed eigenspace histogram block weights.")
+                histogram_discrepancy = spectral_histogram_wasserstein(
+                    candidate_histogram, target_eigenspace_histogram, spec,
+                    block_weights=eigenspace_histogram_block_weights,
+                )
+                # Subcomponent scale balancing is applied below after the source
+                # discrepancies are known. Store raw values here for diagnostics.
+                out["lambda"] = lambda_discrepancy
+                out["eigenspace_histogram"] = histogram_discrepancy
+                out["spectral"] = 0.0  # populated by the normalized combiner below
             else:
                 out["spectral"] = spectral_distance(
                     laplacian_eigenvalues(graph), target_spectrum,
@@ -604,7 +767,30 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
             out["graphlet"] = induced_histogram_distance(graphlet_hist, target_graphlet, spec)
         return out
 
+    def finalize_spectral_subcomponents(values: dict[str, float]) -> dict[str, float]:
+        if representation != "lambda_eigenspace_histogram" or "spectral" not in weights:
+            return values
+        if spectral_subscales is None:
+            return values
+        values["spectral"] = (
+            lambda_weight * values["lambda"] / spectral_subscales["lambda"]
+            + eigenspace_histogram_weight * values["eigenspace_histogram"]
+              / spectral_subscales["eigenspace_histogram"]
+        ) / max(lambda_weight + eigenspace_histogram_weight, 1.0e-12)
+        return values
+
     initial = discrepancies(current)
+    spectral_subscales = None
+    if representation == "lambda_eigenspace_histogram" and "spectral" in weights:
+        spectral_subscales = {
+            "lambda": max(float(initial["lambda"]), cfg.epsilon),
+            "eigenspace_histogram": max(float(initial["eigenspace_histogram"]), cfg.epsilon),
+        }
+        initial["spectral"] = (
+            lambda_weight * initial["lambda"] / spectral_subscales["lambda"]
+            + eigenspace_histogram_weight * initial["eigenspace_histogram"]
+              / spectral_subscales["eigenspace_histogram"]
+        ) / max(lambda_weight + eigenspace_histogram_weight, 1.0e-12)
     scales = {key: max(value, cfg.epsilon) for key, value in initial.items()}
     # Spectral normalization is separately controlled by cfg.normalization.  For
     # component balancing, initial-residual scaling is the default.
@@ -639,7 +825,9 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
         for action in actions:
             candidate = candidates[action]
             graphlet_hist = graphlet_counter.candidate_histogram(candidate) if graphlet_counter is not None else None
-            d = discrepancies(candidate, graphlet_hist=graphlet_hist)
+            d = finalize_spectral_subcomponents(
+                discrepancies(candidate, graphlet_hist=graphlet_hist)
+            )
             e = energy(d)
             if best is None or e < best[0]:
                 best = (e, action, candidate, d, graphlet_hist)

@@ -98,6 +98,7 @@ class SummaryDiffusionConfig:
     spectral_sigma: float = 0.20
     heat_kernel_sigma: float = 0.12
     projector_sigma: float = 0.12
+    eigenspace_histogram_sigma: float = 0.12
     graphlet_sigma: float = 0.35
     time_sampling: str = "stratified"
     preserve_spectral_trace: bool = True
@@ -134,6 +135,7 @@ class SummaryDiffusionConfig:
             spectral_sigma=float(values.get("spectral_sigma", 0.20)),
             heat_kernel_sigma=float(values.get("heat_kernel_sigma", values.get("spectral_sigma", 0.12))),
             projector_sigma=float(values.get("projector_sigma", values.get("spectral_sigma", 0.12))),
+            eigenspace_histogram_sigma=float(values.get("eigenspace_histogram_sigma", values.get("spectral_sigma", 0.12))),
             graphlet_sigma=float(values.get("graphlet_sigma", 0.35)),
             time_sampling=str(values.get("time_sampling", "stratified")).lower(),
             preserve_spectral_trace=bool(values.get("preserve_spectral_trace", True)),
@@ -162,6 +164,8 @@ class SummaryDiffusionConfig:
             raise ValueError("summary_diffusion.heat_kernel_sigma must be finite and nonnegative.")
         if not np.isfinite(result.projector_sigma) or result.projector_sigma < 0.0:
             raise ValueError("summary_diffusion.projector_sigma must be finite and nonnegative.")
+        if not np.isfinite(result.eigenspace_histogram_sigma) or result.eigenspace_histogram_sigma < 0.0:
+            raise ValueError("summary_diffusion.eigenspace_histogram_sigma must be finite and nonnegative.")
         if not np.isfinite(result.graphlet_sigma) or result.graphlet_sigma < 0.0:
             raise ValueError("summary_diffusion.graphlet_sigma must be finite and nonnegative.")
         if not (0.0 <= result.min_progress < result.max_progress <= 1.0):
@@ -368,6 +372,73 @@ def sample_eigenspace_projector_bridge_marginal(
         "noise_std": float(std),
         "noise_rms": float(np.sqrt(np.mean(np.square(std * noise)))) if noise.size else 0.0,
     }
+
+def sample_eigenspace_histogram_bridge_marginal(
+    source: np.ndarray,
+    clean: np.ndarray,
+    *,
+    progress: float,
+    sigma: float,
+    block_mask: np.ndarray,
+    bins: int,
+    schedule: SummaryDiffusionConfig,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, dict[str, float]]:
+    """Endpoint-conditioned bridge for block-normalized spectral histograms.
+
+    Active degree-pair blocks remain sum-one because Gaussian noise is centered
+    independently inside every block. Intermediate coordinates may be negative;
+    the denoiser predicts a valid clean probability histogram with block-softmax.
+    """
+    source_values = np.asarray(source, dtype=np.float64)
+    clean_values = np.asarray(clean, dtype=np.float64)
+    mask = np.asarray(block_mask, dtype=bool)
+    if source_values.shape != clean_values.shape or source_values.ndim != 1:
+        raise ValueError("Eigenspace-histogram bridge endpoints must be equal-width vectors.")
+    if int(bins) < 2 or source_values.size % int(bins) != 0:
+        raise ValueError("Eigenspace-histogram width must be divisible by bins.")
+    num_blocks = source_values.size // int(bins)
+    if mask.shape != (num_blocks,):
+        raise ValueError("Eigenspace-histogram block mask has the wrong shape.")
+    if schedule.bridge == "ou_bridge":
+        clean_coeff, source_coeff, unit_std = schedule.ou_bridge_coefficients(progress)
+        mean = source_coeff * source_values + clean_coeff * clean_values
+        std = float(sigma) * float(unit_std)
+        a = clean_coeff
+    else:
+        a = schedule.alpha(progress)
+        source_coeff = 1.0 - a
+        clean_coeff = a
+        mean = source_coeff * source_values + clean_coeff * clean_values
+        unit_std = float(np.sqrt(max(a * (1.0 - a), 0.0)))
+        std = float(sigma) * unit_std
+    noise = rng.normal(size=(num_blocks, int(bins))).astype(np.float64)
+    for block in range(num_blocks):
+        if mask[block]:
+            row = noise[block] - float(noise[block].mean())
+            noise[block] = _unit_rms(row)
+        else:
+            noise[block] = 0.0
+    noise = noise.reshape(-1)
+    state = mean + std * noise
+    state = state.reshape(num_blocks, int(bins))
+    state[~mask] = 0.0
+    # Numerical centering keeps active blocks exactly on the affine sum-one
+    # hyperplane, while allowing off-simplex (negative) intermediate states.
+    for block in np.flatnonzero(mask):
+        state[block] += (1.0 - float(state[block].sum())) / float(bins)
+    state = state.reshape(-1)
+    return state, {
+        "progress": float(progress),
+        "alpha": float(a),
+        "clean_coefficient": float(clean_coeff),
+        "source_coefficient": float(source_coeff),
+        "unit_noise_std": float(unit_std),
+        "bridge": str(schedule.bridge),
+        "noise_std": float(std),
+        "noise_rms": float(np.sqrt(np.mean(np.square(std * noise)))) if noise.size else 0.0,
+    }
+
 
 def sample_heat_kernel_bridge_marginal(
     source: np.ndarray,

@@ -610,6 +610,12 @@ def main() -> None:
             "heat_kernel_times": tuple(spectral_cfg.get("heat_kernel_times", [0.25, 1.0, 4.0])),
             "heat_kernel_projection_iterations": int(predictor_cfg.get("heat_kernel_projection_iterations", 6)),
             "projector_rank": int(spectral_cfg.get("projector_rank", 4)),
+            "eigenspace_rank": int(spectral_cfg.get("eigenspace_rank", 4)),
+            "eigenspace_histogram_bins": int(spectral_cfg.get("eigenspace_histogram_bins", 16)),
+            "eigenspace_histogram_degree_max": int(
+                spectral_cfg.get("eigenspace_histogram_degree_max", max(graph.number_of_nodes() for graph in train_graphs) - 1)
+            ),
+            "eigenspace_histogram_max_distance": float(spectral_cfg.get("eigenspace_histogram_max_distance", 3.0)),
             "use_graph_context": bool(predictor_cfg.get("use_graph_context", True)),
             "predict_clustering_coefficient": clustering_coefficient_enabled,
             "predict_clustering_histogram": clustering_histogram_enabled,
@@ -736,13 +742,22 @@ def main() -> None:
             spectral_representation = "heat_kernel"
         if spectral_representation in {"eigenspace", "lambda_projector", "eigenvalues_projector", "lambda+p", "lambda_p"}:
             spectral_representation = "lambda_projector"
+        if spectral_representation in {
+            "eigenspace_histogram", "lambda_eigenspace_histogram", "spectral_distance_histogram",
+            "degree_conditioned_spectral_distance_histogram", "lambda_histogram"
+        }:
+            spectral_representation = "lambda_eigenspace_histogram"
         active_loss_defaults = (
             [("heat_kernel", 1.0), ("spectrum", 0.0), ("moment2", 0.0), ("low_frequency", 0.0)]
             if spectral_representation == "heat_kernel"
             else (
                 [("spectrum", 1.0), ("projector", 1.0), ("moment2", 0.0), ("low_frequency", 0.0)]
                 if spectral_representation == "lambda_projector"
-                else [("spectrum", 1.0), ("moment2", 0.1), ("low_frequency", 0.0)]
+                else (
+                    [("spectrum", 1.0), ("eigenspace_histogram", 1.0), ("moment2", 0.0), ("low_frequency", 0.0)]
+                    if spectral_representation == "lambda_eigenspace_histogram"
+                    else [("spectrum", 1.0), ("moment2", 0.1), ("low_frequency", 0.0)]
+                )
             )
         )
         if spectral_graphlet_mode:
@@ -822,6 +837,11 @@ def main() -> None:
             spectral_representation = "heat_kernel"
         if spectral_representation in {"eigenspace", "lambda_projector", "eigenvalues_projector", "lambda+p", "lambda_p"}:
             spectral_representation = "lambda_projector"
+        if spectral_representation in {
+            "eigenspace_histogram", "lambda_eigenspace_histogram", "spectral_distance_histogram",
+            "degree_conditioned_spectral_distance_histogram", "lambda_histogram"
+        }:
+            spectral_representation = "lambda_eigenspace_histogram"
         if spectral_representation == "heat_kernel":
             print(
                 "Legacy spectral-space diffusion: multiscale combinatorial-Laplacian heat kernels "
@@ -833,6 +853,13 @@ def main() -> None:
                 "Structured spectral-space diffusion: jointly denoise Laplacian eigenvalues Lambda "
                 "and the low-frequency eigenspace projector P_k=U_k U_k^T; projector supervision "
                 "uses deterministic degree-constrained structural alignment.",
+                flush=True,
+            )
+        elif spectral_representation == "lambda_eigenspace_histogram":
+            print(
+                "Permutation-invariant spectral-space diffusion: jointly denoise Laplacian eigenvalues "
+                "and normalized degree-conditioned low-frequency spectral-distance histograms; "
+                "no node alignment is required.",
                 flush=True,
             )
         else:

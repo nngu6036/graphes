@@ -188,6 +188,12 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
         spectral_representation=str(spectral_cfg.get("representation", "eigenvalues")),
         heat_kernel_times=tuple(spectral_cfg.get("heat_kernel_times", [0.25, 1.0, 4.0])),
         projector_rank=int(spectral_cfg.get("projector_rank", 4)),
+        eigenspace_rank=int(spectral_cfg.get("eigenspace_rank", 4)),
+        eigenspace_histogram_bins=int(spectral_cfg.get("eigenspace_histogram_bins", 16)),
+        eigenspace_histogram_degree_max=int(
+            spectral_cfg.get("eigenspace_histogram_degree_max", max(g.number_of_nodes() for g in train_graphs) - 1)
+        ),
+        eigenspace_histogram_max_distance=float(spectral_cfg.get("eigenspace_histogram_max_distance", 3.0)),
     )
     model = JointDegreeSpectralPredictor(
         joint_degree_config={

@@ -1,5 +1,9 @@
 # Lambda + projector spectral diffusion
 
+> **Legacy node-indexed representation.** The projector implementation is retained for reproducibility.
+> New eigenspace experiments should use the degree-conditioned spectral-distance histogram in
+> `EIGENSPACE_HISTOGRAM_SPECTRAL_DIFFUSION.md`.
+
 GraphER's structured eigenspace representation is
 
 \[
