@@ -55,6 +55,9 @@ class TopologySpectralTransformerPredictor(nn.Module):
         dropout: float = 0.0,
         min_gap: float = 1.0e-6,
         input_normalization: str = "mean_degree",
+        spectral_representation: str = "eigenvalues",
+        heat_kernel_times: Sequence[float] = (0.25, 1.0, 4.0),
+        heat_kernel_projection_iterations: int = 6,
         use_graph_context: bool = True,
         predict_clustering_coefficient: bool = False,
         predict_clustering_histogram: bool = False,
@@ -84,7 +87,20 @@ class TopologySpectralTransformerPredictor(nn.Module):
         self.dropout_p = float(dropout)
         self.min_gap = float(min_gap)
         self.input_normalization = str(input_normalization).lower()
+        self.spectral_representation = str(spectral_representation).lower()
+        if self.spectral_representation in {"heat", "heatkernel", "heat-kernel"}:
+            self.spectral_representation = "heat_kernel"
+        if self.spectral_representation not in {"eigenvalues", "heat_kernel"}:
+            raise ValueError("spectral_representation must be eigenvalues or heat_kernel.")
+        self.heat_kernel_times = tuple(float(value) for value in heat_kernel_times)
+        if not self.heat_kernel_times or any(value <= 0.0 for value in self.heat_kernel_times):
+            raise ValueError("heat_kernel_times must contain positive values.")
+        self.heat_kernel_projection_iterations = int(heat_kernel_projection_iterations)
+        if self.heat_kernel_projection_iterations < 1:
+            raise ValueError("heat_kernel_projection_iterations must be positive.")
         self.use_graph_context = bool(use_graph_context)
+        if self.spectral_representation == "heat_kernel" and not self.use_graph_context:
+            raise ValueError("Heat-kernel spectral diffusion requires use_graph_context=true.")
         self.predict_clustering_coefficient = bool(predict_clustering_coefficient)
         self.predict_clustering_histogram = bool(predict_clustering_histogram)
         self.predict_orbit_summary = bool(predict_orbit_summary)
@@ -149,7 +165,10 @@ class TopologySpectralTransformerPredictor(nn.Module):
         self.node_in = nn.Linear(4, self.hidden_dim)
         # Legacy checkpoints use seven hard-source pair features. New joint edge
         # diffusion adds current soft edge probability and source edge probability.
-        self.edge_in = nn.Linear(9 if self.predict_edge_state else 7, self.edge_dim)
+        pair_input_dim = 9 if self.predict_edge_state else 7
+        if self.spectral_representation == "heat_kernel":
+            pair_input_dim += 2 * len(self.heat_kernel_times)
+        self.edge_in = nn.Linear(pair_input_dim, self.edge_dim)
         self.layers = nn.ModuleList(
             [
                 TopologyMPNNLayer(self.hidden_dim, self.edge_dim)
@@ -168,6 +187,14 @@ class TopologySpectralTransformerPredictor(nn.Module):
             nn.Sequential(
                 nn.Linear(self.edge_dim, self.edge_dim), nn.SiLU(), nn.Linear(self.edge_dim, 2)
             ) if self.predict_edge_state else None
+        )
+        self.clean_heat_kernel_head = (
+            nn.Sequential(
+                nn.Linear(self.edge_dim, self.edge_dim),
+                nn.SiLU(),
+                nn.Linear(self.edge_dim, len(self.heat_kernel_times)),
+            )
+            if self.spectral_representation == "heat_kernel" else None
         )
 
         # [normalized current lambda_i, normalized source lambda_i,
@@ -300,10 +327,23 @@ class TopologySpectralTransformerPredictor(nn.Module):
         ]
         if self.predict_edge_state:
             pair_feature_values.extend([current_edge_prob, source_edge_prob])
+        if self.spectral_representation == "heat_kernel":
+            if batch.current_heat_kernel is None or batch.source_heat_kernel is None:
+                raise ValueError("Heat-kernel model received a batch without heat-kernel bridge states.")
+            if batch.current_heat_kernel.shape[-1] != len(self.heat_kernel_times):
+                raise ValueError("Heat-kernel bridge scale count differs from the checkpoint.")
+            for channel in range(len(self.heat_kernel_times)):
+                pair_feature_values.append(batch.current_heat_kernel[..., channel])
+                pair_feature_values.append(batch.source_heat_kernel[..., channel])
         edge_features = torch.stack(pair_feature_values, dim=-1)
         edge_hidden = self.edge_in(edge_features)
         edge_hidden = 0.5 * (edge_hidden + edge_hidden.transpose(1, 2))
-        edge_hidden = edge_hidden * pair_mask.unsqueeze(-1).to(edge_hidden.dtype)
+        edge_valid = (
+            node_mask.unsqueeze(1) & node_mask.unsqueeze(2)
+            if self.spectral_representation == "heat_kernel"
+            else pair_mask
+        )
+        edge_hidden = edge_hidden * edge_valid.unsqueeze(-1).to(edge_hidden.dtype)
 
         for layer in self.layers:
             node_hidden, edge_hidden = layer(
@@ -487,6 +527,41 @@ class TopologySpectralTransformerPredictor(nn.Module):
             )
         return result
 
+    def _project_heat_kernel_prediction(
+        self, raw: torch.Tensor, node_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Map pair logits to a symmetric nonnegative approximately stochastic kernel.
+
+        A combinatorial-Laplacian heat kernel is symmetric, nonnegative and has
+        row sums one.  Symmetric Sinkhorn scaling enforces those cheap manifold
+        constraints while leaving PSD/semigroup consistency to the learning
+        objective and hard graph projection.
+        """
+        mask = node_mask.bool()
+        pair_valid = mask.unsqueeze(1) & mask.unsqueeze(2)
+        values = F.softplus(raw) + 1.0e-8
+        values = 0.5 * (values + values.transpose(1, 2))
+        values = values * pair_valid.unsqueeze(-1).to(values.dtype)
+        for _ in range(self.heat_kernel_projection_iterations):
+            row_sum = values.sum(dim=2).clamp_min(1.0e-8)
+            inv_sqrt = torch.rsqrt(row_sum)
+            values = values * inv_sqrt.unsqueeze(2) * inv_sqrt.unsqueeze(1)
+            values = 0.5 * (values + values.transpose(1, 2))
+            values = values * pair_valid.unsqueeze(-1).to(values.dtype)
+        return values
+
+    def _append_heat_kernel_outputs(
+        self, outputs: dict[str, torch.Tensor], edge_hidden: torch.Tensor | None, batch: TopologySpectralBatch
+    ) -> None:
+        if self.clean_heat_kernel_head is None:
+            return
+        if edge_hidden is None:
+            raise ValueError("Heat-kernel prediction requires pair/graph context.")
+        raw = self.clean_heat_kernel_head(edge_hidden)
+        clean = self._project_heat_kernel_prediction(raw, batch.node_mask)
+        outputs["clean_heat_kernel_raw"] = raw
+        outputs["clean_heat_kernel"] = clean
+
     def forward(self, batch: TopologySpectralBatch) -> dict[str, torch.Tensor]:
         # Debug-friendly spectral-only mode deliberately removes adjacency/GNN
         # context from the denoiser.  The network then receives only the noisy
@@ -502,6 +577,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
             if self.predict_edge_state:
                 raise ValueError("predict_edge_state requires use_graph_context=true.")
         outputs = self._spectral_outputs_from_graph_hidden(batch, graph_hidden)
+        self._append_heat_kernel_outputs(outputs, edge_hidden, batch)
         if self.clean_edge_head is not None:
             logits = self.clean_edge_head(edge_hidden)
             logits = 0.5 * (logits + logits.transpose(1, 2))
@@ -566,6 +642,38 @@ class TopologySpectralTransformerPredictor(nn.Module):
             + float(weights.get("moment2", 0.1)) * moment2_loss
             + float(weights.get("low_frequency", 0.0)) * low_frequency_loss
         )
+
+        heat_kernel_metrics: dict[str, float] = {}
+        if self.spectral_representation == "heat_kernel":
+            if batch.clean_heat_kernel_target is None or "clean_heat_kernel" not in outputs:
+                raise ValueError("Heat-kernel spectral model requires clean heat-kernel targets.")
+            predicted_heat = outputs["clean_heat_kernel"]
+            target_heat = batch.clean_heat_kernel_target.to(predicted_heat.dtype)
+            if predicted_heat.shape != target_heat.shape:
+                raise ValueError("Predicted and target heat-kernel tensors must have identical shape.")
+            valid_pairs = (batch.node_mask.unsqueeze(1) & batch.node_mask.unsqueeze(2)).unsqueeze(-1)
+            valid_weight_heat = valid_pairs.to(predicted_heat.dtype)
+            heat_count = valid_weight_heat.sum().clamp_min(1.0) * predicted_heat.shape[-1]
+            heat_delta = predicted_heat - target_heat
+            heat_loss = (
+                F.smooth_l1_loss(predicted_heat, target_heat, reduction="none")
+                * valid_weight_heat
+            ).sum() / heat_count
+            total = total + float(weights.get("heat_kernel", 1.0)) * heat_loss
+            with torch.no_grad():
+                heat_rmse = torch.sqrt((heat_delta.square() * valid_weight_heat).sum() / heat_count)
+                heat_mae = (heat_delta.abs() * valid_weight_heat).sum() / heat_count
+                rows = predicted_heat.sum(dim=2)
+                row_mask = batch.node_mask.unsqueeze(-1).to(rows.dtype)
+                row_sum_mae = ((rows - 1.0).abs() * row_mask).sum() / row_mask.sum().clamp_min(1.0)
+                symmetry = (predicted_heat - predicted_heat.transpose(1, 2)).abs().amax()
+                heat_kernel_metrics = {
+                    "heat_kernel_loss": float(heat_loss.detach().cpu()),
+                    "heat_kernel_rmse": float(heat_rmse.detach().cpu()),
+                    "heat_kernel_mae": float(heat_mae.detach().cpu()),
+                    "heat_kernel_row_sum_mae": float(row_sum_mae.detach().cpu()),
+                    "heat_kernel_symmetry_max_abs": float(symmetry.detach().cpu()),
+                }
 
         edge_metrics: dict[str, float] = {}
         if self.predict_edge_state:
@@ -765,6 +873,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
                     ),
                 }
             )
+        metrics.update(heat_kernel_metrics)
         metrics.update(histogram_metrics)
         metrics.update(orbit_metrics)
         metrics.update(cycle_metrics)
@@ -799,6 +908,9 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "dropout": self.dropout_p,
             "min_gap": self.min_gap,
             "input_normalization": self.input_normalization,
+            "spectral_representation": self.spectral_representation,
+            "heat_kernel_times": list(self.heat_kernel_times),
+            "heat_kernel_projection_iterations": self.heat_kernel_projection_iterations,
             "use_graph_context": self.use_graph_context,
             "predict_clustering_coefficient": self.predict_clustering_coefficient,
             "predict_clustering_histogram": self.predict_clustering_histogram,
@@ -1098,6 +1210,7 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
     def forward(self, batch: TopologySpectralBatch) -> dict[str, torch.Tensor]:
         graph_hidden, edge_hidden = self._graph_context(batch)
         outputs = self._spectral_outputs_from_graph_hidden(batch, graph_hidden)
+        self._append_heat_kernel_outputs(outputs, edge_hidden, batch)
         if self.clean_edge_head is not None:
             logits = self.clean_edge_head(edge_hidden)
             logits = 0.5 * (logits + logits.transpose(1, 2))

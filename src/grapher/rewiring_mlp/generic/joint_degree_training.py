@@ -163,6 +163,7 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
     vectorizer.empirical_degree_sequences = [sorted((d for _, d in g.degree()), reverse=True) for g in train_graphs]
 
     pcfg = dict(config.get("topology_predictor", {}) or {})
+    spectral_cfg = dict(config.get("spectral_prediction", {}) or {})
     summaries = dict(config.get("structure_summary_prediction", {}) or {})
     from grapher.rewiring_mlp.generic.spectral_model import TopologySpectralTransformerPredictor
     import inspect
@@ -184,6 +185,8 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
         induced_graphlet_scope=summaries.get("induced_graphlet_scope", "all"),
         predict_edge_state=bool((config.get("edge_diffusion", {}) or {}).get("enabled", False)),
         edge_smoothing=float((config.get("edge_diffusion", {}) or {}).get("smoothing", 0.01)),
+        spectral_representation=str(spectral_cfg.get("representation", "eigenvalues")),
+        heat_kernel_times=tuple(spectral_cfg.get("heat_kernel_times", [0.25, 1.0, 4.0])),
     )
     model = JointDegreeSpectralPredictor(
         joint_degree_config={

@@ -192,6 +192,70 @@ The structural heads predict a 100-bin clustering-coefficient histogram, the
 `k = 3, 4, 5`.  Molecular graphlet identities additionally include
 `atomic_num` and `bond_type`.
 
+### Heat-kernel spectral-space diffusion
+
+The legacy topology configs diffuse only the combinatorial-Laplacian eigenvalue
+vector.  The repository also provides an additive **heat-kernel spectral-space**
+variant that represents a graph by multiscale matrices
+
+```text
+H_tau(G) = exp(-tau * L(G) / scale)
+```
+
+with `scale = mean_degree` by default and `tau = [0.25, 1.0, 4.0]`.  A heat
+kernel contains both eigenvalue decay and eigenspace information, while being
+invariant to eigenvector sign flips and rotations inside repeated eigenspaces.
+The forward bridge is trained between the target graph and its indexed
+degree-matched HH source in heat-kernel space.  Generation starts from the HH
+heat kernel, denoises the heat-kernel state, and realizes the predicted target
+through the same degree-preserving, connectivity-preserving rewiring operator.
+
+The full Community-small heat-kernel experiment is:
+
+```text
+configs/experiments/grapher/community_small_joint_edge_heat_kernel_graphlets345_learned.yaml
+```
+
+Train and generate it with:
+
+```bash
+CFG=configs/experiments/grapher/community_small_joint_edge_heat_kernel_graphlets345_learned.yaml
+TRAIN=outputs/topology_grapher/community_small_joint_edge_heat_kernel_graphlets345_learned/seed_42
+GEN=outputs/topology_generation/community_small_joint_edge_heat_kernel_graphlets345/seed_42/learned
+
+PYTHONPATH=src python scripts/train_topology_grapher.py \
+  --config "$CFG" \
+  --output-dir "$TRAIN" \
+  --seed 42 \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_topology_grapher.py \
+  --config "$CFG" \
+  --checkpoint "$TRAIN/checkpoint.pt" \
+  --output-dir "$GEN" \
+  --num-generate 1024 \
+  --seed 42 \
+  --device gpu
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config "$CFG" \
+  --generated-dir "$GEN" \
+  --reference-split test \
+  --output-dir "$GEN/evaluation_test"
+```
+
+For the **true spectral-only training ablation** (no edge-diffusion loss and no
+clustering/orbit/graphlet heads), use:
+
+```text
+configs/experiments/grapher/community_small_heat_kernel_only_learned.yaml
+```
+
+This differs from a generation-time `spectral` guidance ablation: the excluded
+heads are absent during training as well as receiving zero refiner weight.
+Existing eigenvalue configs are intentionally unchanged for direct ablation.
+See [`docs/HEAT_KERNEL_SPECTRAL_DIFFUSION.md`](docs/HEAT_KERNEL_SPECTRAL_DIFFUSION.md).
+
 The degree/typed-degree encoder and decoder are trained jointly with GraphER.
 At generation time the same GraphER checkpoint can be used with either of two
 sequence sources:
@@ -691,7 +755,7 @@ export EDGE=/home/quang/EDGE
 export EDGE_PYTHON=/home/quang/miniconda3/envs/edge/bin/python
 
 export SPECTRE=/home/quang/SPECTRE
-export SPECTRE_PYTHON=/home/quang/miniconda3/envs/spectre/bin/python
+export SPECTRE_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 ```
 
 If a baseline is installed in the current environment, its `*_PYTHON` variable

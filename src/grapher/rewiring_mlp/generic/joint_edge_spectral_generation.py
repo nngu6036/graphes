@@ -4,7 +4,8 @@ This is the generic analogue of the attributed joint typed edge sampler.  The
 neural state contains two continuous bridges:
 
 * symmetric binary edge-category logits over {no-edge, edge}; and
-* combinatorial-Laplacian eigenvalues.
+* a configurable spectral state: legacy Laplacian eigenvalues or multiscale
+  combinatorial-Laplacian heat kernels.
 
 The hard graph never follows the soft bridge directly.  After sampling a clean
 endpoint prediction, ordinary degree-preserving double-edge swaps realize that
@@ -35,6 +36,11 @@ from grapher.rewiring_mlp.generic.soft_edge_bridge import (
     advance_edges,
     edge_probabilities,
     labels_to_logits,
+)
+from grapher.rewiring_mlp.generic.heat_kernel import (
+    heat_kernel_distance,
+    heat_kernel_stack,
+    validate_heat_kernel_stack,
 )
 from grapher.rewiring_mlp.generic.spectral import (
     laplacian_eigenvalues,
@@ -104,6 +110,39 @@ def _advance_spectrum(
         if result.size > 1:
             result[1:] += (trace - float(result.sum())) / (result.size - 1)
     return np.asarray(result, dtype=np.float64)
+
+
+def _advance_heat_kernel(
+    current: np.ndarray,
+    clean: np.ndarray,
+    t: float,
+    s: float,
+    *,
+    sigma: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    if not (0.0 <= t < s <= 1.0):
+        raise ValueError("Heat-kernel bridge transition requires 0 <= t < s <= 1.")
+    current = validate_heat_kernel_stack(current)
+    clean = validate_heat_kernel_stack(clean)
+    if current.shape != clean.shape:
+        raise ValueError("Current and predicted clean heat kernels must have the same shape.")
+    if not np.isfinite(sigma) or sigma < 0:
+        raise ValueError("heat_kernel_sigma must be finite and nonnegative.")
+    alpha = (s - t) / max(1.0 - t, 1.0e-12)
+    std = float(sigma) * math.sqrt(
+        max((s - t) * (1.0 - s) / max(1.0 - t, 1.0e-12), 0.0)
+    )
+    result = current + alpha * (clean - current)
+    if std > 0:
+        noise = rng.normal(size=result.shape).astype(np.float64)
+        noise = 0.5 * (noise + noise.transpose(1, 0, 2))
+        for channel in range(noise.shape[-1]):
+            rms = float(np.sqrt(np.mean(noise[..., channel] ** 2)))
+            if rms > 1.0e-12:
+                noise[..., channel] /= rms
+        result = result + std * noise
+    return 0.5 * (result + result.transpose(1, 0, 2))
 
 
 @dataclass(frozen=True)
@@ -208,7 +247,14 @@ class JointEdgeSpectralRefinerConfig:
 
 
 @torch.no_grad()
-def _predict(model, source: nx.Graph, edge_state: torch.Tensor, spectrum_state: np.ndarray, time: float):
+def _predict(
+    model,
+    source: nx.Graph,
+    edge_state: torch.Tensor,
+    spectrum_state: np.ndarray,
+    time: float,
+    heat_kernel_state: np.ndarray | None = None,
+):
     device = next(model.parameters()).device
     n = source.number_of_nodes()
     source_spectrum = laplacian_eigenvalues(source).astype(np.float32)
@@ -216,16 +262,29 @@ def _predict(model, source: nx.Graph, edge_state: torch.Tensor, spectrum_state: 
     source_logits = _source_edge_logits(source, smoothing, device)[0].detach().cpu().numpy().astype(np.float32)
     current_logits = edge_state[0].detach().cpu().numpy().astype(np.float32)
     labels = _adjacency_labels(source)[0].numpy().astype(np.int64)
+    source_heat = clean_heat = None
+    if str(getattr(model, "spectral_representation", "eigenvalues")) == "heat_kernel":
+        source_heat = heat_kernel_stack(
+            source,
+            times=getattr(model, "heat_kernel_times", (0.25, 1.0, 4.0)),
+            normalization=getattr(model, "input_normalization", "mean_degree"),
+        ).astype(np.float32)
+        if heat_kernel_state is None:
+            heat_kernel_state = source_heat
+        clean_heat = np.zeros_like(source_heat, dtype=np.float32)
     example = TopologySpectralExample(
         current_graph=source,
         time=float(time),
         current_spectrum=np.asarray(spectrum_state, dtype=np.float32),
         source_spectrum=source_spectrum,
         clean_spectrum_target=np.zeros(n, dtype=np.float32),
-        current_edge_logits=current_logits,
-        source_edge_logits=source_logits,
-        clean_edge_logits_target=source_logits,
-        clean_edge_labels_target=labels,
+        current_heat_kernel=(None if heat_kernel_state is None else np.asarray(heat_kernel_state, dtype=np.float32)),
+        source_heat_kernel=source_heat,
+        clean_heat_kernel_target=clean_heat,
+        current_edge_logits=(current_logits if getattr(model, "predict_edge_state", False) else None),
+        source_edge_logits=(source_logits if getattr(model, "predict_edge_state", False) else None),
+        clean_edge_logits_target=(source_logits if getattr(model, "predict_edge_state", False) else None),
+        clean_edge_labels_target=(labels if getattr(model, "predict_edge_state", False) else None),
     )
     batch = collate_spectral_examples([example]).to(device)
     return model(batch), batch
@@ -233,8 +292,6 @@ def _predict(model, source: nx.Graph, edge_state: torch.Tensor, spectrum_state: 
 
 @torch.no_grad()
 def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, seed: int):
-    if not getattr(model, "predict_edge_state", False):
-        raise ValueError("Joint soft-edge sampling requires a checkpoint trained with edge_diffusion.enabled=true.")
     model.eval()
     device = next(model.parameters()).device
     edge_cfg = dict(config.get("edge_diffusion", {}) or {})
@@ -244,44 +301,68 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
         raise ValueError("edge_diffusion.sampling_steps must be at least 2.")
     sigma_edge = float(edge_cfg.get("sigma", 1.0))
     sigma_spec = float(diff_cfg.get("spectral_sigma", 0.2))
+    sigma_heat = float(diff_cfg.get("heat_kernel_sigma", sigma_spec))
     smoothing = float(edge_cfg.get("smoothing", getattr(model, "edge_smoothing", 0.01)))
     if not math.isclose(smoothing, float(getattr(model, "edge_smoothing", smoothing)), rel_tol=0, abs_tol=1e-12):
         raise ValueError("edge_diffusion.smoothing differs from the trained checkpoint.")
 
+    representation = str(getattr(model, "spectral_representation", "eigenvalues"))
     mask = torch.ones((1, source.number_of_nodes()), dtype=torch.bool, device=device)
     labels = _adjacency_labels(source).to(device)
     edge_state = labels_to_logits(labels, mask, smoothing)
     spectrum_state = laplacian_eigenvalues(source).astype(np.float64)
+    heat_state = None
+    if representation == "heat_kernel":
+        heat_state = heat_kernel_stack(
+            source,
+            times=getattr(model, "heat_kernel_times", (0.25, 1.0, 4.0)),
+            normalization=str(config.get("spectral_prediction", {}).get(
+                "heat_kernel_normalization", getattr(model, "input_normalization", "mean_degree")
+            )),
+        )
     scale = spectral_scale(source, mode=str(config.get("spectral_prediction", {}).get("normalization", "mean_degree")))
     rng = np.random.default_rng(int(seed))
     generator = torch.Generator(device=device).manual_seed(int(seed))
     trajectory = []
-    last_outputs = None
     for step in range(steps):
         t = step / steps
-        s = (step + 1) / steps
-        outputs, _batch = _predict(model, source, edge_state, spectrum_state, t)
-        last_outputs = outputs
-        clean_edge = outputs["clean_edge_logits"]
-        clean_spectrum = outputs["clean_spectrum"][0, : source.number_of_nodes()].detach().cpu().numpy().astype(np.float64)
-        edge_state = advance_edges(edge_state, clean_edge, t, s, mask, sigma_edge, generator=generator)
-        spectrum_state = _advance_spectrum(
-            spectrum_state, clean_spectrum, t, s,
-            sigma=sigma_spec, scale=scale, rng=rng,
-        )
+        next_t = (step + 1) / steps
+        outputs, _batch = _predict(model, source, edge_state, spectrum_state, t, heat_state)
+        if getattr(model, "predict_edge_state", False):
+            clean_edge = outputs["clean_edge_logits"]
+            edge_state = advance_edges(edge_state, clean_edge, t, next_t, mask, sigma_edge, generator=generator)
+        if representation == "heat_kernel":
+            clean_heat = outputs["clean_heat_kernel"][0, : source.number_of_nodes(), : source.number_of_nodes()].detach().cpu().numpy().astype(np.float64)
+            heat_state = _advance_heat_kernel(
+                heat_state, clean_heat, t, next_t, sigma=sigma_heat, rng=rng
+            )
+            state_rms = float(np.sqrt(np.mean(np.square(heat_state)))) if heat_state.size else 0.0
+        else:
+            clean_spectrum = outputs["clean_spectrum"][0, : source.number_of_nodes()].detach().cpu().numpy().astype(np.float64)
+            spectrum_state = _advance_spectrum(
+                spectrum_state, clean_spectrum, t, next_t,
+                sigma=sigma_spec, scale=scale, rng=rng,
+            )
+            state_rms = float(np.sqrt(np.mean(np.square(spectrum_state)))) if spectrum_state.size else 0.0
         trajectory.append({
             "step": step + 1,
-            "time": s,
+            "time": next_t,
             "edge_logit_rms": float(edge_state.square().mean().sqrt().cpu()),
-            "spectral_state_rms": float(np.sqrt(np.mean(np.square(spectrum_state)))) if spectrum_state.size else 0.0,
+            "spectral_state_rms": state_rms,
+            "spectral_representation": representation,
         })
 
-    final_outputs, _ = _predict(model, source, edge_state, spectrum_state, 1.0)
+    final_outputs, _ = _predict(model, source, edge_state, spectrum_state, 1.0, heat_state)
     n = source.number_of_nodes()
     targets: dict[str, Any] = {
         "edge_probabilities": edge_probabilities(edge_state, mask)[0, :n, :n].detach().cpu().numpy(),
-        "spectrum": np.asarray(spectrum_state, dtype=np.float64),
+        "spectral_representation": representation,
     }
+    if representation == "heat_kernel":
+        targets["heat_kernel"] = np.asarray(heat_state, dtype=np.float64)
+        targets["heat_kernel_times"] = list(getattr(model, "heat_kernel_times", (0.25, 1.0, 4.0)))
+    else:
+        targets["spectrum"] = np.asarray(spectrum_state, dtype=np.float64)
     if getattr(model, "predict_clustering_histogram", False):
         targets["clustering_histogram"] = final_outputs["clean_clustering_histogram"][0].detach().cpu().numpy()
     if getattr(model, "predict_orbit_summary", False):
@@ -293,9 +374,13 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
         "prediction_calls": steps + 1,
         "sampling_steps": steps,
         "edge_sigma": sigma_edge,
-        "spectral_sigma": sigma_spec,
+        "spectral_sigma": (sigma_spec if representation == "eigenvalues" else None),
+        "heat_kernel_sigma": (sigma_heat if representation == "heat_kernel" else None),
+        "spectral_representation": representation,
+        "heat_kernel_times": (list(getattr(model, "heat_kernel_times", ())) if representation == "heat_kernel" else None),
         "trajectory": trajectory,
-        "independent_laplacian_eigenvalue_diffusion": True,
+        "independent_laplacian_eigenvalue_diffusion": representation == "eigenvalues",
+        "joint_laplacian_heat_kernel_diffusion": representation == "heat_kernel",
     }
 
 
@@ -317,9 +402,17 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
     n = len(source)
     if probs.shape != (n, n, 2) or not np.isfinite(probs).all():
         raise ValueError("Generic soft endpoint probabilities have the wrong shape or contain nonfinite values.")
-    target_spectrum = np.asarray(targets["spectrum"], dtype=np.float64)
-    if target_spectrum.shape != (n,):
-        raise ValueError("Predicted Laplacian target width differs from graph size.")
+    representation = str(targets.get("spectral_representation", getattr(model, "spectral_representation", "eigenvalues")))
+    target_spectrum = None
+    target_heat_kernel = None
+    if representation == "heat_kernel":
+        target_heat_kernel = validate_heat_kernel_stack(
+            targets.get("heat_kernel"), n=n, num_scales=len(getattr(model, "heat_kernel_times", ()))
+        )
+    else:
+        target_spectrum = np.asarray(targets["spectrum"], dtype=np.float64)
+        if target_spectrum.shape != (n,):
+            raise ValueError("Predicted Laplacian target width differs from graph size.")
     target_hist = targets.get("clustering_histogram")
     target_orbit = targets.get("orbit")
     spec = getattr(model, "induced_graphlet_spec", None)
@@ -345,10 +438,22 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
         if "edge" in weights:
             out["edge"] = _edge_energy(graph, probs)
         if "spectral" in weights:
-            out["spectral"] = spectral_distance(
-                laplacian_eigenvalues(graph), target_spectrum,
-                metric=cfg.distance, scale=scale,
-            )
+            if representation == "heat_kernel":
+                candidate_heat = heat_kernel_stack(
+                    graph,
+                    times=getattr(model, "heat_kernel_times", (0.25, 1.0, 4.0)),
+                    normalization=str(config.get("spectral_prediction", {}).get(
+                        "heat_kernel_normalization", getattr(model, "input_normalization", "mean_degree")
+                    )),
+                )
+                out["spectral"] = heat_kernel_distance(
+                    candidate_heat, target_heat_kernel, metric=cfg.distance
+                )
+            else:
+                out["spectral"] = spectral_distance(
+                    laplacian_eigenvalues(graph), target_spectrum,
+                    metric=cfg.distance, scale=scale,
+                )
         if "clustering" in weights:
             out["clustering"] = clustering_histogram_wasserstein(
                 extract_clustering_histogram(graph, int(model.clustering_histogram_bins)), target_hist

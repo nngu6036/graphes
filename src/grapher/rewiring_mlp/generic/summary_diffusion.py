@@ -96,6 +96,7 @@ class SummaryDiffusionConfig:
     schedule: str = "cosine"
     power: float = 2.0
     spectral_sigma: float = 0.20
+    heat_kernel_sigma: float = 0.12
     graphlet_sigma: float = 0.35
     time_sampling: str = "stratified"
     preserve_spectral_trace: bool = True
@@ -130,6 +131,7 @@ class SummaryDiffusionConfig:
             schedule=schedule,
             power=float(values.get("power", 2.0)),
             spectral_sigma=float(values.get("spectral_sigma", 0.20)),
+            heat_kernel_sigma=float(values.get("heat_kernel_sigma", values.get("spectral_sigma", 0.12))),
             graphlet_sigma=float(values.get("graphlet_sigma", 0.35)),
             time_sampling=str(values.get("time_sampling", "stratified")).lower(),
             preserve_spectral_trace=bool(values.get("preserve_spectral_trace", True)),
@@ -154,6 +156,8 @@ class SummaryDiffusionConfig:
             raise ValueError("summary_diffusion.power must be finite and positive.")
         if not np.isfinite(result.spectral_sigma) or result.spectral_sigma < 0.0:
             raise ValueError("summary_diffusion.spectral_sigma must be finite and nonnegative.")
+        if not np.isfinite(result.heat_kernel_sigma) or result.heat_kernel_sigma < 0.0:
+            raise ValueError("summary_diffusion.heat_kernel_sigma must be finite and nonnegative.")
         if not np.isfinite(result.graphlet_sigma) or result.graphlet_sigma < 0.0:
             raise ValueError("summary_diffusion.graphlet_sigma must be finite and nonnegative.")
         if not (0.0 <= result.min_progress < result.max_progress <= 1.0):
@@ -299,6 +303,62 @@ def sample_spectral_bridge_marginal(
         "noise_rms": float(np.sqrt(np.mean(np.square(std * noise)))) if noise.size else 0.0,
     }
 
+
+
+def sample_heat_kernel_bridge_marginal(
+    source: np.ndarray,
+    clean: np.ndarray,
+    *,
+    progress: float,
+    sigma: float,
+    schedule: SummaryDiffusionConfig,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, dict[str, float]]:
+    """Sample a symmetric endpoint-conditioned bridge in heat-kernel space.
+
+    The state is allowed to leave the PSD/doubly-stochastic heat-kernel
+    manifold between endpoints, exactly as the eigenvalue bridge is allowed to
+    leave the realizable graph-spectrum manifold.  The x0 predictor learns the
+    clean heat-kernel endpoint; hard graph rewiring later projects that target
+    back into the discrete degree fibre.
+    """
+
+    source_values = np.asarray(source, dtype=np.float64)
+    clean_values = np.asarray(clean, dtype=np.float64)
+    if source_values.shape != clean_values.shape:
+        raise ValueError("Heat-kernel bridge endpoints must have identical shape.")
+    if source_values.ndim != 3 or source_values.shape[0] != source_values.shape[1]:
+        raise ValueError("Heat-kernel bridge endpoints must have shape [n,n,num_scales].")
+    if schedule.bridge == "ou_bridge":
+        clean_coeff, source_coeff, unit_std = schedule.ou_bridge_coefficients(progress)
+        mean = source_coeff * source_values + clean_coeff * clean_values
+        std = float(sigma) * float(unit_std)
+        a = clean_coeff
+    else:
+        a = schedule.alpha(progress)
+        source_coeff = 1.0 - a
+        clean_coeff = a
+        mean = source_coeff * source_values + clean_coeff * clean_values
+        unit_std = float(np.sqrt(max(a * (1.0 - a), 0.0)))
+        std = float(sigma) * unit_std
+    noise = rng.normal(size=source_values.shape).astype(np.float64)
+    noise = 0.5 * (noise + noise.transpose(1, 0, 2))
+    # Unit-RMS normalization per diffusion scale keeps sigma interpretable
+    # independently of graph size and number of heat scales.
+    for channel in range(noise.shape[-1]):
+        noise[..., channel] = _unit_rms(noise[..., channel])
+    state = mean + std * noise
+    state = 0.5 * (state + state.transpose(1, 0, 2))
+    return state, {
+        "progress": float(progress),
+        "alpha": float(a),
+        "clean_coefficient": float(clean_coeff),
+        "source_coefficient": float(source_coeff),
+        "unit_noise_std": float(unit_std),
+        "bridge": str(schedule.bridge),
+        "noise_std": float(std),
+        "noise_rms": float(np.sqrt(np.mean(np.square(std * noise)))) if noise.size else 0.0,
+    }
 
 def sample_graphlet_clr_bridge_marginal(
     source_logits: Sequence[float] | np.ndarray,

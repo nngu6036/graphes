@@ -40,7 +40,13 @@ from grapher.rewiring_mlp.generic.rewiring import (
 from grapher.rewiring_mlp.generic.summary_diffusion import (
     SummaryDiffusionConfig,
     sample_graphlet_clr_bridge_marginal,
+    sample_heat_kernel_bridge_marginal,
     sample_spectral_bridge_marginal,
+)
+from grapher.rewiring_mlp.generic.heat_kernel import (
+    heat_kernel_distance,
+    heat_kernel_stack,
+    validate_heat_times,
 )
 from grapher.rewiring_mlp.generic.spectral import (
     degree_spectral_moments,
@@ -59,6 +65,9 @@ class TopologySpectralExample:
     current_graph: nx.Graph
     time: float
     clean_spectrum_target: np.ndarray
+    current_heat_kernel: np.ndarray | None = None
+    source_heat_kernel: np.ndarray | None = None
+    clean_heat_kernel_target: np.ndarray | None = None
     # Optional clean structural summary target. For the minimal spectral debug
     # model this is the graph-average local clustering coefficient in [0, 1].
     # It is predicted as an auxiliary x0 target but is NOT itself diffused.
@@ -109,6 +118,9 @@ class TopologySpectralBatch:
     source_spectrum: torch.Tensor
     clean_spectrum_target: torch.Tensor
     spectrum_mask: torch.Tensor
+    current_heat_kernel: torch.Tensor | None = None
+    source_heat_kernel: torch.Tensor | None = None
+    clean_heat_kernel_target: torch.Tensor | None = None
     current_edge_logits: torch.Tensor | None = None
     source_edge_logits: torch.Tensor | None = None
     clean_edge_logits_target: torch.Tensor | None = None
@@ -156,6 +168,35 @@ def collate_spectral_examples(
     source_spectra = np.zeros((batch_size, max_nodes), dtype=np.float32)
     clean_spectra = np.zeros((batch_size, max_nodes), dtype=np.float32)
     spectrum_mask = np.zeros((batch_size, max_nodes), dtype=np.bool_)
+
+    heat_widths = {
+        int(np.asarray(example.current_heat_kernel).shape[-1])
+        for example in examples
+        if example.current_heat_kernel is not None
+    }
+    if len(heat_widths) > 1:
+        raise ValueError("Heat-kernel examples in one batch must share one scale count.")
+    heat_width = next(iter(heat_widths), 0)
+    heat_enabled = heat_width > 0
+    if heat_enabled and any(
+        example.current_heat_kernel is None
+        or example.source_heat_kernel is None
+        or example.clean_heat_kernel_target is None
+        for example in examples
+    ):
+        raise ValueError("Cannot mix examples with and without heat-kernel diffusion states.")
+    current_heat_kernel = (
+        np.zeros((batch_size, max_nodes, max_nodes, heat_width), dtype=np.float32)
+        if heat_enabled else None
+    )
+    source_heat_kernel = (
+        np.zeros((batch_size, max_nodes, max_nodes, heat_width), dtype=np.float32)
+        if heat_enabled else None
+    )
+    clean_heat_kernel = (
+        np.zeros((batch_size, max_nodes, max_nodes, heat_width), dtype=np.float32)
+        if heat_enabled else None
+    )
 
     edge_enabled = any(example.current_edge_logits is not None for example in examples)
     if edge_enabled and any(
@@ -307,6 +348,22 @@ def collate_spectral_examples(
         source_spectra[index, :n] = source_spectrum
         clean_spectra[index, :n] = target
         spectrum_mask[index, :n] = True
+        if heat_enabled:
+            assert current_heat_kernel is not None
+            assert source_heat_kernel is not None
+            assert clean_heat_kernel is not None
+            heat_arrays = [
+                np.asarray(example.current_heat_kernel, dtype=np.float32),
+                np.asarray(example.source_heat_kernel, dtype=np.float32),
+                np.asarray(example.clean_heat_kernel_target, dtype=np.float32),
+            ]
+            if any(array.shape != (n, n, heat_width) for array in heat_arrays):
+                raise ValueError(
+                    "Heat-kernel bridge tensors must have shape [n,n,num_scales]."
+                )
+            current_heat_kernel[index, :n, :n] = heat_arrays[0]
+            source_heat_kernel[index, :n, :n] = heat_arrays[1]
+            clean_heat_kernel[index, :n, :n] = heat_arrays[2]
         if edge_enabled:
             arrays = [
                 np.asarray(example.current_edge_logits,dtype=np.float32),
@@ -375,6 +432,15 @@ def collate_spectral_examples(
         source_spectrum=torch.from_numpy(source_spectra),
         clean_spectrum_target=torch.from_numpy(clean_spectra),
         spectrum_mask=torch.from_numpy(spectrum_mask),
+        current_heat_kernel=(
+            torch.from_numpy(current_heat_kernel) if current_heat_kernel is not None else None
+        ),
+        source_heat_kernel=(
+            torch.from_numpy(source_heat_kernel) if source_heat_kernel is not None else None
+        ),
+        clean_heat_kernel_target=(
+            torch.from_numpy(clean_heat_kernel) if clean_heat_kernel is not None else None
+        ),
         current_edge_logits=(torch.from_numpy(current_edge_logits) if current_edge_logits is not None else None),
         source_edge_logits=(torch.from_numpy(source_edge_logits) if source_edge_logits is not None else None),
         clean_edge_logits_target=(torch.from_numpy(clean_edge_logits) if clean_edge_logits is not None else None),
@@ -1228,6 +1294,9 @@ class TopologySpectralDiffusionEndpoint:
     source_spectrum: np.ndarray
     clean_spectrum: np.ndarray
     spectral_scale: float
+    source_heat_kernel: np.ndarray | None = None
+    clean_heat_kernel: np.ndarray | None = None
+    heat_kernel_times: tuple[float, ...] = ()
     source_edge_logits: np.ndarray | None = None
     clean_edge_logits: np.ndarray | None = None
     clean_edge_labels: np.ndarray | None = None
@@ -1262,12 +1331,27 @@ def _prepare_spectral_diffusion_endpoint(
         require_same_degree_sequence=require_same_degree_sequence,
         rng=rng,
     )
+    representation = str(spectral_config.get("representation", "eigenvalues")).lower()
+    if representation in {"heat", "heatkernel", "heat-kernel"}:
+        representation = "heat_kernel"
+    if representation not in {"eigenvalues", "heat_kernel"}:
+        raise ValueError("spectral_prediction.representation must be eigenvalues or heat_kernel.")
+    heat_times = validate_heat_times(spectral_config.get("heat_kernel_times", [0.25, 1.0, 4.0]))
+    heat_normalization = str(spectral_config.get("heat_kernel_normalization", spectral_config.get("normalization", "mean_degree")))
     edge_cfg=dict(edge_diffusion_config or {})
     edge_enabled=bool(edge_cfg.get("enabled",False))
-    if edge_enabled:
+    if edge_enabled or representation == "heat_kernel":
         target=_align_target_to_source_indexed_degrees(source,target,rng)
     source_spectrum = laplacian_eigenvalues(source)
     clean_spectrum = laplacian_eigenvalues(target)
+    source_heat_kernel = clean_heat_kernel = None
+    if representation == "heat_kernel":
+        source_heat_kernel = heat_kernel_stack(
+            source, times=heat_times, normalization=heat_normalization
+        )
+        clean_heat_kernel = heat_kernel_stack(
+            target, times=heat_times, normalization=heat_normalization
+        )
     source_edge_logits=clean_edge_logits=clean_edge_labels=None
     if edge_enabled:
         smoothing=float(edge_cfg.get("smoothing",0.01))
@@ -1317,6 +1401,9 @@ def _prepare_spectral_diffusion_endpoint(
         source_spectrum=source_spectrum,
         clean_spectrum=clean_spectrum,
         spectral_scale=float(scale),
+        source_heat_kernel=source_heat_kernel,
+        clean_heat_kernel=clean_heat_kernel,
+        heat_kernel_times=(heat_times if representation == "heat_kernel" else ()),
         source_edge_logits=source_edge_logits,
         clean_edge_logits=clean_edge_logits,
         clean_edge_labels=clean_edge_labels,
@@ -1339,17 +1426,24 @@ def _prepare_spectral_diffusion_endpoint(
         clean_cycle_graphlet_histogram=(
             extract_cycle_graphlet_histogram(target, k=cycle_k) if cycle_k is not None else None
         ),
-        spectral_endpoint_distance=spectral_distance(
-            source_spectrum,
-            clean_spectrum,
-            metric=str(spectral_config.get("distance", "rmse")),
-            scale=scale,
-            low_frequency_weight=float(
-                spectral_config.get("low_frequency_weight", 1.0)
-            ),
-            low_frequency_cutoff=int(
-                spectral_config.get("low_frequency_cutoff", 0)
-            ),
+        spectral_endpoint_distance=(
+            heat_kernel_distance(
+                source_heat_kernel, clean_heat_kernel,
+                metric=str(spectral_config.get("distance", "rmse")),
+            )
+            if representation == "heat_kernel"
+            else spectral_distance(
+                source_spectrum,
+                clean_spectrum,
+                metric=str(spectral_config.get("distance", "rmse")),
+                scale=scale,
+                low_frequency_weight=float(
+                    spectral_config.get("low_frequency_weight", 1.0)
+                ),
+                low_frequency_cutoff=int(
+                    spectral_config.get("low_frequency_cutoff", 0)
+                ),
+            )
         ),
     )
 
@@ -1367,6 +1461,7 @@ def _sample_spectral_diffusion_endpoint_examples(
     samples_per_graph = max(int(diff_values.get("samples_per_graph", 32)), 1)
     paths_per_graph = max(int(diff_values.get("paths_per_graph", 1)), 1)
     spectral_noise_rms: list[float] = []
+    heat_kernel_noise_rms: list[float] = []
     graphlet_noise_rms: list[float] = []
     edge_noise_rms: list[float] = []
     examples: list[TopologySpectralExample] = []
@@ -1374,18 +1469,36 @@ def _sample_spectral_diffusion_endpoint_examples(
     for path in range(paths_per_graph):
         progresses = diff_cfg.sample_progresses(samples_per_graph, rng=rng)
         for local_index, progress in enumerate(progresses):
-            current_spectrum, spec_diag = sample_spectral_bridge_marginal(
-                endpoint.source_spectrum,
-                endpoint.clean_spectrum,
-                progress=float(progress),
-                sigma=diff_cfg.spectral_sigma,
-                scale=endpoint.spectral_scale,
-                preserve_trace=diff_cfg.preserve_spectral_trace,
-                fix_lambda1=diff_cfg.fix_spectral_lambda1,
-                schedule=diff_cfg,
-                rng=rng,
-            )
-            spectral_noise_rms.append(float(spec_diag["noise_rms"]))
+            current_heat_kernel = None
+            if endpoint.source_heat_kernel is not None:
+                assert endpoint.clean_heat_kernel is not None
+                current_heat_kernel, heat_diag = sample_heat_kernel_bridge_marginal(
+                    endpoint.source_heat_kernel,
+                    endpoint.clean_heat_kernel,
+                    progress=float(progress),
+                    sigma=diff_cfg.heat_kernel_sigma,
+                    schedule=diff_cfg,
+                    rng=rng,
+                )
+                heat_kernel_noise_rms.append(float(heat_diag["noise_rms"]))
+                # No eigenvalue bridge is sampled in heat-kernel mode. Keep the
+                # legacy spectral token scaffold fixed at the source endpoint;
+                # the actual continuous spectral state is carried by H_tau.
+                current_spectrum = endpoint.source_spectrum.copy()
+                spec_diag = {"noise_rms": 0.0}
+            else:
+                current_spectrum, spec_diag = sample_spectral_bridge_marginal(
+                    endpoint.source_spectrum,
+                    endpoint.clean_spectrum,
+                    progress=float(progress),
+                    sigma=diff_cfg.spectral_sigma,
+                    scale=endpoint.spectral_scale,
+                    preserve_trace=diff_cfg.preserve_spectral_trace,
+                    fix_lambda1=diff_cfg.fix_spectral_lambda1,
+                    schedule=diff_cfg,
+                    rng=rng,
+                )
+                spectral_noise_rms.append(float(spec_diag["noise_rms"]))
 
             current_edge_logits=None
             if endpoint.source_edge_logits is not None:
@@ -1422,6 +1535,15 @@ def _sample_spectral_diffusion_endpoint_examples(
                     current_spectrum=current_spectrum.astype(np.float32),
                     source_spectrum=endpoint.source_spectrum.astype(np.float32),
                     clean_spectrum_target=endpoint.clean_spectrum.astype(np.float32),
+                    current_heat_kernel=(
+                        None if current_heat_kernel is None else current_heat_kernel.astype(np.float32)
+                    ),
+                    source_heat_kernel=(
+                        None if endpoint.source_heat_kernel is None else endpoint.source_heat_kernel.astype(np.float32)
+                    ),
+                    clean_heat_kernel_target=(
+                        None if endpoint.clean_heat_kernel is None else endpoint.clean_heat_kernel.astype(np.float32)
+                    ),
                     current_edge_logits=current_edge_logits,
                     source_edge_logits=(None if endpoint.source_edge_logits is None else endpoint.source_edge_logits.astype(np.float32)),
                     clean_edge_logits_target=(None if endpoint.clean_edge_logits is None else endpoint.clean_edge_logits.astype(np.float32)),
@@ -1498,10 +1620,13 @@ def _sample_spectral_diffusion_endpoint_examples(
         "graphlet_bridge": diff_cfg.resolved_graphlet_bridge,
         "schedule": diff_cfg.schedule,
         "spectral_sigma": diff_cfg.spectral_sigma,
+        "heat_kernel_sigma": (diff_cfg.heat_kernel_sigma if endpoint.source_heat_kernel is not None else None),
         "graphlet_sigma": diff_cfg.graphlet_sigma if graphlet_basis is not None else None,
         "preserve_spectral_trace": diff_cfg.preserve_spectral_trace,
         "fix_spectral_lambda1": diff_cfg.fix_spectral_lambda1,
         "mean_spectral_noise_rms": float(np.mean(spectral_noise_rms)) if spectral_noise_rms else 0.0,
+        "mean_heat_kernel_noise_rms": float(np.mean(heat_kernel_noise_rms)) if heat_kernel_noise_rms else 0.0,
+        "spectral_representation": ("heat_kernel" if endpoint.source_heat_kernel is not None else "eigenvalues"),
         "mean_graphlet_noise_rms": float(np.mean(graphlet_noise_rms)) if graphlet_noise_rms else 0.0,
         "mean_edge_noise_rms": float(np.mean(edge_noise_rms)) if edge_noise_rms else 0.0,
         "edge_diffusion_enabled": endpoint.source_edge_logits is not None,
@@ -1524,243 +1649,71 @@ def build_spectral_diffusion_examples(
     structure_summary_config: dict[str, Any] | None = None,
     edge_diffusion_config: dict[str, Any] | None = None,
 ) -> tuple[list[TopologySpectralExample], dict[str, Any]]:
-    """Sample continuous stochastic summary-diffusion training states.
+    """Sample eager continuous summary-diffusion states.
 
-    Training follows the diffusion bridge directly.  Only the source and clean
-    endpoint graphs are materialized.  Intermediate states are continuous
-    Laplacian-spectrum / graphlet-CLR vectors and are *not* obtained by rewiring
-    or assumed to correspond to any realizable graph.
+    The eager and streaming paths intentionally share the same endpoint and
+    bridge helpers. This keeps heat-kernel and legacy eigenvalue diffusion
+    bit-for-bit consistent at the level of their stochastic state definition.
     """
 
     diff_values = dict(diffusion_config or {})
-    diff_cfg = SummaryDiffusionConfig.from_dict(diff_values)
     source_cfg = dict(source_config or {})
     spec_cfg = dict(spectral_config or {})
-    histogram_bins = clustering_histogram_bins(structure_summary_config)
-    orbit_width = orbit_summary_width(structure_summary_config)
-    cycle_k = cycle_graphlet_k(structure_summary_config)
-    induced_spec = InducedGraphletSpec.from_config(structure_summary_config)
+    require_same_degree_sequence = bool(spec_cfg.get("require_same_degree_sequence", True))
     rng = np.random.default_rng(int(seed))
-    require_same_degree_sequence = bool(
-        spec_cfg.get("require_same_degree_sequence", True)
-    )
-    samples_per_graph = max(int(diff_values.get("samples_per_graph", 32)), 1)
-    paths_per_graph = max(int(diff_values.get("paths_per_graph", 1)), 1)
-
     examples: list[TopologySpectralExample] = []
-    endpoint_reports: list[dict[str, Any]] = []
-    spectral_noise_rms: list[float] = []
-    graphlet_noise_rms: list[float] = []
-    edge_noise_rms: list[float] = []
-    sample_id = 0
-
-    for raw_item in graphs:
-        source, target, metadata = _resolve_spectral_diffusion_endpoints(
+    reports: list[dict[str, Any]] = []
+    for graph_index, raw_item in enumerate(graphs):
+        endpoint = _prepare_spectral_diffusion_endpoint(
             raw_item,
             source_config=source_cfg,
+            spectral_config=spec_cfg,
+            graphlet_basis=graphlet_basis,
+            graphlet_logit_epsilon=graphlet_logit_epsilon,
             require_same_degree_sequence=require_same_degree_sequence,
             rng=rng,
+            structure_summary_config=structure_summary_config,
+            edge_diffusion_config=edge_diffusion_config,
         )
-        edge_cfg=dict(edge_diffusion_config or {})
-        edge_enabled=bool(edge_cfg.get("enabled",False))
-        if edge_enabled:
-            target=_align_target_to_source_indexed_degrees(source,target,rng)
-        source_spectrum = laplacian_eigenvalues(source)
-        clean_spectrum = laplacian_eigenvalues(target)
-        source_edge_logits=clean_edge_logits=clean_edge_labels=None
-        if edge_enabled:
-            smoothing=float(edge_cfg.get("smoothing",0.01))
-            source_edge_logits,_=_binary_edge_logits(source,smoothing)
-            clean_edge_logits,clean_edge_labels=_binary_edge_logits(target,smoothing)
-        clean_clustering_coefficient = float(nx.average_clustering(target))
-        clean_histogram = (
-            extract_clustering_histogram(target, histogram_bins)
-            if histogram_bins is not None else None
+        block, report = _sample_spectral_diffusion_endpoint_examples(
+            endpoint,
+            diffusion_config=diff_values,
+            graphlet_basis=graphlet_basis,
+            seed=int(seed) + 10_007 * int(graph_index),
         )
-        clean_orbit_summary = (
-            extract_orbit_summary(target) if orbit_width is not None else None
-        )
-        clean_induced_histogram = (
-            extract_induced_histogram(target, induced_spec) if induced_spec is not None else None
-        )
-        clean_cycle_histogram = (
-            extract_cycle_graphlet_histogram(target, k=cycle_k) if cycle_k is not None else None
-        )
-        scale = spectral_scale(source, mode=str(spec_cfg.get("normalization", "mean_degree")))
+        examples.extend(block)
+        reports.append(report)
 
-        source_prob = source_logits = clean_prob = clean_logits = graphlet_mask = None
-        if graphlet_basis is not None:
-            source_prob, source_mask, _ = extract_topology_graphlet_simplex(
-                source,
-                graphlet_basis=graphlet_basis,
-            )
-            clean_prob, clean_mask, _ = extract_topology_graphlet_simplex(
-                target,
-                graphlet_basis=graphlet_basis,
-            )
-            if not np.array_equal(source_mask, clean_mask):
-                raise AssertionError(
-                    "Equal-size source and clean graphs must share graphlet coordinate masks."
-                )
-            graphlet_mask = source_mask
-            source_logits = graphlet_simplex_to_clr(
-                source_prob,
-                graphlet_basis=graphlet_basis,
-                epsilon=float(graphlet_logit_epsilon),
-                coordinate_mask=graphlet_mask,
-            )
-            clean_logits = graphlet_simplex_to_clr(
-                clean_prob,
-                graphlet_basis=graphlet_basis,
-                epsilon=float(graphlet_logit_epsilon),
-                coordinate_mask=graphlet_mask,
-            )
-
-        endpoint_reports.append(
-            {
-                **metadata,
-                "num_nodes": int(source.number_of_nodes()),
-                "spectral_endpoint_distance": spectral_distance(
-                    source_spectrum,
-                    clean_spectrum,
-                    metric=str(spec_cfg.get("distance", "rmse")),
-                    scale=scale,
-                    low_frequency_weight=float(spec_cfg.get("low_frequency_weight", 1.0)),
-                    low_frequency_cutoff=int(spec_cfg.get("low_frequency_cutoff", 0)),
-                ),
-            }
-        )
-
-        for path in range(paths_per_graph):
-            progresses = diff_cfg.sample_progresses(samples_per_graph, rng=rng)
-            for local_index, progress in enumerate(progresses):
-                current_spectrum, spec_diag = sample_spectral_bridge_marginal(
-                    source_spectrum,
-                    clean_spectrum,
-                    progress=float(progress),
-                    sigma=diff_cfg.spectral_sigma,
-                    scale=scale,
-                    preserve_trace=diff_cfg.preserve_spectral_trace,
-                    fix_lambda1=diff_cfg.fix_spectral_lambda1,
-                    schedule=diff_cfg,
-                    rng=rng,
-                )
-                spectral_noise_rms.append(float(spec_diag["noise_rms"]))
-
-                current_edge_logits=None
-                if source_edge_logits is not None:
-                    current_edge_logits,edge_rms=_sample_binary_edge_bridge(
-                        source_edge_logits,clean_edge_logits,float(progress),
-                        float(edge_cfg.get("sigma",1.0)),rng)
-                    edge_noise_rms.append(edge_rms)
-                current_prob = current_logits = None
-                if graphlet_basis is not None:
-                    assert source_logits is not None
-                    assert clean_logits is not None
-                    assert graphlet_mask is not None
-                    current_logits, graph_diag = sample_graphlet_clr_bridge_marginal(
-                        source_logits,
-                        clean_logits,
-                        progress=float(progress),
-                        sigma=diff_cfg.graphlet_sigma,
-                        graphlet_basis=graphlet_basis,
-                        coordinate_mask=graphlet_mask,
-                        schedule=diff_cfg,
-                        rng=rng,
-                    )
-                    current_prob = graphlet_clr_to_simplex(
-                        current_logits,
-                        graphlet_basis=graphlet_basis,
-                        coordinate_mask=graphlet_mask,
-                    )
-                    graphlet_noise_rms.append(float(graph_diag["noise_rms"]))
-
-                examples.append(
-                    TopologySpectralExample(
-                        # Fixed source graph is conditioning context.  It is NOT
-                        # an intermediate rewired graph.
-                        current_graph=source.copy(),
-                        time=float(progress),
-                        current_spectrum=current_spectrum.astype(np.float32),
-                        source_spectrum=source_spectrum.astype(np.float32),
-                        clean_spectrum_target=clean_spectrum.astype(np.float32),
-                        current_edge_logits=current_edge_logits,
-                        source_edge_logits=(None if source_edge_logits is None else source_edge_logits.astype(np.float32)),
-                        clean_edge_logits_target=(None if clean_edge_logits is None else clean_edge_logits.astype(np.float32)),
-                        clean_edge_labels_target=(None if clean_edge_labels is None else clean_edge_labels.astype(np.int64)),
-                        clean_clustering_coefficient_target=clean_clustering_coefficient,
-                        clean_clustering_histogram_target=(
-                            None if clean_histogram is None else clean_histogram.astype(np.float32)
-                        ),
-                        clean_orbit_summary_target=(
-                            None if clean_orbit_summary is None else clean_orbit_summary.astype(np.float32)
-                        ),
-                        clean_induced_graphlet_histogram_target=(
-                            None if clean_induced_histogram is None else clean_induced_histogram.astype(np.float32)
-                        ),
-                        clean_cycle_graphlet_histogram_target=(
-                            None if clean_cycle_histogram is None else clean_cycle_histogram.astype(np.float32)
-                        ),
-                        current_graphlet_probabilities=(
-                            None if current_prob is None else current_prob.astype(np.float32)
-                        ),
-                        source_graphlet_probabilities=(
-                            None if source_prob is None else source_prob.astype(np.float32)
-                        ),
-                        clean_graphlet_probabilities_target=(
-                            None if clean_prob is None else clean_prob.astype(np.float32)
-                        ),
-                        current_graphlet_logits=(
-                            None if current_logits is None else current_logits.astype(np.float32)
-                        ),
-                        source_graphlet_logits=(
-                            None if source_logits is None else source_logits.astype(np.float32)
-                        ),
-                        clean_graphlet_logits_target=(
-                            None if clean_logits is None else clean_logits.astype(np.float32)
-                        ),
-                        graphlet_coordinate_mask=(
-                            None if graphlet_mask is None else graphlet_mask.astype(np.bool_)
-                        ),
-                        base_generator=str(metadata["base_generator"]),
-                        source_index=int(metadata["source_index"]),
-                        target_index=int(metadata["target_index"]),
-                        matching_cost=float(metadata["matching_cost"]),
-                        trajectory_id=sample_id,
-                        step=local_index,
-                    )
-                )
-            sample_id += 1
-
+    diff_cfg = SummaryDiffusionConfig.from_dict(diff_values)
+    representation = str(spec_cfg.get("representation", "eigenvalues")).lower()
+    if representation in {"heat", "heatkernel", "heat-kernel"}:
+        representation = "heat_kernel"
     diagnostics = {
-        "format": "summary_diffusion_training_states_v1",
+        "format": "summary_diffusion_training_states_v2",
         "training_state_source": "continuous_summary_diffusion",
         "rewiring_used_for_training_states": False,
+        "spectral_representation": representation,
         "num_graphs": len(graphs),
-        "num_paths": len(graphs) * paths_per_graph,
+        "num_paths": sum(int(row.get("num_paths", 0)) for row in reports),
         "num_examples": len(examples),
-        "samples_per_graph": samples_per_graph,
-        "paths_per_graph": paths_per_graph,
+        "samples_per_graph": max(int(diff_values.get("samples_per_graph", 32)), 1),
+        "paths_per_graph": max(int(diff_values.get("paths_per_graph", 1)), 1),
         "bridge": diff_cfg.bridge,
         "graphlet_bridge": diff_cfg.resolved_graphlet_bridge,
         "schedule": diff_cfg.schedule,
-        "ou_num_scales": diff_cfg.ou_num_scales if diff_cfg.bridge == "ou_bridge" else None,
-        "ou_schedule": diff_cfg.ou_schedule if diff_cfg.bridge == "ou_bridge" else None,
-        "ou_eps": diff_cfg.ou_eps if diff_cfg.bridge == "ou_bridge" else None,
         "spectral_sigma": diff_cfg.spectral_sigma,
+        "heat_kernel_sigma": diff_cfg.heat_kernel_sigma if representation == "heat_kernel" else None,
         "graphlet_sigma": diff_cfg.graphlet_sigma if graphlet_basis is not None else None,
         "preserve_spectral_trace": diff_cfg.preserve_spectral_trace,
         "fix_spectral_lambda1": diff_cfg.fix_spectral_lambda1,
-        "mean_spectral_noise_rms": float(np.mean(spectral_noise_rms)) if spectral_noise_rms else 0.0,
-        "mean_graphlet_noise_rms": float(np.mean(graphlet_noise_rms)) if graphlet_noise_rms else 0.0,
-        "mean_edge_noise_rms": float(np.mean(edge_noise_rms)) if edge_noise_rms else 0.0,
-        "edge_diffusion_enabled": bool((edge_diffusion_config or {}).get("enabled",False)),
-        "mean_endpoint_spectral_discrepancy": (
-            float(np.mean([row["spectral_endpoint_distance"] for row in endpoint_reports]))
-            if endpoint_reports else 0.0
-        ),
-        "source_modes": sorted({str(row["source_mode"]) for row in endpoint_reports}),
-        "base_generators": sorted({str(row["base_generator"]) for row in endpoint_reports}),
+        "mean_spectral_noise_rms": float(np.mean([row.get("mean_spectral_noise_rms", 0.0) for row in reports])) if reports else 0.0,
+        "mean_heat_kernel_noise_rms": float(np.mean([row.get("mean_heat_kernel_noise_rms", 0.0) for row in reports])) if reports else 0.0,
+        "mean_graphlet_noise_rms": float(np.mean([row.get("mean_graphlet_noise_rms", 0.0) for row in reports])) if reports else 0.0,
+        "mean_edge_noise_rms": float(np.mean([row.get("mean_edge_noise_rms", 0.0) for row in reports])) if reports else 0.0,
+        "edge_diffusion_enabled": bool((edge_diffusion_config or {}).get("enabled", False)),
+        "mean_endpoint_spectral_discrepancy": float(np.mean([row.get("mean_endpoint_spectral_discrepancy", 0.0) for row in reports])) if reports else 0.0,
+        "source_modes": sorted({mode for row in reports for mode in row.get("source_modes", [])}),
+        "base_generators": sorted({mode for row in reports for mode in row.get("base_generators", [])}),
     }
     return examples, diagnostics
 

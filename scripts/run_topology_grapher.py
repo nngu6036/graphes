@@ -371,15 +371,21 @@ def main() -> None:
             device=device,
         )
         predictor_report = checkpoint.get("report", {}) or {}
-        predictor_spectral_error_raw = predictor_report.get(
-            "val_spectral_normalized_rmse",
-            predictor_report.get("val_spectral_normalized_mae"),
-        )
+        if str(getattr(model, "spectral_representation", "eigenvalues")) == "heat_kernel":
+            predictor_spectral_error_raw = predictor_report.get(
+                "val_heat_kernel_rmse", predictor_report.get("val_heat_kernel_mae")
+            )
+            missing_message = "val_heat_kernel_rmse/mae"
+        else:
+            predictor_spectral_error_raw = predictor_report.get(
+                "val_spectral_normalized_rmse",
+                predictor_report.get("val_spectral_normalized_mae"),
+            )
+            missing_message = "val_spectral_normalized_rmse/mae"
         if predictor_spectral_error_raw is None:
             raise ValueError(
-                "The spectral checkpoint is missing held-out "
-                "val_spectral_normalized_rmse/mae; generate from a checkpoint "
-                "selected by train_topology_grapher.py."
+                "The spectral checkpoint is missing held-out " + missing_message +
+                "; generate from a checkpoint selected by train_topology_grapher.py."
             )
         predictor_spectral_error = float(predictor_spectral_error_raw)
     elif checkpoint_format == TOPOLOGY_CHECKPOINT_FORMAT:
@@ -408,7 +414,13 @@ def main() -> None:
             f"{TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT!r}."
         )
     model_device = next(model.parameters()).device
-    joint_edge_diffusion = bool(guidance_mode == "spectral" and getattr(model, "predict_edge_state", False))
+    joint_edge_diffusion = bool(
+        guidance_mode == "spectral"
+        and (
+            getattr(model, "predict_edge_state", False)
+            or str(getattr(model, "spectral_representation", "eigenvalues")) == "heat_kernel"
+        )
+    )
 
     degree_source = str(generation_cfg.get("degree_source", "learned")).lower()
     perturbation_cfg = dict(generation_cfg.get("degree_perturbation", {}) or {})
@@ -552,8 +564,9 @@ def main() -> None:
                 refiner_settings = JointEdgeSpectralRefinerConfig.from_dict(refiner_cfg, model=model)
                 active_components = set(refiner_settings.guidance_mode.split("_"))
                 print(
-                    "[GraphER/JointEdgeSpectral] loaded generic binary-edge + independent "
-                    "Laplacian-eigenvalue diffusion checkpoint; hard realization preserves indexed degrees.",
+                    "[GraphER/JointSpectral] loaded generic soft-edge / spectral-space diffusion "
+                    f"checkpoint representation={getattr(model, 'spectral_representation', 'eigenvalues')}; "
+                    "hard realization preserves indexed degrees.",
                     flush=True,
                 )
             else:
@@ -1180,6 +1193,12 @@ def main() -> None:
                     "bridge_expansions",
                 ),
                 "predictor_spectral_normalized_error": float(predictor_spectral_error),
+                "predictor_heat_kernel_error": (
+                    float(predictor_spectral_error)
+                    if str(getattr(model, "spectral_representation", "eigenvalues")) == "heat_kernel"
+                    else None
+                ),
+                "spectral_representation": str(getattr(model, "spectral_representation", "eigenvalues")),
                 "spectral_distance": refiner_settings.distance,
                 "spectral_normalization": refiner_settings.normalization,
                 "spectral_bridge_schedule": refiner_settings.bridge_schedule,
@@ -1260,6 +1279,12 @@ def main() -> None:
         "degree_source": degree_source,
         "degree_rng_mode": degree_rng_mode,
         "joint_soft_edge_diffusion": joint_edge_diffusion,
+        "spectral_representation": str(getattr(model, "spectral_representation", "eigenvalues")),
+        "heat_kernel_times": (
+            list(getattr(model, "heat_kernel_times", ()))
+            if str(getattr(model, "spectral_representation", "eigenvalues")) == "heat_kernel"
+            else None
+        ),
         "laplacian_eigenvalue_diffusion": bool(guidance_mode == "spectral"),
         "degree_prior_report_file": "degree_prior_report.json",
         "parent_degree_fingerprint": degree_prior_report["returned_parent_degree_fingerprint"],

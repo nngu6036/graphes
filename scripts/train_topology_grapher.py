@@ -606,6 +606,9 @@ def main() -> None:
                     spectral_cfg.get("normalization", "mean_degree"),
                 )
             ),
+            "spectral_representation": str(spectral_cfg.get("representation", "eigenvalues")),
+            "heat_kernel_times": tuple(spectral_cfg.get("heat_kernel_times", [0.25, 1.0, 4.0])),
+            "heat_kernel_projection_iterations": int(predictor_cfg.get("heat_kernel_projection_iterations", 6)),
             "use_graph_context": bool(predictor_cfg.get("use_graph_context", True)),
             "predict_clustering_coefficient": clustering_coefficient_enabled,
             "predict_clustering_histogram": clustering_histogram_enabled,
@@ -727,11 +730,14 @@ def main() -> None:
                 raise ValueError(f"loss_weights.{key} requires structure_summary_prediction.cycle_graphlet_histogram=true.")
         if not orbit_summary_enabled and float(loss_weights.get("orbit_summary", 0.0)) != 0.0:
             raise ValueError("loss_weights.orbit_summary requires structure_summary_prediction.orbit_summary=true.")
-        active_loss_defaults = [
-            ("spectrum", 1.0),
-            ("moment2", 0.1),
-            ("low_frequency", 0.0),
-        ]
+        spectral_representation = str(spectral_cfg.get("representation", "eigenvalues")).lower()
+        if spectral_representation in {"heat", "heatkernel", "heat-kernel"}:
+            spectral_representation = "heat_kernel"
+        active_loss_defaults = (
+            [("heat_kernel", 1.0), ("spectrum", 0.0), ("moment2", 0.0), ("low_frequency", 0.0)]
+            if spectral_representation == "heat_kernel"
+            else [("spectrum", 1.0), ("moment2", 0.1), ("low_frequency", 0.0)]
+        )
         if spectral_graphlet_mode:
             active_loss_defaults.extend(
                 [("graphlet_logit", 1.0), ("graphlet_probability", 0.25)]
@@ -804,12 +810,23 @@ def main() -> None:
         flush=True,
     )
     if spectral_family_mode:
-        print(
-            "Spectral Transformer: predicts all clean Laplacian eigenvalues jointly; "
-            "variable graph sizes are handled by padded spectral tokens + mask; "
-            "eigenvectors are not predicted.",
-            flush=True,
-        )
+        spectral_representation = str(spectral_cfg.get("representation", "eigenvalues")).lower()
+        if spectral_representation in {"heat", "heatkernel", "heat-kernel"}:
+            spectral_representation = "heat_kernel"
+        if spectral_representation == "heat_kernel":
+            print(
+                "Spectral-space diffusion: multiscale combinatorial-Laplacian heat kernels "
+                "H_tau=exp(-tau L/scale). The full matrices carry eigenvalue + eigenspace "
+                "information; hard degree-preserving rewiring realizes the predicted endpoint.",
+                flush=True,
+            )
+        else:
+            print(
+                "Spectral Transformer: predicts all clean Laplacian eigenvalues jointly; "
+                "variable graph sizes are handled by padded spectral tokens + mask; "
+                "eigenvectors are not predicted.",
+                flush=True,
+            )
         if spectral_mode and not bool(predictor_cfg.get("use_graph_context", True)):
             print(
                 "[GraphER/SpectralOnly] graph/GNN context disabled: denoiser inputs are "
