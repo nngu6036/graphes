@@ -10,6 +10,7 @@ from grapher.rewiring_mlp.generic.heat_kernel import (
     heat_kernel_stack,
 )
 from grapher.rewiring_mlp.generic.joint_edge_spectral_generation import (
+    JointEdgeSpectralRefinerConfig,
     refine_graph,
     sample_soft_endpoint,
 )
@@ -159,6 +160,9 @@ def test_heat_kernel_generation_works_without_edge_diffusion_head():
             },
         },
     }
+    refiner_cfg = JointEdgeSpectralRefinerConfig.from_dict(config["topology_refiner"], model=model)
+    assert refiner_cfg.guidance_mode == "spectral"
+
     targets, report = sample_soft_endpoint(model, graph, config, seed=11)
     assert report["spectral_representation"] == "heat_kernel"
     assert report["joint_laplacian_heat_kernel_diffusion"] is True

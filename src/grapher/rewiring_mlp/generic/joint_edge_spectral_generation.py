@@ -206,12 +206,29 @@ class JointEdgeSpectralRefinerConfig:
         if unknown_weights:
             raise ValueError(f"Unsupported joint refiner weights: {sorted(unknown_weights)}")
         kwargs = {key: values[key] for key in allowed if key in values}
+        edge_weight = float(weights.get("edge", 1.0))
+        spectral_weight = float(weights.get("spectral", 0.1))
+        clustering_weight = float(weights.get("clustering", 0.25))
+        orbit_weight = float(weights.get("orbit", 1.0))
+        induced_graphlet_weight = float(weights.get("graphlet", 0.1))
+        active_components = [
+            name
+            for name, weight in (
+                ("edge", edge_weight),
+                ("spectral", spectral_weight),
+                ("clustering", clustering_weight),
+                ("orbit", orbit_weight),
+                ("graphlet", induced_graphlet_weight),
+            )
+            if weight > 0.0
+        ]
         kwargs.update(
-            edge_weight=float(weights.get("edge", 1.0)),
-            spectral_weight=float(weights.get("spectral", 0.1)),
-            clustering_weight=float(weights.get("clustering", 0.25)),
-            orbit_weight=float(weights.get("orbit", 1.0)),
-            induced_graphlet_weight=float(weights.get("graphlet", 0.1)),
+            edge_weight=edge_weight,
+            spectral_weight=spectral_weight,
+            clustering_weight=clustering_weight,
+            orbit_weight=orbit_weight,
+            induced_graphlet_weight=induced_graphlet_weight,
+            guidance_mode="_".join(active_components),
         )
         if model is not None:
             kwargs["clustering_histogram_bins"] = (
