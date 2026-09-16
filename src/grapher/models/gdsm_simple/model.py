@@ -4,10 +4,13 @@ The model intentionally implements only the core experiment:
   * diffuse sorted adjacency eigenvalues;
   * keep / sample an empirical eigenvector basis from the training split;
   * reconstruct A = U diag(lambda) U^T;
-  * threshold the reconstructed adjacency.
+  * threshold the reconstructed adjacency;
+  * optionally refine that binary graph with degree-preserving double-edge
+    swaps that reduce error to the predicted adjacency spectrum.
 
-It is deliberately smaller than the released GSDM architecture so GraphER
-components can be introduced one at a time around a stable reference.
+The denoiser remains deliberately smaller than the released GSDM architecture
+so GraphER generation components can be introduced one at a time around a
+stable reference.
 """
 from __future__ import annotations
 

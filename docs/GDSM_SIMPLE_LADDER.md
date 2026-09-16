@@ -4,7 +4,7 @@
 ablation. It is intentionally smaller than the released GSDM implementation;
 results must be labeled **GSDM-Simple**, not GSDM.
 
-## S0: spectral reference (implemented)
+## S0: spectral threshold reference
 
 - state: sorted adjacency eigenvalues `lambda`;
 - forward process: VP-style discrete Gaussian diffusion on `lambda`;
@@ -12,37 +12,68 @@ results must be labeled **GSDM-Simple**, not GSDM.
 - generation prior: Gaussian eigenvalues + one empirical training eigenbasis;
 - graph size: sampled jointly with the empirical eigenbasis;
 - realization: `A_soft = U diag(lambda) U^T`, fixed threshold at 0.5;
-- no connectivity repair, largest-component filter, degree correction, HH,
-  rewiring, graphlets, clustering, or orbit guidance.
+- no connectivity repair, degree correction, HH, rewiring, graphlets,
+  clustering, or orbit guidance.
 
-This is the reference against which every GraphER addition should be measured.
+The retained high-budget S0 config is:
 
-## Planned one-change-at-a-time ladder
+`configs/baselines/gdsm_simple_community_small_s0.yaml`
+
+## S1: threshold graph + degree-preserving spectral rewiring (implemented)
+
+The default `configs/baselines/gdsm_simple_community_small.yaml` now implements
+S1. Training is identical to S0. Only generation changes:
+
+1. sample an empirical training eigenbasis `U` and diffuse a target adjacency
+   spectrum `lambda_hat`;
+2. reconstruct `A_soft = U diag(lambda_hat) U^T` and threshold at 0.5;
+3. call the resulting graph `G0` and extract/freeze its indexed degree sequence;
+4. propose ordinary double-edge swaps inside that degree fibre;
+5. compute each candidate graph's sorted adjacency eigenvalues, normalized by
+   `sqrt(n)` exactly as during training;
+6. accept the best candidate only if its spectral RMSE to `lambda_hat` strictly
+   improves;
+7. repeat up to the configured rewiring budget.
+
+Thus S1 approximately solves
+
+`argmin_{G : deg(G)=deg(G0)} RMSE(lambda(G), lambda_hat)`
+
+without changing the learned GSDM-Simple denoiser. If `G0` is connected, the
+default config also requires accepted swaps to keep it connected; a disconnected
+threshold reconstruction is not artificially forced to be connected.
+
+Generation writes:
+
+- `threshold_graphs.pkl`: original S0 threshold graphs;
+- `base_graphs.pkl`: final S1 refined graphs (used by the common evaluator);
+- `target_adjacency_eigenvalues.pkl`: frozen generated spectral targets;
+- `rewiring_diagnostics.json`: per-graph and aggregate spectral improvements.
+
+Because rewiring is generation-only, an existing compatible S0 checkpoint can
+be reused with the S1 YAML; retraining is not required.
+
+## One-change-at-a-time ladder
 
 | Stage | Change relative to previous stage | Question isolated |
 | --- | --- | --- |
-| S0 | GSDM-Simple reference | How well does spectral eigenvalue diffusion + empirical `U` work? |
-| S1 | + degree histogram conditioning | Does knowing the invariant improve spectral prediction? |
-| S2 | + HH source / endpoint bridge | Does a degree-realizable source improve the reverse path? |
-| S3 | + degree-preserving rewiring realization | What is gained/lost by replacing threshold reconstruction with constrained realization? |
-| S4 | + permutation-invariant eigenspace summary | Does additional global structure improve the constrained search? |
-| S5 | + graphlet summary | What is the marginal value of local higher-order guidance? |
+| S0 | spectral diffusion + empirical `U` + threshold | How well does the simple spectral generator work? |
+| S1 | + post-threshold degree-preserving spectral rewiring | Does discrete realization move the final graph closer to its generated spectrum? |
+| S2 | + explicit generated degree sequence and HH source | Is a structured degree-realizable source better than inheriting degrees from thresholding? |
+| S3 | + degree-conditioned spectral model / endpoint bridge | Does coupling `D` and `lambda` improve target consistency? |
+| S4 | + permutation-invariant eigenspace summary | Does additional global structure improve constrained search? |
+| S5 | + graphlet/local structural summary | What is the marginal value of local higher-order guidance? |
 
-Each stage should keep the same dataset split, evaluation code, sample count and
-seed set. Use a new config and run ID for every stage. Do not modify S0 in place.
+Keep the same dataset split, evaluation code, sample count and seed set for
+paired comparisons.
 
-## S0 commands
+## S1 commands
+
+An already-trained run can be reused because S1 is generation-only:
 
 ```bash
-RUN=seed_42
+RUN=seed_42_high_budget
 N=1024
-
-PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/gdsm_simple_community_small.yaml \
-  --seed-id 42 --run-id "$RUN" --device gpu
 
 PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
   --stage generate \
@@ -55,5 +86,9 @@ GEN_DIR="outputs/baselines/gdsm_simple/community_small/$RUN/generations/seed_42_
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  --reference-split test \
+  --output-dir "$GEN_DIR/evaluation_test"
 ```
+
+To reproduce S0 from the same checkpoint, generate with
+`gdsm_simple_community_small_s0.yaml` and a different `--generation-id`.

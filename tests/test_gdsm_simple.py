@@ -42,3 +42,58 @@ def test_q_sample_end_shapes_and_masked_transformer():
     assert pred.shape == clean.shape
     assert torch.all(pred[~mask] == 0)
     assert torch.isfinite(pred).all()
+
+
+def test_degree_preserving_spectral_rewiring_moves_toward_target():
+    import networkx as nx
+
+    from grapher.models.gdsm_simple.refiner import (
+        SpectralRewireConfig,
+        adjacency_spectral_rmse,
+        normalized_adjacency_eigenvalues,
+        refine_graph_toward_adjacency_spectrum,
+    )
+
+    source = nx.Graph()
+    source.add_nodes_from(range(8))
+    source.add_edges_from(
+        [
+            (0, 4),
+            (1, 2),
+            (1, 4),
+            (1, 5),
+            (1, 7),
+            (2, 4),
+            (3, 5),
+            (4, 7),
+            (5, 6),
+            (6, 7),
+        ]
+    )
+    target = source.copy()
+    target.remove_edges_from([(0, 4), (5, 6)])
+    target.add_edges_from([(0, 5), (4, 6)])
+    target_spectrum = normalized_adjacency_eigenvalues(target)
+
+    initial = adjacency_spectral_rmse(source, target_spectrum)
+    refined, diagnostics = refine_graph_toward_adjacency_spectrum(
+        source,
+        target_spectrum,
+        rng=np.random.default_rng(123),
+        config=SpectralRewireConfig(
+            max_steps=1,
+            proposal_budget=-1,
+            valid_candidate_budget=-1,
+            min_relative_improvement=0.0,
+            preserve_connectivity_if_source_connected=True,
+        ),
+    )
+    final = adjacency_spectral_rmse(refined, target_spectrum)
+
+    assert final < initial
+    assert final < 1.0e-10
+    assert [source.degree(i) for i in range(8)] == [refined.degree(i) for i in range(8)]
+    assert nx.is_connected(refined)
+    assert diagnostics["accepted_steps"] == 1
+    assert diagnostics["degree_preserved"] is True
+    assert diagnostics["all_accepted_steps_improve"] is True

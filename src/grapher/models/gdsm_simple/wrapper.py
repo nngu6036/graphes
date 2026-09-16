@@ -42,6 +42,10 @@ from grapher.models.gdsm_simple.model import (
     q_sample,
     reconstruct_soft_adjacency,
 )
+from grapher.models.gdsm_simple.refiner import (
+    SpectralRewireConfig,
+    refine_graph_toward_adjacency_spectrum,
+)
 from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 
 
@@ -157,7 +161,8 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
     capabilities = BaselineCapabilities(frozenset({"generic"}), "in_process", "ready")
     implementation_note = (
         "Project-owned reference: adjacency-eigenvalue DDPM/DDIM with empirical "
-        "training eigenbases and direct UΛU^T threshold reconstruction."
+        "training eigenbases, UΛU^T threshold reconstruction, and optional "
+        "degree-preserving spectral rewiring at generation."
     )
     supported_datasets = frozenset({"community_small", "ego_small", "grid"})
 
@@ -195,6 +200,15 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             "degree_conditioning": False,
             "hh_initialization": False,
             "degree_preserving_rewiring": False,
+            "rewiring": {
+                "max_steps": 32,
+                "proposal_budget": 256,
+                "valid_candidate_budget": 128,
+                "min_relative_improvement": 1.0e-6,
+                "relative_improvement_epsilon": 1.0e-12,
+                "preserve_connectivity_if_source_connected": True,
+                "reject_revisited_states": True,
+            },
             "structural_summary": "none",
         },
     }
@@ -219,7 +233,7 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             raise ValueError(f"Unknown gdsm_simple options: {unknown}")
         extensions = options.get("extensions", {}) or {}
         unsupported = [
-            key for key in ("degree_conditioning", "hh_initialization", "degree_preserving_rewiring")
+            key for key in ("degree_conditioning", "hh_initialization")
             if bool(extensions.get(key, False))
         ]
         if str(extensions.get("structural_summary", "none")).lower() != "none":
@@ -398,7 +412,14 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                     "diffused_state": "sorted_adjacency_eigenvalues",
                     "eigenvectors": "sampled_empirically_from_training_split_and_not_diffused",
                     "reconstruction": "U_diag_lambda_Ut_then_fixed_threshold",
-                    "grapher_extensions_enabled": False,
+                    "generation_extension": (
+                        "degree_preserving_spectral_rewiring_from_threshold_graph"
+                        if bool(options.get("extensions", {}).get("degree_preserving_rewiring", False))
+                        else "none"
+                    ),
+                    "grapher_extensions_enabled": bool(
+                        options.get("extensions", {}).get("degree_preserving_rewiring", False)
+                    ),
                 },
                 "test_used_for_training": False,
             }
@@ -428,11 +449,28 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             raise RuntimeError("Checkpoint hash differs from managed training manifest")
         state = torch.load(request.checkpoint_path, map_location="cpu", weights_only=False)
         options = copy.deepcopy(manifest["options"])
-        # Generation may alter only runtime / sampling throughput, never the model.
-        unknown = sorted(set(request.options) - {"runtime", "generation_batch_size"})
+        # Generation may alter runtime/sampling controls and generation-only
+        # rewiring, but never the trained denoiser architecture/diffusion.
+        unknown = sorted(
+            set(request.options)
+            - {"runtime", "generation_batch_size", "sample", "extensions"}
+        )
         if unknown:
             raise ValueError(f"Unsupported gdsm_simple generation overrides: {unknown}")
         _deep_update(options, request.options)
+        generation_extensions = options.get("extensions", {}) or {}
+        generation_unsupported = [
+            key for key in ("degree_conditioning", "hh_initialization")
+            if bool(generation_extensions.get(key, False))
+        ]
+        if str(generation_extensions.get("structural_summary", "none")).lower() != "none":
+            generation_unsupported.append("structural_summary")
+        if generation_unsupported:
+            raise NotImplementedError(
+                "gdsm_simple generation currently supports only the degree-preserving "
+                "spectral-rewiring extension; unsupported extensions: "
+                f"{generation_unsupported}"
+            )
         device = _resolve_device(options.get("runtime", {}))
         _seed_everything(request.generation_seed)
         model_cfg = state["model_config"]
@@ -454,17 +492,26 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         )
         bases = state["basis_eigenvectors"]
         basis_n = np.asarray(state["basis_num_nodes"], dtype=np.int64)
-        sample_cfg = state["sample"]
+        sample_cfg = options.get("sample", state["sample"])
+        extensions = options.get("extensions", {}) or {}
+        rewiring_enabled = bool(extensions.get("degree_preserving_rewiring", False))
+        rewiring_cfg = SpectralRewireConfig.from_mapping(extensions.get("rewiring", {}))
         batch_size = int(options.get("generation_batch_size", 128))
-        rng = np.random.default_rng(request.generation_seed)
+        # Keep basis sampling independent from rewiring proposals so enabling the
+        # generation-only refiner does not change the underlying GSDM samples.
+        basis_rng = np.random.default_rng(request.generation_seed)
+        rewiring_rng = np.random.default_rng(request.generation_seed + 1_000_003)
         generator = torch.Generator(device=device).manual_seed(request.generation_seed)
         graphs: list[nx.Graph] = []
+        threshold_graphs: list[nx.Graph] = []
+        target_spectra: list[np.ndarray] = []
+        rewiring_diagnostics: list[dict[str, Any]] = []
         max_nodes = int(state["max_nodes"])
         start = time.monotonic()
         while len(graphs) < request.num_graphs:
             b = min(batch_size, request.num_graphs - len(graphs))
             # Sampling one training basis index jointly samples graph size and U.
-            indices = rng.integers(0, len(bases), size=b)
+            indices = basis_rng.integers(0, len(bases), size=b)
             sizes = basis_n[indices]
             mask = torch.arange(max_nodes, device=device).unsqueeze(0) < torch.tensor(sizes, device=device).unsqueeze(1)
             num_nodes = torch.tensor(sizes, dtype=torch.long, device=device)
@@ -487,6 +534,32 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                 soft.fill_diagonal_(0.0)
                 adjacency = (soft > float(sample_cfg.get("threshold", 0.5))).cpu().numpy()
                 graph = nx.from_numpy_array(adjacency.astype(np.int8), create_using=nx.Graph)
+                threshold_graphs.append(graph.copy())
+                target_normalized = np.sort(
+                    normalized[row, :n].detach().cpu().numpy().astype(np.float64)
+                )
+                target_spectra.append(target_normalized.copy())
+                if rewiring_enabled:
+                    graph, diagnostics = refine_graph_toward_adjacency_spectrum(
+                        graph,
+                        target_normalized,
+                        rng=rewiring_rng,
+                        config=rewiring_cfg,
+                    )
+                else:
+                    diagnostics = {
+                        "enabled": False,
+                        "accepted_steps": 0,
+                        "degree_preserved": True,
+                        "source_connected": bool(
+                            graph.number_of_nodes() <= 1 or nx.is_connected(graph)
+                        ),
+                        "final_connected": bool(
+                            graph.number_of_nodes() <= 1 or nx.is_connected(graph)
+                        ),
+                        "stop_reason": "disabled",
+                    }
+                rewiring_diagnostics.append(diagnostics)
                 graphs.append(graph)
             print(f"GSDM-Simple generated {len(graphs)}/{request.num_graphs}", flush=True)
         generation_id = request.resolved_generation_id
@@ -499,6 +572,51 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             with graph_path.open("wb") as handle:
                 pickle.dump(graphs, handle, protocol=pickle.HIGHEST_PROTOCOL)
             graph_hash = _sha256(graph_path)
+
+            threshold_path = staging / "threshold_graphs.pkl"
+            with threshold_path.open("wb") as handle:
+                pickle.dump(threshold_graphs, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            target_spectrum_path = staging / "target_adjacency_eigenvalues.pkl"
+            with target_spectrum_path.open("wb") as handle:
+                pickle.dump(target_spectra, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+            initial_errors = [
+                float(d["initial_error"]) for d in rewiring_diagnostics if "initial_error" in d
+            ]
+            final_errors = [
+                float(d["final_error"]) for d in rewiring_diagnostics if "final_error" in d
+            ]
+            accepted_steps = [int(d.get("accepted_steps", 0)) for d in rewiring_diagnostics]
+            aggregate_rewiring = {
+                "enabled": rewiring_enabled,
+                "num_graphs": len(graphs),
+                "degree_preservation_rate": float(
+                    np.mean([bool(d.get("degree_preserved", False)) for d in rewiring_diagnostics])
+                ),
+                "source_connected_rate": float(
+                    np.mean([bool(d.get("source_connected", False)) for d in rewiring_diagnostics])
+                ),
+                "final_connected_rate": float(
+                    np.mean([bool(d.get("final_connected", False)) for d in rewiring_diagnostics])
+                ),
+                "mean_accepted_steps": float(np.mean(accepted_steps)) if accepted_steps else 0.0,
+                "changed_graph_rate": float(np.mean([v > 0 for v in accepted_steps])) if accepted_steps else 0.0,
+                "mean_initial_spectral_rmse": float(np.mean(initial_errors)) if initial_errors else None,
+                "mean_final_spectral_rmse": float(np.mean(final_errors)) if final_errors else None,
+                "mean_absolute_spectral_improvement": (
+                    float(np.mean(np.asarray(initial_errors) - np.asarray(final_errors)))
+                    if initial_errors else None
+                ),
+                "all_accepted_steps_improve": bool(
+                    all(bool(d.get("all_accepted_steps_improve", True)) for d in rewiring_diagnostics)
+                ),
+                "config": _jsonable(extensions.get("rewiring", {})),
+            }
+            _write_json(
+                staging / "rewiring_diagnostics.json",
+                {"aggregate": aggregate_rewiring, "per_graph": rewiring_diagnostics},
+            )
+
             _write_json(staging / "manifest.json", {
                 "format": GENERATION_FORMAT,
                 "model_id": self.model_id,
@@ -509,14 +627,32 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                 "num_generated": len(graphs),
                 "duration_seconds": time.monotonic() - start,
                 "base_graphs": {"path": "base_graphs.pkl", "sha256": graph_hash},
+                "threshold_graphs": {
+                    "path": "threshold_graphs.pkl",
+                    "sha256": _sha256(threshold_path),
+                    "role": "pre_rewiring_gdsm_threshold_reconstruction",
+                },
+                "target_adjacency_eigenvalues": {
+                    "path": "target_adjacency_eigenvalues.pkl",
+                    "sha256": _sha256(target_spectrum_path),
+                    "normalization": "eigenvalues_div_sqrt_num_nodes",
+                },
                 "checkpoint": {"path": str(request.checkpoint_path.resolve()), "sha256": _sha256(request.checkpoint_path)},
                 "empirical_prior": {
                     "node_count": "jointly_sampled_with_training_eigenbasis",
                     "eigenvectors": "training_split_empirical",
                     "test_conditioning": False,
                 },
-                "reconstruction": {"type": "spectral_threshold", "threshold": float(sample_cfg.get("threshold", 0.5))},
-                "posthoc_repair": False,
+                "reconstruction": {
+                    "type": (
+                        "spectral_threshold_then_degree_preserving_spectral_rewiring"
+                        if rewiring_enabled
+                        else "spectral_threshold"
+                    ),
+                    "threshold": float(sample_cfg.get("threshold", 0.5)),
+                },
+                "spectral_rewiring": aggregate_rewiring,
+                "posthoc_repair": rewiring_enabled,
                 "largest_component_filter": False,
             })
             if target.exists():

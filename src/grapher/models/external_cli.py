@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import yaml
+
 from grapher.models import (
     DatasetReference,
     GenerateRequest,
@@ -645,7 +647,12 @@ def _training_options(
     raise KeyError(model)
 
 
-def _generation_options(model: str, args: argparse.Namespace) -> dict[str, Any]:
+def _generation_options(
+    model: str,
+    args: argparse.Namespace,
+    *,
+    wrapper_config: Path | None = None,
+) -> dict[str, Any]:
     runtime = _runtime_options(model, args)
 
     if model == "dhvae_hh":
@@ -657,7 +664,24 @@ def _generation_options(model: str, args: argparse.Namespace) -> dict[str, Any]:
             result["max_attempts_per_graph"] = int(args.max_attempts_per_graph)
         return result
 
-    result = {"runtime": runtime}
+    result: dict[str, Any] = {}
+    # gdsm_simple has generation-only spectral-rewiring controls in its YAML.
+    # Reading only generation-safe sections here lets an already-trained S0
+    # checkpoint be reused for S1 rewiring without an unnecessary retrain.
+    if model == "gdsm_simple" and wrapper_config is not None:
+        loaded = yaml.safe_load(wrapper_config.read_text(encoding="utf-8")) or {}
+        selected = loaded.get("gdsm_simple", loaded)
+        if not isinstance(selected, Mapping):
+            raise TypeError("gdsm_simple config section must be a mapping")
+        for key in ("sample", "extensions", "generation_batch_size"):
+            if key in selected:
+                value = selected[key]
+                result[key] = (
+                    dict(value) if isinstance(value, Mapping) else value
+                )
+
+    # Explicit CLI runtime / throughput controls remain highest priority.
+    result["runtime"] = runtime
     if args.generation_batch_size is not None:
         result["generation_batch_size"] = int(args.generation_batch_size)
     if model == "graphrnn" and args.sample_time is not None:
@@ -874,7 +898,9 @@ def run(model_id: str, args: argparse.Namespace) -> dict[str, Any]:
         generation_seed = (
             args.generation_seed if args.generation_seed is not None else args.seed_id
         )
-        generation_options = _generation_options(model, args)
+        generation_options = _generation_options(
+            model, args, wrapper_config=wrapper_config
+        )
         _status(
             model,
             f"starting generation: requested={args.num_samples}, seed={generation_seed}",

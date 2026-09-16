@@ -2,7 +2,7 @@ comparison:
   model: gdsm_simple
   dataset: community_small
   common_config: common_community_small.yaml
-  status: graphes_native_high_budget_reference
+  status: graphes_native_high_budget_s1_spectral_rewire
 
 gdsm_simple:
   train:
@@ -10,13 +10,11 @@ gdsm_simple:
     # 5000 epochs ~= 20,000 optimizer updates.
     epochs: 5000
     batch_size: 16
-
     lr: 0.0002
     weight_decay: 1.0e-6
 
   model:
-    # Keep model capacity unchanged so this is a compute-budget
-    # experiment rather than an architecture experiment.
+    # Keep the S0 denoiser capacity unchanged. S1 changes generation only.
     max_nodes: 20
     hidden_dim: 128
     num_layers: 4
@@ -24,16 +22,13 @@ gdsm_simple:
     ff_dim: 256
 
   diffusion:
-    # Keep the same forward diffusion process.
     steps: 1000
     beta_start: 0.0001
     beta_end: 0.02
 
   sample:
-    # Previously 100. Use the complete reverse chain so that
-    # sampling approximation is not the bottleneck.
+    # Full reverse chain; threshold graph is retained as threshold_graphs.pkl.
     steps: 1000
-
     threshold: 0.5
     sort_eigenvalues: true
 
@@ -42,5 +37,18 @@ gdsm_simple:
   extensions:
     degree_conditioning: false
     hh_initialization: false
-    degree_preserving_rewiring: false
+
+    # S1: take the degree sequence from the threshold-reconstructed GSDM graph
+    # and search only within that degree fibre. Each accepted double-edge swap
+    # must reduce RMSE to the diffusion-predicted adjacency eigenvalues.
+    degree_preserving_rewiring: true
+    rewiring:
+      max_steps: 32
+      proposal_budget: 256
+      valid_candidate_budget: 128
+      min_relative_improvement: 1.0e-6
+      relative_improvement_epsilon: 1.0e-12
+      preserve_connectivity_if_source_connected: true
+      reject_revisited_states: true
+
     structural_summary: none
