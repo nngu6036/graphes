@@ -609,6 +609,7 @@ def main() -> None:
             "spectral_representation": str(spectral_cfg.get("representation", "eigenvalues")),
             "heat_kernel_times": tuple(spectral_cfg.get("heat_kernel_times", [0.25, 1.0, 4.0])),
             "heat_kernel_projection_iterations": int(predictor_cfg.get("heat_kernel_projection_iterations", 6)),
+            "projector_rank": int(spectral_cfg.get("projector_rank", 4)),
             "use_graph_context": bool(predictor_cfg.get("use_graph_context", True)),
             "predict_clustering_coefficient": clustering_coefficient_enabled,
             "predict_clustering_histogram": clustering_histogram_enabled,
@@ -733,10 +734,16 @@ def main() -> None:
         spectral_representation = str(spectral_cfg.get("representation", "eigenvalues")).lower()
         if spectral_representation in {"heat", "heatkernel", "heat-kernel"}:
             spectral_representation = "heat_kernel"
+        if spectral_representation in {"eigenspace", "lambda_projector", "eigenvalues_projector", "lambda+p", "lambda_p"}:
+            spectral_representation = "lambda_projector"
         active_loss_defaults = (
             [("heat_kernel", 1.0), ("spectrum", 0.0), ("moment2", 0.0), ("low_frequency", 0.0)]
             if spectral_representation == "heat_kernel"
-            else [("spectrum", 1.0), ("moment2", 0.1), ("low_frequency", 0.0)]
+            else (
+                [("spectrum", 1.0), ("projector", 1.0), ("moment2", 0.0), ("low_frequency", 0.0)]
+                if spectral_representation == "lambda_projector"
+                else [("spectrum", 1.0), ("moment2", 0.1), ("low_frequency", 0.0)]
+            )
         )
         if spectral_graphlet_mode:
             active_loss_defaults.extend(
@@ -813,11 +820,19 @@ def main() -> None:
         spectral_representation = str(spectral_cfg.get("representation", "eigenvalues")).lower()
         if spectral_representation in {"heat", "heatkernel", "heat-kernel"}:
             spectral_representation = "heat_kernel"
+        if spectral_representation in {"eigenspace", "lambda_projector", "eigenvalues_projector", "lambda+p", "lambda_p"}:
+            spectral_representation = "lambda_projector"
         if spectral_representation == "heat_kernel":
             print(
-                "Spectral-space diffusion: multiscale combinatorial-Laplacian heat kernels "
-                "H_tau=exp(-tau L/scale). The full matrices carry eigenvalue + eigenspace "
-                "information; hard degree-preserving rewiring realizes the predicted endpoint.",
+                "Legacy spectral-space diffusion: multiscale combinatorial-Laplacian heat kernels "
+                "H_tau=exp(-tau L/scale).",
+                flush=True,
+            )
+        elif spectral_representation == "lambda_projector":
+            print(
+                "Structured spectral-space diffusion: jointly denoise Laplacian eigenvalues Lambda "
+                "and the low-frequency eigenspace projector P_k=U_k U_k^T; projector supervision "
+                "uses deterministic degree-constrained structural alignment.",
                 flush=True,
             )
         else:

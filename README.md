@@ -192,36 +192,47 @@ The structural heads predict a 100-bin clustering-coefficient histogram, the
 `k = 3, 4, 5`.  Molecular graphlet identities additionally include
 `atomic_num` and `bond_type`.
 
-### Heat-kernel spectral-space diffusion
+### Structured spectral-space diffusion: eigenvalues + eigenspace projector
 
-The legacy topology configs diffuse only the combinatorial-Laplacian eigenvalue
-vector.  The repository also provides an additive **heat-kernel spectral-space**
-variant that represents a graph by multiscale matrices
-
-```text
-H_tau(G) = exp(-tau * L(G) / scale)
-```
-
-with `scale = mean_degree` by default and `tau = [0.25, 1.0, 4.0]`.  A heat
-kernel contains both eigenvalue decay and eigenspace information, while being
-invariant to eigenvector sign flips and rotations inside repeated eigenspaces.
-The forward bridge is trained between the target graph and its indexed
-degree-matched HH source in heat-kernel space.  Generation starts from the HH
-heat kernel, denoises the heat-kernel state, and realizes the predicted target
-through the same degree-preserving, connectivity-preserving rewiring operator.
-
-The full Community-small heat-kernel experiment is:
+The maintained eigenspace experiment now predicts one structured spectral state
+rather than several independent heat-kernel matrices.  For each graph, GraphER
+uses
 
 ```text
-configs/experiments/grapher/community_small_joint_edge_heat_kernel_graphlets345_learned.yaml
+Lambda(G) = ordered combinatorial-Laplacian eigenvalues
+P_k(G)    = U_k U_k^T
 ```
 
-Train and generate it with:
+where `U_k` contains the first `k` non-trivial Laplacian eigenvectors.  The
+projector removes eigenvector sign ambiguity and rotations inside the selected
+subspace.  The default Community-small setting uses `k = 4`.
+
+Training constructs a connected degree-matched HH source, aligns equal-degree
+nodes with a deterministic structural Hungarian assignment, and samples
+endpoint-conditioned Brownian bridges for both `Lambda` and `P_k`.  The
+Spectral Transformer predicts the clean eigenvalues, while a pair head predicts
+the clean projector.  The projector head is projected to the rank-k manifold in
+the subspace orthogonal to the constant Laplacian mode, so the prediction is
+symmetric, PSD, idempotent, has trace `k`, and satisfies `P_k 1 = 0`.
+
+Generation starts from `(Lambda_HH, P_HH)`, reverses both continuous bridges,
+and realizes the predicted joint spectral target with degree-preserving,
+connectivity-preserving rewiring.  Candidate spectral discrepancy is the
+weighted combination of normalized eigenvalue RMSE and projector chordal
+distance.
+
+The full Community-small experiment is:
+
+```text
+configs/experiments/grapher/community_small_joint_edge_lambda_projector_graphlets345_learned.yaml
+```
+
+Train, generate and evaluate it with:
 
 ```bash
-CFG=configs/experiments/grapher/community_small_joint_edge_heat_kernel_graphlets345_learned.yaml
-TRAIN=outputs/topology_grapher/community_small_joint_edge_heat_kernel_graphlets345_learned/seed_42
-GEN=outputs/topology_generation/community_small_joint_edge_heat_kernel_graphlets345/seed_42/learned
+CFG=configs/experiments/grapher/community_small_joint_edge_lambda_projector_graphlets345_learned.yaml
+TRAIN=outputs/topology_grapher/community_small_joint_edge_lambda_projector_graphlets345_learned/seed_42
+GEN=outputs/topology_generation/community_small_joint_edge_lambda_projector_graphlets345_learned/seed_42/learned
 
 PYTHONPATH=src python scripts/train_topology_grapher.py \
   --config "$CFG" \
@@ -244,17 +255,18 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir "$GEN/evaluation_test"
 ```
 
-For the **true spectral-only training ablation** (no edge-diffusion loss and no
-clustering/orbit/graphlet heads), use:
+For the **true structured spectral-only training ablation** (no edge-diffusion
+loss and no clustering/orbit/graphlet heads), use:
 
 ```text
-configs/experiments/grapher/community_small_heat_kernel_only_learned.yaml
+configs/experiments/grapher/community_small_lambda_projector_only_learned.yaml
 ```
 
-This differs from a generation-time `spectral` guidance ablation: the excluded
-heads are absent during training as well as receiving zero refiner weight.
-Existing eigenvalue configs are intentionally unchanged for direct ablation.
-See [`docs/HEAT_KERNEL_SPECTRAL_DIFFUSION.md`](docs/HEAT_KERNEL_SPECTRAL_DIFFUSION.md).
+The older heat-kernel configs remain available only for backward-compatible
+checkpoint reproduction; they are no longer the recommended eigenspace
+parameterization.  Existing eigenvalue-only configs are also unchanged for
+direct ablation.  See
+[`docs/LAMBDA_PROJECTOR_SPECTRAL_DIFFUSION.md`](docs/LAMBDA_PROJECTOR_SPECTRAL_DIFFUSION.md).
 
 The degree/typed-degree encoder and decoder are trained jointly with GraphER.
 At generation time the same GraphER checkpoint can be used with either of two
@@ -1284,6 +1296,7 @@ Current canonical documents:
 - [`docs/TOPOLOGY_GENERATOR.md`](docs/TOPOLOGY_GENERATOR.md) — generic topology generation;
 - [`docs/ATTRIBUTED_SPECTRAL_GRAPHLET_DIFFUSION.md`](docs/ATTRIBUTED_SPECTRAL_GRAPHLET_DIFFUSION.md) — attributed spectral/graphlet pipeline;
 - [`docs/SPECTRAL_GRAPHLET_DIFFUSION.md`](docs/SPECTRAL_GRAPHLET_DIFFUSION.md) — generic spectral/graphlet guidance;
+- [`docs/LAMBDA_PROJECTOR_SPECTRAL_DIFFUSION.md`](docs/LAMBDA_PROJECTOR_SPECTRAL_DIFFUSION.md) — structured eigenvalue + eigenspace-projector diffusion;
 - [`docs/SPECTRAL_ONLY_DEBUG.md`](docs/SPECTRAL_ONLY_DEBUG.md) — spectral debugging protocol;
 - [`docs/CYCLE_GRAPHLET_GUIDANCE.md`](docs/CYCLE_GRAPHLET_GUIDANCE.md) — molecular cycle-only graphlet guidance and current tuning;
 - [`docs/degree_perturbation_community_small.md`](docs/degree_perturbation_community_small.md) — degree-prior perturbations.

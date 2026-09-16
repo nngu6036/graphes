@@ -340,6 +340,7 @@ def main() -> None:
     predictor_clustering_error: float | None = None
     predictor_orbit_log_error: float | None = None
     predictor_spectral_error: float | None = None
+    predictor_projector_error: float | None = None
     if checkpoint_format == TOPOLOGY_SPECTRAL_GRAPHLET_CHECKPOINT_FORMAT:
         guidance_mode = "spectral_graphlet"
         model, graphlet_basis, summary_config, checkpoint = (
@@ -371,11 +372,25 @@ def main() -> None:
             device=device,
         )
         predictor_report = checkpoint.get("report", {}) or {}
-        if str(getattr(model, "spectral_representation", "eigenvalues")) == "heat_kernel":
+        representation = str(getattr(model, "spectral_representation", "eigenvalues"))
+        if representation == "heat_kernel":
             predictor_spectral_error_raw = predictor_report.get(
                 "val_heat_kernel_rmse", predictor_report.get("val_heat_kernel_mae")
             )
             missing_message = "val_heat_kernel_rmse/mae"
+        elif representation == "lambda_projector":
+            predictor_spectral_error_raw = predictor_report.get(
+                "val_spectral_normalized_rmse", predictor_report.get("val_spectral_normalized_mae")
+            )
+            projector_error_raw = predictor_report.get(
+                "val_projector_chordal", predictor_report.get("val_projector_loss")
+            )
+            if projector_error_raw is None:
+                raise ValueError(
+                    "The lambda+projector checkpoint is missing held-out val_projector_chordal/loss."
+                )
+            predictor_projector_error = float(projector_error_raw)
+            missing_message = "val_spectral_normalized_rmse/mae"
         else:
             predictor_spectral_error_raw = predictor_report.get(
                 "val_spectral_normalized_rmse",
@@ -418,7 +433,7 @@ def main() -> None:
         guidance_mode == "spectral"
         and (
             getattr(model, "predict_edge_state", False)
-            or str(getattr(model, "spectral_representation", "eigenvalues")) == "heat_kernel"
+            or str(getattr(model, "spectral_representation", "eigenvalues")) in {"heat_kernel", "lambda_projector"}
         )
     )
 
@@ -1198,6 +1213,11 @@ def main() -> None:
                     if str(getattr(model, "spectral_representation", "eigenvalues")) == "heat_kernel"
                     else None
                 ),
+                "predictor_projector_error": (
+                    None if predictor_projector_error is None else float(predictor_projector_error)
+                ),
+                "mean_accepted_lambda_gain": _mean_or_zero(accepted_rows, "lambda_gain"),
+                "mean_accepted_projector_gain": _mean_or_zero(accepted_rows, "projector_gain"),
                 "spectral_representation": str(getattr(model, "spectral_representation", "eigenvalues")),
                 "spectral_distance": refiner_settings.distance,
                 "spectral_normalization": refiner_settings.normalization,
@@ -1285,7 +1305,19 @@ def main() -> None:
             if str(getattr(model, "spectral_representation", "eigenvalues")) == "heat_kernel"
             else None
         ),
-        "laplacian_eigenvalue_diffusion": bool(guidance_mode == "spectral"),
+        "projector_rank": (
+            int(getattr(model, "projector_rank", 0))
+            if str(getattr(model, "spectral_representation", "eigenvalues")) == "lambda_projector"
+            else None
+        ),
+        "laplacian_eigenvalue_diffusion": bool(
+            guidance_mode == "spectral"
+            and str(getattr(model, "spectral_representation", "eigenvalues")) in {"eigenvalues", "lambda_projector"}
+        ),
+        "laplacian_eigenspace_projector_diffusion": bool(
+            guidance_mode == "spectral"
+            and str(getattr(model, "spectral_representation", "eigenvalues")) == "lambda_projector"
+        ),
         "degree_prior_report_file": "degree_prior_report.json",
         "parent_degree_fingerprint": degree_prior_report["returned_parent_degree_fingerprint"],
         "sampled_degree_fingerprint": degree_prior_report["returned_degree_fingerprint"],

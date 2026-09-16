@@ -4,8 +4,8 @@ This is the generic analogue of the attributed joint typed edge sampler.  The
 neural state contains two continuous bridges:
 
 * symmetric binary edge-category logits over {no-edge, edge}; and
-* a configurable spectral state: legacy Laplacian eigenvalues or multiscale
-  combinatorial-Laplacian heat kernels.
+* a configurable spectral state: Laplacian eigenvalues, legacy multiscale
+  heat kernels, or a joint eigenvalue + low-frequency eigenspace projector.
 
 The hard graph never follows the soft bridge directly.  After sampling a clean
 endpoint prediction, ordinary degree-preserving double-edge swaps realize that
@@ -41,6 +41,13 @@ from grapher.rewiring_mlp.generic.heat_kernel import (
     heat_kernel_distance,
     heat_kernel_stack,
     validate_heat_kernel_stack,
+)
+from grapher.rewiring_mlp.generic.eigenspace import (
+    effective_projector_rank,
+    eigenspace_projector_distance,
+    laplacian_eigenspace_projector,
+    project_to_eigenspace_projector,
+    validate_eigenspace_projector,
 )
 from grapher.rewiring_mlp.generic.spectral import (
     laplacian_eigenvalues,
@@ -143,6 +150,48 @@ def _advance_heat_kernel(
                 noise[..., channel] /= rms
         result = result + std * noise
     return 0.5 * (result + result.transpose(1, 0, 2))
+
+
+def _advance_projector(
+    current: np.ndarray,
+    clean: np.ndarray,
+    t: float,
+    s: float,
+    *,
+    sigma: float,
+    rank: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    if not (0.0 <= t < s <= 1.0):
+        raise ValueError("Projector bridge transition requires 0 <= t < s <= 1.")
+    current = np.asarray(current, dtype=np.float64)
+    clean = np.asarray(clean, dtype=np.float64)
+    if current.shape != clean.shape or current.ndim != 2 or current.shape[0] != current.shape[1]:
+        raise ValueError("Current and predicted clean projectors must have matching [n,n] shape.")
+    if not np.isfinite(sigma) or sigma < 0:
+        raise ValueError("projector_sigma must be finite and nonnegative.")
+    alpha = (s - t) / max(1.0 - t, 1e-12)
+    std = float(sigma) * math.sqrt(
+        max((s - t) * (1.0 - s) / max(1.0 - t, 1e-12), 0.0)
+    )
+    result = current + alpha * (clean - current)
+    n = result.shape[0]
+    if std > 0.0 and n:
+        noise = rng.normal(size=result.shape).astype(np.float64)
+        noise = 0.5 * (noise + noise.T)
+        centering = np.eye(n, dtype=np.float64) - np.ones((n, n), dtype=np.float64) / float(n)
+        noise = centering @ noise @ centering
+        rms = float(np.sqrt(np.mean(noise ** 2)))
+        if rms > 1.0e-12:
+            noise /= rms
+        result = result + std * noise
+        result = centering @ result @ centering
+    result = 0.5 * (result + result.T)
+    # At t=1 the transition is exactly the model's clean projector. Keep
+    # intermediate states continuous/off-manifold, mirroring the training bridge.
+    if s >= 1.0 - 1.0e-12:
+        result = project_to_eigenspace_projector(result, rank=rank)
+    return result
 
 
 @dataclass(frozen=True)
@@ -271,6 +320,7 @@ def _predict(
     spectrum_state: np.ndarray,
     time: float,
     heat_kernel_state: np.ndarray | None = None,
+    projector_state: np.ndarray | None = None,
 ):
     device = next(model.parameters()).device
     n = source.number_of_nodes()
@@ -279,8 +329,10 @@ def _predict(
     source_logits = _source_edge_logits(source, smoothing, device)[0].detach().cpu().numpy().astype(np.float32)
     current_logits = edge_state[0].detach().cpu().numpy().astype(np.float32)
     labels = _adjacency_labels(source)[0].numpy().astype(np.int64)
+    representation = str(getattr(model, "spectral_representation", "eigenvalues"))
     source_heat = clean_heat = None
-    if str(getattr(model, "spectral_representation", "eigenvalues")) == "heat_kernel":
+    source_projector = clean_projector = None
+    if representation == "heat_kernel":
         source_heat = heat_kernel_stack(
             source,
             times=getattr(model, "heat_kernel_times", (0.25, 1.0, 4.0)),
@@ -289,6 +341,13 @@ def _predict(
         if heat_kernel_state is None:
             heat_kernel_state = source_heat
         clean_heat = np.zeros_like(source_heat, dtype=np.float32)
+    elif representation == "lambda_projector":
+        source_projector = laplacian_eigenspace_projector(
+            source, rank=int(getattr(model, "projector_rank", 4))
+        ).astype(np.float32)
+        if projector_state is None:
+            projector_state = source_projector
+        clean_projector = np.zeros_like(source_projector, dtype=np.float32)
     example = TopologySpectralExample(
         current_graph=source,
         time=float(time),
@@ -298,6 +357,9 @@ def _predict(
         current_heat_kernel=(None if heat_kernel_state is None else np.asarray(heat_kernel_state, dtype=np.float32)),
         source_heat_kernel=source_heat,
         clean_heat_kernel_target=clean_heat,
+        current_projector=(None if projector_state is None else np.asarray(projector_state, dtype=np.float32)),
+        source_projector=source_projector,
+        clean_projector_target=clean_projector,
         current_edge_logits=(current_logits if getattr(model, "predict_edge_state", False) else None),
         source_edge_logits=(source_logits if getattr(model, "predict_edge_state", False) else None),
         clean_edge_logits_target=(source_logits if getattr(model, "predict_edge_state", False) else None),
@@ -319,6 +381,7 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
     sigma_edge = float(edge_cfg.get("sigma", 1.0))
     sigma_spec = float(diff_cfg.get("spectral_sigma", 0.2))
     sigma_heat = float(diff_cfg.get("heat_kernel_sigma", sigma_spec))
+    sigma_projector = float(diff_cfg.get("projector_sigma", sigma_spec))
     smoothing = float(edge_cfg.get("smoothing", getattr(model, "edge_smoothing", 0.01)))
     if not math.isclose(smoothing, float(getattr(model, "edge_smoothing", smoothing)), rel_tol=0, abs_tol=1e-12):
         raise ValueError("edge_diffusion.smoothing differs from the trained checkpoint.")
@@ -329,6 +392,7 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
     edge_state = labels_to_logits(labels, mask, smoothing)
     spectrum_state = laplacian_eigenvalues(source).astype(np.float64)
     heat_state = None
+    projector_state = None
     if representation == "heat_kernel":
         heat_state = heat_kernel_stack(
             source,
@@ -337,6 +401,10 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
                 "heat_kernel_normalization", getattr(model, "input_normalization", "mean_degree")
             )),
         )
+    elif representation == "lambda_projector":
+        projector_state = laplacian_eigenspace_projector(
+            source, rank=int(getattr(model, "projector_rank", 4))
+        )
     scale = spectral_scale(source, mode=str(config.get("spectral_prediction", {}).get("normalization", "mean_degree")))
     rng = np.random.default_rng(int(seed))
     generator = torch.Generator(device=device).manual_seed(int(seed))
@@ -344,7 +412,9 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
     for step in range(steps):
         t = step / steps
         next_t = (step + 1) / steps
-        outputs, _batch = _predict(model, source, edge_state, spectrum_state, t, heat_state)
+        outputs, _batch = _predict(
+            model, source, edge_state, spectrum_state, t, heat_state, projector_state
+        )
         if getattr(model, "predict_edge_state", False):
             clean_edge = outputs["clean_edge_logits"]
             edge_state = advance_edges(edge_state, clean_edge, t, next_t, mask, sigma_edge, generator=generator)
@@ -360,16 +430,31 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
                 spectrum_state, clean_spectrum, t, next_t,
                 sigma=sigma_spec, scale=scale, rng=rng,
             )
-            state_rms = float(np.sqrt(np.mean(np.square(spectrum_state)))) if spectrum_state.size else 0.0
+            if representation == "lambda_projector":
+                clean_projector = outputs["clean_projector"][0, : source.number_of_nodes(), : source.number_of_nodes()].detach().cpu().numpy().astype(np.float64)
+                projector_state = _advance_projector(
+                    projector_state, clean_projector, t, next_t,
+                    sigma=sigma_projector, rank=int(getattr(model, "projector_rank", 4)), rng=rng,
+                )
+                projector_rms = float(np.sqrt(np.mean(np.square(projector_state)))) if projector_state.size else 0.0
+                state_rms = float(np.sqrt(
+                    0.5 * np.mean(np.square(spectrum_state)) + 0.5 * np.mean(np.square(projector_state))
+                ))
+            else:
+                projector_rms = None
+                state_rms = float(np.sqrt(np.mean(np.square(spectrum_state)))) if spectrum_state.size else 0.0
         trajectory.append({
             "step": step + 1,
             "time": next_t,
             "edge_logit_rms": float(edge_state.square().mean().sqrt().cpu()),
             "spectral_state_rms": state_rms,
+            "projector_state_rms": (projector_rms if representation == "lambda_projector" else None),
             "spectral_representation": representation,
         })
 
-    final_outputs, _ = _predict(model, source, edge_state, spectrum_state, 1.0, heat_state)
+    final_outputs, _ = _predict(
+        model, source, edge_state, spectrum_state, 1.0, heat_state, projector_state
+    )
     n = source.number_of_nodes()
     targets: dict[str, Any] = {
         "edge_probabilities": edge_probabilities(edge_state, mask)[0, :n, :n].detach().cpu().numpy(),
@@ -380,6 +465,9 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
         targets["heat_kernel_times"] = list(getattr(model, "heat_kernel_times", (0.25, 1.0, 4.0)))
     else:
         targets["spectrum"] = np.asarray(spectrum_state, dtype=np.float64)
+        if representation == "lambda_projector":
+            targets["projector"] = np.asarray(projector_state, dtype=np.float64)
+            targets["projector_rank"] = int(getattr(model, "projector_rank", 4))
     if getattr(model, "predict_clustering_histogram", False):
         targets["clustering_histogram"] = final_outputs["clean_clustering_histogram"][0].detach().cpu().numpy()
     if getattr(model, "predict_orbit_summary", False):
@@ -391,13 +479,16 @@ def sample_soft_endpoint(model, source: nx.Graph, config: dict[str, Any], *, see
         "prediction_calls": steps + 1,
         "sampling_steps": steps,
         "edge_sigma": sigma_edge,
-        "spectral_sigma": (sigma_spec if representation == "eigenvalues" else None),
+        "spectral_sigma": (sigma_spec if representation in {"eigenvalues", "lambda_projector"} else None),
         "heat_kernel_sigma": (sigma_heat if representation == "heat_kernel" else None),
+        "projector_sigma": (sigma_projector if representation == "lambda_projector" else None),
+        "projector_rank": (int(getattr(model, "projector_rank", 4)) if representation == "lambda_projector" else None),
         "spectral_representation": representation,
         "heat_kernel_times": (list(getattr(model, "heat_kernel_times", ())) if representation == "heat_kernel" else None),
         "trajectory": trajectory,
         "independent_laplacian_eigenvalue_diffusion": representation == "eigenvalues",
         "joint_laplacian_heat_kernel_diffusion": representation == "heat_kernel",
+        "joint_laplacian_lambda_projector_diffusion": representation == "lambda_projector",
     }
 
 
@@ -422,6 +513,7 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
     representation = str(targets.get("spectral_representation", getattr(model, "spectral_representation", "eigenvalues")))
     target_spectrum = None
     target_heat_kernel = None
+    target_projector = None
     if representation == "heat_kernel":
         target_heat_kernel = validate_heat_kernel_stack(
             targets.get("heat_kernel"), n=n, num_scales=len(getattr(model, "heat_kernel_times", ()))
@@ -430,6 +522,10 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
         target_spectrum = np.asarray(targets["spectrum"], dtype=np.float64)
         if target_spectrum.shape != (n,):
             raise ValueError("Predicted Laplacian target width differs from graph size.")
+        if representation == "lambda_projector":
+            target_projector = validate_eigenspace_projector(
+                targets.get("projector"), n=n
+            )
     target_hist = targets.get("clustering_histogram")
     target_orbit = targets.get("orbit")
     spec = getattr(model, "induced_graphlet_spec", None)
@@ -440,6 +536,13 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
         validate_induced_histogram(target_graphlet, spec)
     graphlet_counter = InducedGraphletCounter(current, spec) if cfg.induced_graphlet_weight > 0 else None
     scale = spectral_scale(source, mode=cfg.normalization)
+    spectral_cfg = dict(config.get("spectral_prediction", {}) or {})
+    lambda_weight = float(spectral_cfg.get("lambda_weight", 1.0))
+    projector_weight = float(spectral_cfg.get("projector_weight", 1.0))
+    projector_distance_name = str(spectral_cfg.get("projector_distance", "chordal"))
+    projector_rank = int(getattr(model, "projector_rank", spectral_cfg.get("projector_rank", 4)))
+    if lambda_weight < 0.0 or projector_weight < 0.0 or lambda_weight + projector_weight <= 0.0:
+        raise ValueError("lambda_weight and projector_weight must be nonnegative with positive sum.")
 
     weights = {
         "edge": cfg.edge_weight,
@@ -466,6 +569,24 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
                 out["spectral"] = heat_kernel_distance(
                     candidate_heat, target_heat_kernel, metric=cfg.distance
                 )
+            elif representation == "lambda_projector":
+                lambda_discrepancy = spectral_distance(
+                    laplacian_eigenvalues(graph), target_spectrum,
+                    metric=cfg.distance, scale=scale,
+                )
+                candidate_projector = laplacian_eigenspace_projector(
+                    graph, rank=projector_rank
+                )
+                projector_discrepancy = eigenspace_projector_distance(
+                    candidate_projector, target_projector, rank=projector_rank,
+                    metric=projector_distance_name,
+                )
+                out["spectral"] = (
+                    lambda_weight * lambda_discrepancy
+                    + projector_weight * projector_discrepancy
+                ) / max(lambda_weight + projector_weight, 1.0e-12)
+                out["lambda"] = lambda_discrepancy
+                out["projector"] = projector_discrepancy
             else:
                 out["spectral"] = spectral_distance(
                     laplacian_eigenvalues(graph), target_spectrum,
@@ -494,7 +615,7 @@ def refine_graph(source: nx.Graph, targets: dict[str, Any], model, config: dict[
         scales = {key: 1.0 for key in initial}
 
     def energy(values):
-        return sum(weights[key] * values[key] / scales[key] for key in values)
+        return sum(weights[key] * values[key] / scales[key] for key in weights)
 
     current_d = initial
     current_e = energy(current_d)

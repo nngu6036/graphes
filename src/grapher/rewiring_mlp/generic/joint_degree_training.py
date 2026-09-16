@@ -187,6 +187,7 @@ def build_joint_model(config, train_graphs, *, degree_provenance_graphs=None):
         edge_smoothing=float((config.get("edge_diffusion", {}) or {}).get("smoothing", 0.01)),
         spectral_representation=str(spectral_cfg.get("representation", "eigenvalues")),
         heat_kernel_times=tuple(spectral_cfg.get("heat_kernel_times", [0.25, 1.0, 4.0])),
+        projector_rank=int(spectral_cfg.get("projector_rank", 4)),
     )
     model = JointDegreeSpectralPredictor(
         joint_degree_config={

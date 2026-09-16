@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import math
 from typing import Any, Sequence
 
 import torch
@@ -58,6 +59,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
         spectral_representation: str = "eigenvalues",
         heat_kernel_times: Sequence[float] = (0.25, 1.0, 4.0),
         heat_kernel_projection_iterations: int = 6,
+        projector_rank: int = 4,
         use_graph_context: bool = True,
         predict_clustering_coefficient: bool = False,
         predict_clustering_histogram: bool = False,
@@ -90,17 +92,22 @@ class TopologySpectralTransformerPredictor(nn.Module):
         self.spectral_representation = str(spectral_representation).lower()
         if self.spectral_representation in {"heat", "heatkernel", "heat-kernel"}:
             self.spectral_representation = "heat_kernel"
-        if self.spectral_representation not in {"eigenvalues", "heat_kernel"}:
-            raise ValueError("spectral_representation must be eigenvalues or heat_kernel.")
+        if self.spectral_representation in {"eigenspace", "lambda_projector", "eigenvalues_projector", "lambda+p", "lambda_p"}:
+            self.spectral_representation = "lambda_projector"
+        if self.spectral_representation not in {"eigenvalues", "heat_kernel", "lambda_projector"}:
+            raise ValueError("spectral_representation must be eigenvalues, heat_kernel, or lambda_projector.")
         self.heat_kernel_times = tuple(float(value) for value in heat_kernel_times)
         if not self.heat_kernel_times or any(value <= 0.0 for value in self.heat_kernel_times):
             raise ValueError("heat_kernel_times must contain positive values.")
         self.heat_kernel_projection_iterations = int(heat_kernel_projection_iterations)
         if self.heat_kernel_projection_iterations < 1:
             raise ValueError("heat_kernel_projection_iterations must be positive.")
+        self.projector_rank = int(projector_rank)
+        if self.projector_rank < 1:
+            raise ValueError("projector_rank must be positive.")
         self.use_graph_context = bool(use_graph_context)
-        if self.spectral_representation == "heat_kernel" and not self.use_graph_context:
-            raise ValueError("Heat-kernel spectral diffusion requires use_graph_context=true.")
+        if self.spectral_representation in {"heat_kernel", "lambda_projector"} and not self.use_graph_context:
+            raise ValueError("Pairwise eigenspace spectral diffusion requires use_graph_context=true.")
         self.predict_clustering_coefficient = bool(predict_clustering_coefficient)
         self.predict_clustering_histogram = bool(predict_clustering_histogram)
         self.predict_orbit_summary = bool(predict_orbit_summary)
@@ -168,6 +175,8 @@ class TopologySpectralTransformerPredictor(nn.Module):
         pair_input_dim = 9 if self.predict_edge_state else 7
         if self.spectral_representation == "heat_kernel":
             pair_input_dim += 2 * len(self.heat_kernel_times)
+        elif self.spectral_representation == "lambda_projector":
+            pair_input_dim += 2
         self.edge_in = nn.Linear(pair_input_dim, self.edge_dim)
         self.layers = nn.ModuleList(
             [
@@ -195,6 +204,14 @@ class TopologySpectralTransformerPredictor(nn.Module):
                 nn.Linear(self.edge_dim, len(self.heat_kernel_times)),
             )
             if self.spectral_representation == "heat_kernel" else None
+        )
+        self.clean_projector_head = (
+            nn.Sequential(
+                nn.Linear(self.edge_dim, self.edge_dim),
+                nn.SiLU(),
+                nn.Linear(self.edge_dim, 1),
+            )
+            if self.spectral_representation == "lambda_projector" else None
         )
 
         # [normalized current lambda_i, normalized source lambda_i,
@@ -335,12 +352,17 @@ class TopologySpectralTransformerPredictor(nn.Module):
             for channel in range(len(self.heat_kernel_times)):
                 pair_feature_values.append(batch.current_heat_kernel[..., channel])
                 pair_feature_values.append(batch.source_heat_kernel[..., channel])
+        elif self.spectral_representation == "lambda_projector":
+            if batch.current_projector is None or batch.source_projector is None:
+                raise ValueError("Lambda+projector model received a batch without eigenspace bridge states.")
+            pair_feature_values.append(batch.current_projector)
+            pair_feature_values.append(batch.source_projector)
         edge_features = torch.stack(pair_feature_values, dim=-1)
         edge_hidden = self.edge_in(edge_features)
         edge_hidden = 0.5 * (edge_hidden + edge_hidden.transpose(1, 2))
         edge_valid = (
             node_mask.unsqueeze(1) & node_mask.unsqueeze(2)
-            if self.spectral_representation == "heat_kernel"
+            if self.spectral_representation in {"heat_kernel", "lambda_projector"}
             else pair_mask
         )
         edge_hidden = edge_hidden * edge_valid.unsqueeze(-1).to(edge_hidden.dtype)
@@ -562,6 +584,54 @@ class TopologySpectralTransformerPredictor(nn.Module):
         outputs["clean_heat_kernel_raw"] = raw
         outputs["clean_heat_kernel"] = clean
 
+    def _project_eigenspace_prediction(
+        self, raw: torch.Tensor, node_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Project pair scores to a rank-k non-trivial Laplacian eigenspace.
+
+        The constant vector is removed with the centering projector and the
+        largest-k eigenvectors of the centered symmetric score matrix define an
+        orthogonal projector. This enforces symmetry, PSD, idempotence, trace k
+        and P1=0 by construction.
+        """
+        if raw.ndim != 3 or raw.shape[1] != raw.shape[2]:
+            raise ValueError("Projector head must emit [B,N,N] scores.")
+        outputs = torch.zeros_like(raw)
+        for index in range(raw.shape[0]):
+            n = int(node_mask[index].sum().item())
+            rank = min(self.projector_rank, max(n - 1, 0))
+            if n == 0 or rank == 0:
+                continue
+            score = raw[index, :n, :n]
+            score = 0.5 * (score + score.transpose(0, 1))
+            # Work directly in a deterministic Helmert basis of 1^perp so the
+            # constant vector can never be selected as one of the rank-k modes.
+            q = torch.zeros((n, n - 1), dtype=score.dtype, device=score.device)
+            for column in range(n - 1):
+                j = column + 1
+                denom = math.sqrt(float(j * (j + 1)))
+                q[:j, column] = 1.0 / denom
+                q[j, column] = -float(j) / denom
+            reduced = q.transpose(0, 1) @ score @ q
+            _values, vectors = torch.linalg.eigh(reduced)
+            basis = q @ vectors[:, -rank:]
+            projector = basis @ basis.transpose(0, 1)
+            outputs[index, :n, :n] = 0.5 * (projector + projector.transpose(0, 1))
+        return outputs
+
+    def _append_projector_outputs(
+        self, outputs: dict[str, torch.Tensor], edge_hidden: torch.Tensor | None, batch: TopologySpectralBatch
+    ) -> None:
+        if self.clean_projector_head is None:
+            return
+        if edge_hidden is None:
+            raise ValueError("Eigenspace-projector prediction requires pair/graph context.")
+        raw = self.clean_projector_head(edge_hidden).squeeze(-1)
+        raw = 0.5 * (raw + raw.transpose(1, 2))
+        clean = self._project_eigenspace_prediction(raw, batch.node_mask)
+        outputs["clean_projector_raw"] = raw
+        outputs["clean_projector"] = clean
+
     def forward(self, batch: TopologySpectralBatch) -> dict[str, torch.Tensor]:
         # Debug-friendly spectral-only mode deliberately removes adjacency/GNN
         # context from the denoiser.  The network then receives only the noisy
@@ -578,6 +648,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
                 raise ValueError("predict_edge_state requires use_graph_context=true.")
         outputs = self._spectral_outputs_from_graph_hidden(batch, graph_hidden)
         self._append_heat_kernel_outputs(outputs, edge_hidden, batch)
+        self._append_projector_outputs(outputs, edge_hidden, batch)
         if self.clean_edge_head is not None:
             logits = self.clean_edge_head(edge_hidden)
             logits = 0.5 * (logits + logits.transpose(1, 2))
@@ -673,6 +744,55 @@ class TopologySpectralTransformerPredictor(nn.Module):
                     "heat_kernel_mae": float(heat_mae.detach().cpu()),
                     "heat_kernel_row_sum_mae": float(row_sum_mae.detach().cpu()),
                     "heat_kernel_symmetry_max_abs": float(symmetry.detach().cpu()),
+                }
+
+        projector_metrics: dict[str, float] = {}
+        if self.spectral_representation == "lambda_projector":
+            if batch.clean_projector_target is None or "clean_projector" not in outputs:
+                raise ValueError("Lambda+projector model requires clean eigenspace-projector targets.")
+            predicted_projector = outputs["clean_projector"]
+            target_projector = batch.clean_projector_target.to(predicted_projector.dtype)
+            if predicted_projector.shape != target_projector.shape:
+                raise ValueError("Predicted and target eigenspace projectors must have identical shape.")
+            per_graph_losses = []
+            per_graph_chordal = []
+            for index in range(predicted_projector.shape[0]):
+                n = int(batch.node_mask[index].sum().item())
+                rank = min(self.projector_rank, max(n - 1, 0))
+                if rank == 0:
+                    continue
+                delta = predicted_projector[index, :n, :n] - target_projector[index, :n, :n]
+                squared = delta.square().sum() / (2.0 * float(rank))
+                per_graph_losses.append(squared)
+                per_graph_chordal.append(torch.sqrt(squared.clamp_min(0.0)))
+            projector_loss = (
+                torch.stack(per_graph_losses).mean()
+                if per_graph_losses else predicted_projector.sum() * 0.0
+            )
+            total = total + float(weights.get("projector", 1.0)) * projector_loss
+            with torch.no_grad():
+                chordal = (
+                    torch.stack(per_graph_chordal).mean()
+                    if per_graph_chordal else projector_loss
+                )
+                valid_pair = (batch.node_mask.unsqueeze(1) & batch.node_mask.unsqueeze(2)).to(predicted_projector.dtype)
+                denom = valid_pair.sum().clamp_min(1.0)
+                idempotence = (((predicted_projector @ predicted_projector) - predicted_projector).square() * valid_pair).sum() / denom
+                null_residual = torch.bmm(predicted_projector, batch.node_mask.to(predicted_projector.dtype).unsqueeze(-1)).squeeze(-1)
+                null_denom = batch.node_mask.to(predicted_projector.dtype).sum().clamp_min(1.0)
+                null_rmse = torch.sqrt((null_residual.square() * batch.node_mask.to(predicted_projector.dtype)).sum() / null_denom)
+                traces = predicted_projector.diagonal(dim1=1, dim2=2).sum(-1)
+                expected = torch.minimum(
+                    torch.full_like(batch.graph_size, float(self.projector_rank)),
+                    (batch.graph_size - 1.0).clamp_min(0.0),
+                )
+                trace_mae = torch.mean(torch.abs(traces - expected.to(traces.dtype)))
+                projector_metrics = {
+                    "projector_loss": float(projector_loss.detach().cpu()),
+                    "projector_chordal": float(chordal.detach().cpu()),
+                    "projector_idempotence_rmse": float(torch.sqrt(idempotence).detach().cpu()),
+                    "projector_nullspace_rmse": float(null_rmse.detach().cpu()),
+                    "projector_trace_mae": float(trace_mae.detach().cpu()),
                 }
 
         edge_metrics: dict[str, float] = {}
@@ -874,6 +994,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
                 }
             )
         metrics.update(heat_kernel_metrics)
+        metrics.update(projector_metrics)
         metrics.update(histogram_metrics)
         metrics.update(orbit_metrics)
         metrics.update(cycle_metrics)
@@ -911,6 +1032,7 @@ class TopologySpectralTransformerPredictor(nn.Module):
             "spectral_representation": self.spectral_representation,
             "heat_kernel_times": list(self.heat_kernel_times),
             "heat_kernel_projection_iterations": self.heat_kernel_projection_iterations,
+            "projector_rank": self.projector_rank,
             "use_graph_context": self.use_graph_context,
             "predict_clustering_coefficient": self.predict_clustering_coefficient,
             "predict_clustering_histogram": self.predict_clustering_histogram,
@@ -1211,6 +1333,7 @@ class TopologySpectralGraphletTransformerPredictor(TopologySpectralTransformerPr
         graph_hidden, edge_hidden = self._graph_context(batch)
         outputs = self._spectral_outputs_from_graph_hidden(batch, graph_hidden)
         self._append_heat_kernel_outputs(outputs, edge_hidden, batch)
+        self._append_projector_outputs(outputs, edge_hidden, batch)
         if self.clean_edge_head is not None:
             logits = self.clean_edge_head(edge_hidden)
             logits = 0.5 * (logits + logits.transpose(1, 2))

@@ -41,12 +41,19 @@ from grapher.rewiring_mlp.generic.summary_diffusion import (
     SummaryDiffusionConfig,
     sample_graphlet_clr_bridge_marginal,
     sample_heat_kernel_bridge_marginal,
+    sample_eigenspace_projector_bridge_marginal,
     sample_spectral_bridge_marginal,
 )
 from grapher.rewiring_mlp.generic.heat_kernel import (
     heat_kernel_distance,
     heat_kernel_stack,
     validate_heat_times,
+)
+from grapher.rewiring_mlp.generic.eigenspace import (
+    effective_projector_rank,
+    eigenspace_projector_distance,
+    laplacian_eigenspace_projector,
+    projector_node_signatures,
 )
 from grapher.rewiring_mlp.generic.spectral import (
     degree_spectral_moments,
@@ -68,6 +75,9 @@ class TopologySpectralExample:
     current_heat_kernel: np.ndarray | None = None
     source_heat_kernel: np.ndarray | None = None
     clean_heat_kernel_target: np.ndarray | None = None
+    current_projector: np.ndarray | None = None
+    source_projector: np.ndarray | None = None
+    clean_projector_target: np.ndarray | None = None
     # Optional clean structural summary target. For the minimal spectral debug
     # model this is the graph-average local clustering coefficient in [0, 1].
     # It is predicted as an auxiliary x0 target but is NOT itself diffused.
@@ -121,6 +131,9 @@ class TopologySpectralBatch:
     current_heat_kernel: torch.Tensor | None = None
     source_heat_kernel: torch.Tensor | None = None
     clean_heat_kernel_target: torch.Tensor | None = None
+    current_projector: torch.Tensor | None = None
+    source_projector: torch.Tensor | None = None
+    clean_projector_target: torch.Tensor | None = None
     current_edge_logits: torch.Tensor | None = None
     source_edge_logits: torch.Tensor | None = None
     clean_edge_logits_target: torch.Tensor | None = None
@@ -196,6 +209,27 @@ def collate_spectral_examples(
     clean_heat_kernel = (
         np.zeros((batch_size, max_nodes, max_nodes, heat_width), dtype=np.float32)
         if heat_enabled else None
+    )
+
+    projector_enabled = any(example.current_projector is not None for example in examples)
+    if projector_enabled and any(
+        example.current_projector is None
+        or example.source_projector is None
+        or example.clean_projector_target is None
+        for example in examples
+    ):
+        raise ValueError("Cannot mix examples with and without eigenspace-projector diffusion states.")
+    current_projector = (
+        np.zeros((batch_size, max_nodes, max_nodes), dtype=np.float32)
+        if projector_enabled else None
+    )
+    source_projector = (
+        np.zeros((batch_size, max_nodes, max_nodes), dtype=np.float32)
+        if projector_enabled else None
+    )
+    clean_projector = (
+        np.zeros((batch_size, max_nodes, max_nodes), dtype=np.float32)
+        if projector_enabled else None
     )
 
     edge_enabled = any(example.current_edge_logits is not None for example in examples)
@@ -364,6 +398,20 @@ def collate_spectral_examples(
             current_heat_kernel[index, :n, :n] = heat_arrays[0]
             source_heat_kernel[index, :n, :n] = heat_arrays[1]
             clean_heat_kernel[index, :n, :n] = heat_arrays[2]
+        if projector_enabled:
+            assert current_projector is not None
+            assert source_projector is not None
+            assert clean_projector is not None
+            projector_arrays = [
+                np.asarray(example.current_projector, dtype=np.float32),
+                np.asarray(example.source_projector, dtype=np.float32),
+                np.asarray(example.clean_projector_target, dtype=np.float32),
+            ]
+            if any(array.shape != (n, n) for array in projector_arrays):
+                raise ValueError("Eigenspace-projector bridge tensors must have shape [n,n].")
+            current_projector[index, :n, :n] = projector_arrays[0]
+            source_projector[index, :n, :n] = projector_arrays[1]
+            clean_projector[index, :n, :n] = projector_arrays[2]
         if edge_enabled:
             arrays = [
                 np.asarray(example.current_edge_logits,dtype=np.float32),
@@ -440,6 +488,15 @@ def collate_spectral_examples(
         ),
         clean_heat_kernel_target=(
             torch.from_numpy(clean_heat_kernel) if clean_heat_kernel is not None else None
+        ),
+        current_projector=(
+            torch.from_numpy(current_projector) if current_projector is not None else None
+        ),
+        source_projector=(
+            torch.from_numpy(source_projector) if source_projector is not None else None
+        ),
+        clean_projector_target=(
+            torch.from_numpy(clean_projector) if clean_projector is not None else None
         ),
         current_edge_logits=(torch.from_numpy(current_edge_logits) if current_edge_logits is not None else None),
         source_edge_logits=(torch.from_numpy(source_edge_logits) if source_edge_logits is not None else None),
@@ -1264,6 +1321,58 @@ def _align_target_to_source_indexed_degrees(source: nx.Graph, target: nx.Graph, 
     return aligned
 
 
+def _align_target_to_source_projector_structure(
+    source: nx.Graph,
+    target: nx.Graph,
+    *,
+    projector_rank: int,
+) -> tuple[nx.Graph, float]:
+    """Deterministically align equal-degree nodes using local/projector signatures.
+
+    A projector is node-indexed, so the random equal-degree permutation used by
+    the edge-only path would create arbitrary eigenspace supervision.  This
+    matching keeps the hard indexed-degree constraint and uses a Hungarian
+    assignment inside each degree group.  The signatures themselves are
+    invariant to the labels of the *other* vertices.
+    """
+
+    from scipy.optimize import linear_sum_assignment
+
+    source = normalize_topology_graph(source)
+    target = normalize_topology_graph(target)
+    source_degrees = dict(source.degree())
+    target_degrees = dict(target.degree())
+    if sorted(source_degrees.values()) != sorted(target_degrees.values()):
+        raise ValueError("Projector alignment requires source/target in the same degree fibre.")
+    source_p = laplacian_eigenspace_projector(source, rank=projector_rank)
+    target_p = laplacian_eigenspace_projector(target, rank=projector_rank)
+    source_sig = projector_node_signatures(source, source_p)
+    target_sig = projector_node_signatures(target, target_p)
+    mapping: dict[int, int] = {}
+    total_cost = 0.0
+    for degree in sorted(set(source_degrees.values())):
+        src = sorted(node for node, value in source_degrees.items() if value == degree)
+        tgt = sorted(node for node, value in target_degrees.items() if value == degree)
+        if len(src) != len(tgt):
+            raise AssertionError("Degree-group cardinality mismatch during projector alignment.")
+        if len(src) == 1:
+            mapping[int(tgt[0])] = int(src[0])
+            continue
+        a = source_sig[np.asarray(src, dtype=np.int64)]
+        b = target_sig[np.asarray(tgt, dtype=np.int64)]
+        cost = np.square(a[:, None, :] - b[None, :, :]).mean(axis=-1)
+        # Stable tie breaking without changing the meaningful cost at printed precision.
+        tie = np.arange(cost.size, dtype=np.float64).reshape(cost.shape) * 1.0e-12
+        rows, cols = linear_sum_assignment(cost + tie)
+        for row, col in zip(rows.tolist(), cols.tolist()):
+            mapping[int(tgt[col])] = int(src[row])
+            total_cost += float(cost[row, col])
+    aligned = normalize_topology_graph(nx.relabel_nodes(target, mapping, copy=True))
+    if [aligned.degree(i) for i in range(len(aligned))] != [source.degree(i) for i in range(len(source))]:
+        raise AssertionError("Projector structural alignment failed to preserve indexed degrees.")
+    return aligned, total_cost / max(len(source), 1)
+
+
 def _binary_edge_logits(graph: nx.Graph, smoothing: float) -> tuple[np.ndarray,np.ndarray]:
     if not 0.0 < float(smoothing) < 0.5:
         raise ValueError("generic edge_diffusion.smoothing must be in (0,0.5).")
@@ -1297,6 +1406,10 @@ class TopologySpectralDiffusionEndpoint:
     source_heat_kernel: np.ndarray | None = None
     clean_heat_kernel: np.ndarray | None = None
     heat_kernel_times: tuple[float, ...] = ()
+    source_projector: np.ndarray | None = None
+    clean_projector: np.ndarray | None = None
+    projector_rank: int = 0
+    projector_alignment_cost: float = 0.0
     source_edge_logits: np.ndarray | None = None
     clean_edge_logits: np.ndarray | None = None
     clean_edge_labels: np.ndarray | None = None
@@ -1334,13 +1447,23 @@ def _prepare_spectral_diffusion_endpoint(
     representation = str(spectral_config.get("representation", "eigenvalues")).lower()
     if representation in {"heat", "heatkernel", "heat-kernel"}:
         representation = "heat_kernel"
-    if representation not in {"eigenvalues", "heat_kernel"}:
-        raise ValueError("spectral_prediction.representation must be eigenvalues or heat_kernel.")
+    if representation in {"eigenspace", "lambda_projector", "eigenvalues_projector", "lambda+p", "lambda_p"}:
+        representation = "lambda_projector"
+    if representation not in {"eigenvalues", "heat_kernel", "lambda_projector"}:
+        raise ValueError("spectral_prediction.representation must be eigenvalues, heat_kernel, or lambda_projector.")
     heat_times = validate_heat_times(spectral_config.get("heat_kernel_times", [0.25, 1.0, 4.0]))
     heat_normalization = str(spectral_config.get("heat_kernel_normalization", spectral_config.get("normalization", "mean_degree")))
+    projector_rank = int(spectral_config.get("projector_rank", 4))
+    if projector_rank < 1:
+        raise ValueError("spectral_prediction.projector_rank must be positive.")
     edge_cfg=dict(edge_diffusion_config or {})
     edge_enabled=bool(edge_cfg.get("enabled",False))
-    if edge_enabled or representation == "heat_kernel":
+    projector_alignment_cost = 0.0
+    if representation == "lambda_projector":
+        target, projector_alignment_cost = _align_target_to_source_projector_structure(
+            source, target, projector_rank=projector_rank
+        )
+    elif edge_enabled or representation == "heat_kernel":
         target=_align_target_to_source_indexed_degrees(source,target,rng)
     source_spectrum = laplacian_eigenvalues(source)
     clean_spectrum = laplacian_eigenvalues(target)
@@ -1352,6 +1475,10 @@ def _prepare_spectral_diffusion_endpoint(
         clean_heat_kernel = heat_kernel_stack(
             target, times=heat_times, normalization=heat_normalization
         )
+    source_projector = clean_projector = None
+    if representation == "lambda_projector":
+        source_projector = laplacian_eigenspace_projector(source, rank=projector_rank)
+        clean_projector = laplacian_eigenspace_projector(target, rank=projector_rank)
     source_edge_logits=clean_edge_logits=clean_edge_labels=None
     if edge_enabled:
         smoothing=float(edge_cfg.get("smoothing",0.01))
@@ -1404,6 +1531,10 @@ def _prepare_spectral_diffusion_endpoint(
         source_heat_kernel=source_heat_kernel,
         clean_heat_kernel=clean_heat_kernel,
         heat_kernel_times=(heat_times if representation == "heat_kernel" else ()),
+        source_projector=source_projector,
+        clean_projector=clean_projector,
+        projector_rank=(effective_projector_rank(source.number_of_nodes(), projector_rank) if representation == "lambda_projector" else 0),
+        projector_alignment_cost=float(projector_alignment_cost),
         source_edge_logits=source_edge_logits,
         clean_edge_logits=clean_edge_logits,
         clean_edge_labels=clean_edge_labels,
@@ -1432,17 +1563,24 @@ def _prepare_spectral_diffusion_endpoint(
                 metric=str(spectral_config.get("distance", "rmse")),
             )
             if representation == "heat_kernel"
-            else spectral_distance(
-                source_spectrum,
-                clean_spectrum,
-                metric=str(spectral_config.get("distance", "rmse")),
-                scale=scale,
-                low_frequency_weight=float(
-                    spectral_config.get("low_frequency_weight", 1.0)
-                ),
-                low_frequency_cutoff=int(
-                    spectral_config.get("low_frequency_cutoff", 0)
-                ),
+            else (
+                float(spectral_config.get("lambda_weight", 1.0)) * spectral_distance(
+                    source_spectrum, clean_spectrum,
+                    metric=str(spectral_config.get("distance", "rmse")), scale=scale,
+                    low_frequency_weight=float(spectral_config.get("low_frequency_weight", 1.0)),
+                    low_frequency_cutoff=int(spectral_config.get("low_frequency_cutoff", 0)),
+                )
+                + float(spectral_config.get("projector_weight", 1.0)) * eigenspace_projector_distance(
+                    source_projector, clean_projector, rank=projector_rank,
+                    metric=str(spectral_config.get("projector_distance", "chordal")),
+                )
+                if representation == "lambda_projector"
+                else spectral_distance(
+                    source_spectrum, clean_spectrum,
+                    metric=str(spectral_config.get("distance", "rmse")), scale=scale,
+                    low_frequency_weight=float(spectral_config.get("low_frequency_weight", 1.0)),
+                    low_frequency_cutoff=int(spectral_config.get("low_frequency_cutoff", 0)),
+                )
             )
         ),
     )
@@ -1462,6 +1600,7 @@ def _sample_spectral_diffusion_endpoint_examples(
     paths_per_graph = max(int(diff_values.get("paths_per_graph", 1)), 1)
     spectral_noise_rms: list[float] = []
     heat_kernel_noise_rms: list[float] = []
+    projector_noise_rms: list[float] = []
     graphlet_noise_rms: list[float] = []
     edge_noise_rms: list[float] = []
     examples: list[TopologySpectralExample] = []
@@ -1470,6 +1609,7 @@ def _sample_spectral_diffusion_endpoint_examples(
         progresses = diff_cfg.sample_progresses(samples_per_graph, rng=rng)
         for local_index, progress in enumerate(progresses):
             current_heat_kernel = None
+            current_projector = None
             if endpoint.source_heat_kernel is not None:
                 assert endpoint.clean_heat_kernel is not None
                 current_heat_kernel, heat_diag = sample_heat_kernel_bridge_marginal(
@@ -1481,12 +1621,13 @@ def _sample_spectral_diffusion_endpoint_examples(
                     rng=rng,
                 )
                 heat_kernel_noise_rms.append(float(heat_diag["noise_rms"]))
-                # No eigenvalue bridge is sampled in heat-kernel mode. Keep the
-                # legacy spectral token scaffold fixed at the source endpoint;
-                # the actual continuous spectral state is carried by H_tau.
+                # Legacy heat-kernel mode carries the continuous spectral state
+                # entirely in H_tau.
                 current_spectrum = endpoint.source_spectrum.copy()
                 spec_diag = {"noise_rms": 0.0}
             else:
+                # Eigenvalue diffusion remains active for both eigenvalue-only
+                # and lambda+projector representations.
                 current_spectrum, spec_diag = sample_spectral_bridge_marginal(
                     endpoint.source_spectrum,
                     endpoint.clean_spectrum,
@@ -1499,6 +1640,14 @@ def _sample_spectral_diffusion_endpoint_examples(
                     rng=rng,
                 )
                 spectral_noise_rms.append(float(spec_diag["noise_rms"]))
+                if endpoint.source_projector is not None:
+                    assert endpoint.clean_projector is not None
+                    current_projector, projector_diag = sample_eigenspace_projector_bridge_marginal(
+                        endpoint.source_projector, endpoint.clean_projector,
+                        progress=float(progress), sigma=diff_cfg.projector_sigma,
+                        schedule=diff_cfg, rng=rng,
+                    )
+                    projector_noise_rms.append(float(projector_diag["noise_rms"]))
 
             current_edge_logits=None
             if endpoint.source_edge_logits is not None:
@@ -1543,6 +1692,15 @@ def _sample_spectral_diffusion_endpoint_examples(
                     ),
                     clean_heat_kernel_target=(
                         None if endpoint.clean_heat_kernel is None else endpoint.clean_heat_kernel.astype(np.float32)
+                    ),
+                    current_projector=(
+                        None if current_projector is None else current_projector.astype(np.float32)
+                    ),
+                    source_projector=(
+                        None if endpoint.source_projector is None else endpoint.source_projector.astype(np.float32)
+                    ),
+                    clean_projector_target=(
+                        None if endpoint.clean_projector is None else endpoint.clean_projector.astype(np.float32)
                     ),
                     current_edge_logits=current_edge_logits,
                     source_edge_logits=(None if endpoint.source_edge_logits is None else endpoint.source_edge_logits.astype(np.float32)),
@@ -1621,12 +1779,19 @@ def _sample_spectral_diffusion_endpoint_examples(
         "schedule": diff_cfg.schedule,
         "spectral_sigma": diff_cfg.spectral_sigma,
         "heat_kernel_sigma": (diff_cfg.heat_kernel_sigma if endpoint.source_heat_kernel is not None else None),
+        "projector_sigma": (diff_cfg.projector_sigma if endpoint.source_projector is not None else None),
         "graphlet_sigma": diff_cfg.graphlet_sigma if graphlet_basis is not None else None,
         "preserve_spectral_trace": diff_cfg.preserve_spectral_trace,
         "fix_spectral_lambda1": diff_cfg.fix_spectral_lambda1,
         "mean_spectral_noise_rms": float(np.mean(spectral_noise_rms)) if spectral_noise_rms else 0.0,
         "mean_heat_kernel_noise_rms": float(np.mean(heat_kernel_noise_rms)) if heat_kernel_noise_rms else 0.0,
-        "spectral_representation": ("heat_kernel" if endpoint.source_heat_kernel is not None else "eigenvalues"),
+        "mean_projector_noise_rms": float(np.mean(projector_noise_rms)) if projector_noise_rms else 0.0,
+        "projector_alignment_cost": float(endpoint.projector_alignment_cost),
+        "projector_rank": int(endpoint.projector_rank),
+        "spectral_representation": (
+            "heat_kernel" if endpoint.source_heat_kernel is not None
+            else ("lambda_projector" if endpoint.source_projector is not None else "eigenvalues")
+        ),
         "mean_graphlet_noise_rms": float(np.mean(graphlet_noise_rms)) if graphlet_noise_rms else 0.0,
         "mean_edge_noise_rms": float(np.mean(edge_noise_rms)) if edge_noise_rms else 0.0,
         "edge_diffusion_enabled": endpoint.source_edge_logits is not None,
@@ -1688,6 +1853,8 @@ def build_spectral_diffusion_examples(
     representation = str(spec_cfg.get("representation", "eigenvalues")).lower()
     if representation in {"heat", "heatkernel", "heat-kernel"}:
         representation = "heat_kernel"
+    if representation in {"eigenspace", "lambda_projector", "eigenvalues_projector", "lambda+p", "lambda_p"}:
+        representation = "lambda_projector"
     diagnostics = {
         "format": "summary_diffusion_training_states_v2",
         "training_state_source": "continuous_summary_diffusion",
@@ -1703,11 +1870,14 @@ def build_spectral_diffusion_examples(
         "schedule": diff_cfg.schedule,
         "spectral_sigma": diff_cfg.spectral_sigma,
         "heat_kernel_sigma": diff_cfg.heat_kernel_sigma if representation == "heat_kernel" else None,
+        "projector_sigma": diff_cfg.projector_sigma if representation == "lambda_projector" else None,
         "graphlet_sigma": diff_cfg.graphlet_sigma if graphlet_basis is not None else None,
         "preserve_spectral_trace": diff_cfg.preserve_spectral_trace,
         "fix_spectral_lambda1": diff_cfg.fix_spectral_lambda1,
         "mean_spectral_noise_rms": float(np.mean([row.get("mean_spectral_noise_rms", 0.0) for row in reports])) if reports else 0.0,
         "mean_heat_kernel_noise_rms": float(np.mean([row.get("mean_heat_kernel_noise_rms", 0.0) for row in reports])) if reports else 0.0,
+        "mean_projector_noise_rms": float(np.mean([row.get("mean_projector_noise_rms", 0.0) for row in reports])) if reports else 0.0,
+        "mean_projector_alignment_cost": float(np.mean([row.get("projector_alignment_cost", 0.0) for row in reports])) if reports else 0.0,
         "mean_graphlet_noise_rms": float(np.mean([row.get("mean_graphlet_noise_rms", 0.0) for row in reports])) if reports else 0.0,
         "mean_edge_noise_rms": float(np.mean([row.get("mean_edge_noise_rms", 0.0) for row in reports])) if reports else 0.0,
         "edge_diffusion_enabled": bool((edge_diffusion_config or {}).get("enabled", False)),

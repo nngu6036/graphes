@@ -211,6 +211,7 @@ class JointDegreeSpectralPredictor(TopologySpectralTransformerPredictor):
                 raise ValueError("predict_edge_state requires use_graph_context=true.")
         outputs = self._spectral_outputs_from_graph_hidden(batch, graph_hidden, degree_context=context)
         self._append_heat_kernel_outputs(outputs, edge_hidden, batch)
+        self._append_projector_outputs(outputs, edge_hidden, batch)
         if self.clean_edge_head is not None:
             logits = self.clean_edge_head(edge_hidden)
             logits = 0.5 * (logits + logits.transpose(1, 2))
