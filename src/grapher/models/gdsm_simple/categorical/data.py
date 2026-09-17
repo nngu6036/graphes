@@ -91,13 +91,18 @@ def decode_graph(x, e, vocab: GraphCategoryVocabulary):
     return graph
 
 
-def make_record(graph, vocab, max_nodes, bins):
+def make_record(graph, vocab, max_nodes, bins, graphlet_config=None):
     x,e = encode_graph(graph,vocab,max_nodes)
     adjacency=(e>0).astype(np.float64)
     vals,u = np.linalg.eigh(adjacency)
     clustering,orbit=topology_summary(e,bins)
+    if graphlet_config is not None and graphlet_config.get('sizes') is not None:
+        from .multiscale import count_multi
+        counts=count_multi(x,e,graphlet_config['sizes'],limit=graphlet_config['max_connected_subsets'])
+    else:
+        counts=typed_counts(x,e)
     return {"x":x,"e":e,"z":(vals/len(x)**.5).astype(np.float32),"clustering":clustering,
-            "orbit":orbit,"counts":typed_counts(x,e),"degrees":adjacency.sum(1).astype(np.int64)}, u.astype(np.float32)
+            "orbit":orbit,"counts":counts,"degrees":adjacency.sum(1).astype(np.int64)}, u.astype(np.float32)
 
 
 def collate(records, basis: TypedGraphlets3, *, device):
@@ -112,6 +117,8 @@ def collate(records, basis: TypedGraphlets3, *, device):
     result={"x":x,"e":e,"z":z,"anchor":anchor,"mask":mask,"histogram":np.stack(hist),
             "mass":np.asarray(mass,np.float32),"clustering":np.stack([r["clustering"] for r in records]),
             "orbit":np.stack([r["orbit"] for r in records])}
+    if getattr(basis,'multiscale',False):
+        result['graphlet_order_mask']=np.array([[len(r['x'])>=k for k in basis.orders] for r in records],bool)
     return {k:torch.as_tensor(v,device=device) for k,v in result.items()}
 
 

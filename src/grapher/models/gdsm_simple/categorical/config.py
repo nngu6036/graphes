@@ -23,6 +23,13 @@ DEFAULTS={
 }
 
 
+MULTISCALE_DEFAULTS = {
+    'sizes': None, 'size_weights': None, 'counting': 'exact_connected',
+    'max_vocab_per_size': None, 'min_train_count': 1,
+    'max_connected_subsets': 1000000,
+}
+
+
 def merge(base,changes):
     out=copy.deepcopy(base)
     for k,v in changes.items():
@@ -46,14 +53,34 @@ def resolve(options):
         raise ValueError('Disable legacy degree/HH/rewiring flags; categorical.guidance controls event-local swaps')
     if ext.get('structural_summary','none') != 'none':
         raise ValueError('Use attributed_categorical.graphlets, not legacy structural_summary')
-    for section in ('noise','graphlets','guidance','loss_weights'):
+    for section in ('noise','guidance','loss_weights'):
         _unknown(cfg[section],DEFAULTS[section],section)
     _unknown(cfg['guidance']['weights'],DEFAULTS['guidance']['weights'],'guidance.weights')
     if cfg['noise']['type']!='marginal' or cfg['noise']['schedule']!='cosine_exact_terminal':
         raise ValueError('This variant supports marginal node/edge noise with cosine_exact_terminal only')
     if not math.isfinite(float(cfg['noise']['pseudocount'])) or cfg['noise']['pseudocount']<=0: raise ValueError('noise.pseudocount must be >0')
-    if cfg['graphlets']['size']!=3 or not cfg['graphlets']['connected_only']:
-        raise ValueError('Use connected induced typed graphlets of size 3 plus connected-triple mass')
+    gc=cfg['graphlets']
+    _unknown(gc,{**DEFAULTS['graphlets'],**MULTISCALE_DEFAULTS},'graphlets')
+    if gc.get('sizes') is not None:
+        # Opt-in so legacy config/checkpoint dictionaries are unchanged.
+        gc=merge(MULTISCALE_DEFAULTS,gc);cfg['graphlets']=gc
+        orders=gc['sizes']
+        if not isinstance(orders,list) or not orders or any(type(k) is not int or k not in (3,4,5) for k in orders) or orders!=sorted(set(orders)):
+            raise ValueError('graphlets.sizes must be a sorted unique subset of [3,4,5]')
+        if not gc['connected_only'] or gc['counting']!='exact_connected':
+            raise ValueError('Multiscale graphlets use exact connected induced counts')
+        weights=gc['size_weights']
+        if weights is None: weights=[1.]*len(orders)
+        if not isinstance(weights,list) or len(weights)!=len(orders) or any(not math.isfinite(float(w)) or float(w)<=0 for w in weights):
+            raise ValueError('One finite positive graphlet size weight per order is required')
+        gc['size_weights']=[float(w) for w in weights]
+        for key in ('max_vocab_per_size','max_connected_subsets'):
+            if gc[key] is not None and (type(gc[key]) is not int or gc[key]<1):
+                raise ValueError(f'graphlets.{key} must be null or a positive integer')
+        if type(gc['min_train_count']) is not int or gc['min_train_count']<1:
+            raise ValueError('graphlets.min_train_count must be a positive integer')
+    elif gc['size']!=3 or not gc['connected_only']:
+        raise ValueError('Use legacy size: 3 or explicit graphlets.sizes: [3,4,5]')
     if int(cfg['graphlets']['clustering_bins'])<2: raise ValueError('clustering_bins must be >=2')
     init=cfg['initialization']
     _unknown(init,DEFAULTS['initialization'],'initialization')

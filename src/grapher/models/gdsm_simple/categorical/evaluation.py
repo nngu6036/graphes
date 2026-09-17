@@ -76,6 +76,9 @@ def rbf_mmd2(a,b,sigma=1.,block=256):
 
 def evaluate(generated_dir,reference_graphs,*,sigma=1.,max_reference=None,seed=42):
     root=Path(generated_dir);schema=json.loads((root/'categorical_schema.json').read_text())
+    if schema.get('graphlet_schema_version')==2:
+        from .multiscale_evaluation import evaluate_multi
+        return evaluate_multi(generated_dir,reference_graphs,sigma=sigma,max_reference=max_reference,seed=seed)
     vocab=GraphCategoryVocabulary.from_dict(schema['category_vocabulary'])
     generated=load_pickle(root/'base_graphs.pkl');reference=load_pickle(reference_graphs)
     if not isinstance(reference,(list,tuple)) or not reference:raise ValueError('Reference must be a nonempty graph list')

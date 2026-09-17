@@ -1,345 +1,3 @@
-CFG=configs/experiments/grapher/community_small_joint_edge_laplacian_graphlets345_learned.yaml
-TRAIN=outputs/topology_grapher/community_small_joint_edge_laplacian_graphlets345_learned/seed_42
-GENROOT=outputs/topology_generation/community_small_joint_edge_laplacian_graphlets345/seed_42
-
-PYTHONPATH=src python scripts/train_topology_grapher.py \
-  --config "$CFG" \
-  --output-dir "$TRAIN" \
-  --seed 42 \
-  --device gpu
-
-GEN="$GENROOT/learned"
-PYTHONPATH=src python scripts/run_topology_grapher.py \
-  --config "$CFG" \
-  --checkpoint "$TRAIN/checkpoint.pt" \
-  --output-dir "$GEN" \
-  --num-generate 1024 \
-  --seed 42 \
-  --device gpu
-
-GEN="$GENROOT/edge_relocation"
-PYTHONPATH=src python scripts/run_topology_grapher.py \
-  --config "$CFG" \
-  --checkpoint "$TRAIN/checkpoint.pt" \
-  --output-dir "$GEN" \
-  --num-generate 1024 \
-  --seed 42 \
-  --device gpu \
-  --set generation.degree_source=edge_relocation \
-  --set generation.degree_rng_mode=independent \
-  --set generation.degree_perturbation.max_attempts=256 \
-  --set generation.degree_perturbation.max_distance=4.0 \
-  --set generation.degree_perturbation.require_novel=false
-
-
-for MODE in learned edge_relocation; do
-  GEN="$GENROOT/$MODE"
-
-  PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-    --config "$CFG" \
-    --generated-dir "$GEN" \
-    --reference-split test \
-    --output-dir "$GEN/evaluation_test"
-
-done
-
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-hh_source_to_test                   0.009433          0.090692      0.121366
-topology_final_to_test              0.009433          0.027206      0.026957
-
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-hh_source_to_test                   0.004734          0.190756      0.166243
-topology_final_to_test              0.004734          0.026768      0.029705
-
-CFG=configs/experiments/grapher/ego_small_joint_edge_laplacian_graphlets345_learned.yaml
-TRAIN=outputs/topology_grapher/ego_small_joint_edge_laplacian_graphlets345_learned/seed_42
-GENROOT=outputs/topology_generation/ego_small_joint_edge_laplacian_graphlets345/seed_42
-
-PYTHONPATH=src python scripts/train_topology_grapher.py \
-  --config "$CFG" \
-  --output-dir "$TRAIN" \
-  --seed 42 \
-  --device gpu
-
-GEN="$GENROOT/learned"
-PYTHONPATH=src python scripts/run_topology_grapher.py \
-  --config "$CFG" \
-  --checkpoint "$TRAIN/checkpoint.pt" \
-  --output-dir "$GEN" \
-  --num-generate 1024 \
-  --seed 42 \
-  --device gpu
-
-GEN="$GENROOT/edge_relocation"
-PYTHONPATH=src python scripts/run_topology_grapher.py \
-  --config "$CFG" \
-  --checkpoint "$TRAIN/checkpoint.pt" \
-  --output-dir "$GEN" \
-  --num-generate 1024 \
-  --seed 42 \
-  --device gpu \
-  --set generation.degree_source=edge_relocation \
-  --set generation.degree_rng_mode=independent \
-  --set generation.degree_perturbation.max_attempts=256 \
-  --set generation.degree_perturbation.max_distance=4.0 \
-  --set generation.degree_perturbation.require_novel=false
-
-
-for MODE in learned edge_relocation; do
-  GEN="$GENROOT/$MODE"
-
-  PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-    --config "$CFG" \
-    --generated-dir "$GEN" \
-    --output-dir "$GEN/evaluation_report"
-
-done
-
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_val                        0.018696          0.019628      0.012698
-hh_source_to_val                    0.019768          0.020074      0.008708
-topology_final_to_val               0.019768          0.015183      0.008883
-
-
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_val                        0.018696          0.019628      0.012698
-hh_source_to_val                    0.055582          0.021257      0.014943
-topology_final_to_val               0.055582          0.021411      0.015616
-
-CFG=configs/experiments/grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned.yaml
-TRAIN=outputs/attributed_grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned/seed_42
-GENROOT=outputs/attributed_generation/qm9_joint_typed_edge_laplacian_graphlets345/seed_42
-NTRAIN=40000
-NGEN=1024
-
-PYTHONPATH=src python scripts/train_attributed_grapher.py \
-  --config "$CFG" \
-  --output-dir "$TRAIN" \
-  --num-train-graphs "$NTRAIN" \
-  --seed 42 \
-  --device gpu \
-  --graphlet-progress-interval 100 \
-  --batch-progress-interval 10 \
-  --progress-interval-seconds 10
-
-
-GENROOT=outputs/attributed_generation/qm9_joint_typed_edge_laplacian_graphlets345/seed_42
-GEN="$GENROOT/edge_relocation_resampled"
-PYTHONPATH=src python scripts/run_attributed_grapher.py \
-  --config "$CFG" \
-  --checkpoint "$TRAIN/checkpoint.pt" \
-  --output-dir "$GEN" \
-  --num-generate "$NGEN" \
-  --seed 42 \
-  --device gpu \
-  --set generation.invariant_source=edge_relocation \
-  --set generation.invariant_rng_mode=independent \
-  --set generation.degree_perturbation.max_attempts=256 \
-  --set generation.degree_perturbation.max_distance=4.0 \
-  --set generation.degree_perturbation.require_novel=true
-
-
-PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-dir "$GEN" \
-  --dataset-root outputs/datasets \
-  --dataset qm9_attributed \
-  --reference-split test \
-  --train-split train \
-  --hogdiff-compatible-metrics \
-  --require-fcd \
-  --output-dir "$GEN/evaluation_molecules"
-
-
-Molecular evaluation
-  validity: 1.0
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 1.0
-  validity_without_correction: 1.0
-  fcd: 1.7968100842947976
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 1024
-  num_invalid_generated_molecules: 0
-  num_valid_generated_molecules_with_projected_formal_charges: 1024
-  num_invalid_generated_molecules_after_projected_formal_charges: 0
-  num_raw_invalid_resolved_by_projected_formal_charges: 0
-  projected_formal_charge_success_rate_on_raw_invalid: 1.0
-  num_valid_generated_molecules_with_correction: 1024
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 0
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
-  uniqueness_rate: 0.9931640625
-  unique_valid_count: 1017
-  novelty_rate: 0.9144542772861357
-  novel_unique_valid_count: 930
-  nspdk_mmd: 0.005540202428890431
-  nspdk_mmd_valid_only: 0.005540202428890431
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.0001785923635462407
-  nspdk_proxy_mmd_metric_source: 0.00017987783876307175
-  fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
-
-
-
-GEN="$GENROOT/learned"
-PYTHONPATH=src python scripts/run_attributed_grapher.py \
-  --config "$CFG" \
-  --checkpoint "$TRAIN/checkpoint.pt" \
-  --output-dir "$GEN" \
-  --num-generate "$NGEN" \
-  --seed 42 \
-  --device gpu
-
-PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-dir "$GEN" \
-  --dataset-root outputs/datasets \
-  --dataset qm9_attributed \
-  --reference-split test \
-  --train-split train \
-  --hogdiff-compatible-metrics \
-  --require-fcd \
-  --output-dir "$GEN/evaluation_molecules"
-
-
-Molecular evaluation
-  validity: 1.0
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 1.0
-  validity_without_correction: 1.0
-  fcd: 2.1350128970592372
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 1024
-  num_invalid_generated_molecules: 0
-  num_valid_generated_molecules_with_projected_formal_charges: 1024
-  num_invalid_generated_molecules_after_projected_formal_charges: 0
-  num_raw_invalid_resolved_by_projected_formal_charges: 0
-  projected_formal_charge_success_rate_on_raw_invalid: 1.0
-  num_valid_generated_molecules_with_correction: 1024
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 0
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
-  uniqueness_rate: 0.9912109375
-  unique_valid_count: 1015
-  novelty_rate: 0.7527093596059113
-  novel_unique_valid_count: 764
-  nspdk_mmd: 0.005040237232893912
-  nspdk_mmd_valid_only: 0.005040237232893912
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.00020037658750985573
-  nspdk_proxy_mmd_metric_source: 0.0002002956184293771
-  fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
-
-
-
-GENROOT=outputs/attributed_generation/qm9_joint_typed_edge_laplacian_graphlets345/seed_42
-GEN="$GENROOT/train_empirical"
-PYTHONPATH=src python scripts/run_attributed_grapher.py \
-  --config "$CFG" \
-  --checkpoint "$TRAIN/checkpoint.pt" \
-  --output-dir "$GEN" \
-  --num-generate "$NGEN" \
-  --seed 42 \
-  --device gpu
-
-
-
-PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-dir "$GEN" \
-  --dataset-root outputs/datasets \
-  --dataset qm9_attributed \
-  --reference-split test \
-  --train-split train \
-  --hogdiff-compatible-metrics \
-  --require-fcd \
-  --output-dir "$GEN/evaluation_molecules"
-
-
-Molecular evaluation
-  validity: 1.0
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 1.0
-  validity_without_correction: 1.0
-  fcd: 2.1350128970592372
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 1024
-  num_invalid_generated_molecules: 0
-  num_valid_generated_molecules_with_projected_formal_charges: 1024
-  num_invalid_generated_molecules_after_projected_formal_charges: 0
-  num_raw_invalid_resolved_by_projected_formal_charges: 0
-  projected_formal_charge_success_rate_on_raw_invalid: 1.0
-  num_valid_generated_molecules_with_correction: 1024
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 0
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
-  uniqueness_rate: 0.9912109375
-  unique_valid_count: 1015
-  novelty_rate: 0.7527093596059113
-  novel_unique_valid_count: 764
-  nspdk_mmd: 0.0050254945957516495
-  nspdk_mmd_valid_only: 0.0050254945957516495
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.00020037658750982323
-  nspdk_proxy_mmd_metric_source: 0.00020029561842934074
-  fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
-
-
-CFG=configs/experiments/grapher/zinc_joint_typed_edge_laplacian_graphlets345_learned.yaml
-TRAIN=outputs/attributed_grapher/zinc_joint_typed_edge_laplacian_graphlets345_learned/seed_42
-GENROOT=outputs/attributed_generation/zinc_joint_typed_edge_laplacian_graphlets345/seed_42
-NTRAIN=100000
-NGEN=1024
-
-PYTHONPATH=src python scripts/train_attributed_grapher.py \
-  --config "$CFG" \
-  --output-dir "$TRAIN" \
-  --num-train-graphs "$NTRAIN" \
-  --seed 42 \
-  --device gpu \
-  --graphlet-progress-interval 100 \
-  --batch-progress-interval 10 \
-  --progress-interval-seconds 10 \
-  --set joint_typed_degree.initialize_degree_checkpoint=null\ 
-  --set joint_typed_degree.freeze_epochs=0
-
-
-
-  CFG=configs/experiments/grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned.yaml
-TRAIN=outputs/attributed_grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned/seed_43
-GENROOT=outputs/attributed_generation/qm9_joint_typed_edge_laplacian_graphlets345/seed_43
-NGEN=1024
-
-PYTHONPATH=src python scripts/train_attributed_grapher.py \
-  --config "$CFG" \
-  --output-dir "$TRAIN" \
-  --seed 43 \
-  --device gpu \
-  --graphlet-progress-interval 100 \
-  --batch-progress-interval 10 \
-  --progress-interval-seconds 10
-
-
 # Simple GDSM + structure summary + rewiring
 
 CFG=configs/baselines/gdsm_simple_community_small_structure3_option_a.yaml
@@ -462,3 +120,113 @@ Comparison                        Degree MMD    Clustering MMD     Orbit MMD
 train_to_test                       0.012987          0.027056      0.008995
 gdsm_simple_base_to_test            0.020714          0.018201      0.013184
 gdsm_simple_option_a_to_test        0.021030          0.017170      0.012487
+
+PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae/qm9_categorical_spectral_prior.yaml
+
+CFG=configs/baselines/gdsm_simple_qm9_categorical.yaml
+RUN=seed_42_spectral_categorical
+N=1024
+
+PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --no-common-config \
+  --wrapper-config "$CFG" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device cuda:0
+
+PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --no-common-config \
+  --wrapper-config "$CFG" \
+  --seed-id 42 \
+  --generation-seed 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device cuda:0
+
+GEN="outputs/baselines/gdsm_simple/qm9/${RUN}/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir "$GEN"
+
+PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir "$GEN" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl
+
+{
+  "num_generated": 1024,
+  "num_reference": 13083,
+  "reference_path": "/home/quang/graphes/outputs/datasets/qm9_attributed/test.pkl",
+  "reference_sha256": "2089f2f0c67cd51685304408ab0071b0c91ff4e037d063ce54f80d085450e0ef",
+  "reference_subsample_seed": null,
+  "protocol": "biased_RBF_MMD_squared_Euclidean",
+  "sigma": 1.0,
+  "not_standard_graphRNN_ORCA_or_NSPDK": true,
+  "raw_graphs_no_sanitization_or_filter": true,
+  "external_typed_graphlet3_class_count": 48,
+  "mmd2": {
+    "node_category_histogram": 5.346417253826452e-05,
+    "edge_category_histogram": 9.66733054719171e-06,
+    "typed_graphlet3_joint_mass": 5.086090490991069e-06,
+    "connected_triple_mass": 1.2983593311588493e-07
+  },
+  "mean_conditional_overflow_against_training_vocabulary": {
+    "generated": 0.0007641393094672821,
+    "reference": 0.0
+  }
+
+Molecular evaluation
+  validity: 0.9775390625
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.986328125
+  validity_without_correction: 0.9775390625
+  fcd: 0.5541950439488801
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1001
+  num_invalid_generated_molecules: 23
+  num_valid_generated_molecules_with_projected_formal_charges: 1010
+  num_invalid_generated_molecules_after_projected_formal_charges: 14
+  num_raw_invalid_resolved_by_projected_formal_charges: 9
+  projected_formal_charge_success_rate_on_raw_invalid: 0.391304347826087
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 23
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.998001998001998
+  unique_valid_count: 999
+  novelty_rate: 0.45545545545545546
+  novel_unique_valid_count: 455
+  nspdk_mmd: 0.0015831699712827707
+  nspdk_mmd_valid_only: 0.0015831699712827707
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.683209219801429e-05
+  nspdk_proxy_mmd_metric_source: 1.8894596611427747e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1001
+  fcd_generated_smiles_source: raw_valid
+
+
+
+CFG=configs/baselines/gdsm_simple_zinc_categorical.yaml
+RUN=seed_42_spectral_categorical
+N=1024
+
+PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset zinc \
+  --no-common-config \
+  --wrapper-config "$CFG" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device cuda:0
+
+

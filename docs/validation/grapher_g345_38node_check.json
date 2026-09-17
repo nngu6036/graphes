@@ -1,0 +1,14 @@
+{
+  "status": "passed",
+  "fixture": "38-node categorically labelled circular ladder",
+  "nodes": 38,
+  "connected_subset_counts": {
+    "3": 114,
+    "4": 209,
+    "5": 380
+  },
+  "full_count_seconds": 0.006030026999951588,
+  "local_delta_seconds": 0.002995787000031669,
+  "local_delta_equals_full_recount": true,
+  "note": "Synthetic CPU counting check only; not ZINC generation runtime"
+}

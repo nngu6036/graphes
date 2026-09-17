@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "test_kind": "synthetic_numerical_preflight_not_quality_benchmark",
+  "python": "3.13.5",
+  "torch": "2.10.0+cpu",
+  "cuda_build": null,
+  "device": "cpu",
+  "gpu_name": null,
+  "seed": 42,
+  "max_nodes": 9,
+  "checked_graphs": 256,
+  "optimizer_steps": 8,
+  "finite_losses_and_gradients": true,
+  "max_eigenpair_reconstruction_error": 1.1896619600548775e-07,
+  "max_orthogonality_error": 8.599822809429725e-08,
+  "solver": {
+    "backend_policy": "cpu",
+    "solve_dtype": "float64",
+    "output_dtype": "float32",
+    "quality_tolerance": 1e-08,
+    "counts": {
+      "edgeless_graphs": 144,
+      "cpu_routed_batches": 120,
+      "cpu_batch_calls": 120
+    },
+    "cached_cpu_groups": []
+  }
+}

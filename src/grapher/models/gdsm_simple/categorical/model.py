@@ -47,7 +47,8 @@ class GraphLayer(nn.Module):
 class SpectralCategoricalDenoiser(nn.Module):
     def __init__(self, *, node_classes, edge_classes, graphlet_classes,
                  hidden_dim=128, num_layers=3, num_heads=4, ff_dim=256,
-                 dropout=0., clustering_bins=100, spectral_conditioning=True, max_nodes=38):
+                 dropout=0., clustering_bins=100, spectral_conditioning=True, max_nodes=38,
+                 graphlet_block_sizes=None, graphlet_orders=None, graphlet_size_weights=None):
         super().__init__()
         if hidden_dim < 4 or hidden_dim % num_heads or num_layers < 1:
             raise ValueError("Invalid hidden dimension, head count, or layer count")
@@ -70,7 +71,13 @@ class SpectralCategoricalDenoiser(nn.Module):
         self.edge_head=mlp(hidden_dim+2*node_classes,hidden_dim,edge_classes)
         self.summary=mlp(3*hidden_dim+node_classes+edge_classes,hidden_dim,hidden_dim)
         self.graphlet_head=nn.Linear(hidden_dim,graphlet_classes)
-        self.mass_head=nn.Linear(hidden_dim,1)
+        self.graphlet_block_sizes=tuple(graphlet_block_sizes or ())
+        self.graphlet_orders=tuple(graphlet_orders or ())
+        self.graphlet_size_weights=tuple(graphlet_size_weights or ())
+        if self.graphlet_block_sizes:
+            if sum(self.graphlet_block_sizes)!=graphlet_classes or len(self.graphlet_orders)!=len(self.graphlet_block_sizes) or len(self.graphlet_size_weights)!=len(self.graphlet_orders):
+                raise ValueError('Inconsistent multiscale graphlet head dimensions')
+        self.mass_head=nn.Linear(hidden_dim,len(self.graphlet_orders) or 1)
         self.clustering_head=nn.Linear(hidden_dim,clustering_bins)
         self.orbit_head=nn.Linear(hidden_dim,4)
 
@@ -126,10 +133,17 @@ class SpectralCategoricalDenoiser(nn.Module):
         pe=edge_logits.softmax(-1)*active[...,None]
         pooled=self.summary(torch.cat((mean_nodes(h,mask),mean_pairs(pair,active),summary_spectral,
                                        mean_nodes(px,mask),mean_pairs(pe,active)),-1))
-        return {"clean_spectrum":spectrum,"node_logits":node_logits,"edge_logits":edge_logits,
-                "graphlet_logits":self.graphlet_head(pooled),"graphlet_mass":self.mass_head(pooled).sigmoid().squeeze(-1),
+        result={"clean_spectrum":spectrum,"node_logits":node_logits,"edge_logits":edge_logits,
+                "graphlet_logits":self.graphlet_head(pooled),"graphlet_mass":self.mass_head(pooled).sigmoid(),
                 "clustering_logits":self.clustering_head(pooled),"orbit_log_mean":F.softplus(self.orbit_head(pooled)),
                 "spectral_scores":scores}
+        if self.graphlet_block_sizes:
+            result['graphlet_block_sizes']=self.graphlet_block_sizes
+            result['graphlet_orders']=self.graphlet_orders
+            result['graphlet_size_weights']=self.graphlet_size_weights
+        else:
+            result['graphlet_mass']=result['graphlet_mass'].squeeze(-1)
+        return result
 
 
 def losses(pred,target,weights):
@@ -138,31 +152,63 @@ def losses(pred,target,weights):
     def masked_ce(logits,labels,valid):
         if not valid.any(): return logits.sum()*0
         return F.cross_entropy(logits[valid],labels[valid])
-    hist=target['histogram']; logh=pred['graphlet_logits'].log_softmax(-1)
-    has_mass=target['mass']>0
-    graphlet=(F.kl_div(logh[has_mass],hist[has_mass],reduction='batchmean')
-              if has_mass.any() else logh.sum()*0)
+    hist=target['histogram'];order_parts={}
+    if pred.get('graphlet_block_sizes'):
+        weights_k=pred['graphlet_size_weights'];blocks=pred['graphlet_block_sizes']
+        graphlet=pred['graphlet_logits'].sum()*0;mass_loss=pred['graphlet_mass'].sum()*0
+        offset=0
+        for i,(width,w) in enumerate(zip(blocks,weights_k)):
+            logh=pred['graphlet_logits'][:,offset:offset+width].log_softmax(-1)
+            available=target['graphlet_order_mask'][:,i]
+            has_mass=(target['mass'][:,i]>0)&available
+            gh=(F.kl_div(logh[has_mass],hist[has_mass,offset:offset+width],reduction='batchmean')
+                if has_mass.any() else logh.sum()*0)
+            gm=(F.mse_loss(pred['graphlet_mass'][available,i],target['mass'][available,i])
+                if available.any() else pred['graphlet_mass'][:,i].sum()*0)
+            graphlet=graphlet+w*gh;mass_loss=mass_loss+w*gm
+            order=pred['graphlet_orders'][i]
+            order_parts[f'graphlet_{order}']=gh;order_parts[f'mass_{order}']=gm
+            offset+=width
+    else:
+        logh=pred['graphlet_logits'].log_softmax(-1)
+        has_mass=target['mass']>0
+        graphlet=(F.kl_div(logh[has_mass],hist[has_mass],reduction='batchmean')
+                  if has_mass.any() else logh.sum()*0)
+        mass_loss=F.mse_loss(pred['graphlet_mass'],target['mass'])
     logc=pred['clustering_logits'].log_softmax(-1)
     parts={
         'spectral':((pred['clean_spectrum']-target['z']).square()*mask).sum()/mask.sum(),
         'node':masked_ce(pred['node_logits'],target['x'],mask),
         'edge':masked_ce(pred['edge_logits'],target['e'],upper),
         'graphlet':graphlet,
-        'mass':F.mse_loss(pred['graphlet_mass'],target['mass']),
+        'mass':mass_loss,
         'clustering':F.kl_div(logc,target['clustering'],reduction='batchmean')+F.mse_loss(logc.exp().cumsum(-1),target['clustering'].cumsum(-1)),
         'orbit':F.mse_loss(pred['orbit_log_mean'],target['orbit']),
     }
     total=sum(parts[k]*float(weights[k]) for k in parts)
-    return total,parts
+    return total,{**parts,**order_parts}
 
 
 def predictions_numpy(pred,index,n):
-    return {
+    multi=bool(pred.get('graphlet_block_sizes'))
+    if multi:
+        blocks=pred['graphlet_logits'][index].split(pred['graphlet_block_sizes'])
+        histogram=torch.cat([h.softmax(-1) for h in blocks]).detach().cpu().numpy()
+        mass=pred['graphlet_mass'][index].detach().cpu().numpy()
+    else:
+        histogram=pred['graphlet_logits'][index].softmax(-1).detach().cpu().numpy()
+        mass=float(pred['graphlet_mass'][index])
+    result={
         'spectrum':pred['clean_spectrum'][index,:n].detach().cpu().numpy(),
         'node_probs':pred['node_logits'][index,:n].softmax(-1).detach().cpu().numpy(),
         'edge_probs':pred['edge_logits'][index,:n,:n].softmax(-1).detach().cpu().numpy(),
-        'histogram':pred['graphlet_logits'][index].softmax(-1).detach().cpu().numpy(),
-        'mass':float(pred['graphlet_mass'][index]),
+        'histogram':histogram,
+        'mass':mass,
         'clustering':pred['clustering_logits'][index].softmax(-1).detach().cpu().numpy(),
         'orbit':pred['orbit_log_mean'][index].detach().cpu().numpy(),
     }
+
+    if multi:
+        result['graphlet_orders']=list(pred['graphlet_orders'])
+        result['graphlet_block_sizes']=list(pred['graphlet_block_sizes'])
+    return result

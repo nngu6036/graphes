@@ -1,0 +1,79 @@
+# This file is consumed by run_grapher_research.sh; it is not a model YAML.
+experiment: GraphER spectral-categorical graphlet orders 3,4,5
+status: proposed_reproducible_starting_profiles_not_benchmark_tuned
+code_cli_model_id: gdsm_simple
+backbone_description: project-owned spectral-categorical adaptation inspired by GSDM
+  and DiGress; not an official GSDM reproduction
+seeds:
+- 42
+- 43
+- 44
+data:
+  rebuild: false
+  model_selection_split: val
+  final_reference_split: test
+  same_prepared_split_for_all_models: true
+datasets:
+  community_small:
+    serialized_dataset: sbm
+    num_generate: 1024
+    main_config: configs/experiments/grapher_research/community_small_g345.yaml
+  ego_small:
+    serialized_dataset: ego_small
+    num_generate: 1024
+    main_config: configs/experiments/grapher_research/ego_small_g345.yaml
+  qm9:
+    serialized_dataset: qm9_attributed
+    num_generate: 10000
+    main_config: configs/experiments/grapher_research/qm9_g345.yaml
+  zinc:
+    serialized_dataset: zinc
+    num_generate: 10000
+    main_config: configs/experiments/grapher_research/zinc_g345.yaml
+evaluation:
+  molecular_source: raw_valid
+  molecular_backend_policy: require_FCD_and_exact_NSPDK_no_proxy
+  num_requested_fixed_not_resample_until_valid: true
+  topology_mmd: graphrnn
+  orbit_order: 4
+  typed_graphlet_orders:
+  - 3
+  - 4
+  - 5
+  typed_graphlet_kernel: biased_RBF_MMD_squared_Euclidean_sigma_1
+  typed_graphlet_counting: exact_connected_induced
+  typed_graphlet_reference_subsample: null
+  reported_uncertainty: mean_and_sample_standard_deviation_across_independent_training_seeds
+  train_test_diagnostic: same_size_reference_resampling_as_separate_finite_sample_diagnostic_not_a_lower_bound
+checkpoint_selection:
+  criterion: fixed_noisy_validation_joint_loss
+  test_metric_selection: false
+runtime_ablations:
+  no_guidance: same main checkpoint; remove every structural rewiring event, retain
+    spectral feedback
+  final_only: same main checkpoint; only last posterior draw is refined; unmatched
+    accepted-swap budget
+retrained_ablations:
+  backbone_only: spectral-categorical losses only; no summary supervision or rewiring;
+    auxiliary output parameters retained but have zero loss
+  categorical_only: node/edge losses only; no spectral decoder features, no feedback
+    or rewiring; diagnostic computations retained, not a speed baseline
+  k3: single order 3; same total graphlet loss weight
+  k34: orders 3 and 4; same total graphlet loss weight
+paired_generation:
+  keep_batch_size_fixed: true
+  separate_refiner_rng: true
+  same_initial_and_sampling_seeds: true
+  limitation: paths diverge after first intervention; final_pre_rewire is not the
+    independent no-guidance baseline
+report:
+  raw_validity: true
+  posthoc_correction_separate: true
+  actual_valid_count: true
+  unique_and_novel_denominators: true
+  overflow_per_order: true
+  accepted_swaps: true
+  total_runtime: true
+  peak_memory: true
+  full_pipeline_degree_preservation_claim: false
+  guaranteed_chemical_validity_claim: false

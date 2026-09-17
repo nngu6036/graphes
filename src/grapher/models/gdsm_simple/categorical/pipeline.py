@@ -6,7 +6,7 @@ import pickle
 import shutil
 import tempfile
 import time
-from collections import defaultdict
+from collections import defaultdict, Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,6 +26,8 @@ from .model import SpectralCategoricalDenoiser, losses, predictions_numpy
 from .noise import MarginalNoise, cosine_alpha_bar, draw_graph, spectral_q_sample, spectral_reverse
 from .spectral import degree_anchor, eigenpairs
 from .refiner import refine
+from .multiscale import (TypedGraphletsMulti, fit_basis, pack_training_counts,
+                         remap_training_counts, pack_basis_counts)
 
 FORMAT='gdsm_spectral_categorical_checkpoint_v1'
 
@@ -47,23 +49,38 @@ def prepare_data(train_graphs,val_graphs,max_nodes,cfg,seed):
     rng=np.random.default_rng(seed+271)
     reservoir=defaultdict(list); seen_sizes=defaultdict(int); all_keys=set()
     train=[]; val=[]
+    multi=cfg['graphlets'].get('sizes') is not None
+    all_counts={k:Counter() for k in cfg['graphlets']['sizes']} if multi else None
+    codebooks={k:{} for k in all_counts} if multi else None
     node_counts=np.zeros(vocab.num_node_categories,np.int64)
     edge_counts=np.zeros(vocab.num_edge_categories,np.int64)
     limit=int(cfg['initialization']['basis_max_per_size'])
     for i,g in enumerate(train_graphs):
-        row,u=make_record(g,vocab,max_nodes,bins); train.append(row)
+        row,u=make_record(g,vocab,max_nodes,bins,cfg['graphlets']); train.append(row)
         n=len(row['x']); seen_sizes[n]+=1
         if len(reservoir[n])<limit: reservoir[n].append(u)
         else:
             j=int(rng.integers(seen_sizes[n]))
             if j<limit: reservoir[n][j]=u
-        all_keys.update(row['counts'])
+        if multi:
+            for k in all_counts: all_counts[k].update(row['counts'][k])
+            row['counts']=pack_training_counts(row['counts'],codebooks)
+        else:
+            all_keys.update(row['counts'])
         node_counts+=np.bincount(row['x'],minlength=len(node_counts))
         edge_counts+=np.bincount(row['e'][np.triu_indices(n,1)],minlength=len(edge_counts))
         if (i+1)%10000==0: print(f'[gdsm-categorical] prepared {i+1} training graphs',flush=True)
+    if multi:
+        basis,coverage=fit_basis(all_counts,cfg['graphlets'])
+        lookup={k:np.array([basis.index[k].get(key,len(basis.keys_by_order[k])) for key in codebooks[k]],np.int32) for k in basis.orders}
+        for row in train: row['counts']=remap_training_counts(row['counts'],lookup)
+        del all_counts,codebooks,lookup
+    else:
+        basis=TypedGraphlets3(sorted(all_keys))
     for g in val_graphs:
-        row,_=make_record(g,vocab,max_nodes,bins); val.append(row)
-    basis=TypedGraphlets3(sorted(all_keys))
+        row,_=make_record(g,vocab,max_nodes,bins,cfg['graphlets'])
+        if multi: row['counts']=pack_basis_counts(row['counts'],basis)
+        val.append(row)
     anchor_cache={}; unseen_validation_sizes=set(); anchor_residuals=[]
     for rows in (train,val):
         for row in rows:
@@ -83,7 +100,7 @@ def prepare_data(train_graphs,val_graphs,max_nodes,cfg,seed):
     xm=(node_counts+pseudo)/(node_counts.sum()+pseudo*len(node_counts))
     em=(edge_counts+pseudo)/(edge_counts.sum()+pseudo*len(edge_counts))
     metadata={
-        'category_vocabulary':vocab.to_dict(),'graphlet_keys':[list(k) for k in basis.keys],
+        'category_vocabulary':vocab.to_dict(),'graphlet_keys':[] if multi else [list(k) for k in basis.keys],
         'node_marginal':xm.tolist(),'edge_marginal':em.tolist(),
         'node_category_counts':node_counts.tolist(),'edge_category_counts':edge_counts.tolist(),
         'edge_counting':'unordered_pairs_including_no_edge_excluding_padding_and_diagonal',
@@ -91,16 +108,23 @@ def prepare_data(train_graphs,val_graphs,max_nodes,cfg,seed):
         'unseen_validation_sizes_haar_anchor_fallback':sorted(unseen_validation_sizes),
         'mean_anchor_row_sum_rmse':float(np.mean(anchor_residuals)) if anchor_residuals else 0.,
     }
+    if multi:
+        metadata.update(basis.schema())
+        metadata['training_graphlet_vocabulary_coverage']=coverage
     return train,val,vocab,basis,dict(reservoir),metadata
 
 
 def _make_model_config(options,cfg,vocab,basis,max_nodes):
     mc=options['model']
-    return dict(node_classes=vocab.num_node_categories,edge_classes=vocab.num_edge_categories,
+    config=dict(node_classes=vocab.num_node_categories,edge_classes=vocab.num_edge_categories,
                 graphlet_classes=basis.dimension,max_nodes=max_nodes,
                 hidden_dim=int(mc['hidden_dim']),num_layers=int(mc['num_layers']),num_heads=int(mc['num_heads']),
                 ff_dim=int(mc['ff_dim']),dropout=float(mc['dropout']),
                 clustering_bins=int(cfg['graphlets']['clustering_bins']),spectral_conditioning=cfg['spectral_conditioning'])
+    if getattr(basis,'multiscale',False):
+        config.update(graphlet_block_sizes=list(basis.block_sizes),graphlet_orders=list(basis.orders),
+                      graphlet_size_weights=basis.size_weights.tolist())
+    return config
 
 
 def _loss_batch(model,records,basis,cfg,schedule,node_noise,edge_noise,generator,device,*,permutations):
@@ -145,7 +169,7 @@ def train(wrapper,request,options):
     optimizer=torch.optim.AdamW(model.parameters(),lr=float(tc['lr']),weight_decay=float(tc['weight_decay']))
     torch_rng=torch.Generator(device=device).manual_seed(request.run.train_seed+91)
     order_rng=np.random.default_rng(request.run.train_seed+92)
-    batch_size=int(tc['batch_size']); history=[]; best=float('inf'); best_epoch=0; best_state=None
+    batch_size=int(tc['batch_size']); history=[]; best=float('inf'); best_epoch=0; best_state=None; optimizer_steps=0
     layout.train_dir.parent.mkdir(parents=True,exist_ok=True)
     staging=Path(tempfile.mkdtemp(prefix='.gdsm_categorical_train_',dir=layout.train_dir.parent))
     try:
@@ -161,10 +185,10 @@ def train(wrapper,request,options):
                     if not torch.isfinite(loss): raise FloatingPointError('Nonfinite joint training loss')
                     optimizer.zero_grad(set_to_none=True); loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(),float(tc.get('grad_norm') or 1.))
-                    optimizer.step()
+                    optimizer.step(); optimizer_steps+=1
                     for key,value in {'loss':loss,**parts}.items(): sums[key]+=float(value.detach())*len(rows)
                     count+=len(rows)
-                row={'epoch':epoch,**{'train_'+k:v/count for k,v in sums.items()}}
+                row={'epoch':epoch,'optimizer_steps':optimizer_steps,**{'train_'+k:v/count for k,v in sums.items()}}
                 if epoch==1 or epoch%int(tc['validation_every'])==0 or epoch==int(tc['epochs']):
                     model.eval(); vsums=defaultdict(float); vcount=0
                     vrng=torch.Generator(device=device).manual_seed(request.run.train_seed+100003)
@@ -187,7 +211,7 @@ def train(wrapper,request,options):
         state={'format':FORMAT,'model_state':best_state,'model_config':mc,'categorical_config':cfg,
                'diffusion_steps':len(schedule)-1,'schema':metadata,'basis_bank':bank,
                'basis_degree_sequences':[r['degrees'].tolist() for r in train_rows],
-               'max_nodes':max_nodes,'best_epoch':best_epoch,'best_val_loss':best,'history':history}
+               'max_nodes':max_nodes,'optimizer_steps':optimizer_steps,'best_epoch':best_epoch,'best_val_loss':best,'history':history}
         torch.save(state,checkpoint)
         _write_json(staging/'training_metrics.json',{'history':history,'best_epoch':best_epoch,'best_val_loss':best})
         _write_json(staging/'categorical_schema.json',metadata)
@@ -196,7 +220,7 @@ def train(wrapper,request,options):
         (staging/'resolved_config.yaml').write_text(yaml.safe_dump({wrapper.model_id:resolved_options},sort_keys=False))
         manifest={'format':'grapher_gdsm_spectral_categorical_training_v1','model_id':wrapper.model_id,
                   'run_id':request.run.run_id,'train_seed':request.run.train_seed,'created_at':datetime.now(timezone.utc).isoformat(),
-                  'duration_seconds':time.monotonic()-started,
+                  'duration_seconds':time.monotonic()-started,'optimizer_steps':optimizer_steps,
                   'dataset':{'benchmark_id':request.dataset.benchmark_id,'serialized_id':request.dataset.serialized_id,
                              'fingerprint':fingerprint,'split_sha256':{k:_sha256(v) for k,v in request.dataset.split_paths.items()},
                              'num_train_graphs_used':len(train_rows),'num_val_graphs_used':len(val_rows)},
@@ -241,7 +265,8 @@ def generate(wrapper,request,state,manifest,options):
     model.load_state_dict(state['model_state']); model.eval()
     total=int(state['diffusion_steps']); abar=cosine_alpha_bar(total,device=device)
     schema=state['schema']; vocab=GraphCategoryVocabulary.from_dict(schema['category_vocabulary'])
-    basis=TypedGraphlets3(schema['graphlet_keys']); bins=int(cfg['graphlets']['clustering_bins'])
+    basis=TypedGraphletsMulti.from_schema(schema) if schema.get('graphlet_schema_version')==2 else TypedGraphlets3(schema['graphlet_keys'])
+    bins=int(cfg['graphlets']['clustering_bins'])
     xn=MarginalNoise(schema['node_marginal'],abar); en=MarginalNoise(schema['edge_marginal'],abar)
     sample_steps=int(options['sample']['steps'])
     times=np.rint(np.linspace(total,0,sample_steps+1)).astype(int).tolist()
@@ -342,7 +367,9 @@ def generate(wrapper,request,state,manifest,options):
                             'initial_degree_preserved':bool(np.array_equal(actual,np.array([initial.degree(v) for v in range(n)]))),
                             'connected':nx.is_connected(graph),
                             'final_eigenpair_reconstruction_max_error':float(np.max(np.abs((vectors*(values*np.sqrt(n))[None])@vectors.T-(ee>0)))),
-                            'final_typed_graphlet_overflow_mass':float(basis.summary(xx,ee)[0][-1])})
+                            'final_typed_graphlet_overflow_mass':(basis.overflow_mean(basis.summary(xx,ee)[0]) if getattr(basis,'multiscale',False) else float(basis.summary(xx,ee)[0][-1]))})
+            if getattr(basis,'multiscale',False):
+                rows[i]['final_typed_graphlet_overflow_by_order']=basis.overflow_by_order(basis.summary(xx,ee)[0])
             if cfg['save_trajectory']: trajectories.append(rows[i].pop('trajectory'))
             else: rows[i].pop('trajectory')
             diagnostics.append(rows[i])
