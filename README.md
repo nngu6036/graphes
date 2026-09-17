@@ -1392,3 +1392,15 @@ PYTHONPATH=src python scripts/run_guidance_factorial_ablation.py \
 ```
 
 See [`docs/GUIDANCE_FACTORIAL_ABLATION.md`](docs/GUIDANCE_FACTORIAL_ABLATION.md) for the controlled degree-source variant and interpretation.
+
+## Structure3 Option A: degree-informed spectral generation
+
+For a spectral generator whose degrees may change during denoising, use
+`extensions.generation_mode: spectral_decode`. The learned degree sequence is
+prior information rather than a hard graph invariant; generation decodes every
+clean spectral estimate and runs local structural swaps at selected steps.
+
+See [the Option-A guide](docs/GDSM_SIMPLE_OPTION_A.md) for the strict
+initialization-only training configurations, compatibility sampling with existing
+Structure3 checkpoints, Community-small/Ego-small commands, and degree audits.
+The original degree-constrained modes remain unchanged.

@@ -1,0 +1,103 @@
+# Ego-small adaptation of the existing Community-small Structure3 configuration.
+# Uses the common prepared Ego-small split, not the larger Ego benchmark.
+# Training budget is a starting point, not a validation-tuned result.
+comparison:
+  model: gdsm_simple
+  dataset: ego_small
+  common_config: common_ego_small.yaml
+  status: graphes_native_structure3_degree_basis_learned_prior
+
+gdsm_simple:
+  train:
+    # Four independently sampled same-size basis pairings per training graph.
+    # On the configured 128-graph train split: 625 * (128*4/16) = 20,000 updates.
+    # The DH-VAE has a separate training budget; this is not equal total compute.
+    epochs: 625
+    batch_size: 16
+    lr: 0.0002
+    weight_decay: 1.0e-6
+    grad_norm: 1.0
+    validation_every: 5
+    log_every: 10
+
+  model:
+    max_nodes: 18
+    hidden_dim: 128
+    num_layers: 4
+    num_heads: 4
+    ff_dim: 256
+    dropout: 0.0
+
+  diffusion:
+    steps: 1000
+    beta_start: 0.0001
+    beta_end: 0.02
+
+  sample:
+    steps: 1000
+    # Used for the saved diagnostic threshold graph, not degree-exact decoding.
+    threshold: 0.5
+    sort_eigenvalues: true
+
+  generation_batch_size: 128
+
+  extensions:
+    degree_conditioning: true
+    degree_preserving_rewiring: true
+    structural_summary:
+      enabled: true
+      graphlet_size: 3
+      # Four ORCA-compatible orbits (0..3), NOT the 15-orbit size<=4 vector.
+      orbit_scope: up_to_3
+      clustering_bins: 100
+      basis_pairings_per_graph: 4
+      loss_weights:
+        clustering: 1.0
+        orbit: 0.5
+        graphlet: 0.5
+
+    initialization:
+      # Training and generation both use a degree/basis-centred VP process.
+      mode: degree_basis
+      ridge: 0.001
+      diagonal_weight: 1.0
+      # null seeds all modes; a positive integer seeds only dominant modes.
+      # Changing this setting changes training corruption and requires retraining.
+      seed_top_k: null
+      ensure_connected: true
+      degree_generator:
+        type: dhvae
+        checkpoint_path: outputs/degree_generators/ego_small/seed_42/checkpoint.pt
+        sample_num_nodes: empirical
+        sample_num_edges: model
+        exact_degree_sum_conditioning: true
+        max_resample: 500
+        model_resample_attempts: 32
+        parity_conditioned: false
+        max_parity_resample: 1
+        postprocess_policy: reject_only
+        fallback: error
+
+    # New-stage refiner; the legacy extensions.rewiring block is not used.
+    structure_guidance:
+      # Count interval in reverse MODEL EVALUATIONS, not original timesteps.
+      # With 1000 evaluations these settings give events at t=299,199,99,0.
+      start_fraction: 0.35
+      every: 100
+      max_steps_per_event: 2
+      proposal_budget: 128
+      valid_candidate_budget: 64
+      min_improvement: 1.0e-8
+      require_structural_improvement: true
+      lambda_weight: 0.25
+      clustering_weight: 1.0
+      orbit_weight: 0.25
+      graphlet_weight: 0.25
+      source_weight: 0.02
+      # Feed the accepted discrete graph's spectrum back into the next step.
+      spectrum_feedback: 0.05
+      feedback_only_after_accept: true
+      # At the first guidance event, fit a degree-exact feasible graph to U/lambda.
+      # These realization swaps are logged separately from structural swaps.
+      realization_fit_steps: 4
+      save_intermediate_graphs: false

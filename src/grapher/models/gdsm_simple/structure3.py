@@ -37,7 +37,21 @@ def validate_structure_options(options: Mapping[str, Any]) -> None:
         raise ValueError("The structured denoiser requires degree_conditioning=true.")
     if ext.get("hh_initialization", False):
         raise ValueError("Use initialization.mode; the legacy hh_initialization flag is not used here.")
+    mode = ext.get("generation_mode", "degree_constrained")
+    if mode not in {"degree_constrained", "spectral_decode"}:
+        raise ValueError("extensions.generation_mode must be degree_constrained or spectral_decode.")
     init = ext.get("initialization", {})
+    if init.get("conditioning", "degree_basis") not in {"degree_basis", "initialization_only"}:
+        raise ValueError("initialization.conditioning must be degree_basis or initialization_only.")
+    if mode == "spectral_decode":
+        threshold = float(options.get("sample", {}).get("threshold", .5))
+        if not np.isfinite(threshold) or not 0 <= threshold <= 1:
+            raise ValueError("spectral_decode requires sample.threshold in [0,1].")
+        spectral = ext.get("spectral_decode", {})
+        if spectral.get("feedback_mode", "fixed_basis_delta") != "fixed_basis_delta":
+            raise ValueError("spectral_decode.feedback_mode must be fixed_basis_delta.")
+        if spectral.get("connectivity", "unconstrained") != "unconstrained":
+            raise ValueError("Option A uses unconstrained spectral decoding; no silent connectivity repair.")
     if init.get("mode", "degree_basis") not in {"degree_basis", "gaussian"}:
         raise ValueError("initialization.mode must be degree_basis or gaussian.")
     if float(init.get("ridge", 1e-3)) <= 0 or float(init.get("diagonal_weight", 1.0)) < 0:

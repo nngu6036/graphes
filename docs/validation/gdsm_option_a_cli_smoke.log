@@ -1,0 +1,37 @@
+[run_gdsm_simple_baseline 2026-09-17T04:00:47+00:00] starting training: dataset=community_small, run_id=option_a_cli_smoke, seed=42
+GSDM-Simple Structure3: caching exact clean summaries and independent degree/basis anchors
+/opt/pyvenv/lib/python3.13/site-packages/torch/nn/modules/transformer.py:531: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)
+  output = torch._nested_tensor_from_mask(
+GSDM-Simple Structure3 epoch 1/2 train=3.563326 val=4.048588 C_W1=0.45171 O_log_RMSE=0.84386 H3_TV=0.50908
+GSDM-Simple Structure3 epoch 2/2 train=3.722377 val=4.003846 C_W1=0.45168 O_log_RMSE=0.84385 H3_TV=0.50915
+[run_gdsm_simple_baseline 2026-09-17T04:00:48+00:00] training completed: checkpoint=/mnt/data/option_a_cli_smoke/runs/gdsm_simple/community_small/option_a_cli_smoke/train/checkpoints/gdsm_simple.pt
+[run_gdsm_simple_baseline 2026-09-17T04:00:48+00:00] starting generation: requested=6, seed=45
+GSDM-Simple Structure3 Option A generated 2/6
+GSDM-Simple Structure3 Option A generated 4/6
+GSDM-Simple Structure3 Option A generated 6/6
+[run_gdsm_simple_baseline 2026-09-17T04:00:48+00:00] generation completed: graphs=/mnt/data/option_a_cli_smoke/runs/gdsm_simple/community_small/option_a_cli_smoke/generations/strict_option_a/base_graphs.pkl
+{
+  "checkpoint": "/mnt/data/option_a_cli_smoke/runs/gdsm_simple/community_small/option_a_cli_smoke/train/checkpoints/gdsm_simple.pt",
+  "common_config": "/mnt/data/option_a_work/configs/baselines/common_community_small.yaml",
+  "dataset": "community_small",
+  "experiment": null,
+  "generated_graphs": "/mnt/data/option_a_cli_smoke/runs/gdsm_simple/community_small/option_a_cli_smoke/generations/strict_option_a/base_graphs.pkl",
+  "generation_id": "strict_option_a",
+  "generation_manifest": "/mnt/data/option_a_cli_smoke/runs/gdsm_simple/community_small/option_a_cli_smoke/generations/strict_option_a/manifest.json",
+  "generation_seed": 45,
+  "graphs_sha256": "72574f8be11ce94ff8cbde7ab584f9b3b925d2ba22b8b705e7ea3c00cd0e7be0",
+  "model": "gdsm_simple",
+  "native_dataset": null,
+  "num_samples": 6,
+  "run_dir": "/mnt/data/option_a_cli_smoke/runs/gdsm_simple/community_small/option_a_cli_smoke",
+  "run_id": "option_a_cli_smoke",
+  "seed_id": 42,
+  "serialized_dataset": "toy",
+  "stage": "all",
+  "status": "complete",
+  "training_estimated_graphs": null,
+  "training_ground_truth_graphs": null,
+  "training_ground_truth_model_view": null,
+  "training_manifest": "/mnt/data/option_a_cli_smoke/runs/gdsm_simple/community_small/option_a_cli_smoke/train/manifest.json",
+  "wrapper_config": "/mnt/data/option_a_cli_smoke/smoke.yaml"
+}

@@ -1,0 +1,22 @@
+GSDM-Simple Structure3 device-alias hotfix validation
+Python: 3.13.5
+PyTorch: 2.10.0+cpu
+CUDA available: False
+
+Command: OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 PYTHONPATH=src python -m pytest -q tests --tb=short
+
+........................................................................ [ 32%]
+........................sss............................................. [ 65%]
+........................................................................ [ 98%]
+....                                                                     [100%]
+=============================== warnings summary ===============================
+tests/test_gdsm_structure3.py::test_training_generation_roundtrip_and_checkpoint_reuse
+  /opt/pyvenv/lib/python3.13/site-packages/torch/nn/modules/transformer.py:531: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)
+    output = torch._nested_tensor_from_mask(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+217 passed, 3 skipped, 1 warning in 6.18s
+
+Targeted post-fix device tests:
+.....................sss                                                 [100%]
+21 passed, 3 skipped in 1.18s

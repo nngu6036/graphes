@@ -34,8 +34,18 @@ class DegreeVAESampler:
         model: Any | None = None,
         vectorizer: Any | None = None,
     ):
+        import torch
+
         self.checkpoint_path = str(checkpoint_path)
         self.device = resolve_torch_device(device)
+        # An unindexed CUDA device names the current GPU, but is not equal to
+        # a parameter's concrete device (e.g. cuda != cuda:0). Pin it once so
+        # validation and later sampling use the same GPU, even if it changes.
+        if self.device.type == "cuda" and self.device.index is None:
+            self.device = torch.device("cuda", torch.cuda.current_device())
+        elif self.device.type == "cpu":
+            # CPU tensors report "cpu", including allocations via "cpu:0".
+            self.device = torch.device("cpu")
         self.deterministic = bool(deterministic)
         self.seed = int(seed)
         self.sample_num_nodes = str(sample_num_nodes)
@@ -53,8 +63,14 @@ class DegreeVAESampler:
         self._vectorizer = vectorizer
         if model is None:
             self._load()
-        elif next(model.parameters()).device != self.device:
-            raise ValueError("Embedded degree model must already be on the sampler device.")
+        else:
+            model_device = next(model.parameters()).device
+            if model_device != self.device:
+                raise ValueError(
+                    "Embedded degree model must already be on the sampler device. "
+                    f"Got model={model_device}, sampler={self.device} "
+                    f"(requested={device!r})."
+                )
 
     def _load(self) -> None:
         model, vectorizer, _ = load_degree_vae_checkpoint(

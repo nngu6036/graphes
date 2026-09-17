@@ -338,3 +338,31 @@ PYTHONPATH=src python scripts/train_attributed_grapher.py \
   --graphlet-progress-interval 100 \
   --batch-progress-interval 10 \
   --progress-interval-seconds 10
+
+
+# Simple GDSM + structure summary + rewiring
+
+CFG=configs/baselines/gdsm_simple_community_small_structure3.yaml
+RUN=seed_42_structure3_degree_basis
+
+PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config "$CFG" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+
+  N=1024
+
+PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config "$CFG" \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device cuda:0

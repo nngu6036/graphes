@@ -2,8 +2,8 @@
 
 The old v1 spectral-only pipeline remains untouched. Rewiring never runs during
 training; clean graph summaries are precomputed, not extracted from Gaussian
-states. Generation carries a persistent degree-exact discrete graph through
-selected reverse-time events and feeds its spectrum into later DDIM steps.
+states. Generation supports a persistent degree-exact graph (legacy) or repeated
+spectral decoding with freely changing degrees (Option A).
 """
 from __future__ import annotations
 
@@ -66,6 +66,19 @@ def make_anchor(basis, degrees, init):
     return anchor, {"mode": "degree_basis", **diag}
 
 
+def make_condition(basis, degrees, anchor, max_nodes, init):
+    """The strict Option-A mode does not expose d or s as denoiser inputs.
+
+    Degree information enters through the initial spectral anchor. Keeping the
+    source-centred scheduler is a coordinate choice, not a degree projection.
+    The basis descriptors in the last two blocks are retained in both modes.
+    """
+    condition = conditioning_features(basis, degrees, anchor, max_nodes)
+    if init.get("conditioning", "degree_basis") == "initialization_only":
+        condition[:2 * max_nodes] = 0.
+    return condition
+
+
 def make_training_dataset(graphs, bank_graphs, bank_bases, max_nodes, summary_cfg, init, *, seed, pairings):
     """Independent same-size training-bank bases for train AND validation.
 
@@ -92,7 +105,7 @@ def make_training_dataset(graphs, bank_graphs, bank_bases, max_nodes, summary_cf
             if key not in cache:
                 basis = align_basis_rows(bank_bases[j], basis_degrees[j])
                 anchor, _ = make_anchor(basis, d, init)
-                cache[key] = (anchor, conditioning_features(basis, d, anchor, max_nodes))
+                cache[key] = (anchor, make_condition(basis, d, anchor, max_nodes, init))
             anchor, condition = cache[key]
             rows.append((clean[i], masks[i], sizes[i], torch.from_numpy(condition),
                          torch.tensor(np.pad(anchor, (0, max_nodes-n)), dtype=torch.float32),
@@ -226,6 +239,7 @@ def train_structured(wrapper, request, options):
                                    "forward_process": "source_centered_VP" if init.get("mode", "degree_basis") == "degree_basis" else "zero_centered_VP",
                                    "basis_pairing": "independent_same_size_training_basis", "rewiring_during_training": False,
                                    "orbit_columns": [0, 1, 2, 3], "graphlets": ["induced_P3", "triangle"],
+                                   "degree_conditioning": init.get("conditioning", "degree_basis"),
                                    "degree_prior_trained_separately": init.get("degree_generator", {}).get("type", "empirical") == "dhvae"},
             "test_used_for_training": False,
         }
@@ -257,7 +271,10 @@ def _load_degree_sampler(init, state, manifest, device, seed):
     recorded_hash = degree_state.get("config", {}).get("dataset", {}).get("train_sha256")
     if recorded_hash is not None and recorded_hash != manifest["dataset"]["split_sha256"]["train"]:
         raise ValueError("DH-VAE training split hash differs from the spectral training split.")
-    prior.update({"device": str(device), "fallback": "error", "postprocess_policy": "reject_only"})
+    # Pass the loaded model's concrete placement, not an alias such as "cuda".
+    # This also avoids resolving the current GPU a second time at the handoff.
+    model_device = next(degree_model.parameters()).device
+    prior.update({"device": str(model_device), "fallback": "error", "postprocess_policy": "reject_only"})
     sampler = DegreeVAESampler.from_config(prior, seed=seed, model=degree_model, vectorizer=vectorizer)
     return sampler, {"type": "dhvae", "learned": True, "checkpoint_path": str(path.resolve()),
                      "sha256": _sha256(path), "training_degree_multiset_verified": True,
@@ -274,14 +291,17 @@ def _validate_generation_contract(state, options):
         if trained_summary.get(key, default) != requested_summary.get(key, default):
             raise ValueError(f"Generation cannot change trained structural_summary.{key}.")
     trained, requested = state["initialization"], options["extensions"].get("initialization", {})
-    for key, default in (("mode", "degree_basis"), ("ridge", 1e-3), ("diagonal_weight", 1.), ("seed_top_k", None)):
+    for key, default in (("mode", "degree_basis"), ("ridge", 1e-3), ("diagonal_weight", 1.), ("seed_top_k", None), ("conditioning", "degree_basis")):
         if trained.get(key, default) != requested.get(key, default):
-            raise ValueError(f"Generation cannot change trained initialization.{key}; training corruption must match the sampler.")
+            raise ValueError(f"Generation cannot change trained initialization.{key}; training corruption and conditioning must match the sampler.")
 
 
 @torch.no_grad()
 def generate_structured(wrapper, request, state, manifest, options):
     _validate_generation_contract(state, options)
+    if options["extensions"].get("generation_mode", "degree_constrained") == "spectral_decode":
+        from grapher.models.gdsm_simple.spectral_decode_pipeline import generate_spectral_decode
+        return generate_spectral_decode(wrapper, request, state, manifest, options)
     layout = request.run.layout
     generation_id = request.resolved_generation_id
     target = layout.generation_dir(generation_id)
@@ -343,7 +363,7 @@ def generate_structured(wrapper, request, state, manifest, options):
                 anchor_cache[key] = make_anchor(basis, d, init)
             anchor, ad = anchor_cache[key]
             degrees.append(d); bases.append(basis); anchors.append(anchor)
-            conditions.append(conditioning_features(basis, d, anchor, max_nodes))
+            conditions.append(make_condition(basis, d, anchor, max_nodes, init))
             bank_indices.append(j); init_diagnostics.append(ad); degree_diagnostics.append(dd)
         sizes = torch.tensor([len(d) for d in degrees], dtype=torch.long, device=device)
         mask = torch.arange(max_nodes, device=device).unsqueeze(0) < sizes.unsqueeze(1)

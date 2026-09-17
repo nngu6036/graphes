@@ -1,0 +1,13 @@
+{
+  "num_graphs": 6,
+  "global_degree_constraint": false,
+  "final_graphs_simple_rate": 1.0,
+  "final_connected_rate": 1.0,
+  "initial_to_final_degree_multiset_preservation_rate": 0.5,
+  "prior_to_final_degree_multiset_preservation_rate": 0.16666666666666666,
+  "final_event_degree_preservation_rate": 1.0,
+  "all_local_rewiring_events_preserve_degrees": true,
+  "mean_spectral_degree_change_steps": 1.1666666666666667,
+  "mean_feedback_events": 1.1666666666666667,
+  "note": "Initial/prior degrees may change; final_pre_rewire and final degrees must match. Equality in some samples is allowed."
+}
