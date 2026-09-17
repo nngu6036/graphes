@@ -10,6 +10,17 @@ The repository is organized for controlled experiments: prepared dataset splits
 are frozen, generated artifacts are run-scoped, and baseline outputs are routed
 through the same evaluation code whenever the graph representation permits it.
 
+## GSDM-Simple Structure3 (17 September 2026)
+
+An opt-in GSDM-Simple stage now adds clean clustering-histogram, size-three
+orbit-mean and connected-graphlet prediction; intermediate degree-preserving
+rewiring; and matched degree/basis-centred spectral diffusion. It uses the
+existing learned DH-VAE degree prior and retains the S0/S1 configurations.
+
+Start with `configs/baselines/gdsm_simple_community_small_structure3.yaml` and
+[the implementation guide and commands](docs/GDSM_SIMPLE_STRUCTURE3.md).
+This stage requires a new spectral checkpoint; it cannot reuse S0/S1 weights.
+
 ## Core idea
 
 For generic graphs, GraphER samples or obtains a degree sequence, constructs a

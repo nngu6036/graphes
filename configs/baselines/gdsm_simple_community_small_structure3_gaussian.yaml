@@ -1,0 +1,80 @@
+# Zero-centred corruption ablation; MUST train a separate checkpoint/run-id.
+# Primary documented settings: gdsm_simple_community_small_structure3.yaml
+comparison:
+  model: gdsm_simple
+  dataset: community_small
+  common_config: common_community_small.yaml
+  status: graphes_native_structure3_gaussian
+gdsm_simple:
+  train:
+    epochs: 1250
+    batch_size: 16
+    lr: 0.0002
+    weight_decay: 1.0e-06
+    grad_norm: 1.0
+    validation_every: 5
+    log_every: 10
+  model:
+    max_nodes: 20
+    hidden_dim: 128
+    num_layers: 4
+    num_heads: 4
+    ff_dim: 256
+    dropout: 0.0
+  diffusion:
+    steps: 1000
+    beta_start: 0.0001
+    beta_end: 0.02
+  sample:
+    steps: 1000
+    threshold: 0.5
+    sort_eigenvalues: true
+  generation_batch_size: 128
+  extensions:
+    degree_conditioning: true
+    degree_preserving_rewiring: true
+    structural_summary:
+      enabled: true
+      graphlet_size: 3
+      orbit_scope: up_to_3
+      clustering_bins: 100
+      basis_pairings_per_graph: 4
+      loss_weights:
+        clustering: 1.0
+        orbit: 0.5
+        graphlet: 0.5
+    initialization:
+      mode: gaussian
+      ridge: 0.001
+      diagonal_weight: 1.0
+      seed_top_k: null
+      ensure_connected: true
+      degree_generator:
+        type: dhvae
+        checkpoint_path: outputs/degree_generators/sbm/seed_42/checkpoint.pt
+        sample_num_nodes: empirical
+        sample_num_edges: model
+        exact_degree_sum_conditioning: true
+        max_resample: 500
+        model_resample_attempts: 32
+        parity_conditioned: false
+        max_parity_resample: 1
+        postprocess_policy: reject_only
+        fallback: error
+    structure_guidance:
+      start_fraction: 0.35
+      every: 100
+      max_steps_per_event: 2
+      proposal_budget: 128
+      valid_candidate_budget: 64
+      min_improvement: 1.0e-08
+      require_structural_improvement: true
+      lambda_weight: 0.25
+      clustering_weight: 1.0
+      orbit_weight: 0.25
+      graphlet_weight: 0.25
+      source_weight: 0.02
+      spectrum_feedback: 0.05
+      feedback_only_after_accept: true
+      realization_fit_steps: 4
+      save_intermediate_graphs: false

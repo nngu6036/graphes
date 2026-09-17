@@ -131,3 +131,12 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 To reproduce S0 from the same checkpoint, generate with
 `gdsm_simple_community_small_s0.yaml`. To reproduce the old lambda-only refiner,
 use `gdsm_simple_community_small_s1_lambda_only.yaml`.
+
+## Structure3 extension (17 September 2026)
+
+The opt-in configuration `gdsm_simple_community_small_structure3.yaml` now
+combines degree/basis conditioning, a matched source-centred spectral process,
+size-three clean-summary heads and intermediate structural rewiring. It does
+not change the retained S0/S1 configurations or silently replace the main S1
+configuration. It requires a new checkpoint. See [the Structure3 guide](GDSM_SIMPLE_STRUCTURE3.md)
+for the implemented process, learned degree-prior checks, controls and commands.

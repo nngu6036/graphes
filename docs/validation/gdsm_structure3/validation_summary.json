@@ -1,0 +1,39 @@
+{
+  "validated_on": "2026-09-17",
+  "test_command": "PYTHONPATH=src OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 pytest -q tests",
+  "result": "196 passed, 1 warning",
+  "new_structure3_tests": 22,
+  "device": "cpu",
+  "cuda_available": false,
+  "python": "3.13.5",
+  "torch": "2.10.0+cpu",
+  "numpy": "2.3.5",
+  "networkx": "3.6.1",
+  "scipy": "1.17.0",
+  "benchmark_retrained": false,
+  "benchmark_mmd_measured": false,
+  "gpu_performance_measured": false,
+  "coverage": [
+    "exact summaries vs brute-force graph atlas up to n=5",
+    "degree/basis anchor moments and eigenvector-sign invariance",
+    "centred forward/DDIM algebra",
+    "all summary-head gradients",
+    "oracle structural swap improves objective and preserves degrees",
+    "connected exact degree realization",
+    "stale degree-prior multiset rejection",
+    "managed training and generation round trips",
+    "deterministic generation replay",
+    "empirical and genuine small trained DH-VAE sampling integration",
+    "Gaussian matched-corruption ablation",
+    "intermediate graph events and spectrum-feedback trajectory change",
+    "legacy S0/S1 and remaining project regressions"
+  ],
+  "warnings": [
+    "PyTorch nested-tensor prototype warning"
+  ],
+  "limitations": [
+    "No full Community-small training or 1024-graph benchmark in this environment.",
+    "No claim of MMD improvement or runtime improvement.",
+    "Four size<=3 orbit means are predicted, not 15 size<=4 orbit means."
+  ]
+}

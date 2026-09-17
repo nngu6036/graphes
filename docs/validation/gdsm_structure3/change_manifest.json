@@ -1,0 +1,24 @@
+{
+  "source_archive": "graphes(20260917-012634).zip",
+  "changed_or_added_files": [
+    "README.md",
+    "configs/baselines/gdsm_simple_community_small_structure3.yaml",
+    "configs/baselines/gdsm_simple_community_small_structure3_empirical_degree.yaml",
+    "configs/baselines/gdsm_simple_community_small_structure3_gaussian.yaml",
+    "configs/baselines/gdsm_simple_community_small_structure3_no_feedback.yaml",
+    "configs/baselines/gdsm_simple_community_small_structure3_no_structure_guidance.yaml",
+    "docs/GDSM_SIMPLE_LADDER.md",
+    "docs/GDSM_SIMPLE_STRUCTURE3.md",
+    "docs/validation/gdsm_structure3/full_suite.log",
+    "docs/validation/gdsm_structure3/validation_summary.json",
+    "scripts/run_gdsm_simple_structure3_community_small.sh",
+    "src/grapher/models/gdsm_simple/degree_initialization.py",
+    "src/grapher/models/gdsm_simple/structure3.py",
+    "src/grapher/models/gdsm_simple/structured_model.py",
+    "src/grapher/models/gdsm_simple/structured_pipeline.py",
+    "src/grapher/models/gdsm_simple/wrapper.py",
+    "tests/test_gdsm_structure3.py"
+  ],
+  "removed_source_files": [],
+  "cache_files_excluded": true
+}

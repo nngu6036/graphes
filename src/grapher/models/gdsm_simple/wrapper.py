@@ -48,6 +48,7 @@ from grapher.models.gdsm_simple.refiner import (
     initial_lambda_gate,
     refine_graph_toward_adjacency_spectrum,
 )
+from grapher.models.gdsm_simple.structure3 import structure_enabled, validate_structure_options
 from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 
 
@@ -164,7 +165,8 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
     implementation_note = (
         "Project-owned reference: adjacency-eigenvalue DDPM/DDIM with empirical "
         "training eigenbases, UΛU^T threshold reconstruction, and optional "
-        "source-preserving degree-constrained spectral refinement at generation."
+        "source-preserving spectral refinement or the opt-in Structure3 "
+        "degree/basis-conditioned, structure-guided generation stage."
     )
     supported_datasets = frozenset({"community_small", "ego_small", "grid"})
 
@@ -244,17 +246,14 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         if unknown:
             raise ValueError(f"Unknown gdsm_simple options: {unknown}")
         extensions = options.get("extensions", {}) or {}
-        unsupported = [
-            key for key in ("degree_conditioning", "hh_initialization")
-            if bool(extensions.get(key, False))
-        ]
-        if str(extensions.get("structural_summary", "none")).lower() != "none":
-            unsupported.append("structural_summary")
-        if unsupported:
-            raise NotImplementedError(
-                "This reference intentionally keeps GraphER extensions disabled; "
-                f"requested unsupported extensions: {unsupported}. Add them as a new ablation stage."
-            )
+        if structure_enabled(extensions):
+            validate_structure_options(options)
+        else:
+            unsupported = [key for key in ("degree_conditioning", "hh_initialization") if bool(extensions.get(key, False))]
+            if str(extensions.get("structural_summary", "none")).lower() != "none":
+                unsupported.append("structural_summary")
+            if unsupported:
+                raise ValueError(f"Enable the Structure3 extension to use {unsupported}; see GDSM_SIMPLE_STRUCTURE3.md.")
         estimates = options.get("training_estimates", {}) or {}
         if estimates.get("enabled", False):
             raise ValueError("gdsm_simple does not create corrector-training estimates")
@@ -276,6 +275,9 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         if request.resume_from is not None:
             raise ValueError("gdsm_simple resume is not implemented")
         options = self._options(request)
+        if structure_enabled(options.get("extensions", {})):
+            from grapher.models.gdsm_simple.structured_pipeline import train_structured
+            return train_structured(self, request, options)
         layout = request.run.layout
         artifacts = self._artifacts(request)
         fingerprint = request.dataset.fingerprint()
@@ -479,6 +481,9 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             raise ValueError(f"Unsupported gdsm_simple generation overrides: {unknown}")
         _deep_update(options, request.options)
         generation_extensions = options.get("extensions", {}) or {}
+        if state.get("format") == "gdsm_simple_structure3_checkpoint_v2" or structure_enabled(generation_extensions):
+            from grapher.models.gdsm_simple.structured_pipeline import generate_structured
+            return generate_structured(self, request, state, manifest, options)
         generation_unsupported = [
             key for key in ("degree_conditioning", "hh_initialization")
             if bool(generation_extensions.get(key, False))

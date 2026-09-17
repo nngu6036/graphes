@@ -1,0 +1,10 @@
+........................................................................ [ 36%]
+........................................................................ [ 73%]
+....................................................                     [100%]
+=============================== warnings summary ===============================
+tests/test_gdsm_structure3.py::test_training_generation_roundtrip_and_checkpoint_reuse
+  /opt/pyvenv/lib/python3.13/site-packages/torch/nn/modules/transformer.py:531: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)
+    output = torch._nested_tensor_from_mask(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+196 passed, 1 warning in 5.12s
