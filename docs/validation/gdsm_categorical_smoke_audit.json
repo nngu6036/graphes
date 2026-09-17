@@ -1,0 +1,16 @@
+{
+  "status": "passed",
+  "num_graphs": 12,
+  "artifact_hashes_verified": true,
+  "node_counts_preserved": true,
+  "final_local_node_types_preserved": true,
+  "final_local_indexed_degrees_and_typed_degrees_preserved": true,
+  "prior_degree_preservation_rate": 0.4166666666666667,
+  "initial_degree_preservation_rate": 0.0,
+  "connectedness_rate": 0.9166666666666666,
+  "max_eigenpair_reconstruction_error": 1.9108767588260633e-06,
+  "max_eigenvector_orthogonality_error": 8.344650268554688e-07,
+  "recorded_basis_updates_per_graph": 6,
+  "recorded_categorical_degree_change_steps_mean": 4.5,
+  "degree_changes_are_allowed_not_required": true
+}

@@ -56,7 +56,7 @@ _MODEL_DATASETS: dict[str, dict[str, DatasetCLIProfile]] = {
     },
     "gdsm_simple": {
         key: DatasetCLIProfile(PROFILES[key].serialized_id)
-        for key in ("community_small", "ego_small", "grid")
+        for key in ("community_small", "ego_small", "grid", "qm9", "zinc")
     },
     "edge": {
         key: DatasetCLIProfile(PROFILES[key].serialized_id)
@@ -143,6 +143,10 @@ _TRAINING_ESTIMATE_DEFAULT: dict[str, bool | None] = {
     "edge": None,
     "spectre": None,
 }
+
+
+# Generic user-prepared categorical graphs; never impersonates a benchmark.
+_MODEL_DATASETS['gdsm_simple']['attributed'] = DatasetCLIProfile('attributed')
 
 
 def _positive_int(raw: str) -> int:

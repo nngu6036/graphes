@@ -1,0 +1,101 @@
+# Joint spectral-categorical GDSM. Starting settings, NOT benchmark-tuned.
+# Node/edge marginal noise uses exact-terminal cosine; old linear beta/threshold keys do not apply.
+# 500 posterior transitions; late swaps at s=100,50,0. Eigenbasis refreshed after every transition.
+gdsm_simple:
+  train:
+    epochs: 200
+    batch_size: 64
+    lr: 0.0002
+    weight_decay: 1.0e-06
+    grad_norm: 1.0
+    validation_every: 5
+    log_every: 5
+    max_train_graphs: null
+  model:
+    max_nodes: 9
+    hidden_dim: 128
+    num_layers: 3
+    num_heads: 4
+    ff_dim: 256
+    dropout: 0.0
+  diffusion:
+    steps: 500
+  sample:
+    steps: 500
+  generation_batch_size: 32
+  runtime:
+    device: auto
+  extensions:
+    degree_conditioning: false
+    hh_initialization: false
+    degree_preserving_rewiring: false
+    structural_summary: none
+    attributed_categorical:
+      enabled: true
+      categories:
+        node_attribute: atomic_num
+        node_categories:
+        - 6
+        - 7
+        - 8
+        - 9
+        edge_attribute: bond_type
+        edge_categories:
+        - 1
+        - 2
+        - 3
+      noise:
+        type: marginal
+        schedule: cosine_exact_terminal
+        pseudocount: 0.001
+      graphlets:
+        size: 3
+        connected_only: true
+        clustering_bins: 100
+      initialization:
+        mode: degree_basis
+        ridge: 0.001
+        diagonal_weight: 1.0
+        basis_max_per_size: 32
+        degree_generator:
+          type: dhvae
+          fallback: error
+          postprocess_policy: reject_only
+          checkpoint_path: outputs/degree_generators/qm9_categorical_prior/seed_42/checkpoint.pt
+          sample_num_nodes: empirical
+          sample_num_edges: model
+          exact_degree_sum_conditioning: true
+          max_resample: 500
+          model_resample_attempts: 32
+          parity_conditioned: false
+          max_parity_resample: 1
+      spectral_conditioning: true
+      spectrum_feedback: 0.05
+      feedback_start_fraction: 0.2
+      loss_weights:
+        spectral: 1.0
+        node: 1.0
+        edge: 1.0
+        graphlet: 0.5
+        mass: 0.5
+        clustering: 0.5
+        orbit: 0.25
+      guidance:
+        enabled: true
+        start_fraction: 0.2
+        every: 50
+        max_steps_per_event: 2
+        proposal_budget: 128
+        valid_candidate_budget: 64
+        same_edge_type: true
+        preserve_connectivity_if_connected: true
+        min_improvement: 1.0e-08
+        require_structure_improvement: true
+        weights:
+          graphlet: 1.0
+          mass: 1.0
+          clustering: 0.5
+          orbit: 0.25
+          spectral: 0.25
+          edge: 0.1
+      save_trajectory: false

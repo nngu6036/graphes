@@ -1,0 +1,129 @@
+{
+  "status": "passed",
+  "split_fingerprint": "72c12bb9e843b9d6a62a2c122b256bca844199a629cdede23d1b1479795645f2",
+  "checked": {
+    "train": {
+      "graphs": 5,
+      "sizes": {
+        "3": 1,
+        "4": 1,
+        "5": 1,
+        "6": 2
+      }
+    },
+    "val": {
+      "graphs": 2,
+      "sizes": {
+        "3": 1,
+        "4": 1
+      }
+    }
+  },
+  "category_vocabulary": {
+    "node_values": [
+      "blue",
+      "red"
+    ],
+    "edge_values": [
+      "a",
+      "b"
+    ],
+    "node_attribute": "node_type",
+    "edge_attribute": "edge_type"
+  },
+  "test_content_read": false,
+  "max_nodes": 6,
+  "ordinary_degree_checkpoint": null,
+  "degree_prior_is_not_a_hard_constraint": true
+}
+No trained degree prior required by this config.
+[run_gdsm_simple_baseline 2026-09-17T09:36:08+00:00] starting training: dataset=attributed, run_id=seed_42_spectral_categorical, seed=42
+[gdsm-categorical] epoch=1 train=4.34076 best_val=4.54853
+[gdsm-categorical] epoch=2 train=4.23061 best_val=4.49126
+[run_gdsm_simple_baseline 2026-09-17T09:36:09+00:00] training completed: checkpoint=/mnt/data/gdsm_categorical_cli_smoke/runs/gdsm_simple/attributed/seed_42_spectral_categorical/train/checkpoints/gdsm_simple.pt
+{
+  "checkpoint": "/mnt/data/gdsm_categorical_cli_smoke/runs/gdsm_simple/attributed/seed_42_spectral_categorical/train/checkpoints/gdsm_simple.pt",
+  "common_config": null,
+  "dataset": "attributed",
+  "experiment": null,
+  "generation_seed": 42,
+  "model": "gdsm_simple",
+  "native_dataset": null,
+  "run_dir": "/mnt/data/gdsm_categorical_cli_smoke/runs/gdsm_simple/attributed/seed_42_spectral_categorical",
+  "run_id": "seed_42_spectral_categorical",
+  "seed_id": 42,
+  "serialized_dataset": "attributed",
+  "stage": "train",
+  "status": "complete",
+  "training_estimated_graphs": null,
+  "training_ground_truth_graphs": null,
+  "training_ground_truth_model_view": null,
+  "training_manifest": "/mnt/data/gdsm_categorical_cli_smoke/runs/gdsm_simple/attributed/seed_42_spectral_categorical/train/manifest.json",
+  "wrapper_config": "/mnt/data/gdsm_categorical_cli_smoke/config.yaml"
+}
+[run_gdsm_simple_baseline 2026-09-17T09:36:11+00:00] starting generation: requested=12, seed=42
+[gdsm-categorical] generated 3/12
+[gdsm-categorical] generated 6/12
+[gdsm-categorical] generated 9/12
+[gdsm-categorical] generated 12/12
+[run_gdsm_simple_baseline 2026-09-17T09:36:11+00:00] generation completed: graphs=/mnt/data/gdsm_categorical_cli_smoke/runs/gdsm_simple/attributed/seed_42_spectral_categorical/generations/seed_42_n_12/base_graphs.pkl
+{
+  "checkpoint": "/mnt/data/gdsm_categorical_cli_smoke/runs/gdsm_simple/attributed/seed_42_spectral_categorical/train/checkpoints/gdsm_simple.pt",
+  "common_config": null,
+  "dataset": "attributed",
+  "experiment": null,
+  "generated_graphs": "/mnt/data/gdsm_categorical_cli_smoke/runs/gdsm_simple/attributed/seed_42_spectral_categorical/generations/seed_42_n_12/base_graphs.pkl",
+  "generation_id": "seed_42_n_12",
+  "generation_manifest": "/mnt/data/gdsm_categorical_cli_smoke/runs/gdsm_simple/attributed/seed_42_spectral_categorical/generations/seed_42_n_12/manifest.json",
+  "generation_seed": 42,
+  "graphs_sha256": "cedb5aef235cdc4db9c6d6f00417786fe01f70eafb5b891c3b1d183cd1e8191f",
+  "model": "gdsm_simple",
+  "native_dataset": null,
+  "num_samples": 12,
+  "run_dir": "/mnt/data/gdsm_categorical_cli_smoke/runs/gdsm_simple/attributed/seed_42_spectral_categorical",
+  "run_id": "seed_42_spectral_categorical",
+  "seed_id": 42,
+  "serialized_dataset": "attributed",
+  "stage": "generate",
+  "status": "complete",
+  "training_manifest": "/mnt/data/gdsm_categorical_cli_smoke/runs/gdsm_simple/attributed/seed_42_spectral_categorical/train/manifest.json",
+  "wrapper_config": "/mnt/data/gdsm_categorical_cli_smoke/config.yaml"
+}
+{
+  "status": "passed",
+  "num_graphs": 12,
+  "artifact_hashes_verified": true,
+  "node_counts_preserved": true,
+  "final_local_node_types_preserved": true,
+  "final_local_indexed_degrees_and_typed_degrees_preserved": true,
+  "prior_degree_preservation_rate": 0.4166666666666667,
+  "initial_degree_preservation_rate": 0.0,
+  "connectedness_rate": 0.9166666666666666,
+  "max_eigenpair_reconstruction_error": 1.9108767588260633e-06,
+  "max_eigenvector_orthogonality_error": 8.344650268554688e-07,
+  "recorded_basis_updates_per_graph": 6,
+  "recorded_categorical_degree_change_steps_mean": 4.5,
+  "degree_changes_are_allowed_not_required": true
+}
+{
+  "num_generated": 12,
+  "num_reference": 3,
+  "reference_path": "/mnt/data/gdsm_categorical_cli_smoke/data/attributed/test.pkl",
+  "reference_sha256": "dd7a6194d4c69c11b7e5c822673eda1a9ac9bcdb82fd1d4ca7539c40d7f52ad9",
+  "reference_subsample_seed": null,
+  "protocol": "biased_RBF_MMD_squared_Euclidean",
+  "sigma": 1.0,
+  "not_standard_graphRNN_ORCA_or_NSPDK": true,
+  "raw_graphs_no_sanitization_or_filter": true,
+  "external_typed_graphlet3_class_count": 28,
+  "mmd2": {
+    "node_category_histogram": 0.17196988594325946,
+    "edge_category_histogram": 0.1788298286580403,
+    "typed_graphlet3_joint_mass": 0.28573288672307173,
+    "connected_triple_mass": 0.23841711226801965
+  },
+  "mean_conditional_overflow_against_training_vocabulary": {
+    "generated": 0.9147603511810303,
+    "reference": 0.0
+  }
+}

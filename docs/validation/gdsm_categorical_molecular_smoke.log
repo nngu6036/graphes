@@ -1,0 +1,34 @@
+[run_gdsm_simple_baseline 2026-09-17T09:37:21+00:00] starting training: dataset=qm9, run_id=categorical_smoke, seed=42
+[gdsm-categorical] epoch=1 train=5.29877 best_val=5.52477
+[gdsm-categorical] epoch=2 train=5.20206 best_val=5.47808
+[run_gdsm_simple_baseline 2026-09-17T09:37:22+00:00] training completed: checkpoint=/mnt/data/gdsm_categorical_molecular_smoke/runs/gdsm_simple/qm9/categorical_smoke/train/checkpoints/gdsm_simple.pt
+[run_gdsm_simple_baseline 2026-09-17T09:37:22+00:00] starting generation: requested=12, seed=42
+[gdsm-categorical] generated 4/12
+[gdsm-categorical] generated 8/12
+[gdsm-categorical] generated 12/12
+[run_gdsm_simple_baseline 2026-09-17T09:37:22+00:00] generation completed: graphs=/mnt/data/gdsm_categorical_molecular_smoke/runs/gdsm_simple/qm9/categorical_smoke/generations/seed_42_n_12/base_graphs.pkl
+{
+  "checkpoint": "/mnt/data/gdsm_categorical_molecular_smoke/runs/gdsm_simple/qm9/categorical_smoke/train/checkpoints/gdsm_simple.pt",
+  "common_config": null,
+  "dataset": "qm9",
+  "experiment": null,
+  "generated_graphs": "/mnt/data/gdsm_categorical_molecular_smoke/runs/gdsm_simple/qm9/categorical_smoke/generations/seed_42_n_12/base_graphs.pkl",
+  "generation_id": "seed_42_n_12",
+  "generation_manifest": "/mnt/data/gdsm_categorical_molecular_smoke/runs/gdsm_simple/qm9/categorical_smoke/generations/seed_42_n_12/manifest.json",
+  "generation_seed": 42,
+  "graphs_sha256": "2a091615583b102e03498c93c891f31fb2b7087d329471688ff6d0b14fe287bb",
+  "model": "gdsm_simple",
+  "native_dataset": null,
+  "num_samples": 12,
+  "run_dir": "/mnt/data/gdsm_categorical_molecular_smoke/runs/gdsm_simple/qm9/categorical_smoke",
+  "run_id": "categorical_smoke",
+  "seed_id": 42,
+  "serialized_dataset": "qm9_attributed",
+  "stage": "all",
+  "status": "complete",
+  "training_estimated_graphs": null,
+  "training_ground_truth_graphs": null,
+  "training_ground_truth_model_view": null,
+  "training_manifest": "/mnt/data/gdsm_categorical_molecular_smoke/runs/gdsm_simple/qm9/categorical_smoke/train/manifest.json",
+  "wrapper_config": "/mnt/data/gdsm_categorical_molecular_smoke/config.yaml"
+}

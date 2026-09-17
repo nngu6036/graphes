@@ -49,6 +49,7 @@ from grapher.models.gdsm_simple.refiner import (
     refine_graph_toward_adjacency_spectrum,
 )
 from grapher.models.gdsm_simple.structure3 import structure_enabled, validate_structure_options
+from grapher.models.gdsm_simple.categorical import enabled as categorical_enabled
 from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 
 
@@ -161,14 +162,14 @@ def _spectral_dataset(graphs: list[nx.Graph], max_nodes: int) -> tuple[torch.Ten
 class GDSMSimpleWrapper(BaseGeneratorWrapper):
     model_id = "gdsm_simple"
     display_name = "GSDM-Simple"
-    capabilities = BaselineCapabilities(frozenset({"generic"}), "in_process", "ready")
+    capabilities = BaselineCapabilities(frozenset({"generic", "attributed"}), "in_process", "ready")
     implementation_note = (
         "Project-owned reference: adjacency-eigenvalue DDPM/DDIM with empirical "
         "training eigenbases, UΛU^T threshold reconstruction, and optional "
         "source-preserving spectral refinement or the opt-in Structure3 "
         "degree/basis-conditioned, structure-guided generation stage."
     )
-    supported_datasets = frozenset({"community_small", "ego_small", "grid"})
+    supported_datasets = frozenset({"community_small", "ego_small", "grid", "qm9", "zinc", "attributed"})
 
     default_options: dict[str, Any] = {
         "train": {
@@ -246,7 +247,10 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         if unknown:
             raise ValueError(f"Unknown gdsm_simple options: {unknown}")
         extensions = options.get("extensions", {}) or {}
-        if structure_enabled(extensions):
+        if categorical_enabled(extensions):
+            from grapher.models.gdsm_simple.categorical.config import resolve
+            resolve(options)
+        elif structure_enabled(extensions):
             validate_structure_options(options)
         else:
             unsupported = [key for key in ("degree_conditioning", "hh_initialization") if bool(extensions.get(key, False))]
@@ -275,6 +279,11 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         if request.resume_from is not None:
             raise ValueError("gdsm_simple resume is not implemented")
         options = self._options(request)
+        if categorical_enabled(options.get("extensions", {})):
+            from grapher.models.gdsm_simple.categorical.pipeline import train
+            return train(self, request, options)
+        if request.run.dataset_id in {"qm9", "zinc", "attributed"}:
+            raise ValueError("Molecular GDSM requires extensions.attributed_categorical.enabled=true; refusing to drop attributes")
         if structure_enabled(options.get("extensions", {})):
             from grapher.models.gdsm_simple.structured_pipeline import train_structured
             return train_structured(self, request, options)
@@ -481,6 +490,9 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             raise ValueError(f"Unsupported gdsm_simple generation overrides: {unknown}")
         _deep_update(options, request.options)
         generation_extensions = options.get("extensions", {}) or {}
+        if state.get("format") == "gdsm_spectral_categorical_checkpoint_v1" or categorical_enabled(generation_extensions):
+            from grapher.models.gdsm_simple.categorical.pipeline import generate
+            return generate(self, request, state, manifest, options)
         if state.get("format") == "gdsm_simple_structure3_checkpoint_v2" or structure_enabled(generation_extensions):
             from grapher.models.gdsm_simple.structured_pipeline import generate_structured
             return generate_structured(self, request, state, manifest, options)

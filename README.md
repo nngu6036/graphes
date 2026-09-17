@@ -10,6 +10,23 @@ The repository is organized for controlled experiments: prepared dataset splits
 are frozen, generated artifacts are run-scoped, and baseline outputs are routed
 through the same evaluation code whenever the graph representation permits it.
 
+## GDSM spectral–categorical attributed extension (17 September 2026)
+
+New opt-in node/edge marginal categorical diffusion coupled to binary-adjacency
+spectral denoising, typed connected size-3 graphlet/mass prediction, and late
+same-type local swaps. Categorical edges define the only adjacency; eigenvectors
+are recomputed from that retained graph at every reverse step. Initial degrees
+are a soft prior, not an invariant. Fresh joint training is required.
+
+See [the full implementation and run guide](docs/GDSM_SPECTRAL_CATEGORICAL.md).
+Main configs: `configs/baselines/gdsm_simple_qm9_categorical.yaml` and
+`configs/baselines/gdsm_simple_zinc_categorical.yaml`. A generic `attributed`
+profile and Community-small/Ego-small categorical ablations are also included.
+Run `DEVICE=cuda:0 N=1024 bash scripts/run_gdsm_categorical.sh qm9 all` from this
+root with existing prepared splits and the molecular metric dependencies.
+No chemical validity, connectivity, ConStruct projection guarantee or full-benchmark
+result is claimed by this experimental variant.
+
 ## GSDM-Simple Structure3 (17 September 2026)
 
 An opt-in GSDM-Simple stage now adds clean clustering-histogram, size-three
