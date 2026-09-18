@@ -1,0 +1,58 @@
+# Consumed by scripts/gdsm_final_suite.py, not passed to the model parser.
+experiment: gdsm_final_g345
+implementation: project-owned gdsm_simple spectral-categorical multiscale branch;
+  not official GSDM
+seeds:
+- 42
+- 43
+- 44
+dataset_root: outputs/datasets
+output_root: outputs/baselines
+run_tag: gdsm_final_g345
+evaluation_seed: 42
+training_split: train
+model_selection_split: val
+reference_split: test
+rebuild_datasets: false
+graphlet_orders:
+- 3
+- 4
+- 5
+molecular_source: raw_valid
+qed_weights: RDKit WEIGHT_MEAN
+qed_thresholds:
+- 0.5
+- 0.7
+qed_threshold_interpretation: prespecified descriptive cutoffs, not clinical or universal
+  drug-likeness criteria
+report_uncertainty: unweighted mean and sample standard deviation (ddof=1) of the
+  three run-level metrics
+datasets:
+  community_small:
+    serialized_dataset: sbm
+    model_config: configs/experiments/gdsm_final/community_small.yaml
+    degree_prior_base_config: configs/experiments/dhvae/community_small.yaml
+    num_generate: 1024
+    molecular: false
+    max_nodes: 20
+  ego_small:
+    serialized_dataset: ego_small
+    model_config: configs/experiments/gdsm_final/ego_small.yaml
+    degree_prior_base_config: configs/experiments/dhvae/ego_small.yaml
+    num_generate: 1024
+    molecular: false
+    max_nodes: 18
+  qm9:
+    serialized_dataset: qm9_attributed
+    model_config: configs/experiments/gdsm_final/qm9.yaml
+    degree_prior_base_config: configs/experiments/dhvae/qm9_categorical_spectral_prior.yaml
+    num_generate: 10000
+    molecular: true
+    max_nodes: 9
+  zinc:
+    serialized_dataset: zinc
+    model_config: configs/experiments/gdsm_final/zinc.yaml
+    degree_prior_base_config: configs/experiments/dhvae/zinc_categorical_spectral_prior.yaml
+    num_generate: 10000
+    molecular: true
+    max_nodes: 38

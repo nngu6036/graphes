@@ -216,17 +216,64 @@ Molecular evaluation
 
 
 
-CFG=configs/baselines/gdsm_simple_zinc_categorical.yaml
+
+
+VARIANT=no_guidance \
+RUN=seed_42_spectral_categorical \
+DEVICE=cuda:0 N=10240 GDSM_EIGH_BACKEND=cpu \
+  bash scripts/run_gdsm_categorical.sh qm9 generate
+
+VARIANT=no_guidance \
+RUN=seed_42_spectral_categorical \
+DEVICE=cuda:0 N=10240 GDSM_EIGH_BACKEND=cpu \
+  bash scripts/run_gdsm_categorical.sh qm9 evaluate
+
+
+/home/quang/graphes/outputs/baselines/gdsm_simple/qm9/seed_42_spectral_categorical/generations/seed_42_n_1024
+
+
 RUN=seed_42_spectral_categorical
-N=1024
+DEVICE=cuda:0
+N=10240
+GDSM_EIGH_BACKEND=cpu
+bash scripts/run_gdsm_categorical.sh qm9 generate
 
-PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
-  --stage train \
-  --dataset zinc \
-  --no-common-config \
-  --wrapper-config "$CFG" \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --device cuda:0
+RUN=seed_42_spectral_categorical \
+DEVICE=cuda:0 N=10240 GDSM_EIGH_BACKEND=cpu \
+  bash scripts/run_gdsm_categorical.sh qm9 evaluate
 
 
+Molecular evaluation
+  validity: 0.9775390625
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.986328125
+  validity_without_correction: 0.9775390625
+  fcd: 0.5541950439488801
+  num_generated_graphs: 1024
+  num_valid_generated_molecules: 1001
+  num_invalid_generated_molecules: 23
+  num_valid_generated_molecules_with_projected_formal_charges: 1010
+  num_invalid_generated_molecules_after_projected_formal_charges: 14
+  num_raw_invalid_resolved_by_projected_formal_charges: 9
+  projected_formal_charge_success_rate_on_raw_invalid: 0.391304347826087
+  num_valid_generated_molecules_with_correction: 1024
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 23
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.998001998001998
+  unique_valid_count: 999
+  novelty_rate: 0.45545545545545546
+  novel_unique_valid_count: 455
+  nspdk_mmd: 0.0015856786419585205
+  nspdk_mmd_valid_only: 0.0015856786419585205
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.683209219801439e-05
+  nspdk_proxy_mmd_metric_source: 1.8894596611427327e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 1001
+  fcd_generated_smiles_source: raw_valid
