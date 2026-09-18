@@ -11,6 +11,13 @@ PYTHONHASHSEED=44 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
   --serialized-dataset ego_small
 ```
 
+### Train the seed-matched DH-VAE prior
+
+```bash
+PYTHONHASHSEED=44 PYTHONPATH=src python scripts/train_degree_generator.py \
+  --config configs/experiments/dhvae_final_explicit/ego_small_seed_44.yaml
+```
+
 ### Train the model
 
 ```bash

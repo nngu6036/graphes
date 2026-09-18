@@ -1,0 +1,65 @@
+# Explicit DH-VAE prior for ego_small, seed 43.
+# No runtime config rewriting; seed, device, full-split training and checkpoint path are literal.
+# This is the ordinary degree-histogram prior used by the simple-GDSM spectral-categorical branch.
+experiment: ego_small_ordinary_degree_spectral_prior
+benchmark: ego_small
+seed: 43
+dataset:
+  name: ego_small
+  benchmark: ego_small
+  config_path: configs/datasets/ego_small.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+summary:
+  degree_hist_max_degree: auto
+constructor:
+  type: havel_hakimi
+  ensure_connected: true
+degree_generator:
+  enabled: true
+  type: degree_histogram_vae
+  device: cuda:0
+  latent_dim: 32
+  hidden_dim: 128
+  size_condition_dim: 16
+  use_edge_count_conditioning: true
+  edge_condition_dim: 16
+  prior_condition_on_edges: true
+  edge_count_loss_weight: 2.0
+  prior_type: conditional_gmm
+  prior_components: 4
+  prior_hidden_dim: 128
+  prior_logvar_min: -6.0
+  prior_logvar_max: 4.0
+  num_layers: 2
+  dropout: 0.0
+  learning_rate: 0.001
+  weight_decay: 1.0e-05
+  kl_loss_weight: 0.005
+  kl_warmup_epochs: 50
+  node_count_loss_weight: 1.0
+  degree_histogram_loss_weight: 5.0
+  degree_moment_loss_weight: 0.25
+  prior_distribution_loss_weight: 1.0
+  prior_distribution_kernel_sigma: 0.2
+  aggregate_prior_moment_loss_weight: 0.05
+  progress_interval: 10
+  deterministic: false
+  sample_num_nodes: empirical
+  sample_num_edges: model
+  exact_degree_sum_conditioning: true
+  max_resample: 500
+  model_resample_attempts: 32
+  parity_conditioned: false
+  max_parity_resample: 1
+  postprocess_policy: reject_only
+  fallback: error
+  checkpoint_path: outputs/degree_generators/gdsm_final_g345/ego_small/seed_43/checkpoint.pt
+  epochs: 5000
+  batch_size: 64
+degree_evaluation:
+  num_samples: 1024
+  max_reference_sequences: null
+  batch_size: 256
+  output_dir: outputs/degree_generators/gdsm_final_g345/ego_small/seed_43/evaluation
