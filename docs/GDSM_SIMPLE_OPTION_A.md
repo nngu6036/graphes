@@ -210,7 +210,7 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN" --generated-graphs "$GEN/base_graphs.pkl" \
   --generated-stage gdsm_simple_option_a \
   --base-graphs "$GEN/initial_graphs.pkl" --reference-split test \
-  --generic-mmd-protocol graphrnn --num-samples 16 \
+  --generic-mmd-protocol graphrnn \
   --output-dir "$GEN/evaluation_test"
 ```
 
@@ -219,8 +219,8 @@ The Ego prior path is `outputs/degree_generators/ego_small/seed_42/checkpoint.pt
 the Community prior path remains `outputs/degree_generators/sbm/seed_42/checkpoint.pt`.
 The runner selects these automatically.
 
-The evaluator's `--num-samples 16` limits the illustration, not the MMD batch;
-no `--max-graphs` cap is set here. ORCA uses the existing external orbit protocol,
+The evaluator writes metrics only. No `--max-graphs` cap is set here, so the
+complete generated batch is evaluated. ORCA uses the existing external orbit protocol,
 not only the four predicted size-at-most-three orbit coordinates.
 
 ### Reuse the current Structure3 checkpoint without retraining

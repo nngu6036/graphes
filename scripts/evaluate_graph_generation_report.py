@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Create the paper-facing MMD table and generated-graph sample figure."""
+"""Create the paper-facing graph-generation metrics report."""
 
 from __future__ import annotations
 
@@ -7,19 +7,12 @@ import argparse
 import csv
 import hashlib
 import json
-import os
 import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Sequence
 
-os.environ.setdefault("MPLBACKEND", "Agg")
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/grapher-matplotlib")
-
-import matplotlib.pyplot as plt
 import networkx as nx
-import numpy as np
-from matplotlib.lines import Line2D
 
 from grapher.data.io import load_dataset_splits
 from grapher.rewiring_mlp.evaluation.metrics import (
@@ -40,14 +33,6 @@ from grapher.utils.io import ensure_dir, load_pickle, load_yaml, save_json
 
 REPORT_METRICS = ("degree_mmd", "clustering_mmd", "orbit_mmd")
 GENERIC_REPORT_METRICS = (*REPORT_METRICS, "spectral_mmd", "graphlet_history_mmd")
-ATOM_COLORS = {
-    1: "#F3F4F6",
-    6: "#374151",
-    7: "#2563EB",
-    8: "#DC2626",
-    9: "#16A34A",
-}
-ATOM_LABELS = {1: "H", 6: "C", 7: "N", 8: "O", 9: "F"}
 
 
 def _load_graph_list(path: Path) -> list[nx.Graph]:
@@ -708,180 +693,6 @@ def molecular_quality_metrics(
     )
 
 
-def select_sample_indices(
-    graphs: Sequence[nx.Graph],
-    count: int,
-    *,
-    selection: str,
-    seed: int,
-) -> list[int]:
-    count = min(max(int(count), 0), len(graphs))
-    if count == 0:
-        return []
-    if selection == "random":
-        rng = np.random.default_rng(seed)
-        return sorted(
-            int(index) for index in rng.choice(len(graphs), size=count, replace=False)
-        )
-    if selection != "stratified":
-        raise ValueError(f"Unknown sample selection: {selection!r}.")
-
-    # Cover the generated size range rather than showing only the first graphs.
-    ordered = sorted(
-        range(len(graphs)),
-        key=lambda index: (
-            graphs[index].number_of_nodes(),
-            graphs[index].number_of_edges(),
-            index,
-        ),
-    )
-    positions = np.linspace(0, len(ordered) - 1, num=count)
-    return [ordered[int(round(position))] for position in positions]
-
-
-def _atomic_number(data: dict[str, Any]) -> int | None:
-    value = data.get("atomic_num", data.get("atom_type"))
-    return int(value) if value is not None else None
-
-
-def _draw_graph(
-    axis: Any,
-    graph: nx.Graph,
-    *,
-    graph_index: int,
-    layout_seed: int,
-) -> bool:
-    molecular = any(
-        _atomic_number(data) is not None for _, data in graph.nodes(data=True)
-    )
-    positions = nx.spring_layout(
-        graph,
-        seed=int(layout_seed + graph_index),
-        iterations=150,
-    )
-    node_colors = []
-    labels: dict[Any, str] = {}
-    for node, data in graph.nodes(data=True):
-        atomic_number = _atomic_number(data)
-        node_colors.append(
-            ATOM_COLORS.get(atomic_number, "#60A5FA") if molecular else "#4C78A8"
-        )
-        if molecular and atomic_number is not None:
-            labels[node] = ATOM_LABELS.get(atomic_number, str(atomic_number))
-
-    edge_widths = []
-    edge_colors = []
-    for _, _, data in graph.edges(data=True):
-        bond_type = int(data.get("bond_type", 1))
-        edge_widths.append({1: 1.4, 2: 2.4, 3: 3.4, 4: 2.0}.get(bond_type, 1.4))
-        edge_colors.append("#7C3AED" if bond_type == 4 else "#6B7280")
-
-    node_size = max(90, min(360, int(9000 / max(graph.number_of_nodes(), 1))))
-    nx.draw_networkx_edges(
-        graph,
-        positions,
-        ax=axis,
-        width=edge_widths,
-        edge_color=edge_colors,
-        alpha=0.8,
-    )
-    nx.draw_networkx_nodes(
-        graph,
-        positions,
-        ax=axis,
-        node_color=node_colors,
-        node_size=node_size,
-        edgecolors="#111827",
-        linewidths=0.6,
-    )
-    if labels:
-        nx.draw_networkx_labels(
-            graph,
-            positions,
-            labels=labels,
-            ax=axis,
-            font_size=8,
-            font_color="white",
-        )
-    axis.set_title(
-        f"Sample {graph_index + 1}\n"
-        f"$|V|={graph.number_of_nodes()}$, $|E|={graph.number_of_edges()}$",
-        fontsize=9,
-    )
-    axis.set_axis_off()
-    return molecular
-
-
-def plot_generated_graphs(
-    graphs: Sequence[nx.Graph],
-    indices: Sequence[int],
-    *,
-    output_png: Path,
-    output_pdf: Path,
-    columns: int,
-    layout_seed: int,
-    dpi: int,
-) -> None:
-    if not indices:
-        raise ValueError("At least one generated graph is required for plotting.")
-    columns = max(1, min(int(columns), len(indices)))
-    rows = int(np.ceil(len(indices) / columns))
-    figure, axes = plt.subplots(
-        rows,
-        columns,
-        figsize=(3.2 * columns, 3.0 * rows),
-        squeeze=False,
-    )
-    molecular = False
-    for axis, index in zip(axes.flat, indices):
-        molecular = (
-            _draw_graph(
-                axis,
-                graphs[index],
-                graph_index=index,
-                layout_seed=layout_seed,
-            )
-            or molecular
-        )
-    for axis in axes.flat[len(indices) :]:
-        axis.set_axis_off()
-    if molecular:
-        atoms_present = sorted(
-            {
-                atomic_number
-                for index in indices
-                for _, data in graphs[index].nodes(data=True)
-                if (atomic_number := _atomic_number(data)) is not None
-            }
-        )
-        handles = [
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                color="none",
-                markerfacecolor=ATOM_COLORS.get(atomic_number, "#60A5FA"),
-                markeredgecolor="#111827",
-                label=ATOM_LABELS.get(atomic_number, str(atomic_number)),
-                markersize=8,
-            )
-            for atomic_number in atoms_present
-        ]
-        figure.legend(
-            handles=handles,
-            loc="lower center",
-            ncol=max(1, len(handles)),
-            frameon=False,
-        )
-        figure.subplots_adjust(bottom=0.09)
-    figure.suptitle("Representative generated graphs", fontsize=13)
-    figure.tight_layout(rect=(0, 0.04 if molecular else 0, 1, 0.96))
-    output_png.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output_png, dpi=dpi, bbox_inches="tight")
-    figure.savefig(output_pdf, bbox_inches="tight")
-    plt.close(figure)
-
-
 def _write_csv(rows: Sequence[dict[str, Any]], path: Path) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
@@ -988,8 +799,7 @@ def main() -> None:
         description=(
             "Evaluate saved generated graphs with degree and clustering MMD, "
             "spectral and graphlet MMD for generic graphs, and optional "
-            "four-node ORCA orbit MMD, then plot "
-            "representative samples."
+            "four-node ORCA orbit MMD. Save CSV and JSON metric reports."
         )
     )
     parser.add_argument("--config", required=True)
@@ -1057,16 +867,18 @@ def main() -> None:
             "creating a new reference dataset."
         ),
     )
-    parser.add_argument("--num-samples", type=int, default=8)
+    # Legacy figure options are accepted for command compatibility but ignored.
+    parser.add_argument("--num-samples", type=int, default=8, help=argparse.SUPPRESS)
     parser.add_argument(
         "--sample-selection",
         choices=("stratified", "random"),
         default="stratified",
+        help=argparse.SUPPRESS,
     )
-    parser.add_argument("--sample-seed", type=int, default=42)
-    parser.add_argument("--layout-seed", type=int, default=42)
-    parser.add_argument("--columns", type=int, default=4)
-    parser.add_argument("--dpi", type=int, default=300)
+    parser.add_argument("--sample-seed", type=int, default=42, help=argparse.SUPPRESS)
+    parser.add_argument("--layout-seed", type=int, default=42, help=argparse.SUPPRESS)
+    parser.add_argument("--columns", type=int, default=4, help=argparse.SUPPRESS)
+    parser.add_argument("--dpi", type=int, default=300, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     config = load_yaml(args.config)
@@ -1287,27 +1099,10 @@ def main() -> None:
         }
     )
 
-    indices = select_sample_indices(
-        generated,
-        args.num_samples,
-        selection=args.sample_selection,
-        seed=args.sample_seed,
-    )
-    png_path = output_dir / "generated_graph_samples.png"
-    pdf_path = output_dir / "generated_graph_samples.pdf"
     csv_path = output_dir / "graph_mmd_metrics.csv"
     json_path = output_dir / "graph_evaluation_report.json"
     molecular_csv_path = output_dir / "molecular_quality_metrics.csv"
     valid_smiles_path = output_dir / "valid_generated.smi"
-    plot_generated_graphs(
-        generated,
-        indices,
-        output_png=png_path,
-        output_pdf=pdf_path,
-        columns=args.columns,
-        layout_seed=args.layout_seed,
-        dpi=args.dpi,
-    )
     _write_csv(rows, csv_path)
     molecular_metrics: dict[str, Any] | None = None
     molecular_stage_rows: list[dict[str, Any]] = []
@@ -1422,10 +1217,10 @@ def main() -> None:
             "molecular_conversion_error_counts_by_stage": (
                 molecular_stage_errors if molecular else None
             ),
-            "sample_selection": args.sample_selection,
-            "sample_indices_zero_based": indices,
-            "sample_figure_png": str(png_path),
-            "sample_figure_pdf": str(pdf_path),
+            "sample_selection": None,
+            "sample_indices_zero_based": [],
+            "sample_figure_png": None,
+            "sample_figure_pdf": None,
         },
         json_path,
     )
@@ -1437,8 +1232,6 @@ def main() -> None:
         print(f"Saved metrics: {molecular_csv_path}")
         print(f"Saved SMILES:  {valid_smiles_path}")
     print(f"Saved report:  {json_path}")
-    print(f"Saved figure:  {png_path}")
-    print(f"Saved figure:  {pdf_path}")
 
 
 if __name__ == "__main__":

@@ -502,3 +502,18 @@ PYTHONHASHSEED=43 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scri
   --generic-mmd-protocol graphrnn \
   --num-samples 1024 \
   --output-dir outputs/baselines/gdsm_simple/community_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/evaluation_topology
+
+
+  ## Ego small
+
+  PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 42 \
+  --run-id seed_42_gdsm_final_g345 \
+  --device cuda:0
