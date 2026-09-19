@@ -1,3 +1,6 @@
+export GDSM=/home/quang/GDSM
+export GDSM_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
 RUN=seed_42
 N=1024
 
@@ -28,9 +31,15 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir "$GEN_DIR/evaluation_report"
 
 
-  Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-gdsm_to_test                        0.005480          0.007885      0.000457
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
+gdsm_to_test                        0.018339          0.017282      0.007639        0.013240        0.018920
+
+
+
+export GDSM=/home/quang/GDSM
+export GDSM_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_43
 N=1024
@@ -61,9 +70,15 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-gdsm_to_test                        0.014972          0.010614      0.001501
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
+gdsm_to_test                        0.007689          0.010017      0.000697        0.020482        0.017881
+
+
+export GDSM=/home/quang/GDSM
+export GDSM_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_44
 N=1024
@@ -94,12 +109,15 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
+gdsm_to_test                        0.005802          0.007935      0.000416        0.021648        0.010500
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-gdsm_to_test                        0.010720          0.012201      0.000801
 
 
+export GDSM=/home/quang/GDSM
+export GDSM_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_42
 N=1024
@@ -130,12 +148,15 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
-  Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.012987          0.027056      0.008995
-gdsm_to_test                        0.030634          0.122794      0.010824
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.009729        0.001697
+gdsm_to_test                        0.010434          0.049010      0.005121        0.024742        0.004050
 
 
+export GDSM=/home/quang/GDSM
+export GDSM_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_43
 N=1024
@@ -166,10 +187,16 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.012987          0.027056      0.008995
-gdsm_to_test                        0.009493          0.050174      0.007677
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.009729        0.001697
+gdsm_to_test                        0.016231          0.081054      0.006538        0.031655        0.002637
 
+
+
+
+export GDSM=/home/quang/GDSM
+export GDSM_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_44
 N=1024
@@ -200,6 +227,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
-  Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.012987          0.027056      0.008995
-gdsm_to_test                        0.018179          0.068988      0.005385
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.009729        0.001697
+gdsm_to_test                        0.015620          0.048295      0.004437        0.024992        0.003747
+
+
+COMPLETE !!!

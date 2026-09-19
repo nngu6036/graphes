@@ -104,3 +104,25 @@ wrapper config for other budgets.
 Use identical prepared splits, seeds and evaluation; tune and select on validation
 only. Config edits do not retrain existing checkpoints. New matched comparisons
 require new training runs, retaining their resolved configuration hashes.
+
+## Generate the dataset statistics table
+
+Read all five prepared datasets and write the LaTeX table with exact node/edge
+extrema over train, validation and test combined:
+
+```bash
+PYTHONPATH=src python scripts/create_dataset_statistics_table.py \
+  --root outputs/datasets \
+  --output outputs/reports/dataset_statistics.tex \
+  --json-out outputs/reports/dataset_statistics.json
+```
+
+The script resolves Community-small to `sbm` and QM9 to `qm9_attributed` when
+needed. Training epochs come from the common dataset exposure targets. Generated
+sample counts are 1,024 for generic and 10,000 for molecular datasets. The table
+includes its caption and label and requires `\usepackage{booktabs}` in the paper.
+
+It reads one split at a time, never downloads/prepares data, and never plots or
+generates graphs. Missing or malformed datasets fail without writing a partial
+table. Use `--datasets community_small ego_small grid` to select a subset,
+`--root` for another dataset location, and `--force` to replace existing reports.

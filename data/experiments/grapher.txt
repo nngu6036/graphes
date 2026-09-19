@@ -368,6 +368,129 @@ Molecular evaluation
   "qed_wasserstein_1": 0.005463862403880713
 }
 
+
+# =========================
+# QM9 — Seed 41
+# =========================
+
+PYTHONHASHSEED=41 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
+python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_41.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed \
+  --output-root outputs/baselines \
+  --seed-id 41 \
+  --run-id seed_41_gdsm_final_g345 \
+  --device cuda:0
+
+PYTHONHASHSEED=41 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
+python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_41.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed \
+  --output-root outputs/baselines \
+  --seed-id 41 \
+  --generation-seed 41 \
+  --run-id seed_41_gdsm_final_g345 \
+  --generation-id seed_41_n_10000 \
+  --num-samples 10000 \
+  --device cuda:0
+
+GEN=outputs/baselines/gdsm_simple/qm9/seed_41_gdsm_final_g345/generations/seed_41_n_10000
+
+PYTHONHASHSEED=41 PYTHONPATH=src \
+python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN/molecular_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --nspdk-backend eden \
+  --nspdk-complexity 4 \
+  --nspdk-bond-label-mode hogdiff \
+  --require-fcd \
+  --fcd-device cuda:0 \
+  --output-dir "$GEN/evaluation_molecules"
+
+PYTHONHASHSEED=41 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN/molecular_graphs.pkl" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report "$GEN/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN/evaluation_qed"
+
+
+# =========================
+# QM9 — Seed 45
+# =========================
+
+PYTHONHASHSEED=45 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
+python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_45.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed \
+  --output-root outputs/baselines \
+  --seed-id 45 \
+  --run-id seed_45_gdsm_final_g345 \
+  --device cuda:0
+
+PYTHONHASHSEED=45 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
+python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_45.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed \
+  --output-root outputs/baselines \
+  --seed-id 45 \
+  --generation-seed 45 \
+  --run-id seed_45_gdsm_final_g345 \
+  --generation-id seed_45_n_10000 \
+  --num-samples 10000 \
+  --device cuda:0
+
+GEN=outputs/baselines/gdsm_simple/qm9/seed_45_gdsm_final_g345/generations/seed_45_n_10000
+
+PYTHONHASHSEED=45 PYTHONPATH=src \
+python scripts/evaluate_generated_molecules.py \
+  --generated-graphs "$GEN/molecular_graphs.pkl" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --nspdk-backend eden \
+  --nspdk-complexity 4 \
+  --nspdk-bond-label-mode hogdiff \
+  --require-fcd \
+  --fcd-device cuda:0 \
+  --output-dir "$GEN/evaluation_molecules"
+
+PYTHONHASHSEED=45 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN/molecular_graphs.pkl" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report "$GEN/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN/evaluation_qed"
+
+  
   ## ZINC
 
 PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
@@ -462,7 +585,10 @@ PYTHONHASHSEED=42 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scri
   --num-samples 1024 \
   --output-dir outputs/baselines/gdsm_simple/community_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/evaluation_topolog
 
-
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
+gdsm_simple_base_to_test            0.073732          0.785492      0.425264        0.267453        0.567814
+gdsm_final_to_test                  0.009559          0.080085      0.020576        0.057560        0.117862
 
 PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
   --stage train \
@@ -503,6 +629,129 @@ PYTHONHASHSEED=43 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scri
   --num-samples 1024 \
   --output-dir outputs/baselines/gdsm_simple/community_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/evaluation_topology
 
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
+gdsm_simple_base_to_test            0.073686          0.781639      0.428165        0.265305        0.559752
+gdsm_final_to_test                  0.015680          0.059785      0.014582        0.051978        0.073168
+
+
+PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
+  --seed-id 44 \
+  --run-id seed_44_gdsm_final_g345 \
+  --device cuda:0
+
+PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
+  --seed-id 44 \
+  --run-id seed_44_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 44 \
+  --generation-id seed_44_n_1024 \
+  --num-samples 1024
+
+PYTHONHASHSEED=44 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/evaluation_topology
+
+
+
+  PYTHONHASHSEED=41 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_41.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
+  --seed-id 41 \
+  --run-id seed_41_gdsm_final_g345 \
+  --device cuda:0
+
+PYTHONHASHSEED=41 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_41.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
+  --seed-id 41 \
+  --run-id seed_41_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 41 \
+  --generation-id seed_41_n_1024 \
+  --num-samples 1024
+
+PYTHONHASHSEED=41 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_41_gdsm_final_g345/generations/seed_41_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/community_small/seed_41_gdsm_final_g345/generations/seed_41_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/community_small/seed_41_gdsm_final_g345/generations/seed_41_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/community_small/seed_41_gdsm_final_g345/generations/seed_41_n_1024/evaluation_topology
+
+
+  PYTHONHASHSEED=45 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_45.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
+  --seed-id 45 \
+  --run-id seed_45_gdsm_final_g345 \
+  --device cuda:0
+
+PYTHONHASHSEED=45 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_45.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
+  --seed-id 45 \
+  --run-id seed_45_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 45 \
+  --generation-id seed_45_n_1024 \
+  --num-samples 1024
+
+PYTHONHASHSEED=45 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_45_gdsm_final_g345/generations/seed_45_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/community_small/seed_45_gdsm_final_g345/generations/seed_45_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/community_small/seed_45_gdsm_final_g345/generations/seed_45_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/community_small/seed_45_gdsm_final_g345/generations/seed_45_n_1024/evaluation_topology
 
   ## Ego small
 
@@ -517,3 +766,197 @@ PYTHONHASHSEED=43 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scri
   --seed-id 42 \
   --run-id seed_42_gdsm_final_g345 \
   --device cuda:0
+
+PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 42 \
+  --run-id seed_42_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 42 \
+  --generation-id seed_42_n_1024 \
+  --num-samples 1024
+
+PYTHONHASHSEED=42 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/ego_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/ego_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/ego_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/evaluation_topology
+
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.005604        0.001697
+gdsm_simple_base_to_test            0.148215          0.142648      0.042097        0.162579        0.089631
+gdsm_final_to_test                  0.027087          0.028338      0.007503        0.020622        0.008749
+
+
+ PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 43 \
+  --run-id seed_43_gdsm_final_g345 \
+  --device cuda:0
+
+PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 43 \
+  --run-id seed_43_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 43 \
+  --generation-id seed_43_n_1024 \
+  --num-samples 1024
+
+PYTHONHASHSEED=43 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/ego_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/ego_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/ego_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/evaluation_topology
+
+
+
+PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 44 \
+  --run-id seed_44_gdsm_final_g345 \
+  --device cuda:0
+
+PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 44 \
+  --run-id seed_44_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 44 \
+  --generation-id seed_44_n_1024 \
+  --num-samples 1024
+
+PYTHONHASHSEED=44 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/ego_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/ego_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/ego_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/evaluation_topology
+
+
+
+
+
+PYTHONHASHSEED=41 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_41.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 41 \
+  --run-id seed_41_gdsm_final_g345 \
+  --device cuda:0
+
+PYTHONHASHSEED=41 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_41.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 41 \
+  --run-id seed_41_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 41 \
+  --generation-id seed_41_n_1024 \
+  --num-samples 1024
+
+PYTHONHASHSEED=41 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_41_gdsm_final_g345/generations/seed_41_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/ego_small/seed_41_gdsm_final_g345/generations/seed_41_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/ego_small/seed_41_gdsm_final_g345/generations/seed_41_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/ego_small/seed_41_gdsm_final_g345/generations/seed_41_n_1024/evaluation_topology
+
+
+
+
+PYTHONHASHSEED=45 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_45.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 45 \
+  --run-id seed_45_gdsm_final_g345 \
+  --device cuda:0
+
+PYTHONHASHSEED=45 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_45.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 45 \
+  --run-id seed_45_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 45 \
+  --generation-id seed_45_n_1024 \
+  --num-samples 1024
+
+PYTHONHASHSEED=45 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_45_gdsm_final_g345/generations/seed_45_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/ego_small/seed_45_gdsm_final_g345/generations/seed_45_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/ego_small/seed_45_gdsm_final_g345/generations/seed_45_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/ego_small/seed_45_gdsm_final_g345/generations/seed_45_n_1024/evaluation_topology

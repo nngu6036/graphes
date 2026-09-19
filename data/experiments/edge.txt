@@ -1,3 +1,6 @@
+export EDGE=/home/quang/EDGE
+export EDGE_PYTHON=/home/quang/miniconda3/envs/edge/bin/python
+
 RUN=seed_42
 N=1024
 
@@ -7,6 +10,7 @@ PYTHONPATH=src python scripts/run_edge_baseline.py \
   --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/edge_community_small.yaml \
   --seed-id 42 \
+  --overwrite \
   --run-id "$RUN" \
   --device gpu
 

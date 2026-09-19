@@ -8,6 +8,7 @@ PYTHONPATH=src python scripts/run_spectre_baseline.py \
   --seed-id 42 \
   --run-id seed_42 \
   --device gpu \
+  --overwrite \
   --n-epochs 10000
 
 # Generation
@@ -46,6 +47,7 @@ PYTHONPATH=src python scripts/run_spectre_baseline.py \
   --seed-id 43 \
   --run-id seed_43 \
   --device gpu \
+  --overwrite \
   --n-epochs 10000
 
 # Generation
@@ -82,6 +84,7 @@ PYTHONPATH=src python scripts/run_spectre_baseline.py \
   --seed-id 44 \
   --run-id seed_44 \
   --device gpu \
+  --overwrite \
   --n-epochs 10000
 
 # Generation
@@ -131,6 +134,7 @@ PYTHONPATH=src python scripts/run_spectre_baseline.py \
   --wrapper-config configs/baselines/spectre_ego_small.yaml \
   --seed-id 42 \
   --run-id seed_42 \
+  --overwrite \
   --num-samples 1024 \
   --device gpu
 
@@ -167,6 +171,7 @@ PYTHONPATH=src python scripts/run_spectre_baseline.py \
   --common-config configs/baselines/common_ego_small.yaml \
   --wrapper-config configs/baselines/spectre_ego_small.yaml \
   --seed-id 43 \
+  --overwrite \
   --run-id "$RUN" \
   --num-samples "$N" \
   --device gpu
@@ -182,3 +187,37 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   Comparison                        Degree MMD    Clustering MMD     Orbit MMD
 train_to_test                       0.012987          0.027056      0.008995
 spectre_to_test                     0.018790          0.075485      0.014003
+
+
+
+
+
+RUN=seed_44
+N=1024
+
+PYTHONPATH=src python scripts/run_spectre_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/spectre_ego_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_spectre_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/spectre_ego_small.yaml \
+  --seed-id 44 \
+  --overwrite \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/spectre/ego_small/$RUN/generations/seed_44_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"

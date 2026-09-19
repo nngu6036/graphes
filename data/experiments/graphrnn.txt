@@ -1,147 +1,243 @@
 
 export GRAPHRNN=/home/quang/GraphRNN
+export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+
+RUN=seed_42
+N=1024
 
 PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --stage train \
   --dataset community_small \
-  --num-samples 1024 \
-  --seed-id 42 \
-  --run-id seed_42_spectre_v2 \
+  --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/graphrnn_community_small.yaml \
-  --skip-training-estimates
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
 
+PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/graphrnn_community_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GEN_DIR="outputs/baselines/graphrnn/community_small/seed_42_spectre_v2/generations/seed_42_n_1024"
+GEN_DIR="outputs/baselines/graphrnn/community_small/$RUN/generations/seed_42_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/baselines/graphrnn_community_small.yaml \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-graphrnn_to_test                    0.022863          0.101231      0.006601
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
+graphrnn_to_test                    0.059348          0.127909      0.031255        0.093625        0.035285
 
 
 
+
+export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 export GRAPHRNN=/home/quang/GraphRNN
 
+
+RUN=seed_43
+N=1024
+
 PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --stage train \
   --dataset community_small \
-  --num-samples 1024 \
-  --seed-id 43 \
-  --run-id seed_43_spectre_v2 \
+  --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/graphrnn_community_small.yaml \
-  --skip-training-estimates
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --device gpu
 
+PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/graphrnn_community_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GEN_DIR="outputs/baselines/graphrnn/community_small/seed_43_spectre_v2/generations/seed_43_n_1024"
+GEN_DIR="outputs/baselines/graphrnn/community_small/$RUN/generations/seed_43_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/baselines/graphrnn_community_small.yaml \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-graphrnn_to_test                    0.020003          0.071855      0.006516
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
+graphrnn_to_test                    0.035003          0.129724      0.007959        0.063566        0.017993
+
+
 
 export GRAPHRNN=/home/quang/GraphRNN
+export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+RUN=seed_44
+N=1024
 
 PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --stage train \
   --dataset community_small \
-  --num-samples 1024 \
-  --seed-id 44 \
-  --run-id seed_44_spectre_v2 \
+  --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/graphrnn_community_small.yaml \
-  --skip-training-estimates
-
-
-GEN_DIR="outputs/baselines/graphrnn/community_small/seed_44_spectre_v2/generations/seed_44_n_1024"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/baselines/graphrnn_community_small.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-  Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-graphrnn_to_test                    0.025478          0.096131      0.008679
-
-
-
-
-export GRAPHRNN=/home/quang/GraphRNN
-
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --dataset ego_small \
-  --num-samples 1024 \
-  --seed-id 42 \
-  --run-id seed_42_spectre_v2 \
-  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
-  --skip-training-estimates
-
-
-GEN_DIR="outputs/baselines/graphrnn/ego_small/seed_42_spectre_v2/generations/seed_42_n_1024"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/baselines/graphrnn_ego_small.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-  Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.012987          0.027056      0.008995
-graphrnn_to_test                    0.309758          0.143666      0.779306
-
-
-
-export GRAPHRNN=/home/quang/GraphRNN
-
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --dataset ego_small \
-  --num-samples 1024 \
-  --seed-id 43 \
-  --run-id seed_43_spectre_v2 \
-  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
-  --skip-training-estimates
-
-
-GEN_DIR="outputs/baselines/graphrnn/ego_small/seed_43_spectre_v2/generations/seed_43_n_1024"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/baselines/graphrnn_ego_small.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-
-  Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.012987          0.027056      0.008995
-graphrnn_to_test                    0.175094          0.154965      0.313381
-
-
-
-export GRAPHRNN=/home/quang/GraphRNN
-
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --dataset ego_small \
-  --num-samples 1024 \
   --seed-id 44 \
-  --run-id seed_44_spectre_v2 \
-  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
-  --skip-training-estimates
+  --run-id "$RUN" \
+  --device gpu
 
+PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/graphrnn_community_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GEN_DIR="outputs/baselines/graphrnn/ego_small/seed_44_spectre_v2/generations/seed_44_n_1024"
+GEN_DIR="outputs/baselines/graphrnn/community_small/$RUN/generations/seed_44_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/baselines/graphrnn_ego_small.yaml \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
-  Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.012987          0.027056      0.008995
-graphrnn_to_test                    0.322721          0.149660      0.837584
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
+graphrnn_to_test                    0.038002          0.119683      0.021371        0.085521        0.011782
+
+
+
+
+
+export GRAPHRNN=/home/quang/GraphRNN
+export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/graphrnn/ego_small/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.009729        0.001697
+graphrnn_to_test                    0.189835          0.150187      0.363689        0.252824        0.164046
+
+export GRAPHRNN=/home/quang/GraphRNN
+export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+
+RUN=seed_43
+N=1024
+
+PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/graphrnn/ego_small/$RUN/generations/seed_43_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.009729        0.001697
+graphrnn_to_test                    0.304969          0.165889      0.793879        0.297407        0.167229
+
+
+
+export GRAPHRNN=/home/quang/GraphRNN
+export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
+
+RUN=seed_44
+N=1024
+
+PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/graphrnn/ego_small/$RUN/generations/seed_44_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.009729        0.001697
+graphrnn_to_test                    0.311820          0.136056      0.802052        0.269935        0.142339
+
+
+COMPLETE !!!
