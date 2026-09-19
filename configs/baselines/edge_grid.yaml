@@ -2,19 +2,24 @@ comparison:
   model: edge
   dataset: grid
   common_config: null
-  status: source_readme_generic_budget_with_dataset_adapter
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: upstream_released_generic_budget
     unit: epochs
     source: uploaded EDGE README training command
     epochs: 50000
     batch_size: 2
     diffusion_steps: 128
-  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
-    select adaptations on validation only, never on test metrics.
 edge:
   train:
-    epochs: 50000
+    epochs: 10000
     batch_size: 2
     lr: 0.0001
     clip_value: 1.0

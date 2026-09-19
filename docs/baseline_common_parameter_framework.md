@@ -1,129 +1,106 @@
-# DeFoG-referenced common baseline parameter framework
+# Comparable baseline training budgets
 
-## Purpose
+Default comparison runs match approximate **training graph exposure** per dataset.
+One pass presents each graph in the prepared training split once. These are project
+comparison budgets, not claims of convergence or published settings.
 
-The common files under `configs/baselines/common_<dataset>.yaml` define a
-**controlled comparison layer** shared by baseline wrappers. DeFoG is the
-reference implementation for this layer.
+| Dataset | Target train-set passes | Graph exposures |
+| --- | ---: | ---: |
+| Community-small | 10,000 | 640,000 with 64 training graphs |
+| Ego-small | 10,000 | 1,280,000 with 128 training graphs |
+| Grid | 10,000 | 700,000 with 70 training graphs |
+| QM9 | 200 | 20,933,000 with 104,665 training graphs |
+| ZINC | 200 | 200 times the actual prepared training count |
 
-This is intentionally different from forcing every baseline to emulate
-DeFoG's internal algorithm. Parameters are split into two categories:
+The targets follow the user-specified GDSM-simple reference budget: 10,000 passes
+for generic datasets and 200 for molecular datasets. Neither target was selected
+using test metrics.
 
-1. **Portable comparison controls**: training horizon, batch size, optimizer,
-   learning rate, weight decay, gradient clipping, EMA decay, data-loader
-   worker count, validation cadence, and representation flags that have the
-   same meaning across implementations.
-2. **Reference-only / model-specific settings**: DeFoG transition type,
-   transformer depth, RRWP settings, time distortion, balanced-rate-matrix
-   parameters (`eta`, `omega`), sampler steps, validation-time sample counts,
-   and DeFoG visualization/checkpoint conveniences. These are recorded for
-   provenance but are not imposed on other algorithms.
+## Audit and changes
 
-The controlled profile is useful for an equal-budget experiment. It should not
-replace an **official/recommended-hyperparameter** comparison, because forcing a
-single optimizer or learning rate across different architectures can favor one
-model and handicap another. A strong paper can report both:
+| Baseline | Previous generic horizon (Community / Ego / Grid) | New default |
+| --- | --- | --- |
+| DiGress | 1,000,000 / 1,000,000 / 100,000 epochs | 10,000 epochs |
+| DeFoG | 1,000,000 / 1,000,000 / unsupported | 10,000 epochs |
+| GDSM (GSDM alias) | 200 / 200 / 5,000 epochs | 10,000 epochs |
+| GDSM-simple | 5,000 / 200 / 200 epochs | 10,000 epochs |
+| CatFlow | 10,000 / 1,000 / 1,000 epochs | 10,000 epochs |
+| GDSS | 5,000 epochs | 10,000 epochs |
+| EDGE | 50,000 epochs | 10,000 epochs |
+| SPECTRE | 12,000 epochs | 10,000 epochs |
+| GraphRNN | 3,000 epochs of 32 batches of 32 | approximately 10,000 passes |
+| HOG-Diff | separate higher-order and OU iteration budgets | approximately 10,000 passes summed across stages |
+| DH-VAE+HH | 5,000 / 5,000 / 300 epochs | 10,000 epochs |
 
-- **Protocol-controlled**: common data, split, seeds, evaluation, hardware, and
-  DeFoG-reference portable training controls.
-- **Native/recommended**: each baseline's published training hyperparameters,
-  while retaining the same GraphER data/evaluation protocol.
+Supported default molecular profiles use 200 passes: DiGress, DeFoG, CatFlow,
+GDSS, GDSM-simple, DH-VAE+HH, HOG-Diff, and SPECTRE (QM9 only). HOG-Diff shares
+these passes across its stages instead of granting 200 independently to each.
 
-## Source-derived profiles
+Previous model budget declarations remain under `comparison.native_budget` for
+audit purposes. Some were already adaptations; that field does not establish an
+official upstream configuration. Explicit GDSM-simple categorical, structure3,
+option-A and other ablation configs retain their experiment-specific budgets;
+selecting one opts out of the default matched comparison.
 
-### Community-small
+## Exposure calculation
 
-GraphER Community-small corresponds to DeFoG `comm20`. The portable DeFoG
-settings are:
+For a complete DataLoader traversal, exposure is `epochs * N_train`, including
+the final partial batch. Batch size 256 with 64 training graphs therefore consumes
+64 graphs per epoch. Batch size changes update counts, not pass counts.
 
-- epochs: 1,000,000
-- batch size: 256
-- optimizer: AdamW
-- learning rate: 2e-4 (inherited from `train_default.yaml`)
-- weight decay: 1e-12 (inherited)
-- gradient clipping: disabled (inherited)
-- EMA decay: 0 (inherited)
-- data-loader workers: 0 (inherited)
-- validation every 1,000 epochs
+GraphRNN samples with replacement. Its wrapper resolves
+`epochs = round(target_passes * N_train / (batch_size * batch_ratio))`, with a
+minimum of one epoch. Nominal Community/Ego/Grid horizons are 625/1250/684 epochs.
+The wrapper recalculates them using the actual prepared split and batch settings.
 
-### Ego-small
+HOG-Diff resolves each stage's iterations using actual training count, effective
+stage batch size, and `comparison.budget.stage_exposure_weights`. The weights
+preserve the previous relative allocation of graph exposure between stages.
+Counts round to the nearest iteration, with a minimum of one. The wrapper supplies
+live `n_iters` rather than inheriting the million-iteration upstream ZINC budget.
 
-The attached DeFoG code has no Hydra experiment for GraphER's Ego-small. Its
-`SpectreGraphDataset` contains an `ego` loader for the separate 757-graph EDGE
-Ego benchmark, and `src/main.py` does not expose that dataset in the generic
-training branch. Therefore `common_ego_small.yaml` explicitly reuses the
-Comm20 small-generic-graph budget as a compatibility reference. It is an
-adaptation, not an official DeFoG Ego-small configuration.
+Both sampled-loop wrappers record target exposure, estimated realized exposure,
+training count, horizons and explicit overrides in
+`comparison_reference.resolved_exposure_budget` in the training options/manifest.
+The HOG-Diff estimate assumes one configured minibatch per iteration; upstream
+loop endpoints or partial batches can cause small differences.
 
-### QM9
+Exposure parity does not equalize GPU hours, FLOPs, optimizer updates, parameter
+counts, or convergence. GDSM/GDSS train multiple components per batch; SPECTRE
+trains generator/discriminator components. SPECTRE's empirical singleton branch
+can exclude singleton graphs from its GAN loader. Report these differences where
+applicable.
 
-The profile is DeFoG `qm9_no_h`:
+## Schedules and precedence
 
-- epochs: 1,000
-- batch size: 1,024
-- optimizer: AdamW (inherited)
-- learning rate: 2e-4 (inherited)
-- weight decay: 1e-12 (inherited)
-- gradient clipping: disabled (inherited)
-- EMA decay: 0 (inherited)
-- validation every 50 epochs
-- heavy-atom / remove-H representation
-- pin memory: true
+GDSM/GDSS exponential learning-rate decays preserve their original terminal decay:
+`new_gamma = old_gamma ** (old_epochs / new_epochs)`. CatFlow's cosine schedule
+already uses the configured horizon. SPECTRE's explicit warmup/temperature-decay
+durations and GraphRNN's learning-rate milestones scale with their horizons.
+DiGress and CatFlow validation/checkpoint cadences are adjusted. Model-specific
+learning rates, batch sizes, architectures, EMA settings and samplers remain
+separate choices.
 
-`qm9_no_h.yaml` contains `dataset.num_workers: 16`, but DeFoG's
-`AbstractDataModule` reads `cfg.train.num_workers`. The effective upstream
-value is therefore `0` from `train_default.yaml`; the common config records
-that effective value and preserves the misplaced declaration under
-`reference_only`.
+Common configs now declare 10,000/200-epoch fallback horizons, including a new Grid
+common file. DeFoG uses these directly; the other default model files agree with
+their dataset target. Merge precedence is:
 
-### ZINC
+1. Wrapper/upstream defaults.
+2. Common dataset fallback controls.
+3. Model-specific wrapper YAML.
+4. Explicit CLI or `TrainRequest.options` overrides.
 
-The profile is DeFoG `zinc`:
+GraphRNN/HOG-Diff conversion applies only to configs declaring
+`comparison.budget.unit: train_set_passes`. Explicit epoch/iteration overrides
+remain authoritative and are flagged in exposure metadata; they can break parity.
+Batch overrides trigger conversion with the new batch size. Custom configs
+without this declaration retain their existing behavior.
 
-- epochs: 300
-- batch size: 256
-- optimizer: AdamW
-- learning rate: 2e-4
-- weight decay: 1e-12 (inherited)
-- gradient clipping: disabled (inherited)
-- EMA decay: 0 (inherited)
-- data-loader workers: 4
-- validation every 4 epochs
-- remove H: true
-- aromatic categorical edge class: false
+Normal `scripts/run_<model>_baseline.py --dataset <dataset>` commands need no new
+flag. `--no-common-config` disables common fallback controls but does not undo a
+budget declared in the selected model YAML. Use an explicit horizon or custom
+wrapper config for other budgets.
 
-## DeFoG runner integration
-
-`run_defog_baseline.py` now accepts:
-
-```bash
---common-config configs/baselines/common_<dataset>.yaml
-```
-
-Precedence is:
-
-1. upstream DeFoG defaults / experiment config
-2. DeFoG-specific `--wrapper-config`
-3. portable values from `--common-config`
-4. explicit CLI controls such as `--n-epochs`
-
-The common-config path, SHA256 digest, reference identity, and applied values
-are retained in the training options and therefore in DeFoG's GraphER training
-manifest.
-
-Example:
-
-```bash
-PYTHONPATH=src python scripts/run_defog_baseline.py \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --num-samples 1024 \
-  --seed-id 42 \
-  --device gpu
-```
-
-`--num-samples` remains an explicit evaluation-protocol control. DeFoG's native
-`final_model_samples_to_generate` is recorded under `reference_only`, because
-copying `20` samples from Comm20 into a generic MMD benchmark would create a
-high-variance comparison. Sampling-step counts and DeFoG-specific rate-matrix
-parameters likewise remain method-specific.
+Use identical prepared splits, seeds and evaluation; tune and select on validation
+only. Config edits do not retrain existing checkpoints. New matched comparisons
+require new training runs, retaining their resolved configuration hashes.

@@ -2,17 +2,21 @@ comparison:
   model: catflow
   dataset: community_small
   common_config: common_community_small.yaml
-  status: graphes_linear_v2_generic_adapter_budget_requires_validation_check
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: adapter_budget_not_upstream_native
     unit: epochs
     source: GraphER CatFlow linear-v2 adapter; uploaded CatFlow README has no generic
       graph profile
     epochs: 10000
     batch_size: 128
-  fairness_note: The uploaded CatFlow release has no generic Community-small profile.
-    This explicit linear-v2 budget prevents DeFoG fallback leakage but is not claimed
-    compute- or convergence-equivalent; tune only on validation.
 catflow:
   train:
     epochs: 10000
@@ -23,7 +27,7 @@ catflow:
     distribution: normal
     loss_function: kld
     path: linear
-    validation_every: 100
+    validation_every: 200
     validation_repeats: 4
     checkpoint_every: 1000
   model:

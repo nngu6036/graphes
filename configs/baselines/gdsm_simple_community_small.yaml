@@ -2,13 +2,20 @@ comparison:
   model: gdsm_simple
   dataset: community_small
   common_config: common_community_small.yaml
-  status: graphes_native_high_budget_s1_source_preserving_refinement
+  status: graphes_exposure_matched_adaptation
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
 
 gdsm_simple:
   train:
     # 64 training graphs / batch 16 = 4 updates per epoch.
-    # 5000 epochs ~= 20,000 optimizer updates.
-    epochs: 5000
+    # 10000 epochs ~= 40,000 optimizer updates.
+    epochs: 10000
     batch_size: 16
     lr: 0.0002
     weight_decay: 1.0e-6

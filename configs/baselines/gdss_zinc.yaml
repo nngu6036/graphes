@@ -2,15 +2,20 @@ comparison:
   model: gdss
   dataset: zinc
   common_config: common_zinc.yaml
-  status: exact_upstream_dataset_profile
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 200
+    epochs: 200
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: upstream_released_profile
     unit: epochs
     source: config/zinc250k.yaml
     epochs: 500
     batch_size: 1024
-  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
-    select adaptations on validation only, never on test metrics.
 gdss:
   source_env: GDSS
   python_env: GDSS_PYTHON
@@ -33,11 +38,11 @@ gdss:
       generation_batch_interval: 1
   batch_size: 1024
   train:
-    num_epochs: 500
+    num_epochs: 200
     lr: 0.005
     lr_schedule: true
     ema: 0.999
     weight_decay: 0.0001
     grad_norm: 1.0
-    lr_decay: 0.999
+    lr_decay: 0.9975018746874609
     eps: 1.0e-05

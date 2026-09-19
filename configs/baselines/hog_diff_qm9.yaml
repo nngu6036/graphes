@@ -1,9 +1,20 @@
+# Stage iteration counts are resolved from the actual train split at launch.
 comparison:
   model: hog_diff
   dataset: qm9
   common_config: common_qm9.yaml
-  status: exact_upstream_two_stage_profile
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 200
+    stage_exposure_weights:
+      higher_order: 2944000
+      ou: 52224000
+    resolution: wrapper_from_actual_prepared_train_split
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: upstream_released_two_stage_budget
     unit: stage_iterations
     source: configs/qm9.yaml
@@ -11,8 +22,6 @@ comparison:
     higher_order_batch_size: 32
     ou_iterations: 102000
     ou_batch_size: 512
-  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
-    select adaptations on validation only, never on test metrics.
 hog_diff:
   source_env: HOGDIFF
   python_env: HOGDIFF_PYTHON
@@ -33,8 +42,6 @@ hog_diff:
       iteration_interval: 200
       generation_batch_interval: 1
   higher_order:
-    n_iters: 92000
     batch_size: 32
   ou:
-    n_iters: 102000
     batch_size: 512

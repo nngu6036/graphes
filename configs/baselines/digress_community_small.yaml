@@ -2,23 +2,28 @@ comparison:
   model: digress
   dataset: community_small
   common_config: common_community_small.yaml
-  status: exact_upstream_comm20
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: upstream_released_profile
     unit: epochs
     source: configs/experiment/comm20.yaml
     epochs: 1000000
     batch_size: 256
-  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
-    select adaptations on validation only, never on test metrics.
 digress:
   native_dataset: comm20
   experiment: comm20
-  n_epochs: 1000000
+  n_epochs: 10000
   batch_size: 256
   num_workers: 0
-  check_val_every_n_epochs: 1000
-  save_every_n_epochs: 10000
+  check_val_every_n_epochs: 200
+  save_every_n_epochs: 1000
   generation_batch_size: 64
   training_estimates:
     enabled: true
@@ -30,7 +35,7 @@ digress:
       enabled: true
       stream_output: true
       interval_seconds: 15
-      epoch_interval: 2000
+      epoch_interval: 200
       generation_batch_interval: 1
   hydra_overrides:
   - train.lr=0.0002

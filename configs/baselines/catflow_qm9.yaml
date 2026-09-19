@@ -2,19 +2,23 @@ comparison:
   model: catflow
   dataset: qm9
   common_config: common_qm9.yaml
-  status: upstream_released_budget_with_graphes_linear_path_integration
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 200
+    epochs: 200
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: upstream_released_profile
     unit: epochs
     source: uploaded CatFlow README QM9 command
     epochs: 300
     batch_size: 1024
-  fairness_note: Epoch/batch/LR values come from the uploaded CatFlow README. The
-    GraphER wrapper uses the documented linear-v2 path integration rather than the
-    uploaded fixed-endpoint-noise training branch; record this adaptation when reporting.
 catflow:
   train:
-    epochs: 300
+    epochs: 200
     batch_size: 1024
     lr: 0.0002
     ema: 0.999
@@ -22,9 +26,9 @@ catflow:
     distribution: normal
     loss_function: kld
     path: linear
-    validation_every: 100
+    validation_every: 5
     validation_repeats: 4
-    checkpoint_every: 1000
+    checkpoint_every: 20
   model:
     num_layers: 6
     small_model: 0

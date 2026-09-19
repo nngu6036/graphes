@@ -1,9 +1,20 @@
+# Stage iteration counts are resolved from the actual train split at launch.
 comparison:
   model: hog_diff
   dataset: community_small
   common_config: common_community_small.yaml
-  status: exact_upstream_two_stage_profile
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    stage_exposure_weights:
+      higher_order: 384000
+      ou: 704000
+    resolution: wrapper_from_actual_prepared_train_split
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: upstream_released_two_stage_budget
     unit: stage_iterations
     source: configs/cs.yaml
@@ -11,8 +22,6 @@ comparison:
     higher_order_batch_size: 64
     ou_iterations: 22000
     ou_batch_size: 32
-  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
-    select adaptations on validation only, never on test metrics.
 hog_diff:
   source_env: HOGDIFF
   python_env: HOGDIFF_PYTHON
@@ -33,8 +42,6 @@ hog_diff:
       iteration_interval: 100
       generation_batch_interval: 1
   higher_order:
-    n_iters: 6000
     batch_size: 64
   ou:
-    n_iters: 22000
     batch_size: 32

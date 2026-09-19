@@ -234,7 +234,7 @@ def test_source_backed_cli_overrides_model_train_section_not_common_budget() -> 
         ["--dataset", "community_small", "--n-epochs", "123", "--batch-size", "17"],
     )
     assert options["train"] == {"epochs": 123, "batch_size": 17}
-    assert options["comparison_defaults"]["train"]["epochs"] == 1_000_000
+    assert options["comparison_defaults"]["train"]["epochs"] == 10_000
 
 
 def test_managed_checkpoint_is_resolved_relative_to_train_dir(tmp_path: Path) -> None:

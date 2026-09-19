@@ -2,18 +2,23 @@ comparison:
   model: spectre
   dataset: qm9
   common_config: common_qm9.yaml
-  status: exact_upstream_qm9_profile_with_graphes_singleton_adapter
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 200
+    epochs: 200
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: upstream_released_profile
     unit: epochs
     source: README QM9 command
     epochs: 30
     batch_size: 128
-  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
-    select adaptations on validation only, never on test metrics.
 spectre:
   train:
-    epochs: 30
+    epochs: 200
     batch_size: 128
     log_every: 1
     singleton_policy: empirical
@@ -42,14 +47,14 @@ spectre:
     clip_grad_norm: 1.0
     eigvec_temp_decay: true
     eigval_temp_decay: true
-    decay_eigvec_temp_over: 10
-    decay_eigval_temp_over: 10
-    n_eigval_warmup_epochs: 10
-    n_eigvec_warmup_epochs: 15
+    decay_eigvec_temp_over: 67
+    decay_eigval_temp_over: 67
+    n_eigval_warmup_epochs: 67
+    n_eigvec_warmup_epochs: 100
     min_eigval_temp: 0.8
     min_eigvec_temp: 0.8
     SON_gumbel_temperature_decay: true
-    decay_SON_gumbel_temp_over: 25
+    decay_SON_gumbel_temp_over: 167
     SON_gumbel_temperature_warmup_epochs: 0
     n_G: 3
     n_D: 3

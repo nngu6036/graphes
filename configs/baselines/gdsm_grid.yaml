@@ -2,19 +2,24 @@ comparison:
   model: gdsm
   dataset: grid
   common_config: null
-  status: exact_upstream_grid
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: upstream_released_profile
     unit: epochs
     source: config/grid.yaml
     epochs: 5000
     batch_size: 8
-  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
-    select adaptations on validation only, never on test metrics.
 gdsm:
   upstream_config: grid.yaml
   train:
-    epochs: 5000
+    epochs: 10000
     batch_size: 8
     log_every: 10
     lr: 0.01
@@ -22,7 +27,7 @@ gdsm:
     ema: 0.999
     weight_decay: 0.0001
     grad_norm: 1.0
-    lr_decay: 0.999
+    lr_decay: 0.999499874937461
     eps: 1.0e-05
   sample:
     use_ema: true

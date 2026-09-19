@@ -166,7 +166,12 @@ def _boolean(value: Any, *, name: str) -> bool:
 
 
 def _load_options(request: TrainRequest) -> dict[str, Any]:
-    request_options = dict(request.options)
+    from grapher.models.comparison import resolve_sampled_exposure_budget
+
+    request_options = resolve_sampled_exposure_budget(
+        "graphrnn", request.config_path, request.options,
+        train_path=request.dataset.split_paths["train"],
+    )
     defaults = request_options.pop("comparison_defaults", {}) or {}
     if not isinstance(defaults, Mapping):
         raise TypeError("comparison_defaults must contain a mapping.")

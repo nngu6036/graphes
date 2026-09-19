@@ -25,6 +25,7 @@ from grapher.data.io import load_dataset_splits
 from grapher.rewiring_mlp.evaluation.metrics import (
     descriptor_matrix,
     mmd_gaussian_emd,
+    mmd_graphlet_statistics,
     mmd_orbit,
     mmd_orbit_graphrnn,
 )
@@ -33,10 +34,12 @@ from grapher.properties.summary import (
     clustering_histogram,
     configure_orca_executable,
     degree_histogram,
+    spectral_histogram,
 )
 from grapher.utils.io import ensure_dir, load_pickle, load_yaml, save_json
 
 REPORT_METRICS = ("degree_mmd", "clustering_mmd", "orbit_mmd")
+GENERIC_REPORT_METRICS = (*REPORT_METRICS, "spectral_mmd", "graphlet_history_mmd")
 ATOM_COLORS = {
     1: "#F3F4F6",
     6: "#374151",
@@ -488,6 +491,8 @@ def _paper_mmd(
     compute_orbit: bool = True,
     metric_protocol: str = "graphrnn",
     clustering_bins: int = 100,
+    include_generic_metrics: bool = True,
+    graphlet_options: dict[str, Any] | None = None,
 ) -> dict[str, float]:
     """Evaluate generic graph statistics under a declared metric protocol.
 
@@ -501,9 +506,24 @@ def _paper_mmd(
 
     ``graphes_adaptive`` keeps the pre-alignment GraphES behavior for
     backwards diagnostics only.
+
+    Additional generic metrics use the existing evaluation conventions:
+    20-bin normalized-Laplacian spectral histograms with adaptive Gaussian
+    EMD, and graphlet-composition MMD (connected orders 3--5 by default).
     """
 
     protocol = str(metric_protocol).strip().lower().replace("-", "_")
+    additional_metrics = {}
+    if include_generic_metrics:
+        spectral_reference = descriptor_matrix(reference, spectral_histogram)
+        spectral_candidate = descriptor_matrix(candidate, spectral_histogram)
+        graphlet_mmd, _ = mmd_graphlet_statistics(
+            reference, candidate, **(graphlet_options or {})
+        )
+        additional_metrics = {
+            "spectral_mmd": mmd_gaussian_emd(spectral_reference, spectral_candidate),
+            "graphlet_history_mmd": graphlet_mmd,
+        }
     max_degree = max(
         (
             max((int(degree) for _, degree in graph.degree()), default=0)
@@ -533,6 +553,7 @@ def _paper_mmd(
             lambda graph: clustering_histogram(graph, bins),
         )
         return {
+            **additional_metrics,
             "degree_mmd": mmd_gaussian_emd(
                 degree_reference, degree_candidate, sigma=1.0
             ),
@@ -559,6 +580,7 @@ def _paper_mmd(
             lambda graph: clustering_histogram(graph, 20),
         )
         return {
+            **additional_metrics,
             "degree_mmd": mmd_gaussian_emd(degree_reference, degree_candidate),
             "clustering_mmd": mmd_gaussian_emd(
                 clustering_reference, clustering_candidate
@@ -864,10 +886,17 @@ def _write_csv(rows: Sequence[dict[str, Any]], path: Path) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=("comparison", *REPORT_METRICS),
+            fieldnames=("comparison", *_report_metrics(rows)),
         )
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _report_metrics(rows: Sequence[dict[str, Any]]) -> tuple[str, ...]:
+    return tuple(
+        metric for metric in GENERIC_REPORT_METRICS
+        if metric in REPORT_METRICS or any(metric in row for row in rows)
+    )
 
 
 def _write_molecular_csv(
@@ -914,19 +943,22 @@ def validate_report_reference_split(output_dir: Path, reference_split: str) -> N
 
 def _print_table(rows: Sequence[dict[str, Any]], *, reference_split: str = "test") -> None:
     print(f"Graph-distribution MMD against held-out {reference_split} graphs (lower is better)")
-    print(
-        f"{'Comparison':30s}"
-        f"{'Degree MMD':>14s}"
-        f"{'Clustering MMD':>18s}"
-        f"{'Orbit MMD':>14s}"
-    )
+    columns = {
+        "degree_mmd": ("Degree MMD", 14),
+        "clustering_mmd": ("Clustering MMD", 18),
+        "orbit_mmd": ("Orbit MMD", 14),
+        "spectral_mmd": ("Spectral MMD", 16),
+        "graphlet_history_mmd": ("Graphlet MMD", 16),
+    }
+    metrics = _report_metrics(rows)
+    print(f"{'Comparison':30s}" + "".join(
+        f"{columns[key][0]:>{columns[key][1]}s}" for key in metrics
+    ))
     for row in rows:
-        print(
-            f"{str(row['comparison']):30s}"
-            f"{float(row['degree_mmd']):14.6f}"
-            f"{float(row['clustering_mmd']):18.6f}"
-            f"{float(row['orbit_mmd']):14.6f}"
-        )
+        print(f"{str(row['comparison']):30s}" + "".join(
+            f"{float(row.get(key, float('nan'))):{columns[key][1]}.6f}"
+            for key in metrics
+        ))
 
 
 def _print_molecular_metrics(rows: Sequence[dict[str, Any]]) -> None:
@@ -955,7 +987,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate saved generated graphs with degree and clustering MMD, "
-            "optionally add four-node ORCA orbit MMD, then plot "
+            "spectral and graphlet MMD for generic graphs, and optional "
+            "four-node ORCA orbit MMD, then plot "
             "representative samples."
         )
     )
@@ -1156,6 +1189,18 @@ def main() -> None:
     reference = reference_graphs[:reference_count]
     generated = generated_graphs[:generated_count]
     molecular = is_molecular_evaluation(dataset_cfg, generated_graphs)
+    graphlet_options = {
+        "k_min": int(evaluation_cfg.get("graphlet_k_min", 3)),
+        "k_max": int(evaluation_cfg.get("graphlet_k_max", 5)),
+        "connected_only": bool(evaluation_cfg.get("graphlet_connected_only", True)),
+        "topology_filter": str(evaluation_cfg.get("graphlet_topology_filter", "all")),
+        "num_samples": evaluation_cfg.get("graphlet_num_samples"),
+        "backend": graphlet_backend,
+    }
+    if not molecular and exact_orca_backend and not compute_orbit:
+        orca_exec = configure_orca_executable(
+            evaluation_cfg.get("orca_exec"), required=True,
+        )
     final_stage = resolve_generated_stage(
         config,
         generated_path,
@@ -1186,6 +1231,8 @@ def main() -> None:
                     compute_orbit=compute_orbit,
                     metric_protocol=generic_mmd_protocol,
                     clustering_bins=generic_clustering_bins,
+                    include_generic_metrics=not molecular,
+                    graphlet_options=graphlet_options,
                 ),
             }
         )
@@ -1202,6 +1249,8 @@ def main() -> None:
                     compute_orbit=compute_orbit,
                     metric_protocol=generic_mmd_protocol,
                     clustering_bins=generic_clustering_bins,
+                    include_generic_metrics=not molecular,
+                    graphlet_options=graphlet_options,
                 ),
             }
         )
@@ -1218,6 +1267,8 @@ def main() -> None:
                     compute_orbit=compute_orbit,
                     metric_protocol=generic_mmd_protocol,
                     clustering_bins=generic_clustering_bins,
+                    include_generic_metrics=not molecular,
+                    graphlet_options=graphlet_options,
                 ),
             }
         )
@@ -1230,6 +1281,8 @@ def main() -> None:
                 compute_orbit=compute_orbit,
                 metric_protocol=generic_mmd_protocol,
                 clustering_bins=generic_clustering_bins,
+                include_generic_metrics=not molecular,
+                graphlet_options=graphlet_options,
             ),
         }
     )
@@ -1293,7 +1346,7 @@ def main() -> None:
 
     save_json(
         {
-            "format": "graph_generation_evaluation_report_v5",
+            "format": "graph_generation_evaluation_report_v6",
             "reference_split": reference_split,
             "reference_split_sha256": provenance["split_sha256"][reference_split],
             "reference_graph_indices_zero_based": list(range(reference_count)),
@@ -1302,6 +1355,8 @@ def main() -> None:
             "generic_mmd_protocol": generic_mmd_protocol,
             "generic_clustering_bins": generic_clustering_bins,
             "graphlet_backend": graphlet_backend,
+            "generic_graphlet_options": graphlet_options if not molecular else None,
+            "generic_spectral_bins": 20 if not molecular else None,
             "dataset_provenance": provenance,
             "dataset_mismatch_policy": args.dataset_mismatch_policy,
             "dataset_provenance_mismatches": dataset_mismatches,

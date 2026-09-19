@@ -2,15 +2,20 @@ comparison:
   model: gdss
   dataset: ego_small
   common_config: common_ego_small.yaml
-  status: exact_upstream_dataset_profile
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: upstream_released_profile
     unit: epochs
     source: config/ego_small.yaml
     epochs: 5000
     batch_size: 128
-  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
-    select adaptations on validation only, never on test metrics.
 gdss:
   source_env: GDSS
   python_env: GDSS_PYTHON
@@ -35,13 +40,13 @@ gdss:
       generation_batch_interval: 1
   batch_size: 128
   train:
-    num_epochs: 5000
+    num_epochs: 10000
     lr: 0.01
     lr_schedule: true
     ema: 0.999
     weight_decay: 0.0001
     grad_norm: 1.0
-    lr_decay: 0.999
+    lr_decay: 0.999499874937461
     eps: 1.0e-05
   sample:
     use_ema: false

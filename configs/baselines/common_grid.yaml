@@ -1,16 +1,9 @@
 baseline_common:
   schema_version: 1
-  dataset: ego_small
+  dataset: grid
   reference:
-    model: defog
-    native_dataset: comm20
-    experiment: comm20
+    model: graphes
     status: graphes_exposure_matched_adaptation
-    source_files:
-    - configs/experiment/comm20.yaml
-    - configs/train/train_default.yaml
-    - src/datasets/spectre_dataset.py
-    - src/main.py
   training:
     epochs: 10000
     batch_size: 256
@@ -25,16 +18,7 @@ baseline_common:
     remove_hydrogens: null
     pin_memory: false
     aromatic: null
-  reference_only:
-    adapted_from: comm20
-    sample_every_validation: 10
-    validation_samples: 20
-    final_model_samples: 20
-    sample_steps: 1000
-    sample_time_distortion: identity
-    sample_omega: 0.0
-    sample_eta: 0.0
-    model_layers: 8
+  reference_only: {}
   policy:
     role: shared_training_exposure_target
     raw_epoch_counts_cross_model_comparable: false

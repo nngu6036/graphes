@@ -55,7 +55,7 @@ degree_generator:
   type: typed_degree_histogram_vae
   checkpoint_path: outputs/degree_generators/zinc_typed/seed_42/checkpoint.pt
   device: auto
-  epochs: 300
+  epochs: 200
   batch_size: 128
   latent_dim: 64
   hidden_dim: 256
@@ -70,7 +70,7 @@ degree_generator:
   learning_rate: 0.001
   weight_decay: 0.00001
   kl_loss_weight: 0.005
-  kl_warmup_epochs: 50
+  kl_warmup_epochs: 33
   node_count_loss_weight: 1.0
   signature_histogram_loss_weight: 5.0
   incidence_moment_loss_weight: 0.1

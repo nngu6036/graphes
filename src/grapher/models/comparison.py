@@ -1,14 +1,15 @@
 """Common baseline-comparison configuration helpers.
 
-The common YAML is a DeFoG *reference* profile.  It supplies portable defaults
-and protocol provenance, but a baseline's own YAML is merged afterwards so
-model-native/equivalent training budgets can override raw DeFoG epoch counts.
-Explicit CLI options remain highest priority.
+The common YAML supplies dataset exposure targets, portable fallback controls
+and protocol provenance. A baseline's YAML is merged afterwards so custom
+experiments can override these defaults. Explicit CLI options remain highest
+priority. Sampled training loops convert declared exposure to native horizons.
 """
 from __future__ import annotations
 
 import copy
 import hashlib
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -148,11 +149,10 @@ def common_defaults_for_model(
     model_id: str,
     profile: ComparisonProfile | None,
 ) -> dict[str, Any]:
-    """Translate portable DeFoG-reference controls to wrapper-level defaults.
+    """Translate common dataset controls to wrapper-level defaults.
 
     These values are *fallbacks only*.  Wrapper YAML is merged after them.
-    Model-specific schedules/optimizers therefore remain authoritative where a
-    raw DeFoG epoch/LR/EMA value is not comparable.
+    Model-specific schedules and optimizers therefore remain authoritative.
     """
 
     if profile is None:
@@ -300,6 +300,90 @@ def model_comparison_metadata(config_path: Path | None) -> dict[str, Any]:
         return {}
     comparison = loaded.get("comparison", {}) or {}
     return _mapping(comparison, name="comparison")
+
+
+def resolve_sampled_exposure_budget(
+    model_id: str,
+    config_path: Path | None,
+    options: Mapping[str, Any],
+    *,
+    num_train_graphs: int | None = None,
+    train_path: Path | None = None,
+) -> dict[str, Any]:
+    """Convert declared exposure to native sampled-loop horizons.
+
+    Epoch-based loaders already traverse the train split once. GraphRNN instead
+    draws batch_size * batch_ratio graphs per epoch; HOG-Diff draws minibatches
+    in two stages. CLI horizon overrides remain authoritative and are recorded.
+    """
+    result = copy.deepcopy(dict(options))
+    model = normalize_baseline_id(model_id)
+    metadata = model_comparison_metadata(config_path)
+    budget = metadata.get("budget", {})
+    if model not in {"graphrnn", "hog_diff"} or budget.get("unit") != "train_set_passes":
+        return result
+    if num_train_graphs is None:
+        from grapher.utils.io import load_pickle
+
+        if train_path is None:
+            raise ValueError("Sampled exposure resolution requires the prepared train split.")
+        num_train_graphs = len(load_pickle(train_path))
+    passes = float(budget["target_train_passes"])
+    if num_train_graphs <= 0 or not math.isfinite(passes) or passes <= 0:
+        raise ValueError("Exposure budgets require positive train size and finite passes.")
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))[model]
+    target = passes * num_train_graphs
+    explicit_horizon = False
+    if model == "graphrnn":
+        batch = int(result.get("batch_size", config["batch_size"]))
+        ratio = int(result.get("batch_ratio", config["batch_ratio"]))
+        if batch <= 0 or ratio <= 0:
+            raise ValueError("GraphRNN batch_size and batch_ratio must be positive.")
+        explicit_horizon = "epochs" in result
+        epochs = int(result.get("epochs", max(1, round(target / (batch * ratio)))))
+        result["epochs"] = epochs
+        if not explicit_horizon:
+            old_steps = int(config["epochs"]) * int(config["batch_ratio"])
+            scale = epochs * ratio / old_steps
+            if config.get("scheduler_step_unit") == "epoch":
+                scale = epochs / int(config["epochs"])
+            result.setdefault("milestones", [
+                max(1, round(int(value) * scale)) for value in config["milestones"]
+            ])
+        estimated = epochs * batch * ratio
+        resolved = {"epochs": epochs, "batch_size": batch, "batches_per_epoch": ratio}
+    else:
+        weights = budget["stage_exposure_weights"]
+        total_weight = sum(float(weights[stage]) for stage in ("higher_order", "ou"))
+        if total_weight <= 0 or any(
+            not math.isfinite(float(weights[stage])) or float(weights[stage]) <= 0
+            for stage in ("higher_order", "ou")
+        ):
+            raise ValueError("HOG-Diff stage exposure weights must be finite and positive.")
+        estimated = 0
+        resolved = {}
+        for stage in ("higher_order", "ou"):
+            overrides = result.setdefault(stage, {})
+            batch = int(overrides.get("batch_size", config[stage]["batch_size"]))
+            if batch <= 0:
+                raise ValueError("HOG-Diff stage batch sizes must be positive.")
+            explicit_horizon = explicit_horizon or "n_iters" in overrides
+            iterations = int(overrides.get("n_iters", max(
+                1, round(target * float(weights[stage]) / total_weight / batch)
+            )))
+            overrides["n_iters"] = iterations
+            estimated += iterations * batch
+            resolved[stage] = {"n_iters": iterations, "batch_size": batch}
+    result.setdefault("comparison_reference", {})["resolved_exposure_budget"] = {
+        "num_train_graphs": num_train_graphs,
+        "target_train_passes": passes,
+        "target_graph_exposures": target,
+        "estimated_graph_exposures": estimated,
+        "estimated_train_passes": estimated / num_train_graphs,
+        "explicit_horizon_override": explicit_horizon,
+        "resolved": resolved,
+    }
+    return result
 
 
 def comparison_request_options(

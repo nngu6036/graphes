@@ -190,7 +190,12 @@ def _normalize_optimizer_numbers(config: dict[str, Any]) -> None:
 
 
 def _load_options(request: TrainRequest) -> dict[str, Any]:
-    request_options = dict(request.options)
+    from grapher.models.comparison import resolve_sampled_exposure_budget
+
+    request_options = resolve_sampled_exposure_budget(
+        "hog_diff", request.config_path, request.options,
+        train_path=request.dataset.split_paths["train"],
+    )
     defaults = request_options.pop("comparison_defaults", {}) or {}
     if not isinstance(defaults, Mapping):
         raise TypeError("comparison_defaults must contain a mapping.")

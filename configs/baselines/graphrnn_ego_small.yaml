@@ -2,8 +2,17 @@ comparison:
   model: graphrnn
   dataset: ego_small
   common_config: common_ego_small.yaml
-  status: source_default_budget_dataset_specific_shape_adapter
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    nominal_train_graphs: 128
+    resolution: wrapper_from_actual_prepared_train_split
+    epochs: 1250
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: upstream_released_default_budget
     unit: epochs_x_minibatches
     source: args.py
@@ -11,8 +20,6 @@ comparison:
     batches_per_epoch: 32
     optimizer_steps: 96000
     batch_size: 32
-  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
-    select adaptations on validation only, never on test metrics.
 experiment: graphrnn_ego_small
 benchmark: ego_small
 protocol:
@@ -51,16 +58,16 @@ graphrnn:
   num_layers: 4
   batch_size: 32
   batch_ratio: 32
-  epochs: 3000
+  epochs: 1250
   learning_rate: 0.003
   milestones:
-  - 400
-  - 1000
+  - 167
+  - 417
   lr_rate: 0.3
   scheduler_step_unit: batch
   num_workers: 0
-  save_every_epochs: 100
-  log_every_epochs: 10
+  save_every_epochs: 125
+  log_every_epochs: 25
   gradient_clip_norm: null
   sample_time: 1
   generation_batch_size: 32

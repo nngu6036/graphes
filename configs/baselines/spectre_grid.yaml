@@ -2,18 +2,23 @@ comparison:
   model: spectre
   dataset: grid
   common_config: null
-  status: adapted_from_planar_profile_for_large_grid
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: closest_upstream_profile_with_adapter
     unit: epochs
     source: README Planar command
     epochs: 12000
     batch_size: 1
-  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
-    select adaptations on validation only, never on test metrics.
 spectre:
   train:
-    epochs: 12000
+    epochs: 10000
     batch_size: 1
     log_every: 100
   model:
@@ -41,14 +46,14 @@ spectre:
     clip_grad_norm: 1.0
     eigvec_temp_decay: true
     eigval_temp_decay: true
-    decay_eigvec_temp_over: 2000
-    decay_eigval_temp_over: 2000
-    n_eigval_warmup_epochs: 2000
-    n_eigvec_warmup_epochs: 2000
+    decay_eigvec_temp_over: 1667
+    decay_eigval_temp_over: 1667
+    n_eigval_warmup_epochs: 1667
+    n_eigvec_warmup_epochs: 1667
     min_eigval_temp: 0.8
     min_eigvec_temp: 0.8
     SON_gumbel_temperature_decay: true
-    decay_SON_gumbel_temp_over: 10000
+    decay_SON_gumbel_temp_over: 8333
     SON_gumbel_temperature_warmup_epochs: 0
     lr_g: 0.0001
     lr_d: 0.0001

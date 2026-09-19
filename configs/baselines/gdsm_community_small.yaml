@@ -2,19 +2,24 @@ comparison:
   model: gdsm
   dataset: community_small
   common_config: common_community_small.yaml
-  status: exact_upstream_community_small
+  status: graphes_exposure_matched_adaptation
   budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+  native_budget:
     basis: upstream_released_profile
     unit: epochs
     source: config/community_small.yaml
     epochs: 200
     batch_size: 128
-  fairness_note: Model-specific training budget overrides the DeFoG reference fallback;
-    select adaptations on validation only, never on test metrics.
 gdsm:
   upstream_config: community_small.yaml
   train:
-    epochs: 200
+    epochs: 10000
     batch_size: 128
     log_every: 10
     lr: 0.01
@@ -22,7 +27,7 @@ gdsm:
     ema: 0.999
     weight_decay: 0.0001
     grad_norm: 1.0
-    lr_decay: 0.999
+    lr_decay: 0.9999799901935271
     eps: 1.0e-05
   sample:
     use_ema: false
