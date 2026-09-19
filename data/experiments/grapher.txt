@@ -1,279 +1,952 @@
-# Simple GDSM + structure summary + rewiring
+community_small — seed 42
 
-CFG=configs/baselines/gdsm_simple_community_small_structure3_option_a.yaml
-COMMON=configs/baselines/common_community_small.yaml
+Required prior: outputs/degree_generators/gdsm_final_g345/community_small/seed_42/checkpoint.pt.
 
-RUN=seed_42_structure3_option_a
-N=1024
-GID=seed_42_n_${N}_option_a
+Check the supplied config against the prepared data
 
-GEN="outputs/baselines/gdsm_simple/community_small/${RUN}/generations/${GID}"
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm
 
-PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+Train the model
+
+PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
   --stage train \
   --dataset community_small \
-  --common-config "$COMMON" \
-  --wrapper-config "$CFG" \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
   --seed-id 42 \
-  --run-id "$RUN" \
+  --run-id seed_42_gdsm_final_g345 \
   --device cuda:0
 
-PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+Generate
+
+PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
   --stage generate \
   --dataset community_small \
-  --common-config "$COMMON" \
-  --wrapper-config "$CFG" \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
   --seed-id 42 \
+  --run-id seed_42_gdsm_final_g345 \
+  --device cuda:0 \
   --generation-seed 42 \
-  --run-id "$RUN" \
-  --generation-id "$GID" \
-  --num-samples "$N" \
-  --device cuda:0
+  --generation-id seed_42_n_1024 \
+  --num-samples 1024
 
+Audit
 
-  PYTHONPATH=src python scripts/audit_gdsm_option_a.py \
-  --generated-dir "$GEN"
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024
 
-  {
-  "num_graphs": 1024,
-  "global_degree_constraint": false,
-  "final_graphs_simple_rate": 1.0,
-  "final_connected_rate": 1.0,
-  "initial_to_final_degree_multiset_preservation_rate": 0.9912109375,
-  "prior_to_final_degree_multiset_preservation_rate": 0.029296875,
-  "final_event_degree_preservation_rate": 1.0,
-  "all_local_rewiring_events_preserve_degrees": true,
-  "mean_spectral_degree_change_steps": 33.6748046875,
-  "mean_feedback_events": 0.5703125,
-  "note": "Initial/prior degrees may change; final_pre_rewire and final degrees must match. Equality in some samples is allowed."
-}
+Evaluate multiscale structure
 
-export ORCA_EXEC=/home/quang/orca/orca.out
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024 \
+  --reference-graphs outputs/datasets/sbm/test.pkl \
+  --seed 42
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+Evaluate benchmark topology metrics
+
+PYTHONHASHSEED=42 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN" \
-  --generated-graphs "$GEN/base_graphs.pkl" \
-  --generated-stage gdsm_simple_option_a \
-  --base-graphs "$GEN/initial_graphs.pkl" \
+  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/community_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/community_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
   --reference-split test \
   --generic-mmd-protocol graphrnn \
-  --num-samples 16 \
-  --output-dir "$GEN/evaluation_test"
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/community_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/evaluation_topology
 
+community_small — seed 43
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-gdsm_simple_base_to_test            0.003625          0.008958      0.000537
-gdsm_simple_option_a_to_test        0.003609          0.010380      0.000532
+Required prior: outputs/degree_generators/gdsm_final_g345/community_small/seed_43/checkpoint.pt.
 
+Check the supplied config against the prepared data
 
+PYTHONHASHSEED=43 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm
 
+Train the model
 
-CFG=configs/baselines/gdsm_simple_ego_small_structure3_option_a.yaml
-COMMON=configs/baselines/common_ego_small.yaml
+PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
+  --seed-id 43 \
+  --run-id seed_43_gdsm_final_g345 \
+  --device cuda:0
 
-RUN=seed_42_structure3_option_a
-N=1024
-GID=seed_42_n_${N}_option_a
+Generate
 
-GEN="outputs/baselines/gdsm_simple/ego_small/${RUN}/generations/${GID}"
+PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
+  --seed-id 43 \
+  --run-id seed_43_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 43 \
+  --generation-id seed_43_n_1024 \
+  --num-samples 1024
 
-PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+Audit
+
+PYTHONHASHSEED=43 PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024
+
+Evaluate multiscale structure
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024 \
+  --reference-graphs outputs/datasets/sbm/test.pkl \
+  --seed 42
+
+Evaluate benchmark topology metrics
+
+PYTHONHASHSEED=42 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/community_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/community_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/community_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/evaluation_topology
+
+community_small — seed 44
+
+Required prior: outputs/degree_generators/gdsm_final_g345/community_small/seed_44/checkpoint.pt.
+
+Check the supplied config against the prepared data
+
+PYTHONHASHSEED=44 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm
+
+Train the model
+
+PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
+  --seed-id 44 \
+  --run-id seed_44_gdsm_final_g345 \
+  --device cuda:0
+
+Generate
+
+PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
+  --seed-id 44 \
+  --run-id seed_44_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 44 \
+  --generation-id seed_44_n_1024 \
+  --num-samples 1024
+
+Audit
+
+PYTHONHASHSEED=44 PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024
+
+Evaluate multiscale structure
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024 \
+  --reference-graphs outputs/datasets/sbm/test.pkl \
+  --seed 42
+
+Evaluate benchmark topology metrics
+
+PYTHONHASHSEED=42 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/evaluation_topology
+
+ego_small — seed 42
+
+Required prior: outputs/degree_generators/gdsm_final_g345/ego_small/seed_42/checkpoint.pt.
+
+Check the supplied config against the prepared data
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small
+
+Train the model
+
+PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
   --stage train \
   --dataset ego_small \
-  --common-config "$COMMON" \
-  --wrapper-config "$CFG" \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
   --seed-id 42 \
-  --run-id "$RUN" \
+  --run-id seed_42_gdsm_final_g345 \
   --device cuda:0
 
+Generate
 
-
-PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
   --stage generate \
   --dataset ego_small \
-  --common-config "$COMMON" \
-  --wrapper-config "$CFG" \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
   --seed-id 42 \
+  --run-id seed_42_gdsm_final_g345 \
+  --device cuda:0 \
   --generation-seed 42 \
-  --run-id "$RUN" \
-  --generation-id "$GID" \
-  --num-samples "$N" \
-  --device cuda:0
+  --generation-id seed_42_n_1024 \
+  --num-samples 1024
 
+Audit
 
-  export ORCA_EXEC=/home/quang/orca/orca.out
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+Evaluate multiscale structure
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024 \
+  --reference-graphs outputs/datasets/ego_small/test.pkl \
+  --seed 42
+
+Evaluate benchmark topology metrics
+
+PYTHONHASHSEED=42 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN" \
-  --generated-graphs "$GEN/base_graphs.pkl" \
-  --generated-stage gdsm_simple_option_a \
-  --base-graphs "$GEN/initial_graphs.pkl" \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/ego_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/ego_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
   --reference-split test \
   --generic-mmd-protocol graphrnn \
-  --num-samples 16 \
-  --output-dir "$GEN/evaluation_test"
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/ego_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/evaluation_topology
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.012987          0.027056      0.008995
-gdsm_simple_base_to_test            0.020714          0.018201      0.013184
-gdsm_simple_option_a_to_test        0.021030          0.017170      0.012487
+ego_small — seed 43
 
-PYTHONPATH=src python scripts/train_degree_generator.py \
-  --config configs/experiments/dhvae/qm9_categorical_spectral_prior.yaml
+Required prior: outputs/degree_generators/gdsm_final_g345/ego_small/seed_43/checkpoint.pt.
 
-CFG=configs/baselines/gdsm_simple_qm9_categorical.yaml
-RUN=seed_42_spectral_categorical
-N=1024
+Check the supplied config against the prepared data
 
-PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+PYTHONHASHSEED=43 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small
+
+Train the model
+
+PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 43 \
+  --run-id seed_43_gdsm_final_g345 \
+  --device cuda:0
+
+Generate
+
+PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 43 \
+  --run-id seed_43_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 43 \
+  --generation-id seed_43_n_1024 \
+  --num-samples 1024
+
+Audit
+
+PYTHONHASHSEED=43 PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024
+
+Evaluate multiscale structure
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024 \
+  --reference-graphs outputs/datasets/ego_small/test.pkl \
+  --seed 42
+
+Evaluate benchmark topology metrics
+
+PYTHONHASHSEED=42 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/ego_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/ego_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/ego_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/evaluation_topology
+
+ego_small — seed 44
+
+Required prior: outputs/degree_generators/gdsm_final_g345/ego_small/seed_44/checkpoint.pt.
+
+Check the supplied config against the prepared data
+
+PYTHONHASHSEED=44 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small
+
+Train the model
+
+PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 44 \
+  --run-id seed_44_gdsm_final_g345 \
+  --device cuda:0
+
+Generate
+
+PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/ego_small_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset ego_small \
+  --output-root outputs/baselines \
+  --seed-id 44 \
+  --run-id seed_44_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 44 \
+  --generation-id seed_44_n_1024 \
+  --num-samples 1024
+
+Audit
+
+PYTHONHASHSEED=44 PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024
+
+Evaluate multiscale structure
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024 \
+  --reference-graphs outputs/datasets/ego_small/test.pkl \
+  --seed 42
+
+Evaluate benchmark topology metrics
+
+PYTHONHASHSEED=42 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir outputs/baselines/gdsm_simple/ego_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024 \
+  --generated-graphs outputs/baselines/gdsm_simple/ego_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/base_graphs.pkl \
+  --base-graphs outputs/baselines/gdsm_simple/ego_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/initial_graphs.pkl \
+  --generated-stage gdsm_final \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples 1024 \
+  --output-dir outputs/baselines/gdsm_simple/ego_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/evaluation_topology
+
+qm9 — seed 42
+
+Required prior: outputs/degree_generators/gdsm_final_g345/qm9/seed_42/checkpoint.pt.
+
+Check the supplied config against the prepared data
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed
+
+Train the model
+
+PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
   --stage train \
   --dataset qm9 \
   --no-common-config \
-  --wrapper-config "$CFG" \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed \
+  --output-root outputs/baselines \
   --seed-id 42 \
-  --run-id "$RUN" \
+  --run-id seed_42_gdsm_final_g345 \
   --device cuda:0
 
-PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+Generate
+
+PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
   --stage generate \
   --dataset qm9 \
   --no-common-config \
-  --wrapper-config "$CFG" \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed \
+  --output-root outputs/baselines \
   --seed-id 42 \
+  --run-id seed_42_gdsm_final_g345 \
+  --device cuda:0 \
   --generation-seed 42 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device cuda:0
+  --generation-id seed_42_n_10000 \
+  --num-samples 10000
 
-GEN="outputs/baselines/gdsm_simple/qm9/${RUN}/generations/seed_42_n_${N}"
+Audit
 
-PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
-  --generated-dir "$GEN"
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/qm9/seed_42_gdsm_final_g345/generations/seed_42_n_10000
 
-PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
-  --generated-dir "$GEN" \
-  --reference-graphs outputs/datasets/qm9_attributed/test.pkl
+Evaluate multiscale structure
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/qm9/seed_42_gdsm_final_g345/generations/seed_42_n_10000 \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --seed 42
+
+Evaluate molecules (raw-valid cohort)
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs outputs/baselines/gdsm_simple/qm9/seed_42_gdsm_final_g345/generations/seed_42_n_10000/molecular_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --nspdk-backend eden \
+  --nspdk-complexity 4 \
+  --nspdk-bond-label-mode hogdiff \
+  --require-fcd \
+  --fcd-device cuda:0 \
+  --output-dir outputs/baselines/gdsm_simple/qm9/seed_42_gdsm_final_g345/generations/seed_42_n_10000/evaluation_molecules
+
+Evaluate QED (same raw-valid cohort)
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_qed_research.py \
+  --generated-graphs outputs/baselines/gdsm_simple/qm9/seed_42_gdsm_final_g345/generations/seed_42_n_10000/molecular_graphs.pkl \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report outputs/baselines/gdsm_simple/qm9/seed_42_gdsm_final_g345/generations/seed_42_n_10000/evaluation_molecules/molecular_evaluation_metrics.json \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir outputs/baselines/gdsm_simple/qm9/seed_42_gdsm_final_g345/generations/seed_42_n_10000/evaluation_qed
+
+
+
+Molecular evaluation
+  validity: 0.9765
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9851
+  validity_without_correction: 0.9765
+  fcd: 0.2382448449525718
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9765
+  num_invalid_generated_molecules: 235
+  num_valid_generated_molecules_with_projected_formal_charges: 9851
+  num_invalid_generated_molecules_after_projected_formal_charges: 149
+  num_raw_invalid_resolved_by_projected_formal_charges: 86
+  projected_formal_charge_success_rate_on_raw_invalid: 0.3659574468085106
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 235
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9720430107526882
+  unique_valid_count: 9492
+  novelty_rate: 0.46818373367045935
+  novel_unique_valid_count: 4444
+  nspdk_mmd: 0.0007958647284085985
+  nspdk_mmd_valid_only: 0.0007958647284085985
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.0386403711144133e-05
+  nspdk_proxy_mmd_metric_source: 1.0245539025693481e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9765
+  fcd_generated_smiles_source: raw_valid
 
 {
-  "num_generated": 1024,
-  "num_reference": 13083,
-  "reference_path": "/home/quang/graphes/outputs/datasets/qm9_attributed/test.pkl",
-  "reference_sha256": "2089f2f0c67cd51685304408ab0071b0c91ff4e037d063ce54f80d085450e0ef",
-  "reference_subsample_seed": null,
-  "protocol": "biased_RBF_MMD_squared_Euclidean",
-  "sigma": 1.0,
-  "not_standard_graphRNN_ORCA_or_NSPDK": true,
-  "raw_graphs_no_sanitization_or_filter": true,
-  "external_typed_graphlet3_class_count": 48,
-  "mmd2": {
-    "node_category_histogram": 5.346417253826452e-05,
-    "edge_category_histogram": 9.66733054719171e-06,
-    "typed_graphlet3_joint_mass": 5.086090490991069e-06,
-    "connected_triple_mass": 1.2983593311588493e-07
-  },
-  "mean_conditional_overflow_against_training_vocabulary": {
-    "generated": 0.0007641393094672821,
-    "reference": 0.0
-  }
-
-Molecular evaluation
-  validity: 0.9775390625
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.986328125
-  validity_without_correction: 0.9775390625
-  fcd: 0.5541950439488801
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 1001
-  num_invalid_generated_molecules: 23
-  num_valid_generated_molecules_with_projected_formal_charges: 1010
-  num_invalid_generated_molecules_after_projected_formal_charges: 14
-  num_raw_invalid_resolved_by_projected_formal_charges: 9
-  projected_formal_charge_success_rate_on_raw_invalid: 0.391304347826087
-  num_valid_generated_molecules_with_correction: 1024
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 23
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 0.998001998001998
-  unique_valid_count: 999
-  novelty_rate: 0.45545545545545546
-  novel_unique_valid_count: 455
-  nspdk_mmd: 0.0015831699712827707
-  nspdk_mmd_valid_only: 0.0015831699712827707
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 1.683209219801429e-05
-  nspdk_proxy_mmd_metric_source: 1.8894596611427747e-05
-  fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1001
-  fcd_generated_smiles_source: raw_valid
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9765,
+  "validity_without_correction": 0.9765,
+  "qed_mean": 0.4660528612513095,
+  "qed_std_within_run": 0.06729425804320252,
+  "qed_median": 0.47125701289261895,
+  "qed_q10": 0.37711278039426227,
+  "qed_q90": 0.5492492131769379,
+  "qed_unique_valid_mean": 0.46581702019816035,
+  "num_unique_raw_valid": 9492,
+  "qed_yield": 0.4551006190119033,
+  "num_raw_valid_single_component": 9713,
+  "valid_single_component_yield": 0.9713,
+  "qed_single_component_mean": 0.46621448560513556,
+  "qed_ge_0p5_fraction_valid": 0.3091653865847414,
+  "qed_ge_0p5_yield_all": 0.3019,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": -4.736684068018526e-05,
+  "qed_wasserstein_1": 0.005514292415127005
+}
 
 
 
+qm9 — seed 43
 
+Required prior: outputs/degree_generators/gdsm_final_g345/qm9/seed_43/checkpoint.pt.
 
-VARIANT=no_guidance \
-RUN=seed_42_spectral_categorical \
-DEVICE=cuda:0 N=10240 GDSM_EIGH_BACKEND=cpu \
-  bash scripts/run_gdsm_categorical.sh qm9 generate
+Check the supplied config against the prepared data
 
-VARIANT=no_guidance \
-RUN=seed_42_spectral_categorical \
-DEVICE=cuda:0 N=10240 GDSM_EIGH_BACKEND=cpu \
-  bash scripts/run_gdsm_categorical.sh qm9 evaluate
+PYTHONHASHSEED=43 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed
 
+Train the model
 
-/home/quang/graphes/outputs/baselines/gdsm_simple/qm9/seed_42_spectral_categorical/generations/seed_42_n_1024
+PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed \
+  --output-root outputs/baselines \
+  --seed-id 43 \
+  --run-id seed_43_gdsm_final_g345 \
+  --device cuda:0
 
+Generate
 
-RUN=seed_42_spectral_categorical
-DEVICE=cuda:0
-N=10240
-GDSM_EIGH_BACKEND=cpu
-bash scripts/run_gdsm_categorical.sh qm9 generate
+PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed \
+  --output-root outputs/baselines \
+  --seed-id 43 \
+  --run-id seed_43_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 43 \
+  --generation-id seed_43_n_10000 \
+  --num-samples 10000
 
-RUN=seed_42_spectral_categorical \
-DEVICE=cuda:0 N=10240 GDSM_EIGH_BACKEND=cpu \
-  bash scripts/run_gdsm_categorical.sh qm9 evaluate
+Audit
 
+PYTHONHASHSEED=43 PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/qm9/seed_43_gdsm_final_g345/generations/seed_43_n_10000
 
-Molecular evaluation
-  validity: 0.9775390625
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.986328125
-  validity_without_correction: 0.9775390625
-  fcd: 0.5541950439488801
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 1001
-  num_invalid_generated_molecules: 23
-  num_valid_generated_molecules_with_projected_formal_charges: 1010
-  num_invalid_generated_molecules_after_projected_formal_charges: 14
-  num_raw_invalid_resolved_by_projected_formal_charges: 9
-  projected_formal_charge_success_rate_on_raw_invalid: 0.391304347826087
-  num_valid_generated_molecules_with_correction: 1024
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 23
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 0.998001998001998
-  unique_valid_count: 999
-  novelty_rate: 0.45545545545545546
-  novel_unique_valid_count: 455
-  nspdk_mmd: 0.0015856786419585205
-  nspdk_mmd_valid_only: 0.0015856786419585205
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 1.683209219801439e-05
-  nspdk_proxy_mmd_metric_source: 1.8894596611427327e-05
-  fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1001
-  fcd_generated_smiles_source: raw_valid
+Evaluate multiscale structure
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/qm9/seed_43_gdsm_final_g345/generations/seed_43_n_10000 \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --seed 42
+
+Evaluate molecules (raw-valid cohort)
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs outputs/baselines/gdsm_simple/qm9/seed_43_gdsm_final_g345/generations/seed_43_n_10000/molecular_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --nspdk-backend eden \
+  --nspdk-complexity 4 \
+  --nspdk-bond-label-mode hogdiff \
+  --require-fcd \
+  --fcd-device cuda:0 \
+  --output-dir outputs/baselines/gdsm_simple/qm9/seed_43_gdsm_final_g345/generations/seed_43_n_10000/evaluation_molecules
+
+Evaluate QED (same raw-valid cohort)
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_qed_research.py \
+  --generated-graphs outputs/baselines/gdsm_simple/qm9/seed_43_gdsm_final_g345/generations/seed_43_n_10000/molecular_graphs.pkl \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report outputs/baselines/gdsm_simple/qm9/seed_43_gdsm_final_g345/generations/seed_43_n_10000/evaluation_molecules/molecular_evaluation_metrics.json \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir outputs/baselines/gdsm_simple/qm9/seed_43_gdsm_final_g345/generations/seed_43_n_10000/evaluation_qed
+
+qm9 — seed 44
+
+Required prior: outputs/degree_generators/gdsm_final_g345/qm9/seed_44/checkpoint.pt.
+
+Check the supplied config against the prepared data
+
+PYTHONHASHSEED=44 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed
+
+Train the model
+
+PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed \
+  --output-root outputs/baselines \
+  --seed-id 44 \
+  --run-id seed_44_gdsm_final_g345 \
+  --device cuda:0
+
+Generate
+
+PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/qm9_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset qm9_attributed \
+  --output-root outputs/baselines \
+  --seed-id 44 \
+  --run-id seed_44_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 44 \
+  --generation-id seed_44_n_10000 \
+  --num-samples 10000
+
+Audit
+
+PYTHONHASHSEED=44 PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/qm9/seed_44_gdsm_final_g345/generations/seed_44_n_10000
+
+Evaluate multiscale structure
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/qm9/seed_44_gdsm_final_g345/generations/seed_44_n_10000 \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --seed 42
+
+Evaluate molecules (raw-valid cohort)
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs outputs/baselines/gdsm_simple/qm9/seed_44_gdsm_final_g345/generations/seed_44_n_10000/molecular_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed \
+  --reference-split test \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --nspdk-backend eden \
+  --nspdk-complexity 4 \
+  --nspdk-bond-label-mode hogdiff \
+  --require-fcd \
+  --fcd-device cuda:0 \
+  --output-dir outputs/baselines/gdsm_simple/qm9/seed_44_gdsm_final_g345/generations/seed_44_n_10000/evaluation_molecules
+
+Evaluate QED (same raw-valid cohort)
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_qed_research.py \
+  --generated-graphs outputs/baselines/gdsm_simple/qm9/seed_44_gdsm_final_g345/generations/seed_44_n_10000/molecular_graphs.pkl \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report outputs/baselines/gdsm_simple/qm9/seed_44_gdsm_final_g345/generations/seed_44_n_10000/evaluation_molecules/molecular_evaluation_metrics.json \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir outputs/baselines/gdsm_simple/qm9/seed_44_gdsm_final_g345/generations/seed_44_n_10000/evaluation_qed
+
+zinc — seed 42
+
+Required prior: outputs/degree_generators/gdsm_final_g345/zinc/seed_42/checkpoint.pt.
+
+Check the supplied config against the prepared data
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
+  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset zinc
+
+Train the model
+
+PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset zinc \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset zinc \
+  --output-root outputs/baselines \
+  --seed-id 42 \
+  --run-id seed_42_gdsm_final_g345 \
+  --device cuda:0
+
+Generate
+
+PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset zinc \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_42.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset zinc \
+  --output-root outputs/baselines \
+  --seed-id 42 \
+  --run-id seed_42_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 42 \
+  --generation-id seed_42_n_10000 \
+  --num-samples 10000
+
+Audit
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/zinc/seed_42_gdsm_final_g345/generations/seed_42_n_10000
+
+Evaluate multiscale structure
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/zinc/seed_42_gdsm_final_g345/generations/seed_42_n_10000 \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --seed 42
+
+Evaluate molecules (raw-valid cohort)
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs outputs/baselines/gdsm_simple/zinc/seed_42_gdsm_final_g345/generations/seed_42_n_10000/molecular_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --nspdk-backend eden \
+  --nspdk-complexity 4 \
+  --nspdk-bond-label-mode hogdiff \
+  --require-fcd \
+  --fcd-device cuda:0 \
+  --output-dir outputs/baselines/gdsm_simple/zinc/seed_42_gdsm_final_g345/generations/seed_42_n_10000/evaluation_molecules
+
+Evaluate QED (same raw-valid cohort)
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_qed_research.py \
+  --generated-graphs outputs/baselines/gdsm_simple/zinc/seed_42_gdsm_final_g345/generations/seed_42_n_10000/molecular_graphs.pkl \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --molecular-report outputs/baselines/gdsm_simple/zinc/seed_42_gdsm_final_g345/generations/seed_42_n_10000/evaluation_molecules/molecular_evaluation_metrics.json \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir outputs/baselines/gdsm_simple/zinc/seed_42_gdsm_final_g345/generations/seed_42_n_10000/evaluation_qed
+
+zinc — seed 43
+
+Required prior: outputs/degree_generators/gdsm_final_g345/zinc/seed_43/checkpoint.pt.
+
+Check the supplied config against the prepared data
+
+PYTHONHASHSEED=43 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
+  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset zinc
+
+Train the model
+
+PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset zinc \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset zinc \
+  --output-root outputs/baselines \
+  --seed-id 43 \
+  --run-id seed_43_gdsm_final_g345 \
+  --device cuda:0
+
+Generate
+
+PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset zinc \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_43.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset zinc \
+  --output-root outputs/baselines \
+  --seed-id 43 \
+  --run-id seed_43_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 43 \
+  --generation-id seed_43_n_10000 \
+  --num-samples 10000
+
+Audit
+
+PYTHONHASHSEED=43 PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/zinc/seed_43_gdsm_final_g345/generations/seed_43_n_10000
+
+Evaluate multiscale structure
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/zinc/seed_43_gdsm_final_g345/generations/seed_43_n_10000 \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --seed 42
+
+Evaluate molecules (raw-valid cohort)
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs outputs/baselines/gdsm_simple/zinc/seed_43_gdsm_final_g345/generations/seed_43_n_10000/molecular_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --nspdk-backend eden \
+  --nspdk-complexity 4 \
+  --nspdk-bond-label-mode hogdiff \
+  --require-fcd \
+  --fcd-device cuda:0 \
+  --output-dir outputs/baselines/gdsm_simple/zinc/seed_43_gdsm_final_g345/generations/seed_43_n_10000/evaluation_molecules
+
+Evaluate QED (same raw-valid cohort)
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_qed_research.py \
+  --generated-graphs outputs/baselines/gdsm_simple/zinc/seed_43_gdsm_final_g345/generations/seed_43_n_10000/molecular_graphs.pkl \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --molecular-report outputs/baselines/gdsm_simple/zinc/seed_43_gdsm_final_g345/generations/seed_43_n_10000/evaluation_molecules/molecular_evaluation_metrics.json \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir outputs/baselines/gdsm_simple/zinc/seed_43_gdsm_final_g345/generations/seed_43_n_10000/evaluation_qed
+
+zinc — seed 44
+
+Required prior: outputs/degree_generators/gdsm_final_g345/zinc/seed_44/checkpoint.pt.
+
+Check the supplied config against the prepared data
+
+PYTHONHASHSEED=44 PYTHONPATH=src python scripts/check_gdsm_categorical_data.py \
+  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset zinc
+
+Train the model
+
+PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage train \
+  --dataset zinc \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset zinc \
+  --output-root outputs/baselines \
+  --seed-id 44 \
+  --run-id seed_44_gdsm_final_g345 \
+  --device cuda:0
+
+Generate
+
+PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset zinc \
+  --no-common-config \
+  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_44.yaml \
+  --dataset-root outputs/datasets \
+  --serialized-dataset zinc \
+  --output-root outputs/baselines \
+  --seed-id 44 \
+  --run-id seed_44_gdsm_final_g345 \
+  --device cuda:0 \
+  --generation-seed 44 \
+  --generation-id seed_44_n_10000 \
+  --num-samples 10000
+
+Audit
+
+PYTHONHASHSEED=44 PYTHONPATH=src python scripts/audit_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/zinc/seed_44_gdsm_final_g345/generations/seed_44_n_10000
+
+Evaluate multiscale structure
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_gdsm_categorical.py \
+  --generated-dir outputs/baselines/gdsm_simple/zinc/seed_44_gdsm_final_g345/generations/seed_44_n_10000 \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --seed 42
+
+Evaluate molecules (raw-valid cohort)
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-graphs outputs/baselines/gdsm_simple/zinc/seed_44_gdsm_final_g345/generations/seed_44_n_10000/molecular_graphs.pkl \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --nspdk-backend eden \
+  --nspdk-complexity 4 \
+  --nspdk-bond-label-mode hogdiff \
+  --require-fcd \
+  --fcd-device cuda:0 \
+  --output-dir outputs/baselines/gdsm_simple/zinc/seed_44_gdsm_final_g345/generations/seed_44_n_10000/evaluation_molecules
+
+Evaluate QED (same raw-valid cohort)
+
+PYTHONHASHSEED=42 PYTHONPATH=src python scripts/evaluate_qed_research.py \
+  --generated-graphs outputs/baselines/gdsm_simple/zinc/seed_44_gdsm_final_g345/generations/seed_44_n_10000/molecular_graphs.pkl \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --molecular-report outputs/baselines/gdsm_simple/zinc/seed_44_gdsm_final_g345/generations/seed_44_n_10000/evaluation_molecules/molecular_evaluation_metrics.json \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir outputs/baselines/gdsm_simple/zinc/seed_44_gdsm_final_g345/generations/seed_44_n_10000/evaluation_qed
