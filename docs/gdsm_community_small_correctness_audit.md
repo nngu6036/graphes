@@ -151,3 +151,26 @@ training histories, and generated artifacts were unavailable locally, and no
 full experiment was rerun. This audit establishes the tested invariants and
 the evaluation correction; it does not establish the remaining cause of poor
 generation quality.
+
+## Evaluation runtime follow-up
+
+The silence after `Evaluation counts` was reproduced as an expensive graphlet
+descriptor stage. The sampled backend constructed and canonicalized NetworkX
+subgraphs for every subset; `ORCA_EXEC` accelerates the separate orbit metric,
+not this graphlet backend. The spectral histogram correction did not add a
+comparable computational cost.
+
+Topology graphlets of orders 3--5 now use adjacency-pattern lookup tables and
+a bounded cache of the existing fixed-seed subset selections. Counts, canonical
+keys, filtering, and explicit RNG consumption are preserved. Report progress
+shows the comparison, active metric, completed graph count, and elapsed time.
+
+On one synthetic 20-node graph with the configured 8,192-subset budget, warm
+counting across all three orders fell from 1.634 seconds to 0.00335 seconds;
+counts matched exactly. A synthetic report workload with 20 reference graphs,
+64 training graphs, 1,024 initial graphs, and 1,024 final graphs took 7.73 seconds
+locally, excluding ORCA. This is not a timing measurement on the user's server.
+The optimization/progress/report regression checks passed 51 tests, including
+all 1,096 labeled topology patterns through order five and complete metric
+equivalence checks. Report v7 metric definitions and sampling budgets remain
+unchanged by this runtime fix.

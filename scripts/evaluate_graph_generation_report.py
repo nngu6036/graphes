@@ -8,9 +8,10 @@ import csv
 import hashlib
 import json
 import re
+import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import networkx as nx
 
@@ -478,6 +479,7 @@ def _paper_mmd(
     clustering_bins: int = 100,
     include_generic_metrics: bool = True,
     graphlet_options: dict[str, Any] | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, float]:
     """Evaluate generic graph statistics under a declared metric protocol.
 
@@ -498,17 +500,36 @@ def _paper_mmd(
     """
 
     protocol = str(metric_protocol).strip().lower().replace("-", "_")
-    additional_metrics = {}
+    graphrnn = protocol in {
+        "graphrnn", "graphrnn_legacy", "spectre", "spectre_legacy",
+    }
+    if not graphrnn and protocol not in {"graphes_adaptive", "adaptive"}:
+        raise ValueError(
+            f"Unknown generic MMD protocol {metric_protocol!r}; expected "
+            "'graphrnn' or 'graphes_adaptive'."
+        )
+    bins = int(clustering_bins) if graphrnn else 20
+    if bins <= 0:
+        raise ValueError("clustering_bins must be positive.")
+
+    def announce(phase: str, completed: int) -> None:
+        if progress is not None:
+            progress(phase, completed, 1)
+
+    metrics = {}
     if include_generic_metrics:
+        announce("spectral MMD", 0)
         spectral_reference = descriptor_matrix(reference, spectral_histogram)
         spectral_candidate = descriptor_matrix(candidate, spectral_histogram)
-        graphlet_mmd, _ = mmd_graphlet_statistics(
-            reference, candidate, **(graphlet_options or {})
+        metrics["spectral_mmd"] = mmd_gaussian_emd(
+            spectral_reference, spectral_candidate,
         )
-        additional_metrics = {
-            "spectral_mmd": mmd_gaussian_emd(spectral_reference, spectral_candidate),
-            "graphlet_history_mmd": graphlet_mmd,
-        }
+        announce("spectral MMD", 1)
+        graphlet_mmd, _ = mmd_graphlet_statistics(
+            reference, candidate, progress=progress, **(graphlet_options or {})
+        )
+        metrics["graphlet_history_mmd"] = graphlet_mmd
+    announce("degree MMD", 0)
     max_degree = max(
         (
             max((int(degree) for _, degree in graph.degree()), default=0)
@@ -524,63 +545,59 @@ def _paper_mmd(
         candidate,
         lambda graph: degree_histogram(graph, max_degree),
     )
-
-    if protocol in {"graphrnn", "graphrnn_legacy", "spectre", "spectre_legacy"}:
-        bins = int(clustering_bins)
-        if bins <= 0:
-            raise ValueError("clustering_bins must be positive.")
-        clustering_reference = descriptor_matrix(
-            reference,
-            lambda graph: clustering_histogram(graph, bins),
-        )
-        clustering_candidate = descriptor_matrix(
-            candidate,
-            lambda graph: clustering_histogram(graph, bins),
-        )
-        return {
-            **additional_metrics,
-            "degree_mmd": mmd_gaussian_emd(
-                degree_reference, degree_candidate, sigma=1.0
-            ),
-            "clustering_mmd": mmd_gaussian_emd(
-                clustering_reference,
-                clustering_candidate,
-                sigma=0.1,
-                distance_scaling=float(bins),
-            ),
-            "orbit_mmd": (
-                mmd_orbit_graphrnn(reference, candidate, sigma=30.0)
-                if compute_orbit
-                else float("nan")
-            ),
-        }
-
-    if protocol in {"graphes_adaptive", "adaptive"}:
-        clustering_reference = descriptor_matrix(
-            reference,
-            lambda graph: clustering_histogram(graph, 20),
-        )
-        clustering_candidate = descriptor_matrix(
-            candidate,
-            lambda graph: clustering_histogram(graph, 20),
-        )
-        return {
-            **additional_metrics,
-            "degree_mmd": mmd_gaussian_emd(degree_reference, degree_candidate),
-            "clustering_mmd": mmd_gaussian_emd(
-                clustering_reference, clustering_candidate
-            ),
-            "orbit_mmd": (
-                mmd_orbit(reference, candidate)
-                if compute_orbit
-                else float("nan")
-            ),
-        }
-
-    raise ValueError(
-        f"Unknown generic MMD protocol {metric_protocol!r}; expected "
-        "'graphrnn' or 'graphes_adaptive'."
+    metrics["degree_mmd"] = mmd_gaussian_emd(
+        degree_reference, degree_candidate, sigma=1.0 if graphrnn else None,
     )
+    announce("degree MMD", 1)
+    announce("clustering MMD", 0)
+    clustering_reference = descriptor_matrix(
+        reference, lambda graph: clustering_histogram(graph, bins),
+    )
+    clustering_candidate = descriptor_matrix(
+        candidate, lambda graph: clustering_histogram(graph, bins),
+    )
+    metrics["clustering_mmd"] = mmd_gaussian_emd(
+        clustering_reference, clustering_candidate,
+        sigma=0.1 if graphrnn else None,
+        distance_scaling=float(bins) if graphrnn else 1.0,
+    )
+    announce("clustering MMD", 1)
+    orbit_metric = mmd_orbit_graphrnn if graphrnn else mmd_orbit
+    metrics["orbit_mmd"] = (
+        orbit_metric(reference, candidate, progress=progress)
+        if compute_orbit else float("nan")
+    )
+    return metrics
+
+
+def _evaluate_comparison(
+    reference: Sequence[nx.Graph],
+    candidate: Sequence[nx.Graph],
+    comparison: str,
+    **options,
+) -> dict[str, Any]:
+    """Keep long descriptor extraction visible without logging every graph."""
+    started = time.monotonic()
+    last_phase = None
+    last_output = started
+    print(
+        f"Evaluating {comparison}: reference={len(reference)} candidate={len(candidate)}",
+        flush=True,
+    )
+
+    def progress(phase: str, completed: int, total: int) -> None:
+        nonlocal last_phase, last_output
+        now = time.monotonic()
+        if phase != last_phase or completed == total or now - last_output >= 10.0:
+            print(
+                f"[{comparison}] {phase}: {completed}/{total}; elapsed={now - started:.1f}s",
+                flush=True,
+            )
+            last_phase, last_output = phase, now
+
+    metrics = _paper_mmd(reference, candidate, progress=progress, **options)
+    print(f"Completed {comparison} in {time.monotonic() - started:.1f}s", flush=True)
+    return {"comparison": comparison, **metrics}
 
 
 def is_molecular_evaluation(
@@ -1032,71 +1049,44 @@ def main() -> None:
         flush=True,
     )
 
+    metric_options = {
+        "compute_orbit": compute_orbit,
+        "metric_protocol": generic_mmd_protocol,
+        "clustering_bins": generic_clustering_bins,
+        "include_generic_metrics": not molecular,
+        "graphlet_options": graphlet_options,
+    }
     rows: list[dict[str, Any]] = []
     if train_graphs:
         rows.append(
-            {
-                "comparison": f"train_to_{reference_split}",
-                **_paper_mmd(
-                    reference,
-                    train_graphs,
-                    compute_orbit=compute_orbit,
-                    metric_protocol=generic_mmd_protocol,
-                    clustering_bins=generic_clustering_bins,
-                    include_generic_metrics=not molecular,
-                    graphlet_options=graphlet_options,
-                ),
-            }
+            _evaluate_comparison(
+                reference, train_graphs, f"train_to_{reference_split}", **metric_options,
+            )
         )
     if base_graphs:
         base_count = len(base_graphs)
         if args.max_graphs is not None:
             base_count = min(base_count, int(args.max_graphs))
         rows.append(
-            {
-                "comparison": f"{base_stage}_to_{reference_split}",
-                **_paper_mmd(
-                    reference,
-                    base_graphs[:base_count],
-                    compute_orbit=compute_orbit,
-                    metric_protocol=generic_mmd_protocol,
-                    clustering_bins=generic_clustering_bins,
-                    include_generic_metrics=not molecular,
-                    graphlet_options=graphlet_options,
-                ),
-            }
+            _evaluate_comparison(
+                reference, base_graphs[:base_count],
+                f"{base_stage}_to_{reference_split}", **metric_options,
+            )
         )
     if enriched_base_graphs and not _same_artifact(enriched_base_path, generated_path):
         enriched_count = len(enriched_base_graphs)
         if args.max_graphs is not None:
             enriched_count = min(enriched_count, int(args.max_graphs))
         rows.append(
-            {
-                "comparison": f"enriched_base_to_{reference_split}",
-                **_paper_mmd(
-                    reference,
-                    enriched_base_graphs[:enriched_count],
-                    compute_orbit=compute_orbit,
-                    metric_protocol=generic_mmd_protocol,
-                    clustering_bins=generic_clustering_bins,
-                    include_generic_metrics=not molecular,
-                    graphlet_options=graphlet_options,
-                ),
-            }
+            _evaluate_comparison(
+                reference, enriched_base_graphs[:enriched_count],
+                f"enriched_base_to_{reference_split}", **metric_options,
+            )
         )
     rows.append(
-        {
-            "comparison": f"{final_stage}_to_{reference_split}",
-            **_paper_mmd(
-                reference,
-                generated,
-                compute_orbit=compute_orbit,
-                metric_protocol=generic_mmd_protocol,
-                clustering_bins=generic_clustering_bins,
-                include_generic_metrics=not molecular,
-                graphlet_options=graphlet_options,
-            ),
-        }
+        _evaluate_comparison(
+            reference, generated, f"{final_stage}_to_{reference_split}", **metric_options,
+        )
     )
 
     csv_path = output_dir / "graph_mmd_metrics.csv"

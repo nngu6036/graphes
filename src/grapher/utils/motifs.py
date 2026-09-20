@@ -671,6 +671,159 @@ def _iter_connected_k_induced_subgraphs_exact(
             yield subgraph
 
 
+@lru_cache(maxsize=3)
+def _small_topology_lookup(
+    k: int,
+) -> tuple[tuple[str, ...], np.ndarray, np.ndarray, np.ndarray]:
+    """Canonical keys and topology predicates for every labeled 3..5 graphlet.
+
+    Bits follow graph6's column-major upper triangle, most significant first.
+    Minimizing that integer over permutations therefore gives exactly the
+    PythonCanonicalizer's lexicographically smallest graph6 string, including
+    the same final-byte padding. There are only 1,024 patterns even at k=5.
+    """
+    if not 3 <= k <= 5:
+        raise ValueError("Small topology lookup requires 3 <= k <= 5.")
+    pairs = [(u, v) for v in range(1, k) for u in range(v)]
+    edge_positions = {pair: index for index, pair in enumerate(pairs)}
+    width = len(pairs)
+    patterns = np.arange(1 << width, dtype=np.uint16)
+    canonical = patterns.copy()
+    for order in itertools.permutations(range(k)):
+        permuted = np.zeros_like(patterns)
+        for position, (u, v) in enumerate(pairs):
+            source = edge_positions[tuple(sorted((order[u], order[v])))]
+            permuted |= ((patterns >> (width - source - 1)) & 1) << (
+                width - position - 1
+            )
+        np.minimum(canonical, permuted, out=canonical)
+
+    padding = (-width) % 6
+    keys = tuple(
+        chr(k + 63)
+        + "".join(
+            chr(((int(code) << padding) >> shift & 63) + 63)
+            for shift in range(width + padding - 6, -1, -6)
+        )
+        for code in canonical
+    )
+    connected = np.zeros(len(patterns), dtype=bool)
+    cyclic = np.zeros(len(patterns), dtype=bool)
+    simple_cycle = np.zeros(len(patterns), dtype=bool)
+    for code in range(len(patterns)):
+        neighbors = [0] * k
+        for position, (u, v) in enumerate(pairs):
+            if code & (1 << (width - position - 1)):
+                neighbors[u] |= 1 << v
+                neighbors[v] |= 1 << u
+        seen = 0
+        components = 0
+        for node in range(k):
+            if seen & (1 << node):
+                continue
+            components += 1
+            frontier = 1 << node
+            while frontier:
+                bit = frontier & -frontier
+                frontier ^= bit
+                seen |= bit
+                frontier |= neighbors[bit.bit_length() - 1] & ~seen
+        connected[code] = components == 1
+        cyclic[code] = code.bit_count() - k + components > 0
+        simple_cycle[code] = components == 1 and all(
+            adjacent.bit_count() == 2 for adjacent in neighbors
+        )
+    for predicate in (connected, cyclic, simple_cycle):
+        predicate.setflags(write=False)
+    return keys, connected, cyclic, simple_cycle
+
+
+@lru_cache(maxsize=32)
+def _small_topology_subset_indices(
+    n: int, k: int, num_samples: int | None
+) -> np.ndarray:
+    """Reuse bounded deterministic subsets when no caller-owned RNG is supplied."""
+    total = comb(n, k)
+    count = total if num_samples is None else min(total, num_samples)
+    if not 0 <= count <= 16384:
+        raise ValueError("Cached topology subsets are limited to 16,384 rows.")
+    indices = np.asarray(
+        list(_sample_node_subsets(list(range(n)), k, num_samples=num_samples)),
+        dtype=np.intp,
+    ).reshape(-1, k)
+    indices.setflags(write=False)
+    return indices
+
+
+def _small_topology_graphlet_counts(
+    graph: nx.Graph,
+    k: int,
+    *,
+    connected_only: bool,
+    topology_filter: str,
+    num_samples: int | None,
+    rng: np.random.Generator | None,
+) -> dict[str, int]:
+    """Count existing sampled subsets without constructing induced nx.Graphs."""
+    _validate_simple_undirected(graph)
+    if k > graph.number_of_nodes():
+        return {}
+    selected_filter = normalize_graphlet_topology_filter(topology_filter)
+    nodes = sorted(graph.nodes(), key=lambda node: (type(node).__name__, repr(node)))
+    adjacency = nx.to_numpy_array(graph, nodelist=nodes, dtype=bool, weight=None)
+    keys, connected, cyclic, simple_cycle = _small_topology_lookup(k)
+    keep = connected.copy() if connected_only else np.ones(len(keys), dtype=bool)
+    if selected_filter == "cyclic":
+        keep &= cyclic
+    elif selected_filter == "simple_cycle":
+        keep &= simple_cycle
+
+    exact = (
+        num_samples is None
+        or int(num_samples) <= 0
+        or comb(len(nodes), k) <= int(num_samples)
+    )
+    if selected_filter == "simple_cycle" and exact:
+        # Keep the existing sparse cycle search rather than enumerate all nCk.
+        rank = {node: index for index, node in enumerate(nodes)}
+        subsets = (
+            tuple(rank[node] for node in subset)
+            for subset in induced_simple_cycle_node_sets(graph, k)
+        )
+        batches = _batched(subsets, 4096)
+    elif rng is None and (
+        comb(len(nodes), k) if exact else int(num_samples)
+    ) <= 16384:
+        # The existing sampler creates default_rng(0) on every call. Its index
+        # subsets depend only on n/k/budget, so reuse those exact draws across
+        # graphs. Explicit RNGs must still be consumed on every invocation.
+        cached_indices = _small_topology_subset_indices(
+            len(nodes), k, None if exact else int(num_samples)
+        )
+        batches = (
+            cached_indices[offset : offset + 4096]
+            for offset in range(0, len(cached_indices), 4096)
+        )
+    else:
+        # Retain the sampler, sorted node order, and random-number consumption.
+        subsets = _sample_node_subsets(
+            list(range(len(nodes))), k, num_samples=num_samples, rng=rng
+        )
+        batches = _batched(subsets, 4096)
+    pairs = [(u, v) for v in range(1, k) for u in range(v)]
+    counts: Counter[str] = Counter()
+    for batch in batches:
+        indices = np.asarray(batch, dtype=np.intp)
+        codes = np.zeros(len(batch), dtype=np.uint16)
+        for position, (u, v) in enumerate(pairs):
+            codes |= adjacency[indices[:, u], indices[:, v]].astype(np.uint16) << (
+                len(pairs) - position - 1
+            )
+        # Counter preserves first-observed key order, as did the graph iterator.
+        counts.update(keys[code] for code in codes[keep[codes]])
+    return dict(counts)
+
+
 def graphlet_count_dict(
     G: nx.Graph,
     k: int,
@@ -683,9 +836,25 @@ def graphlet_count_dict(
     batch_size: int = 4096,
 ) -> dict[str, int]:
     """
-    Count induced graphlets of size k using nauty canonical graph6 keys.
+    Count induced graphlets of size k using canonical graph6 keys.
     """
     canonicalizer = canonicalizer or default_topology_canonicalizer()
+
+    if (
+        type(canonicalizer) is PythonCanonicalizer
+        and 3 <= k <= min(5, canonicalizer.max_nodes)
+        and G.number_of_nodes() <= 2048
+    ):
+        # Custom canonicalizers and larger graphlets retain their existing path.
+        # The node limit bounds the temporary dense adjacency to 4 MiB.
+        return _small_topology_graphlet_counts(
+            G,
+            k,
+            connected_only=connected_only,
+            topology_filter=topology_filter,
+            num_samples=num_samples,
+            rng=rng,
+        )
 
     counts: Counter[str] = Counter()
 

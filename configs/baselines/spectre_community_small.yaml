@@ -2,14 +2,28 @@ comparison:
   model: spectre
   dataset: community_small
   common_config: common_community_small.yaml
-  status: graphes_exposure_matched_adaptation
+  status: graphes_compute_matched_adaptation
   budget:
-    basis: graphes_controlled_comparison
-    unit: train_set_passes
-    target_train_passes: 10000
-    epochs: 10000
-  fairness_note: Matches training graph exposure, not compute or optimizer updates.
-    Select checkpoints and tune only on validation.
+    basis: graphes_compute_matched_comparison
+    unit: epochs
+    epochs: 500
+    target_runtime_hours:
+    - 1.0
+    - 2.0
+    reference_runtime:
+      epochs: 10000
+      observed_hours:
+      - 24.0
+      - 36.0
+  fairness_note: >
+    SPECTRE is compute-matched rather than train-pass matched because each
+    epoch performs both discriminator and generator updates with expensive
+    spectral/adjacency objectives and gradient penalties. The 500-epoch
+    horizon targets approximately the same 1--2 hour wall-clock budget as
+    the other Community-small baselines. Epoch-dependent spectral schedules
+    are scaled proportionally from the previous 10000-epoch GraphES profile.
+    The managed adapter evaluates the final epoch and does not select using
+    the test split.
   native_budget:
     basis: upstream_released_profile
     unit: epochs
@@ -18,9 +32,9 @@ comparison:
     batch_size: 10
 spectre:
   train:
-    epochs: 10000
+    epochs: 500
     batch_size: 10
-    log_every: 100
+    log_every: 25
   model:
     k_eigval: 2
     gen_gelu: true
@@ -46,14 +60,14 @@ spectre:
     clip_grad_norm: 1.0
     eigvec_temp_decay: true
     eigval_temp_decay: true
-    decay_eigvec_temp_over: 1667
-    decay_eigval_temp_over: 1667
-    n_eigval_warmup_epochs: 1667
-    n_eigvec_warmup_epochs: 1667
+    decay_eigvec_temp_over: 83
+    decay_eigval_temp_over: 83
+    n_eigval_warmup_epochs: 83
+    n_eigvec_warmup_epochs: 83
     min_eigval_temp: 0.8
     min_eigvec_temp: 0.8
     SON_gumbel_temperature_decay: true
-    decay_SON_gumbel_temp_over: 8333
+    decay_SON_gumbel_temp_over: 417
     SON_gumbel_temperature_warmup_epochs: 0
     lr_g: 0.0001
     lr_d: 0.0001

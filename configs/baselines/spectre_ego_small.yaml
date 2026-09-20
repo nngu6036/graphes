@@ -2,14 +2,35 @@ comparison:
   model: spectre
   dataset: ego_small
   common_config: common_ego_small.yaml
-  status: graphes_exposure_matched_adaptation
+  status: graphes_compute_matched_adaptation
   budget:
-    basis: graphes_controlled_comparison
-    unit: train_set_passes
-    target_train_passes: 10000
-    epochs: 10000
-  fairness_note: Matches training graph exposure, not compute or optimizer updates.
-    Select checkpoints and tune only on validation.
+    basis: graphes_compute_matched_comparison
+    unit: epochs
+    epochs: 270
+    target_runtime_hours:
+    - 1.0
+    - 2.0
+    derivation:
+      reference_dataset: community_small
+      reference_epochs: 500
+      reference_train_graphs: 64
+      ego_train_graphs: 128
+      batch_size: 10
+      reference_batches_per_epoch: 7
+      ego_batches_per_epoch: 13
+      reference_total_batches: 3500
+      ego_total_batches: 3510
+  fairness_note: >
+    SPECTRE is compute-matched rather than train-pass matched because each
+    batch performs both discriminator and generator updates with expensive
+    spectral/adjacency objectives and gradient penalties. Ego-small has 128
+    training graphs versus 64 for Community-small, so with batch size 10 it
+    executes about 13 batches per epoch rather than 7. The 270-epoch horizon
+    therefore gives approximately the same total number of SPECTRE training
+    batches as the 500-epoch Community-small compute-matched profile (3510
+    versus 3500). Epoch-dependent spectral schedules are scaled proportionally
+    from the previous 10000-epoch GraphES profile. The managed adapter evaluates
+    the final epoch and does not select using the test split.
   native_budget:
     basis: closest_upstream_profile_with_adapter
     unit: epochs
@@ -18,9 +39,9 @@ comparison:
     batch_size: 10
 spectre:
   train:
-    epochs: 10000
+    epochs: 270
     batch_size: 10
-    log_every: 100
+    log_every: 25
   model:
     k_eigval: 2
     gen_gelu: true
@@ -46,14 +67,14 @@ spectre:
     clip_grad_norm: 1.0
     eigvec_temp_decay: true
     eigval_temp_decay: true
-    decay_eigvec_temp_over: 1667
-    decay_eigval_temp_over: 1667
-    n_eigval_warmup_epochs: 1667
-    n_eigvec_warmup_epochs: 1667
+    decay_eigvec_temp_over: 45
+    decay_eigval_temp_over: 45
+    n_eigval_warmup_epochs: 45
+    n_eigvec_warmup_epochs: 45
     min_eigval_temp: 0.8
     min_eigvec_temp: 0.8
     SON_gumbel_temperature_decay: true
-    decay_SON_gumbel_temp_over: 8333
+    decay_SON_gumbel_temp_over: 225
     SON_gumbel_temperature_warmup_epochs: 0
     lr_g: 0.0001
     lr_d: 0.0001

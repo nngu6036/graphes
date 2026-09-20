@@ -245,6 +245,8 @@ def mmd_orbit_graphrnn(
     reference: Sequence[nx.Graph],
     generated: Sequence[nx.Graph],
     sigma: float = 30.0,
+    *,
+    progress: Callable[[str, int, int], None] | None = None,
 ) -> float:
     """GraphRNN/SPECTRE four-node orbit MMD.
 
@@ -254,28 +256,71 @@ def mmd_orbit_graphrnn(
     *not* renormalize this vector into a probability histogram.
     """
 
-    ref = descriptor_matrix(reference, orbit_count_vector)
-    gen = descriptor_matrix(generated, orbit_count_vector)
-    return mmd_rbf(ref, gen, sigma=float(sigma))
+    ref, gen = _orbit_descriptor_matrices(
+        reference, generated, orbit_count_vector, progress=progress,
+    )
+    if progress is not None:
+        progress("orbit MMD", 0, 1)
+    result = mmd_rbf(ref, gen, sigma=float(sigma))
+    if progress is not None:
+        progress("orbit MMD", 1, 1)
+    return result
+
+
+def _orbit_descriptor_matrices(
+    reference: Sequence[nx.Graph],
+    generated: Sequence[nx.Graph],
+    fn: Callable[[nx.Graph], np.ndarray],
+    *,
+    progress: Callable[[str, int, int], None] | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    completed = 0
+    total = len(reference) + len(generated)
+    if progress is not None:
+        progress("orbit descriptors", 0, total)
+
+    def descriptor(graph: nx.Graph) -> np.ndarray:
+        nonlocal completed
+        result = fn(graph)
+        completed += 1
+        if progress is not None:
+            progress("orbit descriptors", completed, total)
+        return result
+
+    return descriptor_matrix(reference, descriptor), descriptor_matrix(
+        generated, descriptor,
+    )
+
+
+def _orbit_histogram(g: nx.Graph) -> np.ndarray:
+    counts = np.asarray(orbit_count_vector(g), dtype=np.float64).reshape(-1)
+    total = float(np.sum(counts))
+    return counts / (total + 1e-8)
 
 
 def orbit_histogram_matrix(graphs: Sequence[nx.Graph]) -> np.ndarray:
-    def histogram(g: nx.Graph) -> np.ndarray:
-        counts = np.asarray(orbit_count_vector(g), dtype=np.float64).reshape(-1)
-        total = float(np.sum(counts))
-        return counts / (total + 1e-8)
-
-    return descriptor_matrix(graphs, histogram)
+    return descriptor_matrix(graphs, _orbit_histogram)
 
 
 def mmd_orbit(
-    reference: Sequence[nx.Graph], generated: Sequence[nx.Graph], sigma: float = 1.0
+    reference: Sequence[nx.Graph],
+    generated: Sequence[nx.Graph],
+    sigma: float = 1.0,
+    *,
+    progress: Callable[[str, int, int], None] | None = None,
 ) -> float:
-    h_ref = orbit_histogram_matrix(reference)
-    h_gen = orbit_histogram_matrix(generated)
+    h_ref, h_gen = _orbit_descriptor_matrices(
+        reference, generated, _orbit_histogram, progress=progress,
+    )
+    if progress is not None:
+        progress("orbit MMD", 0, 1)
     if h_ref.size == 0 or h_gen.size == 0:
-        return float("nan")
-    return mmd_gaussian_emd(h_ref, h_gen, sigma=float(sigma))
+        result = float("nan")
+    else:
+        result = mmd_gaussian_emd(h_ref, h_gen, sigma=float(sigma))
+    if progress is not None:
+        progress("orbit MMD", 1, 1)
+    return result
 
 
 def mmd_graphlet_statistics(

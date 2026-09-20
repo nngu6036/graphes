@@ -227,7 +227,10 @@ Comparison                        Degree MMD    Clustering MMD     Orbit MMD
 train_to_test                       0.012987          0.027056      0.008995
 hog_diff_to_test                    0.042461          0.062482      0.010783
 
-
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.009729        0.001697
+hog_diff_to_test                    0.036673          0.049233      0.010289        0.038652        0.024643
 
 # QM9
 

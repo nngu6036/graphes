@@ -57,3 +57,23 @@ def test_spectral_mmd_ignores_node_order():
     permuted = nx.from_numpy_array(nx.to_numpy_array(graph, nodelist=order))
     metrics = report._paper_mmd([graph], [permuted], compute_orbit=False)
     assert metrics["spectral_mmd"] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_comparison_reports_descriptor_progress_and_preserves_metrics(capsys):
+    reference = [nx.path_graph(5)]
+    generated = [nx.cycle_graph(5), nx.complete_graph(5)]
+    expected = report._paper_mmd(reference, generated, compute_orbit=False)
+    row = report._evaluate_comparison(
+        reference, generated, "generated_to_test", compute_orbit=False,
+    )
+    assert row["comparison"] == "generated_to_test"
+    for key in report.GENERIC_REPORT_METRICS:
+        assert row[key] == pytest.approx(expected[key], nan_ok=True)
+    output = capsys.readouterr().out
+    assert "Evaluating generated_to_test: reference=1 candidate=2" in output
+    assert "graphlet descriptors: 0/3" in output
+    assert "graphlet descriptors: 3/3" in output
+    assert "spectral MMD: 1/1" in output
+    assert "degree MMD: 1/1" in output
+    assert "clustering MMD: 1/1" in output
+    assert "Completed generated_to_test" in output
