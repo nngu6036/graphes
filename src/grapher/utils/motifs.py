@@ -729,9 +729,10 @@ def _small_topology_lookup(
                 seen |= bit
                 frontier |= neighbors[bit.bit_length() - 1] & ~seen
         connected[code] = components == 1
-        cyclic[code] = code.bit_count() - k + components > 0
+        # Python 3.9 baseline environments do not provide int.bit_count().
+        cyclic[code] = bin(code).count("1") - k + components > 0
         simple_cycle[code] = components == 1 and all(
-            adjacent.bit_count() == 2 for adjacent in neighbors
+            bin(adjacent).count("1") == 2 for adjacent in neighbors
         )
     for predicate in (connected, cyclic, simple_cycle):
         predicate.setflags(write=False)

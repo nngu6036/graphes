@@ -32,88 +32,176 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-digress_to_test                     0.003912          0.009413      0.000292
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
+digress_to_test                     0.005865          0.016493      0.003719        0.029511        0.021216
 
 
 export DIGRESS=/home/quang/DiGress
 export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
 
-PYTHONPATH=src python scripts/run_digress_baseline.py \
-  --dataset ego_small \
-  --num-samples 1024 \
-  --seed-id 42 \
-  --run-id seed_42_e200k \
-  --wrapper-config configs/baselines/digress_ego_small.yaml
-
-GEN_DIR="outputs/baselines/digress/ego_small/seed_42_e200k/generations/seed_42_n_1024"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/ego_small_topology_graphlet.yaml \
-  --generated-dir "$GEN_DIR" \
-  --generated-stage digress_e200k \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-
-Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004751          0.002533      0.006985
-digress_e200k_to_test               0.003472          0.007016      0.012191
-
-export DIGRESS=/home/quang/DiGress
-export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+RUN=seed_43
+N=1024
 
 PYTHONPATH=src python scripts/run_digress_baseline.py \
-  --dataset ego_small \
-  --num-samples 1024 \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/digress_community_small.yaml \
   --seed-id 43 \
-  --run-id seed_43_e200k \
-  --wrapper-config configs/baselines/digress_ego_small.yaml
+  --run-id "$RUN" \
+  --device gpu
 
-GEN_DIR="outputs/baselines/digress/ego_small/seed_43_e200k/generations/seed_43_n_1024"
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/digress_community_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/digress/community_small/$RUN/generations/seed_43_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/ego_small_topology_graphlet.yaml \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
-  --generated-stage digress_e200k \
   --output-dir "$GEN_DIR/evaluation_report"
-
-Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004751          0.002533      0.006985
-digress_e200k_to_test               0.003942          0.008573      0.017430
 
 
 export DIGRESS=/home/quang/DiGress
 export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
 
-PYTHONPATH=src python scripts/run_digress_baseline.py \
-  --dataset ego_small \
-  --num-samples 1024 \
-  --seed-id 44 \
-  --run-id seed_44_e200k \
-  --wrapper-config configs/baselines/digress_ego_small.yaml
+RUN=seed_44
+N=1024
 
-GEN_DIR="outputs/baselines/digress/ego_small/seed_44_e200k/generations/seed_44_n_1024"
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/digress_community_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/digress_community_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/digress/community_small/$RUN/generations/seed_44_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/ego_small_topology_graphlet.yaml \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
-  --generated-stage digress_e200k \
   --output-dir "$GEN_DIR/evaluation_report"
 
 
-Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004751          0.002533      0.006985
-digress_e200k_to_test               0.006524          0.015860      0.020523
 
 
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/digress_ego_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/digress_ego_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/digress/ego_small/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
 
 
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+RUN=seed_43
+N=1024
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/digress_ego_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/digress_ego_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/digress/ego_small/$RUN/generations/seed_43_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
 
 
+export DIGRESS=/home/quang/DiGress
+export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+
+RUN=seed_44
+N=1024
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --stage train \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/digress_ego_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_digress_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/digress_ego_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/digress/ego_small/$RUN/generations/seed_44_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
 
 
 
