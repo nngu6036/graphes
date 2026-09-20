@@ -292,11 +292,17 @@ def mmd_graphlet_statistics(
     edge_label_attr: str | None = None,
     attributed_backend: str = "auto",
     return_by_order: bool = False,
+    progress: Callable[[str, int, int], None] | None = None,
 ) -> (
     tuple[float, float]
     | tuple[float, float, dict[str, float], dict[str, float]]
 ):
-    """MMD for selected graphlet composition and induced-subset mass."""
+    """MMD for selected graphlet composition and induced-subset mass.
+
+    An optional progress callback receives ``(phase, completed, total)``. Graphlet
+    descriptors report once before counting and after each graph; the MMD phase
+    encloses all kernels, including per-order metrics when requested.
+    """
 
     cfg = SummaryConfig(
         graphlet_history=True,
@@ -316,6 +322,8 @@ def mmd_graphlet_statistics(
             "Attributed graphlet evaluation requires both node_label_attr and "
             "edge_label_attr."
         )
+    if progress is not None:
+        progress("graphlet descriptors", 0, len(combined))
     if attributed:
         histories: list[dict[str, dict[str, float]]] = []
         masses: list[dict[str, float]] = []
@@ -323,7 +331,7 @@ def mmd_graphlet_statistics(
             str(k): [] for k in range(int(k_min), int(k_max) + 1)
         }
         rng = np.random.default_rng(0)
-        for graph in combined:
+        for graph_index, graph in enumerate(combined, start=1):
             history: dict[str, dict[str, float]] = {}
             mass: dict[str, float] = {}
             for k in range(int(k_min), int(k_max) + 1):
@@ -358,9 +366,15 @@ def mmd_graphlet_statistics(
                 )
             histories.append(history)
             masses.append(mass)
+            if progress is not None:
+                progress("graphlet descriptors", graph_index, len(combined))
         keys_by_k = {key: sorted(set(values)) for key, values in keys_by_k.items()}
     else:
-        statistics = [graphlet_statistics_summary(graph, cfg) for graph in combined]
+        statistics = []
+        for graph_index, graph in enumerate(combined, start=1):
+            statistics.append(graphlet_statistics_summary(graph, cfg))
+            if progress is not None:
+                progress("graphlet descriptors", graph_index, len(combined))
         histories = [item[0] for item in statistics]
         masses = [item[1] for item in statistics]
         keys_by_k = topology_graphlet_keys_by_size(
@@ -375,7 +389,11 @@ def mmd_graphlet_statistics(
     gen_rows = [
         flatten_graphlet_history(h, keys_by_k) for h in histories[len(reference) :]
     ]
+    if progress is not None:
+        progress("graphlet MMD", 0, 1)
     if not ref_rows or not gen_rows:
+        if progress is not None:
+            progress("graphlet MMD", 1, 1)
         if return_by_order:
             empty = {
                 str(k): float("nan")
@@ -409,6 +427,8 @@ def mmd_graphlet_statistics(
     )
     selected_mass_mmd = mmd_gaussian_emd(ref_mass, gen_mass)
     if not return_by_order:
+        if progress is not None:
+            progress("graphlet MMD", 1, 1)
         return histogram_mmd, selected_mass_mmd
 
     histogram_by_order: dict[str, float] = {}
@@ -441,6 +461,8 @@ def mmd_graphlet_statistics(
             dtype=np.float64,
         )
         mass_by_order[key] = mmd_gaussian_emd(order_ref_mass, order_gen_mass)
+    if progress is not None:
+        progress("graphlet MMD", 1, 1)
     return histogram_mmd, selected_mass_mmd, histogram_by_order, mass_by_order
 
 
