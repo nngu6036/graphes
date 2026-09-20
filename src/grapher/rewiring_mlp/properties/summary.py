@@ -192,20 +192,29 @@ def clustering_histogram(graph: nx.Graph, bins: int = 20) -> np.ndarray:
 
 
 def spectral_histogram(graph: nx.Graph, bins: int = 20) -> np.ndarray:
+    """Normalized-Laplacian spectrum, including isolates and boundary eigenvalues.
+
+    Isolates contribute zero eigenvalues. Snap only floating-point roundoff at
+    bin boundaries so relabeling a graph cannot move an exact boundary value
+    into the adjacent bin or discard an eigenvalue just outside [0, 2].
+    """
+    if bins < 1:
+        raise ValueError("spectral bins must be positive")
     if graph.number_of_nodes() == 0:
         return np.zeros(bins, dtype=np.float64)
     adjacency = nx.to_numpy_array(graph, dtype=np.float64)
     degrees = adjacency.sum(axis=1)
     inv_sqrt = np.zeros_like(degrees)
     inv_sqrt[degrees > 0] = 1.0 / np.sqrt(degrees[degrees > 0])
-    laplacian = np.eye(adjacency.shape[0]) - np.diag(inv_sqrt) @ adjacency @ np.diag(
-        inv_sqrt
+    laplacian = np.diag((degrees > 0).astype(np.float64)) - (
+        inv_sqrt[:, None] * adjacency * inv_sqrt[None, :]
     )
-    try:
-        vals = np.linalg.eigvalsh(laplacian)
-    except np.linalg.LinAlgError:
-        vals = np.zeros(graph.number_of_nodes(), dtype=np.float64)
-    hist, _ = np.histogram(vals, bins=bins, range=(0.0, 2.0), density=False)
+    vals = np.linalg.eigvalsh(laplacian)
+    positions = np.clip(vals, 0.0, 2.0) * (bins / 2.0)
+    nearest = np.rint(positions)
+    positions = np.where(np.abs(positions - nearest) <= 1e-10, nearest, positions)
+    indices = np.minimum(positions.astype(np.int64), bins - 1)
+    hist = np.bincount(indices, minlength=bins)
     return _safe_normalize(hist.astype(np.float64))
 
 

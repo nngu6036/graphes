@@ -1141,7 +1141,7 @@ def main() -> None:
 
     save_json(
         {
-            "format": "graph_generation_evaluation_report_v6",
+            "format": "graph_generation_evaluation_report_v7",
             "reference_split": reference_split,
             "reference_split_sha256": provenance["split_sha256"][reference_split],
             "reference_graph_indices_zero_based": list(range(reference_count)),
@@ -1152,6 +1152,10 @@ def main() -> None:
             "graphlet_backend": graphlet_backend,
             "generic_graphlet_options": graphlet_options if not molecular else None,
             "generic_spectral_bins": 20 if not molecular else None,
+            "generic_spectral_descriptor": (
+                "normalized_laplacian_isolates_zero_stable_boundaries_v2"
+                if not molecular else None
+            ),
             "dataset_provenance": provenance,
             "dataset_mismatch_policy": args.dataset_mismatch_policy,
             "dataset_provenance_mismatches": dataset_mismatches,

@@ -49,3 +49,11 @@ def test_molecular_report_keeps_existing_metrics(monkeypatch):
     )
     assert set(metrics) == set(report.REPORT_METRICS)
     assert report._report_metrics([metrics]) == report.REPORT_METRICS
+
+
+def test_spectral_mmd_ignores_node_order():
+    graph = nx.cycle_graph(6)
+    order = [4, 1, 5, 0, 3, 2]
+    permuted = nx.from_numpy_array(nx.to_numpy_array(graph, nodelist=order))
+    metrics = report._paper_mmd([graph], [permuted], compute_orbit=False)
+    assert metrics["spectral_mmd"] == pytest.approx(0.0, abs=1e-12)
