@@ -1803,6 +1803,8 @@ gdsm_final_no_rewiring_to_test      0.029724          0.022596      0.020263    
 
 
 ## Community-small empirical sequence
+# Seed 41
+# Seed 42
 RUN=seed_42_gdsm_final_g345
 N=1024
 CFG=configs/experiments/gdsm_final_ablation/community_small_seed_42_empirical_degree.yaml
@@ -1837,3 +1839,14 @@ python scripts/evaluate_graph_generation_report.py \
   --generic-mmd-protocol graphrnn \
   --num-samples "$N" \
   --output-dir "$GEN/evaluation_topology"
+
+
+  Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.073170          0.800086      0.420832        0.357828        0.567341
+gdsm_final_empirical_degree_to_test      0.009380          0.066928      0.016751        0.028784        0.103923
+
+# Seed 43
+# Seed 44
+# Seed 45

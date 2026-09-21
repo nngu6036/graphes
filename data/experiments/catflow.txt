@@ -1,9 +1,68 @@
+CatFlow experiment commands and results
+=======================================
+
+Source: catflow(1).txt
+
+Commands and recorded outputs are organized by dataset and seed, in source order. All command arguments,
+paths, metric names, and numerical precision are retained. No experiment commands were executed and no
+additional statistics were calculated.
+
+Not reported denotes an absent value or output; it is not a zero. Source literals such as None and {} are
+retained as written. Source notes identify missing information and apparent inconsistencies without correcting
+the commands or reconciling the results. This is a formatted record, not an executable shell script.
+
+Environment exports are shown only where they occur in the original file. A later run may rely on earlier
+settings. Source-line references identify locations in the original uploaded text, not in this formatted
+version.
+
+Experiment index
+================
+
+Section  Dataset in commands  Run labels  Requested samples per run
+-------  -------------------  ----------  -------------------------
+      1  community_small      42, 43, 44                       1024
+      2  ego_small            42, 43, 44                       1024
+      3  qm9                  42, 43, 44                      10000
+      4  zinc                 42, 43, 44                      10000
+
+Run labels identify the supplied command blocks and the reports that follow them; they do not independently
+verify the provenance of a recorded result.
+
+1. CatFlow / Community-small
+============================
+
+Dataset identifier in the baseline commands: community_small. Requested samples per run: 1024.
+
+Results overview
+----------------
+
+Each recorded train_to_test row is retained separately. Missing columns are marked Not reported; no cross-seed
+means or standard deviations have been calculated.
+
+Run label  Comparison       Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
+---------  ---------------  ----------  --------------  ---------  ------------  ------------
+42         train_to_test      0.004733        0.009889   0.000399      0.006979      0.010610
+42         catflow_to_test    0.072821        0.823010   0.426084      0.367999      0.598952
+43         train_to_test      0.004733        0.009889   0.000399      0.006979      0.010610
+43         catflow_to_test    0.080028        0.831395   0.483119      0.379247      0.610999
+44         train_to_test      0.004733        0.009889   0.000399      0.006979      0.010610
+44         catflow_to_test    0.078349        0.813439   0.450069      0.361605      0.601397
+
+1.1 Seed 42
+-----------
+
+Run ID: seed_42. Source lines: 1-38.
+
+Environment and run settings
+
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_42
 N=1024
 
+1. Training
+
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
   --dataset community_small \
@@ -12,6 +71,8 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --seed-id 42 \
   --run-id "$RUN" \
   --device gpu
+
+2. Generation
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
@@ -23,22 +84,42 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
+Generation directory
+
 GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_42_n_${N}"
+
+Graph evaluation
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
+Recorded evaluation counts
+
 Evaluation counts: reference_test=20 generated=1024 train_reference=64
+
+Recorded graph-distribution results
+
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-catflow_to_test                     0.072821          0.823010      0.426084        0.367999        0.598952
+
+Comparison       Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
+---------------  ----------  --------------  ---------  ------------  ------------
+train_to_test      0.004733        0.009889   0.000399      0.006979      0.010610
+catflow_to_test    0.072821        0.823010   0.426084      0.367999      0.598952
+
+1.2 Seed 43
+-----------
+
+Run ID: seed_43. Source lines: 39-72.
+
+Environment and run settings
 
 RUN=seed_43
 N=1024
 
+1. Training
+
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
   --dataset community_small \
@@ -47,6 +128,8 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --seed-id 43 \
   --run-id "$RUN" \
   --device gpu
+
+2. Generation
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
@@ -58,21 +141,38 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
+Generation directory
+
 GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_43_n_${N}"
+
+Graph evaluation
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
+Recorded graph-distribution results
+
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-catflow_to_test                     0.080028          0.831395      0.483119        0.379247        0.610999
+
+Comparison       Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
+---------------  ----------  --------------  ---------  ------------  ------------
+train_to_test      0.004733        0.009889   0.000399      0.006979      0.010610
+catflow_to_test    0.080028        0.831395   0.483119      0.379247      0.610999
+
+1.3 Seed 44
+-----------
+
+Run ID: seed_44. Source lines: 73-109.
+
+Environment and run settings
 
 RUN=seed_44
 N=1024
 
+1. Training
+
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
   --dataset community_small \
@@ -81,6 +181,8 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --seed-id 44 \
   --run-id "$RUN" \
   --device gpu
+
+2. Generation
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
@@ -92,24 +194,58 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
+Generation directory
+
 GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_44_n_${N}"
+
+Graph evaluation
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
-
+Recorded graph-distribution results
 
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-catflow_to_test                     0.078349          0.813439      0.450069        0.361605        0.601397
 
+Comparison       Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
+---------------  ----------  --------------  ---------  ------------  ------------
+train_to_test      0.004733        0.009889   0.000399      0.006979      0.010610
+catflow_to_test    0.078349        0.813439   0.450069      0.361605      0.601397
+
+2. CatFlow / Ego-small
+======================
+
+Dataset identifier in the baseline commands: ego_small. Requested samples per run: 1024.
+
+Results overview
+----------------
+
+Each recorded train_to_test row is retained separately. Missing columns are marked Not reported; no cross-seed
+means or standard deviations have been calculated.
+
+Run label  Comparison       Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
+---------  ---------------  ----------  --------------  ---------  ------------  ------------
+42         train_to_test      0.012987        0.027056   0.008995      0.010686      0.001697
+42         catflow_to_test    0.122425        0.079914   0.036366      0.185852      0.066582
+43         train_to_test      0.012987        0.027056   0.008995      0.010686      0.001697
+43         catflow_to_test    0.127305        0.087133   0.036739      0.178619      0.076463
+44         train_to_test      0.012987        0.027056   0.008995      0.010686      0.001697
+44         catflow_to_test    0.141249        0.089677   0.038129      0.177758      0.082910
+
+2.1 Seed 42
+-----------
+
+Run ID: seed_42. Source lines: 110-143.
+
+Environment and run settings
 
 RUN=seed_42
 N=1024
 
+1. Training
+
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
   --dataset ego_small \
@@ -118,6 +254,8 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --seed-id 42 \
   --run-id "$RUN" \
   --device gpu
+
+2. Generation
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
@@ -129,21 +267,38 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
+Generation directory
+
 GEN_DIR="outputs/baselines/catflow/ego_small/$RUN/generations/seed_42_n_${N}"
+
+Graph evaluation
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/ego_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
+Recorded graph-distribution results
+
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-catflow_to_test                     0.122425          0.079914      0.036366        0.185852        0.066582
+
+Comparison       Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
+---------------  ----------  --------------  ---------  ------------  ------------
+train_to_test      0.012987        0.027056   0.008995      0.010686      0.001697
+catflow_to_test    0.122425        0.079914   0.036366      0.185852      0.066582
+
+2.2 Seed 43
+-----------
+
+Run ID: seed_43. Source lines: 144-183.
+
+Environment and run settings
 
 RUN=seed_43
 N=1024
 
+1. Training
+
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
   --dataset ego_small \
@@ -152,6 +307,8 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --seed-id 43 \
   --run-id "$RUN" \
   --device gpu
+
+2. Generation
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
@@ -163,27 +320,38 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
+Generation directory
+
 GEN_DIR="outputs/baselines/catflow/ego_small/$RUN/generations/seed_43_n_${N}"
+
+Graph evaluation
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/ego_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
+Recorded graph-distribution results
+
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-catflow_to_test                     0.127305          0.087133      0.036739        0.178619        0.076463
 
+Comparison       Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
+---------------  ----------  --------------  ---------  ------------  ------------
+train_to_test      0.012987        0.027056   0.008995      0.010686      0.001697
+catflow_to_test    0.127305        0.087133   0.036739      0.178619      0.076463
 
+2.3 Seed 44
+-----------
 
+Run ID: seed_44. Source lines: 184-217.
 
-
-
+Environment and run settings
 
 RUN=seed_44
 N=1024
 
+1. Training
+
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
   --dataset ego_small \
@@ -192,6 +360,8 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --seed-id 44 \
   --run-id "$RUN" \
   --device gpu
+
+2. Generation
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
@@ -203,17 +373,64 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
+Generation directory
+
 GEN_DIR="outputs/baselines/catflow/ego_small/$RUN/generations/seed_44_n_${N}"
+
+Graph evaluation
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/ego_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
+Recorded graph-distribution results
+
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-catflow_to_test                     0.141249          0.089677      0.038129        0.177758        0.082910
+
+Comparison       Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
+---------------  ----------  --------------  ---------  ------------  ------------
+train_to_test      0.012987        0.027056   0.008995      0.010686      0.001697
+catflow_to_test    0.141249        0.089677   0.038129      0.177758      0.082910
+
+3. CatFlow / QM9
+================
+
+Dataset identifier in the baseline commands: qm9. Requested samples per run: 10000.
+
+Selected results overview
+-------------------------
+
+Values retain their original precision and scale; rates have not been converted to percentages. Full recorded
+molecular fields and any supplied QED output appear below each run.
+
+Metric                                            Run label 42           Run label 43           Run label 44
+---------------------------------------  ---------------------  ---------------------  ---------------------
+num_generated_graphs                                     10000                  10000                  10000
+validity                                                0.9327                 0.9484                  0.946
+validity_without_correction                             0.9327                 0.9484                  0.946
+validity_with_projected_formal_charges                  0.9506                 0.9618                 0.9603
+validity_with_correction                                   1.0                    1.0                    1.0
+uniqueness_rate                             0.9824166398627641     0.9815478700970055     0.9799154334038055
+novelty_rate                                0.6051511513696388     0.5697711891717693     0.5644012944983818
+nspdk_mmd                                0.0004800525614200496  0.0004585720759938798  0.0004347261367592483
+nspdk_mmd_valid_only                     0.0004800525614200496  0.0004585720759938798  0.0004347261367592483
+fcd                                          0.837292325596195     0.5837904729231269     0.5712547118525002
+metric_molecule_source                               raw_valid              raw_valid              raw_valid
+hogdiff_compatible_distribution_metrics                  False                  False                  False
+fcd_generated_smiles_source                          raw_valid              raw_valid              raw_valid
+qed_mean                                   0.46235175304017395     0.4646153039727859     0.4616053200386356
+qed_std_within_run                         0.07093589141596898    0.07077375887249673    0.07136798652664553
+qed_yield                                  0.43123548006056944     0.4406411542877895     0.4366786327565473
+
+3.1 Seed 42
+-----------
+
+Run ID: seed_42. Source lines: 218-328.
+
+Source notes applying to this run: N1. See Source notes at the end of this file.
+
+Environment and run settings
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
@@ -222,6 +439,7 @@ export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 RUN=seed_42
 N=10000
 
+1. Training
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -233,6 +451,8 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
+2. Generation
+
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset qm9 \
@@ -243,7 +463,11 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
+Generation directory
+
 GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_42_n_${N}"
+
+Molecular evaluation command
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -253,6 +477,8 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
+
+QED evaluation command
 
 PYTHONHASHSEED=42 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
@@ -264,41 +490,45 @@ python scripts/evaluate_qed_research.py \
   --thresholds 0.5 0.7 \
   --output-dir "$GEN_DIR/evaluation_qed"
 
-Molecular evaluation
-  validity: 0.9327
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.9506
-  validity_without_correction: 0.9327
-  fcd: 0.837292325596195
-  num_generated_graphs: 10000
-  num_valid_generated_molecules: 9327
-  num_invalid_generated_molecules: 673
-  num_valid_generated_molecules_with_projected_formal_charges: 9506
-  num_invalid_generated_molecules_after_projected_formal_charges: 494
-  num_raw_invalid_resolved_by_projected_formal_charges: 179
-  projected_formal_charge_success_rate_on_raw_invalid: 0.2659732540861813
-  num_valid_generated_molecules_with_correction: 10000
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 673
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 0.9824166398627641
-  unique_valid_count: 9163
-  novelty_rate: 0.6051511513696388
-  novel_unique_valid_count: 5545
-  nspdk_mmd: 0.0004800525614200496
-  nspdk_mmd_valid_only: 0.0004800525614200496
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 9.973648654294407e-06
-  nspdk_proxy_mmd_metric_source: 1.794537165720756e-05
-  fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 9327
-  fcd_generated_smiles_source: raw_valid
+Recorded molecular evaluation
 
+Metric                                                                 Recorded value
+--------------------------------------------------------------  ---------------------
+validity                                                                       0.9327
+validity_with_correction                                                          1.0
+validity_with_projected_formal_charges                                         0.9506
+validity_without_correction                                                    0.9327
+fcd                                                                 0.837292325596195
+num_generated_graphs                                                            10000
+num_valid_generated_molecules                                                    9327
+num_invalid_generated_molecules                                                   673
+num_valid_generated_molecules_with_projected_formal_charges                      9506
+num_invalid_generated_molecules_after_projected_formal_charges                    494
+num_raw_invalid_resolved_by_projected_formal_charges                              179
+projected_formal_charge_success_rate_on_raw_invalid                0.2659732540861813
+num_valid_generated_molecules_with_correction                                   10000
+num_invalid_generated_molecules_after_correction                                    0
+num_molecules_corrected_to_valid                                                  673
+correction_success_rate_on_raw_invalid                                            1.0
+metric_molecule_source                                                      raw_valid
+hogdiff_compatible_distribution_metrics                                         False
+uniqueness_rate                                                    0.9824166398627641
+unique_valid_count                                                               9163
+novelty_rate                                                       0.6051511513696388
+novel_unique_valid_count                                                         5545
+nspdk_mmd                                                       0.0004800525614200496
+nspdk_mmd_valid_only                                            0.0004800525614200496
+graphlet_histogram_mmd                                                           None
+graphlet_selected_mass_mmd                                                       None
+graphlet_histogram_mmd_by_order                                                    {}
+graphlet_selected_mass_mmd_by_order                                                {}
+nspdk_proxy_mmd_all_generated                                   9.973648654294407e-06
+nspdk_proxy_mmd_metric_source                                   1.794537165720756e-05
+fcd_num_reference_molecules                                                     12997
+fcd_num_valid_generated_molecules                                                9327
+fcd_generated_smiles_source                                                 raw_valid
+
+Recorded QED output
 
 {
   "num_generated_graphs": 10000,
@@ -326,11 +556,22 @@ Molecular evaluation
   "qed_wasserstein_1": 0.003797303227597176
 }
 
+3.2 Seed 43
+-----------
+
+Run ID: seed_43. Source lines: 329-437.
+
+Source notes applying to this run: N1. See Source notes at the end of this file.
+
+Environment and run settings
+
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_43
 N=10000
+
+1. Training
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -342,6 +583,8 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
+2. Generation
+
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset qm9 \
@@ -352,7 +595,11 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
+Generation directory
+
 GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_43_n_${N}"
+
+Molecular evaluation command
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -362,6 +609,8 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
+
+QED evaluation command
 
 PYTHONHASHSEED=43 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
@@ -373,40 +622,45 @@ python scripts/evaluate_qed_research.py \
   --thresholds 0.5 0.7 \
   --output-dir "$GEN_DIR/evaluation_qed"
 
-Molecular evaluation
-  validity: 0.9484
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.9618
-  validity_without_correction: 0.9484
-  fcd: 0.5837904729231269
-  num_generated_graphs: 10000
-  num_valid_generated_molecules: 9484
-  num_invalid_generated_molecules: 516
-  num_valid_generated_molecules_with_projected_formal_charges: 9618
-  num_invalid_generated_molecules_after_projected_formal_charges: 382
-  num_raw_invalid_resolved_by_projected_formal_charges: 134
-  projected_formal_charge_success_rate_on_raw_invalid: 0.2596899224806202
-  num_valid_generated_molecules_with_correction: 10000
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 516
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 0.9815478700970055
-  unique_valid_count: 9309
-  novelty_rate: 0.5697711891717693
-  novel_unique_valid_count: 5304
-  nspdk_mmd: 0.0004585720759938798
-  nspdk_mmd_valid_only: 0.0004585720759938798
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 1.003431737051191e-05
-  nspdk_proxy_mmd_metric_source: 1.61122331455898e-05
-  fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 9484
-  fcd_generated_smiles_source: raw_valid
+Recorded molecular evaluation
+
+Metric                                                                 Recorded value
+--------------------------------------------------------------  ---------------------
+validity                                                                       0.9484
+validity_with_correction                                                          1.0
+validity_with_projected_formal_charges                                         0.9618
+validity_without_correction                                                    0.9484
+fcd                                                                0.5837904729231269
+num_generated_graphs                                                            10000
+num_valid_generated_molecules                                                    9484
+num_invalid_generated_molecules                                                   516
+num_valid_generated_molecules_with_projected_formal_charges                      9618
+num_invalid_generated_molecules_after_projected_formal_charges                    382
+num_raw_invalid_resolved_by_projected_formal_charges                              134
+projected_formal_charge_success_rate_on_raw_invalid                0.2596899224806202
+num_valid_generated_molecules_with_correction                                   10000
+num_invalid_generated_molecules_after_correction                                    0
+num_molecules_corrected_to_valid                                                  516
+correction_success_rate_on_raw_invalid                                            1.0
+metric_molecule_source                                                      raw_valid
+hogdiff_compatible_distribution_metrics                                         False
+uniqueness_rate                                                    0.9815478700970055
+unique_valid_count                                                               9309
+novelty_rate                                                       0.5697711891717693
+novel_unique_valid_count                                                         5304
+nspdk_mmd                                                       0.0004585720759938798
+nspdk_mmd_valid_only                                            0.0004585720759938798
+graphlet_histogram_mmd                                                           None
+graphlet_selected_mass_mmd                                                       None
+graphlet_histogram_mmd_by_order                                                    {}
+graphlet_selected_mass_mmd_by_order                                                {}
+nspdk_proxy_mmd_all_generated                                   1.003431737051191e-05
+nspdk_proxy_mmd_metric_source                                    1.61122331455898e-05
+fcd_num_reference_molecules                                                     12997
+fcd_num_valid_generated_molecules                                                9484
+fcd_generated_smiles_source                                                 raw_valid
+
+Recorded QED output
 
 {
   "num_generated_graphs": 10000,
@@ -434,12 +688,22 @@ Molecular evaluation
   "qed_wasserstein_1": 0.002864823245703269
 }
 
+3.3 Seed 44
+-----------
+
+Run ID: seed_44. Source lines: 438-546.
+
+Source notes applying to this run: N1. See Source notes at the end of this file.
+
+Environment and run settings
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_44
 N=10000
+
+1. Training
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -451,6 +715,8 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
+2. Generation
+
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset qm9 \
@@ -461,7 +727,11 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
+Generation directory
+
 GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_44_n_${N}"
+
+Molecular evaluation command
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -471,6 +741,8 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
+
+QED evaluation command
 
 PYTHONHASHSEED=44 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
@@ -482,40 +754,45 @@ python scripts/evaluate_qed_research.py \
   --thresholds 0.5 0.7 \
   --output-dir "$GEN_DIR/evaluation_qed"
 
-Molecular evaluation
-  validity: 0.946
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.9603
-  validity_without_correction: 0.946
-  fcd: 0.5712547118525002
-  num_generated_graphs: 10000
-  num_valid_generated_molecules: 9460
-  num_invalid_generated_molecules: 540
-  num_valid_generated_molecules_with_projected_formal_charges: 9603
-  num_invalid_generated_molecules_after_projected_formal_charges: 397
-  num_raw_invalid_resolved_by_projected_formal_charges: 143
-  projected_formal_charge_success_rate_on_raw_invalid: 0.26481481481481484
-  num_valid_generated_molecules_with_correction: 10000
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 540
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 0.9799154334038055
-  unique_valid_count: 9270
-  novelty_rate: 0.5644012944983818
-  novel_unique_valid_count: 5232
-  nspdk_mmd: 0.0004347261367592483
-  nspdk_mmd_valid_only: 0.0004347261367592483
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 9.079365403627443e-06
-  nspdk_proxy_mmd_metric_source: 1.6510649029083013e-05
-  fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 9460
-  fcd_generated_smiles_source: raw_valid
+Recorded molecular evaluation
+
+Metric                                                                  Recorded value
+--------------------------------------------------------------  ----------------------
+validity                                                                         0.946
+validity_with_correction                                                           1.0
+validity_with_projected_formal_charges                                          0.9603
+validity_without_correction                                                      0.946
+fcd                                                                 0.5712547118525002
+num_generated_graphs                                                             10000
+num_valid_generated_molecules                                                     9460
+num_invalid_generated_molecules                                                    540
+num_valid_generated_molecules_with_projected_formal_charges                       9603
+num_invalid_generated_molecules_after_projected_formal_charges                     397
+num_raw_invalid_resolved_by_projected_formal_charges                               143
+projected_formal_charge_success_rate_on_raw_invalid                0.26481481481481484
+num_valid_generated_molecules_with_correction                                    10000
+num_invalid_generated_molecules_after_correction                                     0
+num_molecules_corrected_to_valid                                                   540
+correction_success_rate_on_raw_invalid                                             1.0
+metric_molecule_source                                                       raw_valid
+hogdiff_compatible_distribution_metrics                                          False
+uniqueness_rate                                                     0.9799154334038055
+unique_valid_count                                                                9270
+novelty_rate                                                        0.5644012944983818
+novel_unique_valid_count                                                          5232
+nspdk_mmd                                                        0.0004347261367592483
+nspdk_mmd_valid_only                                             0.0004347261367592483
+graphlet_histogram_mmd                                                            None
+graphlet_selected_mass_mmd                                                        None
+graphlet_histogram_mmd_by_order                                                     {}
+graphlet_selected_mass_mmd_by_order                                                 {}
+nspdk_proxy_mmd_all_generated                                    9.079365403627443e-06
+nspdk_proxy_mmd_metric_source                                   1.6510649029083013e-05
+fcd_num_reference_molecules                                                      12997
+fcd_num_valid_generated_molecules                                                 9460
+fcd_generated_smiles_source                                                  raw_valid
+
+Recorded QED output
 
 {
   "num_generated_graphs": 10000,
@@ -543,12 +820,52 @@ Molecular evaluation
   "qed_wasserstein_1": 0.004590680167462394
 }
 
+4. CatFlow / ZINC
+=================
+
+Dataset identifier in the baseline commands: zinc. Requested samples per run: 10000.
+
+Selected results overview
+-------------------------
+
+Values retain their original precision and scale; rates have not been converted to percentages. Full recorded
+molecular fields and any supplied QED output appear below each run.
+
+Metric                                           Run label 42          Run label 43          Run label 44
+---------------------------------------  --------------------  --------------------  --------------------
+num_generated_graphs                                    10000                 10000                 10000
+validity                                               0.4099                0.3671                0.3609
+validity_without_correction                            0.4099                0.3671                0.3609
+validity_with_projected_formal_charges                 0.5181                0.4669                0.4627
+validity_with_correction                                  1.0                   1.0                   1.0
+uniqueness_rate                                           1.0                   1.0                   1.0
+novelty_rate                                              1.0                   1.0                   1.0
+nspdk_mmd                                0.009921937321674667  0.010118090997241714  0.009389614848765332
+nspdk_mmd_valid_only                     0.009921937321674667  0.010118090997241714  0.009389614848765332
+fcd                                         23.07606680411766    22.873311002479497    22.708756120735785
+metric_molecule_source                              raw_valid             raw_valid             raw_valid
+hogdiff_compatible_distribution_metrics                 False                 False                 False
+fcd_generated_smiles_source                         raw_valid             raw_valid             raw_valid
+qed_mean                                   0.6176919180753229    0.6270842477578126    0.6317913751825793
+qed_std_within_run                         0.1644316516181064    0.1617477185898616   0.15808984210824872
+qed_yield                                  0.2531919172190747   0.23020262735189384   0.22801350730339254
+
+4.1 Seed 42
+-----------
+
+Run ID: seed_42. Source lines: 547-655.
+
+Source notes applying to this run: N1. See Source notes at the end of this file.
+
+Environment and run settings
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_42
 N=10000
+
+1. Training
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -560,6 +877,8 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
+2. Generation
+
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset zinc \
@@ -570,7 +889,11 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
+Generation directory
+
 GEN_DIR="outputs/baselines/catflow/zinc/$RUN/generations/seed_42_n_${N}"
+
+Molecular evaluation command
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -580,6 +903,8 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
+
+QED evaluation command
 
 PYTHONHASHSEED=42 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
@@ -591,41 +916,45 @@ python scripts/evaluate_qed_research.py \
   --thresholds 0.5 0.7 \
   --output-dir "$GEN_DIR/evaluation_qed"
 
+Recorded molecular evaluation
 
-Molecular evaluation
-  validity: 0.4099
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.5181
-  validity_without_correction: 0.4099
-  fcd: 23.07606680411766
-  num_generated_graphs: 10000
-  num_valid_generated_molecules: 4099
-  num_invalid_generated_molecules: 5901
-  num_valid_generated_molecules_with_projected_formal_charges: 5181
-  num_invalid_generated_molecules_after_projected_formal_charges: 4819
-  num_raw_invalid_resolved_by_projected_formal_charges: 1082
-  projected_formal_charge_success_rate_on_raw_invalid: 0.18335875275377056
-  num_valid_generated_molecules_with_correction: 10000
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 5901
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 1.0
-  unique_valid_count: 4099
-  novelty_rate: 1.0
-  novel_unique_valid_count: 4099
-  nspdk_mmd: 0.009921937321674667
-  nspdk_mmd_valid_only: 0.009921937321674667
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.00021474983500436754
-  nspdk_proxy_mmd_metric_source: 0.00017926092575585028
-  fcd_num_reference_molecules: 1000
-  fcd_num_valid_generated_molecules: 4099
-  fcd_generated_smiles_source: raw_valid
+Metric                                                                  Recorded value
+--------------------------------------------------------------  ----------------------
+validity                                                                        0.4099
+validity_with_correction                                                           1.0
+validity_with_projected_formal_charges                                          0.5181
+validity_without_correction                                                     0.4099
+fcd                                                                  23.07606680411766
+num_generated_graphs                                                             10000
+num_valid_generated_molecules                                                     4099
+num_invalid_generated_molecules                                                   5901
+num_valid_generated_molecules_with_projected_formal_charges                       5181
+num_invalid_generated_molecules_after_projected_formal_charges                    4819
+num_raw_invalid_resolved_by_projected_formal_charges                              1082
+projected_formal_charge_success_rate_on_raw_invalid                0.18335875275377056
+num_valid_generated_molecules_with_correction                                    10000
+num_invalid_generated_molecules_after_correction                                     0
+num_molecules_corrected_to_valid                                                  5901
+correction_success_rate_on_raw_invalid                                             1.0
+metric_molecule_source                                                       raw_valid
+hogdiff_compatible_distribution_metrics                                          False
+uniqueness_rate                                                                    1.0
+unique_valid_count                                                                4099
+novelty_rate                                                                       1.0
+novel_unique_valid_count                                                          4099
+nspdk_mmd                                                         0.009921937321674667
+nspdk_mmd_valid_only                                              0.009921937321674667
+graphlet_histogram_mmd                                                            None
+graphlet_selected_mass_mmd                                                        None
+graphlet_histogram_mmd_by_order                                                     {}
+graphlet_selected_mass_mmd_by_order                                                 {}
+nspdk_proxy_mmd_all_generated                                   0.00021474983500436754
+nspdk_proxy_mmd_metric_source                                   0.00017926092575585028
+fcd_num_reference_molecules                                                       1000
+fcd_num_valid_generated_molecules                                                 4099
+fcd_generated_smiles_source                                                  raw_valid
+
+Recorded QED output
 
 {
   "num_generated_graphs": 10000,
@@ -653,11 +982,22 @@ Molecular evaluation
   "qed_wasserstein_1": 0.11746777086937793
 }
 
+4.2 Seed 43
+-----------
+
+Run ID: seed_43. Source lines: 656-765.
+
+Source notes applying to this run: N1. See Source notes at the end of this file.
+
+Environment and run settings
+
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_43
 N=10000
+
+1. Training
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -669,6 +1009,8 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
+2. Generation
+
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset zinc \
@@ -679,7 +1021,11 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
+Generation directory
+
 GEN_DIR="outputs/baselines/catflow/zinc/$RUN/generations/seed_43_n_${N}"
+
+Molecular evaluation command
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -689,6 +1035,8 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
+
+QED evaluation command
 
 PYTHONHASHSEED=43 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
@@ -700,42 +1048,45 @@ python scripts/evaluate_qed_research.py \
   --thresholds 0.5 0.7 \
   --output-dir "$GEN_DIR/evaluation_qed"
 
+Recorded molecular evaluation
 
-Molecular evaluation
-  validity: 0.3671
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.4669
-  validity_without_correction: 0.3671
-  fcd: 22.873311002479497
-  num_generated_graphs: 10000
-  num_valid_generated_molecules: 3671
-  num_invalid_generated_molecules: 6329
-  num_valid_generated_molecules_with_projected_formal_charges: 4669
-  num_invalid_generated_molecules_after_projected_formal_charges: 5331
-  num_raw_invalid_resolved_by_projected_formal_charges: 998
-  projected_formal_charge_success_rate_on_raw_invalid: 0.15768683836309053
-  num_valid_generated_molecules_with_correction: 10000
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 6329
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 1.0
-  unique_valid_count: 3671
-  novelty_rate: 1.0
-  novel_unique_valid_count: 3671
-  nspdk_mmd: 0.010118090997241714
-  nspdk_mmd_valid_only: 0.010118090997241714
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.0002265890805799227
-  nspdk_proxy_mmd_metric_source: 0.00018690055191582016
-  fcd_num_reference_molecules: 1000
-  fcd_num_valid_generated_molecules: 3671
-  fcd_generated_smiles_source: raw_valid
+Metric                                                                  Recorded value
+--------------------------------------------------------------  ----------------------
+validity                                                                        0.3671
+validity_with_correction                                                           1.0
+validity_with_projected_formal_charges                                          0.4669
+validity_without_correction                                                     0.3671
+fcd                                                                 22.873311002479497
+num_generated_graphs                                                             10000
+num_valid_generated_molecules                                                     3671
+num_invalid_generated_molecules                                                   6329
+num_valid_generated_molecules_with_projected_formal_charges                       4669
+num_invalid_generated_molecules_after_projected_formal_charges                    5331
+num_raw_invalid_resolved_by_projected_formal_charges                               998
+projected_formal_charge_success_rate_on_raw_invalid                0.15768683836309053
+num_valid_generated_molecules_with_correction                                    10000
+num_invalid_generated_molecules_after_correction                                     0
+num_molecules_corrected_to_valid                                                  6329
+correction_success_rate_on_raw_invalid                                             1.0
+metric_molecule_source                                                       raw_valid
+hogdiff_compatible_distribution_metrics                                          False
+uniqueness_rate                                                                    1.0
+unique_valid_count                                                                3671
+novelty_rate                                                                       1.0
+novel_unique_valid_count                                                          3671
+nspdk_mmd                                                         0.010118090997241714
+nspdk_mmd_valid_only                                              0.010118090997241714
+graphlet_histogram_mmd                                                            None
+graphlet_selected_mass_mmd                                                        None
+graphlet_histogram_mmd_by_order                                                     {}
+graphlet_selected_mass_mmd_by_order                                                 {}
+nspdk_proxy_mmd_all_generated                                    0.0002265890805799227
+nspdk_proxy_mmd_metric_source                                   0.00018690055191582016
+fcd_num_reference_molecules                                                       1000
+fcd_num_valid_generated_molecules                                                 3671
+fcd_generated_smiles_source                                                  raw_valid
 
+Recorded QED output
 
 {
   "num_generated_graphs": 10000,
@@ -763,11 +1114,22 @@ Molecular evaluation
   "qed_wasserstein_1": 0.10807544118688833
 }
 
+4.3 Seed 44
+-----------
+
+Run ID: seed_44. Source lines: 766-873.
+
+Source notes applying to this run: N1. See Source notes at the end of this file.
+
+Environment and run settings
+
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_44
 N=10000
+
+1. Training
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -779,6 +1141,8 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
+2. Generation
+
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset zinc \
@@ -789,7 +1153,11 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
+Generation directory
+
 GEN_DIR="outputs/baselines/catflow/zinc/$RUN/generations/seed_44_n_${N}"
+
+Molecular evaluation command
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -799,6 +1167,8 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
+
+QED evaluation command
 
 PYTHONHASHSEED=44 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
@@ -810,41 +1180,45 @@ python scripts/evaluate_qed_research.py \
   --thresholds 0.5 0.7 \
   --output-dir "$GEN_DIR/evaluation_qed"
 
-Molecular evaluation
-  validity: 0.3609
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.4627
-  validity_without_correction: 0.3609
-  fcd: 22.708756120735785
-  num_generated_graphs: 10000
-  num_valid_generated_molecules: 3609
-  num_invalid_generated_molecules: 6391
-  num_valid_generated_molecules_with_projected_formal_charges: 4627
-  num_invalid_generated_molecules_after_projected_formal_charges: 5373
-  num_raw_invalid_resolved_by_projected_formal_charges: 1018
-  projected_formal_charge_success_rate_on_raw_invalid: 0.15928649663589423
-  num_valid_generated_molecules_with_correction: 10000
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 6391
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 1.0
-  unique_valid_count: 3609
-  novelty_rate: 1.0
-  novel_unique_valid_count: 3609
-  nspdk_mmd: 0.009389614848765332
-  nspdk_mmd_valid_only: 0.009389614848765332
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.00021037325038661574
-  nspdk_proxy_mmd_metric_source: 0.00016469247622853453
-  fcd_num_reference_molecules: 1000
-  fcd_num_valid_generated_molecules: 3609
-  fcd_generated_smiles_source: raw_valid
+Recorded molecular evaluation
 
+Metric                                                                  Recorded value
+--------------------------------------------------------------  ----------------------
+validity                                                                        0.3609
+validity_with_correction                                                           1.0
+validity_with_projected_formal_charges                                          0.4627
+validity_without_correction                                                     0.3609
+fcd                                                                 22.708756120735785
+num_generated_graphs                                                             10000
+num_valid_generated_molecules                                                     3609
+num_invalid_generated_molecules                                                   6391
+num_valid_generated_molecules_with_projected_formal_charges                       4627
+num_invalid_generated_molecules_after_projected_formal_charges                    5373
+num_raw_invalid_resolved_by_projected_formal_charges                              1018
+projected_formal_charge_success_rate_on_raw_invalid                0.15928649663589423
+num_valid_generated_molecules_with_correction                                    10000
+num_invalid_generated_molecules_after_correction                                     0
+num_molecules_corrected_to_valid                                                  6391
+correction_success_rate_on_raw_invalid                                             1.0
+metric_molecule_source                                                       raw_valid
+hogdiff_compatible_distribution_metrics                                          False
+uniqueness_rate                                                                    1.0
+unique_valid_count                                                                3609
+novelty_rate                                                                       1.0
+novel_unique_valid_count                                                          3609
+nspdk_mmd                                                         0.009389614848765332
+nspdk_mmd_valid_only                                              0.009389614848765332
+graphlet_histogram_mmd                                                            None
+graphlet_selected_mass_mmd                                                        None
+graphlet_histogram_mmd_by_order                                                     {}
+graphlet_selected_mass_mmd_by_order                                                 {}
+nspdk_proxy_mmd_all_generated                                   0.00021037325038661574
+nspdk_proxy_mmd_metric_source                                   0.00016469247622853453
+fcd_num_reference_molecules                                                       1000
+fcd_num_valid_generated_molecules                                                 3609
+fcd_generated_smiles_source                                                  raw_valid
+
+Recorded QED output
 
 {
   "num_generated_graphs": 10000,
@@ -871,3 +1245,17 @@ Molecular evaluation
   "qed_mean_minus_reference": -0.10336831376212152,
   "qed_wasserstein_1": 0.10336831376212165
 }
+
+Source notes
+============
+
+These annotations describe the supplied record only. No source command, metric value, dataset setting, or
+report association has been repaired or independently verified.
+
+N1. Molecular graphlet fields
+-----------------------------
+
+Every supplied QM9 and ZINC molecular report records graphlet_histogram_mmd and graphlet_selected_mass_mmd as
+None, and both per-order dictionaries as {}. These literals are retained rather than replaced with zero or
+inferred values.
+

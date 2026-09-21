@@ -66,11 +66,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-stage spectre \
   --output-dir "$GEN_DIR/evaluation_report"
 
-  Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-spectre_to_test                     0.025153          0.097951      0.008820
-
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+spectre_to_test                     0.025153          0.097951      0.008820        0.033084        0.218111
 
 export SPECTRE="/home/quang/SPECTRE"
 export SPECTRE_PYTHON="$(command -v python)"
@@ -105,10 +104,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 
 
-  Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-spectre_to_test                     0.014736          0.066201      0.003613
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+spectre_to_test                     0.014736          0.066201      0.003613        0.020746        0.105857
 
 
 
