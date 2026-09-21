@@ -220,3 +220,8 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/ego_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+spectre_to_test                     0.009240          0.018740      0.006621        0.010128        0.002351

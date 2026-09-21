@@ -103,6 +103,7 @@ train_to_test                       0.004733          0.009889      0.000399    
 gdsm_simple_base_to_test            0.070398          0.772747      0.379034        0.258138        0.552365
 gdsm_final_to_test                  0.012453          0.074927      0.010830        0.052038        0.101208
 
+
 # ==============================================================================
 # Community-small — SEED 42
 # ==============================================================================
@@ -1705,3 +1706,28 @@ python scripts/evaluate_qed_research.py \
 # Recorded result — ZINC, seed 45
 # ------------------------------------------------------------------------------
 # No recorded result in source file.
+
+
+# Communuty small , no rewiring
+
+# Seet 41
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.070398          0.772747      0.379034        0.341562        0.552365
+gdsm_final_no_rewiring_to_test      0.013754          0.150283      0.016237        0.025403        0.117083
+# Seed 42
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.073732          0.785492      0.425264        0.356021        0.567814
+gdsm_final_no_rewiring_to_test      0.009568          0.215877      0.049881        0.046475        0.203391
+# Seed 43
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.073686          0.781639      0.428165        0.345489        0.559752
+gdsm_final_no_rewiring_to_test      0.016094          0.137126      0.026177        0.034020        0.097978
+# Seed 44
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.073171          0.778540      0.418779        0.351482        0.551315
+gdsm_final_no_rewiring_to_test      0.010124          0.143537      0.062513        0.040851        0.132697
+# Seed 45

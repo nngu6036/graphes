@@ -1,0 +1,27 @@
+# Sampling and architecture retain the upstream experiment defaults.
+comparison:
+  model: defog
+  dataset: community_small
+  common_config: common_community_small.yaml
+  status: graphes_exposure_matched_adaptation
+  budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  fairness_note: Matches training graph exposure, not compute or optimizer updates.
+    Select checkpoints and tune only on validation.
+defog:
+  source_env: DEFOG
+  python_env: DEFOG_PYTHON
+  native_dataset: comm20
+  experiment: comm20
+  n_epochs: 10000
+  batch_size: 256
+  num_workers: 0
+  check_val_every_n_epochs: 200
+  optimizer: adamw
+  learning_rate: 0.0002
+  weight_decay: 1.0e-12
+  ema_decay: 0.0
+  pin_memory: false
