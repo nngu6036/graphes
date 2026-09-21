@@ -376,29 +376,33 @@ Molecular evaluation
 
 
 
+export CATFLOW=/home/quang/CatFlow
+export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
 RUN=seed_44
 N=10000
 
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
   --dataset qm9 \
   --common-config configs/baselines/common_qm9.yaml \
-  --wrapper-config configs/baselines/hog_diff_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
   --seed-id 44 \
+  --overwrite \
   --run-id "$RUN" \
   --device gpu
 
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset qm9 \
   --common-config configs/baselines/common_qm9.yaml \
-  --wrapper-config configs/baselines/hog_diff_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
   --seed-id 44 \
   --run-id "$RUN" \
   --num-samples "$N" \
   --device gpu
 
-GEN_DIR="outputs/baselines/hog_diff/qm9/$RUN/generations/seed_44_n_${N}"
+GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_44_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -406,9 +410,19 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --dataset qm9_attributed \
   --reference-split test \
   --train-split train \
-  --hogdiff-compatible-metrics \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
+
+PYTHONHASHSEED=44 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
+  
 
 
 

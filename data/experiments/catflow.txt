@@ -543,11 +543,12 @@ Molecular evaluation
   "qed_wasserstein_1": 0.004590680167462394
 }
 
+
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_42
-N=1024
+N=10000
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -555,6 +556,7 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --common-config configs/baselines/common_zinc.yaml \
   --wrapper-config configs/baselines/catflow_zinc.yaml \
   --seed-id 42 \
+  --overwrite \
   --run-id "$RUN" \
   --device gpu
 
@@ -567,6 +569,7 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --num-samples "$N" \
   --device gpu
+
 GEN_DIR="outputs/baselines/catflow/zinc/$RUN/generations/seed_42_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
@@ -575,49 +578,86 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --dataset zinc \
   --reference-split test \
   --train-split train \
-  --hogdiff-compatible-metrics \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
 
+PYTHONHASHSEED=42 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
+
+
 Molecular evaluation
-  validity: 0.412109375
+  validity: 0.4099
   validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.5302734375
-  validity_without_correction: 0.412109375
-  fcd: 25.415217812699915
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 422
-  num_invalid_generated_molecules: 602
-  num_valid_generated_molecules_with_projected_formal_charges: 543
-  num_invalid_generated_molecules_after_projected_formal_charges: 481
-  num_raw_invalid_resolved_by_projected_formal_charges: 121
-  projected_formal_charge_success_rate_on_raw_invalid: 0.2009966777408638
-  num_valid_generated_molecules_with_correction: 1024
+  validity_with_projected_formal_charges: 0.5181
+  validity_without_correction: 0.4099
+  fcd: 23.07606680411766
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 4099
+  num_invalid_generated_molecules: 5901
+  num_valid_generated_molecules_with_projected_formal_charges: 5181
+  num_invalid_generated_molecules_after_projected_formal_charges: 4819
+  num_raw_invalid_resolved_by_projected_formal_charges: 1082
+  projected_formal_charge_success_rate_on_raw_invalid: 0.18335875275377056
+  num_valid_generated_molecules_with_correction: 10000
   num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 602
+  num_molecules_corrected_to_valid: 5901
   correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
   uniqueness_rate: 1.0
-  unique_valid_count: 1024
+  unique_valid_count: 4099
   novelty_rate: 1.0
-  novel_unique_valid_count: 1024
-  nspdk_mmd: 0.015203532766782015
-  nspdk_mmd_valid_only: 0.015203532766782015
+  novel_unique_valid_count: 4099
+  nspdk_mmd: 0.009921937321674667
+  nspdk_mmd_valid_only: 0.009921937321674667
   graphlet_histogram_mmd: None
   graphlet_selected_mass_mmd: None
   graphlet_histogram_mmd_by_order: {}
   graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.00021741130955708592
-  nspdk_proxy_mmd_metric_source: 0.0002437498891210898
+  nspdk_proxy_mmd_all_generated: 0.00021474983500436754
+  nspdk_proxy_mmd_metric_source: 0.00017926092575585028
   fcd_num_reference_molecules: 1000
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
+  fcd_num_valid_generated_molecules: 4099
+  fcd_generated_smiles_source: raw_valid
 
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 4099,
+  "validity_without_correction": 0.4099,
+  "qed_mean": 0.6176919180753229,
+  "qed_std_within_run": 0.1644316516181064,
+  "qed_median": 0.6508381407561774,
+  "qed_q10": 0.3761504853540951,
+  "qed_q90": 0.799011193132032,
+  "qed_unique_valid_mean": 0.6176919180753229,
+  "num_unique_raw_valid": 4099,
+  "qed_yield": 0.2531919172190747,
+  "num_raw_valid_single_component": 2886,
+  "valid_single_component_yield": 0.2886,
+  "qed_single_component_mean": 0.6232290767230105,
+  "qed_ge_0p5_fraction_valid": 0.7692120029275433,
+  "qed_ge_0p5_yield_all": 0.3153,
+  "qed_ge_0p7_fraction_valid": 0.37862893388631375,
+  "qed_ge_0p7_yield_all": 0.1552,
+  "reference_num_graphs": 1000,
+  "reference_num_raw_valid": 1000,
+  "reference_qed_mean": 0.7351596889447009,
+  "qed_mean_minus_reference": -0.11746777086937799,
+  "qed_wasserstein_1": 0.11746777086937793
+}
 
+export CATFLOW=/home/quang/CatFlow
+export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_43
-N=1024
+N=10000
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -625,6 +665,7 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --common-config configs/baselines/common_zinc.yaml \
   --wrapper-config configs/baselines/catflow_zinc.yaml \
   --seed-id 43 \
+  --overwrite \
   --run-id "$RUN" \
   --device gpu
 
@@ -637,6 +678,7 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --num-samples "$N" \
   --device gpu
+
 GEN_DIR="outputs/baselines/catflow/zinc/$RUN/generations/seed_43_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
@@ -645,46 +687,81 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --dataset zinc \
   --reference-split test \
   --train-split train \
-  --hogdiff-compatible-metrics \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
 
+PYTHONHASHSEED=43 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
 
 
 Molecular evaluation
-  validity: 0.357421875
+  validity: 0.3671
   validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.4580078125
-  validity_without_correction: 0.357421875
-  fcd: 26.042136006762576
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 366
-  num_invalid_generated_molecules: 658
-  num_valid_generated_molecules_with_projected_formal_charges: 469
-  num_invalid_generated_molecules_after_projected_formal_charges: 555
-  num_raw_invalid_resolved_by_projected_formal_charges: 103
-  projected_formal_charge_success_rate_on_raw_invalid: 0.15653495440729484
-  num_valid_generated_molecules_with_correction: 1024
+  validity_with_projected_formal_charges: 0.4669
+  validity_without_correction: 0.3671
+  fcd: 22.873311002479497
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 3671
+  num_invalid_generated_molecules: 6329
+  num_valid_generated_molecules_with_projected_formal_charges: 4669
+  num_invalid_generated_molecules_after_projected_formal_charges: 5331
+  num_raw_invalid_resolved_by_projected_formal_charges: 998
+  projected_formal_charge_success_rate_on_raw_invalid: 0.15768683836309053
+  num_valid_generated_molecules_with_correction: 10000
   num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 658
+  num_molecules_corrected_to_valid: 6329
   correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
   uniqueness_rate: 1.0
-  unique_valid_count: 1024
+  unique_valid_count: 3671
   novelty_rate: 1.0
-  novel_unique_valid_count: 1024
-  nspdk_mmd: 0.016501519979740947
-  nspdk_mmd_valid_only: 0.016501519979740947
+  novel_unique_valid_count: 3671
+  nspdk_mmd: 0.010118090997241714
+  nspdk_mmd_valid_only: 0.010118090997241714
   graphlet_histogram_mmd: None
   graphlet_selected_mass_mmd: None
   graphlet_histogram_mmd_by_order: {}
   graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.00023285219493931783
-  nspdk_proxy_mmd_metric_source: 0.00026414597880426916
+  nspdk_proxy_mmd_all_generated: 0.0002265890805799227
+  nspdk_proxy_mmd_metric_source: 0.00018690055191582016
   fcd_num_reference_molecules: 1000
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
+  fcd_num_valid_generated_molecules: 3671
+  fcd_generated_smiles_source: raw_valid
+
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 3671,
+  "validity_without_correction": 0.3671,
+  "qed_mean": 0.6270842477578126,
+  "qed_std_within_run": 0.1617477185898616,
+  "qed_median": 0.6624855417721736,
+  "qed_q10": 0.391413379531177,
+  "qed_q90": 0.80380235070773,
+  "qed_unique_valid_mean": 0.6270842477578126,
+  "num_unique_raw_valid": 3671,
+  "qed_yield": 0.23020262735189384,
+  "num_raw_valid_single_component": 2729,
+  "valid_single_component_yield": 0.2729,
+  "qed_single_component_mean": 0.6297458573745276,
+  "qed_ge_0p5_fraction_valid": 0.785344592754018,
+  "qed_ge_0p5_yield_all": 0.2883,
+  "qed_ge_0p7_fraction_valid": 0.40343230727322255,
+  "qed_ge_0p7_yield_all": 0.1481,
+  "reference_num_graphs": 1000,
+  "reference_num_raw_valid": 1000,
+  "reference_qed_mean": 0.7351596889447009,
+  "qed_mean_minus_reference": -0.10807544118688828,
+  "qed_wasserstein_1": 0.10807544118688833
+}
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
@@ -734,36 +811,63 @@ python scripts/evaluate_qed_research.py \
   --output-dir "$GEN_DIR/evaluation_qed"
 
 Molecular evaluation
-  validity: 0.3583984375
+  validity: 0.3609
   validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.4560546875
-  validity_without_correction: 0.3583984375
-  fcd: 25.337135584555973
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 367
-  num_invalid_generated_molecules: 657
-  num_valid_generated_molecules_with_projected_formal_charges: 467
-  num_invalid_generated_molecules_after_projected_formal_charges: 557
-  num_raw_invalid_resolved_by_projected_formal_charges: 100
-  projected_formal_charge_success_rate_on_raw_invalid: 0.15220700152207
-  num_valid_generated_molecules_with_correction: 1024
+  validity_with_projected_formal_charges: 0.4627
+  validity_without_correction: 0.3609
+  fcd: 22.708756120735785
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 3609
+  num_invalid_generated_molecules: 6391
+  num_valid_generated_molecules_with_projected_formal_charges: 4627
+  num_invalid_generated_molecules_after_projected_formal_charges: 5373
+  num_raw_invalid_resolved_by_projected_formal_charges: 1018
+  projected_formal_charge_success_rate_on_raw_invalid: 0.15928649663589423
+  num_valid_generated_molecules_with_correction: 10000
   num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 657
+  num_molecules_corrected_to_valid: 6391
   correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
   uniqueness_rate: 1.0
-  unique_valid_count: 1024
+  unique_valid_count: 3609
   novelty_rate: 1.0
-  novel_unique_valid_count: 1024
-  nspdk_mmd: 0.014961406326890261
-  nspdk_mmd_valid_only: 0.014961406326890261
+  novel_unique_valid_count: 3609
+  nspdk_mmd: 0.009389614848765332
+  nspdk_mmd_valid_only: 0.009389614848765332
   graphlet_histogram_mmd: None
   graphlet_selected_mass_mmd: None
   graphlet_histogram_mmd_by_order: {}
   graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.000214005577783399
-  nspdk_proxy_mmd_metric_source: 0.0002415584635277817
+  nspdk_proxy_mmd_all_generated: 0.00021037325038661574
+  nspdk_proxy_mmd_metric_source: 0.00016469247622853453
   fcd_num_reference_molecules: 1000
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
+  fcd_num_valid_generated_molecules: 3609
+  fcd_generated_smiles_source: raw_valid
+
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 3609,
+  "validity_without_correction": 0.3609,
+  "qed_mean": 0.6317913751825793,
+  "qed_std_within_run": 0.15808984210824872,
+  "qed_median": 0.6667087123745778,
+  "qed_q10": 0.3974872456027944,
+  "qed_q90": 0.8045328727439325,
+  "qed_unique_valid_mean": 0.6317913751825793,
+  "num_unique_raw_valid": 3609,
+  "qed_yield": 0.22801350730339254,
+  "num_raw_valid_single_component": 2582,
+  "valid_single_component_yield": 0.2582,
+  "qed_single_component_mean": 0.6388312154499607,
+  "qed_ge_0p5_fraction_valid": 0.798836242726517,
+  "qed_ge_0p5_yield_all": 0.2883,
+  "qed_ge_0p7_fraction_valid": 0.4087004710446107,
+  "qed_ge_0p7_yield_all": 0.1475,
+  "reference_num_graphs": 1000,
+  "reference_num_raw_valid": 1000,
+  "reference_qed_mean": 0.7351596889447009,
+  "qed_mean_minus_reference": -0.10336831376212152,
+  "qed_wasserstein_1": 0.10336831376212165
+}

@@ -1708,7 +1708,45 @@ python scripts/evaluate_qed_research.py \
 # No recorded result in source file.
 
 
-# Communuty small , no rewiring
+## Communuty small , no rewiring
+
+N=1024
+
+for SEED in 41 42 43 44 45; do
+  RUN="seed_${SEED}_gdsm_final_g345"
+  CFG="configs/experiments/gdsm_final_ablation/community_small_seed_42_no_rewiring.yaml"
+  GEN_ID="seed_${SEED}_n_1024_no_rewiring"
+
+  PYTHONHASHSEED="$SEED" GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
+  python scripts/run_gdsm_simple_baseline.py \
+    --stage generate \
+    --dataset community_small \
+    --no-common-config \
+    --wrapper-config "$CFG" \
+    --dataset-root outputs/datasets \
+    --serialized-dataset sbm \
+    --output-root outputs/baselines \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --generation-seed "$SEED" \
+    --generation-id "$GEN_ID" \
+    --num-samples "$N" \
+    --device cuda:0
+
+  GEN="outputs/baselines/gdsm_simple/community_small/$RUN/generations/$GEN_ID"
+
+  PYTHONHASHSEED="$SEED" ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/community_small_evaluation.yaml \
+    --generated-dir "$GEN" \
+    --generated-graphs "$GEN/base_graphs.pkl" \
+    --base-graphs "$GEN/initial_graphs.pkl" \
+    --generated-stage gdsm_final_no_rewiring \
+    --reference-split test \
+    --generic-mmd-protocol graphrnn \
+    --num-samples "$N" \
+    --output-dir "$GEN/evaluation_topology"
+done
 
 # Seet 41
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
@@ -1731,3 +1769,71 @@ train_to_test                       0.004733          0.009889      0.000399    
 gdsm_simple_base_to_test            0.073171          0.778540      0.418779        0.351482        0.551315
 gdsm_final_no_rewiring_to_test      0.010124          0.143537      0.062513        0.040851        0.132697
 # Seed 45
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.075594          0.792313      0.423220        0.357634        0.552874
+gdsm_final_no_rewiring_to_test      0.005388          0.138886      0.038868        0.032136        0.130892
+
+## Ego small , no rewiring
+#Seed 41
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.141295          0.140284      0.043061        0.238597        0.070646
+gdsm_final_no_rewiring_to_test      0.017137          0.016313      0.007783        0.014048        0.002477
+#Seed 42
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.148215          0.142648      0.042097        0.247210        0.089631
+gdsm_final_no_rewiring_to_test      0.026997          0.029132      0.007821        0.031637        0.008458
+#Seed 43
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.147778          0.140262      0.043249        0.236877        0.075810
+gdsm_final_no_rewiring_to_test      0.025800          0.020874      0.007772        0.025102        0.005657
+#Seed 44
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.154692          0.139389      0.043857        0.248980        0.079604
+gdsm_final_no_rewiring_to_test      0.023656          0.030833      0.006100        0.028581        0.004787
+# Seed 45
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.151447          0.148418      0.043952        0.246062        0.075252
+gdsm_final_no_rewiring_to_test      0.029724          0.022596      0.020263        0.039721        0.007863
+
+
+## Community-small empirical sequence
+RUN=seed_42_gdsm_final_g345
+N=1024
+CFG=configs/experiments/gdsm_final_ablation/community_small_seed_42_empirical_degree.yaml
+GEN_ID=seed_42_n_1024_empirical_degree
+
+PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
+python scripts/run_gdsm_simple_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --no-common-config \
+  --wrapper-config "$CFG" \
+  --dataset-root outputs/datasets \
+  --serialized-dataset sbm \
+  --output-root outputs/baselines \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --generation-seed 42 \
+  --generation-id "$GEN_ID" \
+  --num-samples "$N" \
+  --device cuda:0
+
+GEN="outputs/baselines/gdsm_simple/community_small/$RUN/generations/$GEN_ID"
+
+PYTHONHASHSEED=42 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src \
+python scripts/evaluate_graph_generation_report.py \
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN" \
+  --generated-graphs "$GEN/base_graphs.pkl" \
+  --base-graphs "$GEN/initial_graphs.pkl" \
+  --generated-stage gdsm_final_empirical_degree \
+  --reference-split test \
+  --generic-mmd-protocol graphrnn \
+  --num-samples "$N" \
+  --output-dir "$GEN/evaluation_topology"

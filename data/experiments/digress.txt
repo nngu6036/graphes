@@ -547,6 +547,7 @@ Molecular evaluation
 }
 
 
+
 export DIGRESS=/home/quang/DiGress
 export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
 
@@ -573,7 +574,7 @@ PYTHONPATH=src python scripts/run_digress_baseline.py \
   --num-samples "$N" \
   --device gpu
 
-GEN_DIR="outputs/baselines/digress/qm9/$RUN/generations/seed_42_n_${N}"
+GEN_DIR="outputs/baselines/digress/zinc/$RUN/generations/seed_42_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -587,8 +588,8 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
 
 PYTHONHASHSEED=42 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
-  --generated-graphs "$GEN_DIR/molecular_graphs.pkl" \
-  --reference-graphs outputs/datasets/qm9/test.pkl \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
   --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
   --evaluator scripts/evaluate_generated_molecules.py \
   --expected-num-generated 10000 \
@@ -632,29 +633,52 @@ Molecular evaluation
   fcd_generated_smiles_source: valid_with_correction
 
 
- 
-export DIGRESS=/home/quang/DiGress
-export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+ export CATFLOW=/home/quang/CatFlow
+export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
+RUN=seed_43
+N=10000
 
-PYTHONPATH=src python scripts/run_digress_baseline.py \
-  --dataset zinc \
-  --num-samples 1024 \
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
   --seed-id 43 \
-  --run-id seed_43_e1000 \
-  --wrapper-config configs/baselines/digress_zinc.yaml
+  --overwrite \
+  --run-id "$RUN" \
+  --device gpu
 
-GEN_DIR="outputs/baselines/digress/zinc/seed_43_e1000/generations/seed_43_n_1024"
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_43_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --generated-dir "$GEN_DIR" \
   --dataset-root outputs/datasets \
-  --dataset zinc \
+  --dataset qm9_attributed \
   --reference-split test \
   --train-split train \
-  --output-dir "$GEN_DIR/evaluation" \
-    --require-fcd \
- --hogdiff-compatible-metrics
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
+
+PYTHONHASHSEED=43 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
 
 
 
@@ -684,39 +708,49 @@ Molecular evaluation
   fcd_num_valid_generated_molecules: 1024
   fcd_generated_smiles_source: valid_with_correction
 
- 
-export DIGRESS=/home/quang/DiGress
-export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+ export CATFLOW=/home/quang/CatFlow
+export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
+RUN=seed_44
+N=10000
 
-PYTHONPATH=src python scripts/run_digress_baseline.py \
-  --dataset zinc \
-  --num-samples 1024 \
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
   --seed-id 44 \
-  --run-id seed_44_e1000 \
-  --wrapper-config configs/baselines/digress_zinc.yaml
+  --overwrite \
+  --run-id "$RUN" \
+  --device gpu
 
-GEN_DIR="outputs/baselines/digress/zinc/seed_44_e1000/generations/seed_44_n_1024"
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
-  --dataset-root outputs/datasets \
-  --dataset zinc \
-  --reference-split test \
-  --train-split train \
-  --output-dir "$GEN_DIR/evaluation" \
-    --require-fcd \
- --hogdiff-compatible-metrics
-
-
- GEN_DIR="outputs/baselines/digress/zinc/seed_44_e1000/generations/seed_44_n_1024"
+GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_44_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --generated-dir "$GEN_DIR" \
   --dataset-root outputs/datasets \
-  --dataset zinc \
+  --dataset qm9_attributed \
   --reference-split test \
   --train-split train \
-  --output-dir "$GEN_DIR/evaluation" \
-    --require-fcd \
- --hogdiff-compatible-metrics
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
+
+PYTHONHASHSEED=44 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"

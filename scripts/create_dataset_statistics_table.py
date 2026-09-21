@@ -102,22 +102,23 @@ def render_latex(rows: Sequence[dict[str, Any]]) -> str:
         r"\centering",
         r"\small",
         r"\caption{Dataset statistics, training budgets, and generation sample counts.",
+        "Dataset size is the total number of graphs across training, validation, and test splits.",
         "Node and edge extrema are measured over the combined training, validation,",
         "and test splits. Molecular datasets use their prepared heavy-atom",
         "representation, and undirected edges are counted once. Training epochs",
         "denote equivalent passes over the training set, with exposure-matched",
         "budgets for GraphRNN and HOG-Diff. Generated samples are per evaluation run.}",
         r"\label{tab:dataset_statistics}",
-        r"\begin{tabular}{lrrrrrr}",
+        r"\begin{tabular}{lrrrrrrr}",
         r"\toprule",
-        "Dataset & Max nodes & Min nodes & Max edges & Min edges",
+        "Dataset & Dataset size & Max nodes & Min nodes & Max edges & Min edges",
         r"        & Training epochs & Generated samples \\",
         r"\midrule",
     ]
     for row in rows:
         values = [row["name"]] + [
             number(row[key]) for key in (
-                "max_nodes", "min_nodes", "max_edges", "min_edges",
+                "num_graphs", "max_nodes", "min_nodes", "max_edges", "min_edges",
                 "training_epochs", "generated_samples",
             )
         ]
