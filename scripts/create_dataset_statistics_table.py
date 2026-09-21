@@ -10,6 +10,8 @@ are read one split at a time; no graphs are generated or plotted. Training
 budgets come from configs/baselines/common_<dataset>.yaml. Generation counts
 are reporting targets, not requests to run the generators. Missing datasets
 must be prepared separately; this command does not download or rebuild them.
+Dataset sizes come from the full benchmark definitions in configs/datasets,
+not from potentially subsampled prepared splits.
 """
 
 from __future__ import annotations
@@ -77,6 +79,26 @@ def dataset_extrema(dataset: PreparedDataset) -> dict[str, Any]:
     return result
 
 
+def benchmark_size(dataset: str, config_dir: Path) -> dict[str, Any]:
+    """Read the declared benchmark pool size, independently of prepared subsets."""
+    path = config_dir / f"{dataset}.yaml"
+    config = load_yaml(path)
+    for field, value in (
+        ("protocol.expected_graphs", (config.get("protocol") or {}).get("expected_graphs")),
+        ("source.expected_graphs", (config.get("source") or {}).get("expected_graphs")),
+        ("num_graphs", config.get("num_graphs")),
+    ):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{path}: {field} must be a positive integer.")
+        return {
+            "dataset_size": value,
+            "dataset_size_source": {"config": str(path), "field": field},
+        }
+    raise ValueError(f"{path}: no full benchmark graph count is declared.")
+
+
 def training_epochs(dataset: str, config_dir: Path) -> int:
     """Use the common exposure target, rather than a model's native loop count."""
     path = config_dir / f"common_{dataset}.yaml"
@@ -102,9 +124,10 @@ def render_latex(rows: Sequence[dict[str, Any]]) -> str:
         r"\centering",
         r"\small",
         r"\caption{Dataset statistics, training budgets, and generation sample counts.",
-        "Dataset size is the total number of graphs across training, validation, and test splits.",
-        "Node and edge extrema are measured over the combined training, validation,",
-        "and test splits. Molecular datasets use their prepared heavy-atom",
+        "Dataset size is the full benchmark graph count declared in the dataset configuration,",
+        "after protocol exclusions and before any prepared-subset selection.",
+        "Node and edge extrema are measured over the available prepared training, validation,",
+        "and test splits, which may cover only a subset. Molecular datasets use their prepared heavy-atom",
         "representation, and undirected edges are counted once. Training epochs",
         "denote equivalent passes over the training set, with exposure-matched",
         "budgets for GraphRNN and HOG-Diff. Generated samples are per evaluation run.}",
@@ -118,7 +141,7 @@ def render_latex(rows: Sequence[dict[str, Any]]) -> str:
     for row in rows:
         values = [row["name"]] + [
             number(row[key]) for key in (
-                "num_graphs", "max_nodes", "min_nodes", "max_edges", "min_edges",
+                "dataset_size", "max_nodes", "min_nodes", "max_edges", "min_edges",
                 "training_epochs", "generated_samples",
             )
         ]
@@ -160,6 +183,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         datasets = [resolve_prepared_dataset(
             name, root=args.root, config_dir=REPO_ROOT / "configs/datasets",
         ) for name in names]
+        sizes = {name: benchmark_size(name, REPO_ROOT / "configs/datasets") for name in names}
         epochs = {name: training_epochs(name, args.baseline_config_dir) for name in names}
         outputs = [args.output] + ([args.json_out] if args.json_out else [])
         if len({path.resolve() for path in outputs}) != len(outputs):
@@ -174,6 +198,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             name = dataset.requested_name
             rows.append({
                 **dataset_extrema(dataset),
+                **sizes[name],
                 "name": DATASETS[name][0],
                 "training_epochs": epochs[name],
                 "generated_samples": DATASETS[name][1],
