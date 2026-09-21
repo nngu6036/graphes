@@ -243,6 +243,7 @@ PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
   --common-config configs/baselines/common_qm9.yaml \
   --wrapper-config configs/baselines/hog_diff_qm9.yaml \
   --seed-id 42 \
+  --overwrite \
   --run-id "$RUN" \
   --device gpu
 
@@ -252,6 +253,7 @@ PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
   --common-config configs/baselines/common_qm9.yaml \
   --wrapper-config configs/baselines/hog_diff_qm9.yaml \
   --seed-id 42 \
+  --overwrite \
   --run-id "$RUN" \
   --num-samples "$N" \
   --device gpu
@@ -375,7 +377,7 @@ Molecular evaluation
 
 
 RUN=seed_44
-N=1024
+N=10000
 
 PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
   --stage train \

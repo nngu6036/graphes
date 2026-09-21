@@ -82,20 +82,34 @@ def refine(x,e,target,basis,bins,cfg,rng):
     old=energy(x,e,target,basis,bins,cfg['weights'],counts=counts); initial=dict(old)
     seen={e.tobytes()}; accepted=[]; tested=0
     keep_connected=bool(cfg['preserve_connectivity_if_connected']) and nx.is_connected(nx.from_numpy_array(e>0))
+    selection=str(cfg.get('selection','guided')).lower()
     for _ in range(int(cfg['max_steps_per_event'])):
         best,best_energy=None,old
         best_counts=counts
-        for candidate in candidates(e,cfg,rng):
-            if candidate.tobytes() in seen: continue
-            if keep_connected and not nx.is_connected(nx.from_numpy_array(candidate>0)): continue
-            tested+=1
-            candidate_counts=(update_counts(x,e,candidate,counts,basis.orders,limit=basis.limit) if multi else None)
-            score=energy(x,candidate,target,basis,bins,cfg['weights'],counts=candidate_counts)
-            if cfg['require_structure_improvement'] and score['structure']>=old['structure']-cfg['min_improvement']: continue
-            if score['total']<best_energy['total']-cfg['min_improvement']:
-                best,best_energy=candidate,score
-                best_counts=candidate_counts
-        if best is None: break
+        if selection=='uniform':
+            valid=[]
+            for candidate in candidates(e,cfg,rng):
+                if candidate.tobytes() in seen: continue
+                if keep_connected and not nx.is_connected(nx.from_numpy_array(candidate>0)): continue
+                tested+=1
+                candidate_counts=(update_counts(x,e,candidate,counts,basis.orders,limit=basis.limit) if multi else None)
+                valid.append((candidate,candidate_counts))
+            if not valid: break
+            choice=int(rng.integers(len(valid)))
+            best,best_counts=valid[choice]
+            best_energy=energy(x,best,target,basis,bins,cfg['weights'],counts=best_counts)
+        else:
+            for candidate in candidates(e,cfg,rng):
+                if candidate.tobytes() in seen: continue
+                if keep_connected and not nx.is_connected(nx.from_numpy_array(candidate>0)): continue
+                tested+=1
+                candidate_counts=(update_counts(x,e,candidate,counts,basis.orders,limit=basis.limit) if multi else None)
+                score=energy(x,candidate,target,basis,bins,cfg['weights'],counts=candidate_counts)
+                if cfg['require_structure_improvement'] and score['structure']>=old['structure']-cfg['min_improvement']: continue
+                if score['total']<best_energy['total']-cfg['min_improvement']:
+                    best,best_energy=candidate,score
+                    best_counts=candidate_counts
+            if best is None: break
         accepted.append({'before':old,'after':best_energy}); e,old=best,best_energy; counts=best_counts; seen.add(e.tobytes())
     degree_equal=np.array_equal((e>0).sum(1),(before>0).sum(1))
     types_equal=all(np.array_equal((e==k).sum(1),(before==k).sum(1)) for k in range(1,int(max(e.max(),before.max()))+1))
@@ -103,7 +117,7 @@ def refine(x,e,target,basis,bins,cfg,rng):
     final_hist=basis.encode_counts(counts,len(x))[0] if multi else basis.summary(x,e)[0]
     diagnostics={'initial':initial,'final':old,'accepted_steps':len(accepted),'tested_candidates':tested,
               'degree_preserved':degree_equal,'typed_degrees_preserved':types_equal,
-              'accepted':accepted,'initial_overflow_mass':basis.overflow_mean(initial_hist) if multi else float(initial_hist[-1]),
+              'selection':selection,'accepted':accepted,'initial_overflow_mass':basis.overflow_mean(initial_hist) if multi else float(initial_hist[-1]),
               'final_overflow_mass':basis.overflow_mean(final_hist) if multi else float(final_hist[-1])}
     if multi:
         diagnostics['initial_overflow_by_order']=basis.overflow_by_order(initial_hist)

@@ -17,10 +17,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GDSS_GENERATION_DIR" \
   --output-dir "$GDSS_GENERATION_DIR/evaluation_report_seed_42_n_1024"
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-gdss_to_test                        0.022701          0.053660      0.006722
-
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdss_to_test                        0.022701          0.053660      0.006722        0.015525        0.093051
 
 export GDSS=/home/quang/GDSS
 export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
@@ -43,9 +43,9 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-gdss_to_test                        0.025940          0.070714      0.005136
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdss_to_test                        0.025940          0.070714      0.005136        0.029006        0.120583
 
 
 
@@ -70,11 +70,9 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-gdss_to_test                        0.035017          0.057068      0.005585
-
-
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdss_to_test                        0.035017          0.057068      0.005585        0.031943        0.146603
 
 export GDSS=/home/quang/GDSS
 export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
@@ -98,10 +96,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --dataset-mismatch-policy warn \
   --output-dir "$GDSS_GENERATION_DIR/evaluation_report_seed_42_n_1024"
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.012987          0.027056      0.008995
-gdss_to_test                        0.016563          0.030770      0.009539
-
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdss_to_test                        0.016563          0.030770      0.009539        0.010523        0.013438
 
 export GDSS=/home/quang/GDSS
 export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
@@ -126,9 +124,9 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir "$GDSS_GENERATION_DIR/evaluation_report_seed_43_n_1024"
 
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.012987          0.027056      0.008995
-gdss_to_test                        0.018278          0.037864      0.011178
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdss_to_test                        0.018278          0.037864      0.011178        0.012593        0.025421
 
 
 
@@ -156,348 +154,668 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.012987          0.027056      0.008995
-gdss_to_test                        0.013682          0.038398      0.003356
-
-
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdss_to_test                        0.013682          0.038398      0.003356        0.014397        0.010503
 
 
   
-export DIGRESS=/home/quang/DiGress
-export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+export GDSS=/home/quang/GDSS
+export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
 
+RUN=seed_42_e1000
+N=10000
 
 PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage train \
   --dataset zinc \
-  --num-samples 1024 \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/gdss_zinc.yaml \
   --seed-id 42 \
-  --run-id seed_42_e1000 \
-  --wrapper-config configs/baselines/gdss_zinc.yaml
-
-GEN_DIR="outputs/baselines/gdss/zinc/seed_42_e1000/generations/seed_42_n_1024"
-
-PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
-  --dataset-root outputs/datasets \
-  --dataset zinc \
-  --reference-split test \
-  --train-split train \
-  --output-dir "$GEN_DIR/evaluation" \
-    --require-fcd \
- --hogdiff-compatible-metrics
-
-
- Molecular evaluation
-  validity: 0.763671875
-  validity_with_correction: 1.0
-  validity_without_correction: 0.763671875
-  fcd: 31.168086243482026
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 782
-  num_invalid_generated_molecules: 242
-  num_valid_generated_molecules_with_correction: 1024
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 242
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
-  uniqueness_rate: 1.0
-  unique_valid_count: 1024
-  novelty_rate: 1.0
-  novel_unique_valid_count: 1024
-  nspdk_mmd: 0.08612952930771871
-  nspdk_mmd_valid_only: 0.08612952930771871
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  nspdk_proxy_mmd_all_generated: 0.002179061485061646
-  nspdk_proxy_mmd_metric_source: 0.002205969224968697
-  fcd_num_reference_molecules: 1000
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
-
-
-
-
-export DIGRESS=/home/quang/DiGress
-export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
-
+  --run-id "$RUN" \
+  --device gpu
 
 PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage generate \
   --dataset zinc \
-  --num-samples 1024 \
-  --seed-id 43 \
-  --run-id seed_43_e1000 \
-  --wrapper-config configs/baselines/gdss_zinc.yaml
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/gdss_zinc.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GEN_DIR="outputs/baselines/gdss/zinc/seed_43_e1000/generations/seed_43_n_1024"
+GEN_DIR="outputs/baselines/gdss/zinc/$RUN/generations/seed_42_n_${N}"
 
-PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+PYTHONHASHSEED=42 PYTHONPATH=src \
+python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
   --dataset-root outputs/datasets \
   --dataset zinc \
   --reference-split test \
   --train-split train \
-  --output-dir "$GEN_DIR/evaluation" \
-    --require-fcd \
- --hogdiff-compatible-metrics
+  --metric-molecule-source raw_valid \
+  --output-dir "$GEN_DIR/evaluation_molecules_raw"
+
+
+PYTHONHASHSEED=42 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules_raw/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
 
 Molecular evaluation
-  validity: 0.6298828125
+  validity: 0.6317
   validity_with_correction: 1.0
-  validity_without_correction: 0.6298828125
-  fcd: 30.26908428972331
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 645
-  num_invalid_generated_molecules: 379
-  num_valid_generated_molecules_with_correction: 1024
+  validity_with_projected_formal_charges: 0.8755
+  validity_without_correction: 0.6317
+  fcd: 31.689902531776376
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 6317
+  num_invalid_generated_molecules: 3683
+  num_valid_generated_molecules_with_projected_formal_charges: 8755
+  num_invalid_generated_molecules_after_projected_formal_charges: 1245
+  num_raw_invalid_resolved_by_projected_formal_charges: 2438
+  projected_formal_charge_success_rate_on_raw_invalid: 0.6619603584034754
+  num_valid_generated_molecules_with_correction: 10000
   num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 379
+  num_molecules_corrected_to_valid: 3683
   correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
   uniqueness_rate: 1.0
-  unique_valid_count: 1024
+  unique_valid_count: 6317
   novelty_rate: 1.0
-  novel_unique_valid_count: 1024
-  nspdk_mmd: 0.050948799981983116
-  nspdk_mmd_valid_only: 0.050948799981983116
+  novel_unique_valid_count: 6317
+  nspdk_mmd: 0.0369828846036129
+  nspdk_mmd_valid_only: 0.0369828846036129
   graphlet_histogram_mmd: None
   graphlet_selected_mass_mmd: None
-  nspdk_proxy_mmd_all_generated: 0.001359081729907453
-  nspdk_proxy_mmd_metric_source: 0.0013675077333064488
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.001771673678861475
+  nspdk_proxy_mmd_metric_source: 0.0021296046174847367
   fcd_num_reference_molecules: 1000
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
+  fcd_num_valid_generated_molecules: 6317
+  fcd_generated_smiles_source: raw_valid
 
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 6317,
+  "validity_without_correction": 0.6317,
+  "qed_mean": 0.6261321963341093,
+  "qed_std_within_run": 0.14242385559759105,
+  "qed_median": 0.6482345790273328,
+  "qed_q10": 0.43259894136520377,
+  "qed_q90": 0.7898455905497163,
+  "qed_unique_valid_mean": 0.6261321963341093,
+  "num_unique_raw_valid": 6317,
+  "qed_yield": 0.39552770842425705,
+  "num_raw_valid_single_component": 4778,
+  "valid_single_component_yield": 0.4778,
+  "qed_single_component_mean": 0.6315846907326227,
+  "qed_ge_0p5_fraction_valid": 0.818109862276397,
+  "qed_ge_0p5_yield_all": 0.5168,
+  "qed_ge_0p7_fraction_valid": 0.35000791514959634,
+  "qed_ge_0p7_yield_all": 0.2211,
+  "reference_num_graphs": 1000,
+  "reference_num_raw_valid": 1000,
+  "reference_qed_mean": 0.7351596889447009,
+  "qed_mean_minus_reference": -0.10902749261059153,
+  "qed_wasserstein_1": 0.1090274926105915
+}
 
-export DIGRESS=/home/quang/DiGress
-export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
+export GDSS=/home/quang/GDSS
+export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
 
+RUN=seed_43_e1000
+N=10000
 
 PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage train \
   --dataset zinc \
-  --num-samples 1024 \
-  --seed-id 44 \
-  --run-id seed_44_e1000 \
-  --wrapper-config configs/baselines/gdss_zinc.yaml
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/gdss_zinc.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --device gpu
 
-GEN_DIR="outputs/baselines/gdss/zinc/seed_44_e1000/generations/seed_44_n_1024"
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage generate \
+  --dataset zinc \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/gdss_zinc.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+GEN_DIR="outputs/baselines/gdss/zinc/$RUN/generations/seed_43_n_${N}"
+
+PYTHONHASHSEED=43 PYTHONPATH=src \
+python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --dataset-root outputs/datasets \
+  --dataset zinc \
+  --reference-split test \
+  --train-split train \
+  --metric-molecule-source raw_valid \
+  --output-dir "$GEN_DIR/evaluation_molecules_raw"
+
+PYTHONHASHSEED=43 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
-  --dataset-root outputs/datasets \
-  --dataset zinc \
-  --reference-split test \
-  --train-split train \
-  --output-dir "$GEN_DIR/evaluation" \
-    --require-fcd \
- --hogdiff-compatible-metrics
-
-
- Molecular evaluation
-  validity: 0.609375
-  validity_with_correction: 1.0
-  validity_without_correction: 0.609375
-  fcd: 32.27389469495516
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 624
-  num_invalid_generated_molecules: 400
-  num_valid_generated_molecules_with_correction: 1024
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 400
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
-  uniqueness_rate: 1.0
-  unique_valid_count: 1024
-  novelty_rate: 1.0
-  novel_unique_valid_count: 1024
-  nspdk_mmd: 0.04070256045958943
-  nspdk_mmd_valid_only: 0.04070256045958943
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  nspdk_proxy_mmd_all_generated: 0.001794026756373583
-  nspdk_proxy_mmd_metric_source: 0.0017758253435140733
-  fcd_num_reference_molecules: 1000
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
-
-
-
-
-
-  
-PYTHONPATH=src python scripts/run_gdss_baseline.py \
-  --dataset qm9 \
-  --num-samples 1024 \
-  --seed-id 42 \
-  --run-id seed_42 \
-  --epoch-progress-interval 10
-
-
-PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs \
-    outputs/baselines/gdss/qm9/seed_42/generations/seed_42_n_1024/base_graphs.pkl \
-  --dataset-root outputs/datasets \
-  --dataset qm9_attributed \
-  --reference-split test \
-  --train-split train \
-  --output-dir \
-    outputs/baselines/gdss/qm9/seed_42/generations/seed_42_n_1024/evaluation_corrected_fcd \
-  --fcd-use-corrected \
-  --require-fcd \
-   --hogdiff-compatible-metrics
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules_raw/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
 
 
 Molecular evaluation
-  validity: 0.78125
+  validity: 0.6183
   validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.9580078125
-  validity_without_correction: 0.78125
-  fcd: 3.541245948979938
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 800
-  num_invalid_generated_molecules: 224
-  num_valid_generated_molecules_with_projected_formal_charges: 981
-  num_invalid_generated_molecules_after_projected_formal_charges: 43
-  num_raw_invalid_resolved_by_projected_formal_charges: 181
-  projected_formal_charge_success_rate_on_raw_invalid: 0.8080357142857143
-  num_valid_generated_molecules_with_correction: 1024
+  validity_with_projected_formal_charges: 0.9114
+  validity_without_correction: 0.6183
+  fcd: 30.023798943337027
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 6183
+  num_invalid_generated_molecules: 3817
+  num_valid_generated_molecules_with_projected_formal_charges: 9114
+  num_invalid_generated_molecules_after_projected_formal_charges: 886
+  num_raw_invalid_resolved_by_projected_formal_charges: 2931
+  projected_formal_charge_success_rate_on_raw_invalid: 0.7678805344511397
+  num_valid_generated_molecules_with_correction: 10000
   num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 224
+  num_molecules_corrected_to_valid: 3817
   correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
-  uniqueness_rate: 0.998046875
-  unique_valid_count: 1022
-  novelty_rate: 0.8874755381604696
-  novel_unique_valid_count: 907
-  nspdk_mmd: 0.005129848697567039
-  nspdk_mmd_valid_only: 0.005129848697567039
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.00021005460759681622
-  nspdk_proxy_mmd_metric_source: 0.00021355754833683068
-  fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
-  
-  
-PYTHONPATH=src python scripts/run_gdss_baseline.py \
-  --dataset qm9 \
-  --num-samples 1024 \
-  --seed-id 43 \
-  --run-id seed_43 \
-  --epoch-progress-interval 10
-
-
-PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs \
-    outputs/baselines/gdss/qm9/seed_43/generations/seed_43_n_1024/base_graphs.pkl \
-  --dataset-root outputs/datasets \
-  --dataset qm9_attributed \
-  --reference-split test \
-  --train-split train \
-  --output-dir \
-    outputs/baselines/gdss/qm9/seed_43/generations/seed_43_n_1024/evaluation_corrected_fcd \
-  --fcd-use-corrected \
-  --require-fcd \
-   --hogdiff-compatible-metrics
-
-
-  Molecular evaluation
-  validity: 0.7880859375
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.970703125
-  validity_without_correction: 0.7880859375
-  fcd: 3.1656555295528754
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 807
-  num_invalid_generated_molecules: 217
-  num_valid_generated_molecules_with_projected_formal_charges: 994
-  num_invalid_generated_molecules_after_projected_formal_charges: 30
-  num_raw_invalid_resolved_by_projected_formal_charges: 187
-  projected_formal_charge_success_rate_on_raw_invalid: 0.8617511520737328
-  num_valid_generated_molecules_with_correction: 1024
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 217
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
   uniqueness_rate: 1.0
-  unique_valid_count: 1024
-  novelty_rate: 0.8896484375
-  novel_unique_valid_count: 911
-  nspdk_mmd: 0.003206485320760774
-  nspdk_mmd_valid_only: 0.003206485320760774
+  unique_valid_count: 6183
+  novelty_rate: 1.0
+  novel_unique_valid_count: 6183
+  nspdk_mmd: 0.04580398267540292
+  nspdk_mmd_valid_only: 0.04580398267540292
   graphlet_histogram_mmd: None
   graphlet_selected_mass_mmd: None
   graphlet_histogram_mmd_by_order: {}
   graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.00016936630387531985
-  nspdk_proxy_mmd_metric_source: 0.00017003889088195966
-  fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
+  nspdk_proxy_mmd_all_generated: 0.0014191181184210232
+  nspdk_proxy_mmd_metric_source: 0.001912833003012065
+  fcd_num_reference_molecules: 1000
+  fcd_num_valid_generated_molecules: 6183
+  fcd_generated_smiles_source: raw_valid
 
 
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 6183,
+  "validity_without_correction": 0.6183,
+  "qed_mean": 0.6167319686978721,
+  "qed_std_within_run": 0.15130285271087832,
+  "qed_median": 0.6418273444339293,
+  "qed_q10": 0.40518269152004033,
+  "qed_q90": 0.7923978816681401,
+  "qed_unique_valid_mean": 0.6167319686978721,
+  "num_unique_raw_valid": 6183,
+  "qed_yield": 0.38132537624589424,
+  "num_raw_valid_single_component": 4368,
+  "valid_single_component_yield": 0.4368,
+  "qed_single_component_mean": 0.6186927288952528,
+  "qed_ge_0p5_fraction_valid": 0.7811741872877244,
+  "qed_ge_0p5_yield_all": 0.483,
+  "qed_ge_0p7_fraction_valid": 0.3443312307941129,
+  "qed_ge_0p7_yield_all": 0.2129,
+  "reference_num_graphs": 1000,
+  "reference_num_raw_valid": 1000,
+  "reference_qed_mean": 0.7351596889447009,
+  "qed_mean_minus_reference": -0.1184277202468288,
+  "qed_wasserstein_1": 0.11842772024682874
+}
 
-  
+
+export GDSS=/home/quang/GDSS
+export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
+
+RUN=seed_44_e1000
+N=10000
+
 PYTHONPATH=src python scripts/run_gdss_baseline.py \
-  --dataset qm9 \
-  --num-samples 1024 \
+  --stage train \
+  --dataset zinc \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/gdss_zinc.yaml \
   --seed-id 44 \
-  --run-id seed_44 \
-  --epoch-progress-interval 10
+  --run-id "$RUN" \
+  --device gpu
 
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage generate \
+  --dataset zinc \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/gdss_zinc.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs \
-    outputs/baselines/gdss/qm9/seed_44/generations/seed_44_n_1024/base_graphs.pkl \
+GEN_DIR="outputs/baselines/gdss/zinc/$RUN/generations/seed_44_n_${N}"
+
+PYTHONHASHSEED=44 PYTHONPATH=src \
+python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
   --dataset-root outputs/datasets \
-  --dataset qm9_attributed \
+  --dataset zinc \
   --reference-split test \
   --train-split train \
-  --output-dir \
-    outputs/baselines/gdss/qm9/seed_44/generations/seed_44_n_1024/evaluation_corrected_fcd \
-  --fcd-use-corrected \
-  --require-fcd \
-   --hogdiff-compatible-metrics
+  --metric-molecule-source raw_valid \
+  --output-dir "$GEN_DIR/evaluation_molecules_raw"
 
-  Molecular evaluation
-  validity: 0.8330078125
+PYTHONHASHSEED=44 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules_raw/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
+
+ Molecular evaluation
+  validity: 0.4543
   validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.9609375
-  validity_without_correction: 0.8330078125
-  fcd: 3.209300191152309
-  num_generated_graphs: 1024
-  num_valid_generated_molecules: 853
-  num_invalid_generated_molecules: 171
-  num_valid_generated_molecules_with_projected_formal_charges: 984
-  num_invalid_generated_molecules_after_projected_formal_charges: 40
-  num_raw_invalid_resolved_by_projected_formal_charges: 131
-  projected_formal_charge_success_rate_on_raw_invalid: 0.7660818713450293
-  num_valid_generated_molecules_with_correction: 1024
+  validity_with_projected_formal_charges: 0.6514
+  validity_without_correction: 0.4543
+  fcd: 37.86836490470712
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 4543
+  num_invalid_generated_molecules: 5457
+  num_valid_generated_molecules_with_projected_formal_charges: 6514
+  num_invalid_generated_molecules_after_projected_formal_charges: 3486
+  num_raw_invalid_resolved_by_projected_formal_charges: 1971
+  projected_formal_charge_success_rate_on_raw_invalid: 0.3611874656404618
+  num_valid_generated_molecules_with_correction: 10000
   num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 171
+  num_molecules_corrected_to_valid: 5457
   correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: corrected_valid
-  hogdiff_compatible_distribution_metrics: True
-  uniqueness_rate: 0.9990234375
-  unique_valid_count: 1023
-  novelty_rate: 0.8758553274682307
-  novel_unique_valid_count: 896
-  nspdk_mmd: 0.003596141451194552
-  nspdk_mmd_valid_only: 0.003596141451194552
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 1.0
+  unique_valid_count: 4543
+  novelty_rate: 1.0
+  novel_unique_valid_count: 4543
+  nspdk_mmd: 0.0735862041619526
+  nspdk_mmd_valid_only: 0.0735862041619526
   graphlet_histogram_mmd: None
   graphlet_selected_mass_mmd: None
   graphlet_histogram_mmd_by_order: {}
   graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.0001346613782570921
-  nspdk_proxy_mmd_metric_source: 0.00013631488912751983
+  nspdk_proxy_mmd_all_generated: 0.0023614440990896383
+  nspdk_proxy_mmd_metric_source: 0.002954371261376199
+  fcd_num_reference_molecules: 1000
+  fcd_num_valid_generated_molecules: 4543
+  fcd_generated_smiles_source: raw_valid
+
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 4543,
+  "validity_without_correction": 0.4543,
+  "qed_mean": 0.4643278058607356,
+  "qed_std_within_run": 0.1656058469929613,
+  "qed_median": 0.4629137358380407,
+  "qed_q10": 0.24403598144667193,
+  "qed_q90": 0.6924701799544405,
+  "qed_unique_valid_mean": 0.4643278058607356,
+  "num_unique_raw_valid": 4543,
+  "qed_yield": 0.2109441222025323,
+  "num_raw_valid_single_component": 1766,
+  "valid_single_component_yield": 0.1766,
+  "qed_single_component_mean": 0.5052971672694266,
+  "qed_ge_0p5_fraction_valid": 0.4228483381025754,
+  "qed_ge_0p5_yield_all": 0.1921,
+  "qed_ge_0p7_fraction_valid": 0.08958837772397095,
+  "qed_ge_0p7_yield_all": 0.0407,
+  "reference_num_graphs": 1000,
+  "reference_num_raw_valid": 1000,
+  "reference_qed_mean": 0.7351596889447009,
+  "qed_mean_minus_reference": -0.2708318830839653,
+  "qed_wasserstein_1": 0.27083188308396533
+}
+
+
+
+export GDSS=/home/quang/GDSS
+export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
+
+RUN=seed_42
+N=10000
+
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/gdss_qm9.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/gdss_qm9.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/gdss/qm9/$RUN/generations/seed_42_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --dataset-root outputs/datasets \
+  --dataset qm9  \
+  --reference-split test \
+  --train-split train \
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
+
+PYTHONHASHSEED=42 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
+
+Molecular evaluation
+  validity: 0.7758
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9569
+  validity_without_correction: 0.7758
+  fcd: 2.858028249306198
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 7758
+  num_invalid_generated_molecules: 2242
+  num_valid_generated_molecules_with_projected_formal_charges: 9569
+  num_invalid_generated_molecules_after_projected_formal_charges: 431
+  num_raw_invalid_resolved_by_projected_formal_charges: 1811
+  projected_formal_charge_success_rate_on_raw_invalid: 0.8077609277430865
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 2242
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9894302655323537
+  unique_valid_count: 7676
+  novelty_rate: 0.8484887962480459
+  novel_unique_valid_count: 6513
+  nspdk_mmd: 0.0037298025706858765
+  nspdk_mmd_valid_only: 0.0037298025706858765
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.00018681006526553978
+  nspdk_proxy_mmd_metric_source: 0.0001415825595058937
   fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 1024
-  fcd_generated_smiles_source: valid_with_correction
+  fcd_num_valid_generated_molecules: 7758
+  fcd_generated_smiles_source: raw_valid
+  
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 7758,
+  "validity_without_correction": 0.7758,
+  "qed_mean": 0.45898230655361344,
+  "qed_std_within_run": 0.08460972830350395,
+  "qed_median": 0.47297010456123,
+  "qed_q10": 0.3403115056073126,
+  "qed_q90": 0.5546660796668235,
+  "qed_unique_valid_mean": 0.45852779128770077,
+  "num_unique_raw_valid": 7676,
+  "qed_yield": 0.3560784734242939,
+  "num_raw_valid_single_component": 7052,
+  "valid_single_component_yield": 0.7052,
+  "qed_single_component_mean": 0.4614742090891322,
+  "qed_ge_0p5_fraction_valid": 0.3468677494199536,
+  "qed_ge_0p5_yield_all": 0.2691,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": -0.0071179215383762595,
+  "qed_wasserstein_1": 0.008333863076024487
+}
+
+
+export GDSS=/home/quang/GDSS
+export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
+
+RUN=seed_43
+N=10000
+
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/gdss_qm9.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/gdss_qm9.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+
+GEN_DIR="outputs/baselines/gdss/qm9/$RUN/generations/seed_43_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed  \
+  --reference-split test \
+  --train-split train \
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
+
+PYTHONHASHSEED=42 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
+
+Molecular evaluation
+  validity: 0.7879
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9673
+  validity_without_correction: 0.7879
+  fcd: 2.275179086119863
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 7879
+  num_invalid_generated_molecules: 2121
+  num_valid_generated_molecules_with_projected_formal_charges: 9673
+  num_invalid_generated_molecules_after_projected_formal_charges: 327
+  num_raw_invalid_resolved_by_projected_formal_charges: 1794
+  projected_formal_charge_success_rate_on_raw_invalid: 0.8458274398868458
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 2121
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9951770529254982
+  unique_valid_count: 7841
+  novelty_rate: 0.8586914934319602
+  novel_unique_valid_count: 6733
+  nspdk_mmd: 0.0019958732227799503
+  nspdk_mmd_valid_only: 0.0019958732227799503
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.00014376657916480496
+  nspdk_proxy_mmd_metric_source: 0.00010670923021207747
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 7879
+  fcd_generated_smiles_source: raw_valid
+
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 7879,
+  "validity_without_correction": 0.7879,
+  "qed_mean": 0.4532004375933125,
+  "qed_std_within_run": 0.08039988753626837,
+  "qed_median": 0.4663649632231751,
+  "qed_q10": 0.34241654614403044,
+  "qed_q90": 0.5417886957095531,
+  "qed_unique_valid_mean": 0.4530584272088628,
+  "num_unique_raw_valid": 7841,
+  "qed_yield": 0.35707662477977203,
+  "num_raw_valid_single_component": 7364,
+  "valid_single_component_yield": 0.7364,
+  "qed_single_component_mean": 0.4549405495888683,
+  "qed_ge_0p5_fraction_valid": 0.2912806193679401,
+  "qed_ge_0p5_yield_all": 0.2295,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": -0.012899790498677177,
+  "qed_wasserstein_1": 0.012899790498677243
+}
+
+
+export GDSS=/home/quang/GDSS
+export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
+
+RUN=seed_44
+N=10000
+
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/gdss_qm9.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/gdss_qm9.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/gdss/qm9/$RUN/generations/seed_44_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed  \
+  --reference-split test \
+  --train-split train \
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
+
+PYTHONHASHSEED=42 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
+
+Molecular evaluation
+  validity: 0.8313
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9615
+  validity_without_correction: 0.8313
+  fcd: 2.7032612490933197
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 8313
+  num_invalid_generated_molecules: 1687
+  num_valid_generated_molecules_with_projected_formal_charges: 9615
+  num_invalid_generated_molecules_after_projected_formal_charges: 385
+  num_raw_invalid_resolved_by_projected_formal_charges: 1302
+  projected_formal_charge_success_rate_on_raw_invalid: 0.7717842323651453
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 1687
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9930229760615903
+  unique_valid_count: 8255
+  novelty_rate: 0.8575408843125378
+  novel_unique_valid_count: 7079
+  nspdk_mmd: 0.003006139492419159
+  nspdk_mmd_valid_only: 0.003006139492419159
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.00013287881439294803
+  nspdk_proxy_mmd_metric_source: 0.00011209562005752017
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 8313
+  fcd_generated_smiles_source: raw_valid
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 8313,
+  "validity_without_correction": 0.8313,
+  "qed_mean": 0.45645861178834024,
+  "qed_std_within_run": 0.08031001250164298,
+  "qed_median": 0.46952530599257064,
+  "qed_q10": 0.3466858807843782,
+  "qed_q90": 0.5467167443306459,
+  "qed_unique_valid_mean": 0.45611213480320684,
+  "num_unique_raw_valid": 8255,
+  "qed_yield": 0.3794540439796464,
+  "num_raw_valid_single_component": 7723,
+  "valid_single_component_yield": 0.7723,
+  "qed_single_component_mean": 0.4587217106473678,
+  "qed_ge_0p5_fraction_valid": 0.31336460964754,
+  "qed_ge_0p5_yield_all": 0.2605,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": -0.009641616303649458,
+  "qed_wasserstein_1": 0.009641616303649429
+}

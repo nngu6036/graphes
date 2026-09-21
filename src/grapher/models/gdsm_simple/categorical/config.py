@@ -14,7 +14,7 @@ DEFAULTS={
     'spectrum_feedback':.05,
     'feedback_start_fraction':.2,
     'loss_weights':{'spectral':1.,'node':1.,'edge':1.,'graphlet':.5,'mass':.5,'clustering':.5,'orbit':.25},
-    'guidance':{'enabled':True,'start_fraction':.2,'every':50,'max_steps_per_event':2,
+    'guidance':{'enabled':True,'selection':'guided','start_fraction':.2,'every':50,'max_steps_per_event':2,
                 'proposal_budget':128,'valid_candidate_budget':64,'same_edge_type':True,
                 'preserve_connectivity_if_connected':True,'min_improvement':1e-8,
                 'require_structure_improvement':True,
@@ -95,6 +95,9 @@ def resolve(options):
     for key in ('spectrum_feedback','feedback_start_fraction'):
         if not 0<=float(cfg[key])<=1: raise ValueError(f'{key} must be in [0,1]')
     guide=cfg['guidance']
+    if str(guide.get('selection','guided')).lower() not in ('guided','uniform'):
+        raise ValueError("guidance.selection must be 'guided' or 'uniform'")
+    guide['selection']=str(guide.get('selection','guided')).lower()
     if not guide['same_edge_type']: raise ValueError('First implementation uses same-edge-type event-local swaps only')
     if not 0<=guide['start_fraction']<=1 or int(guide['every'])<1 or int(guide['max_steps_per_event'])<0:
         raise ValueError('Invalid guidance schedule')

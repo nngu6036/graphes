@@ -9,7 +9,6 @@ PYTHONPATH=src python scripts/run_spectre_baseline.py \
   --run-id seed_42 \
   --device gpu \
   --overwrite \
-  --n-epochs 10000
 
 # Generation
 PYTHONPATH=src python scripts/run_spectre_baseline.py \
@@ -30,11 +29,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-stage spectre \
   --output-dir "$GEN_DIR/evaluation_report"
 
-
-  Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.004733          0.009889      0.000399
-spectre_to_test                     0.014370          0.058542      0.003513
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+spectre_to_test                     0.014370          0.058542      0.003513        0.034871        0.077288
 
 
 export SPECTRE="/home/quang/SPECTRE"
@@ -48,7 +46,6 @@ PYTHONPATH=src python scripts/run_spectre_baseline.py \
   --run-id seed_43 \
   --device gpu \
   --overwrite \
-  --n-epochs 10000
 
 # Generation
 PYTHONPATH=src python scripts/run_spectre_baseline.py \
@@ -74,6 +71,7 @@ Comparison                        Degree MMD    Clustering MMD     Orbit MMD
 train_to_test                       0.004733          0.009889      0.000399
 spectre_to_test                     0.025153          0.097951      0.008820
 
+
 export SPECTRE="/home/quang/SPECTRE"
 export SPECTRE_PYTHON="$(command -v python)"
 
@@ -85,7 +83,6 @@ PYTHONPATH=src python scripts/run_spectre_baseline.py \
   --run-id seed_44 \
   --device gpu \
   --overwrite \
-  --n-epochs 10000
 
 # Generation
 PYTHONPATH=src python scripts/run_spectre_baseline.py \
@@ -125,7 +122,7 @@ PYTHONPATH=src python scripts/run_spectre_baseline.py \
   --seed-id 42 \
   --run-id seed_42 \
   --device gpu \
-  --n-epochs 10000
+  --overwrite \
 
 # Generation
 PYTHONPATH=src python scripts/run_spectre_baseline.py \
@@ -147,10 +144,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-stage spectre \
   --output-dir "$GEN_DIR/evaluation_report"
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.012987          0.027056      0.008995
-spectre_to_test                     0.008848          0.016365      0.007876
-
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+spectre_to_test                     0.009915          0.012372      0.009334        0.009798        0.002621
 
 
 RUN=seed_43
@@ -163,6 +160,7 @@ PYTHONPATH=src python scripts/run_spectre_baseline.py \
   --wrapper-config configs/baselines/spectre_ego_small.yaml \
   --seed-id 43 \
   --run-id "$RUN" \
+   --overwrite \
   --device gpu
 
 PYTHONPATH=src python scripts/run_spectre_baseline.py \
@@ -183,10 +181,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
-
-  Comparison                        Degree MMD    Clustering MMD     Orbit MMD
-train_to_test                       0.012987          0.027056      0.008995
-spectre_to_test                     0.018790          0.075485      0.014003
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+spectre_to_test                     0.011974          0.021264      0.011599        0.013504        0.001818
 
 
 
@@ -201,6 +199,7 @@ PYTHONPATH=src python scripts/run_spectre_baseline.py \
   --common-config configs/baselines/common_ego_small.yaml \
   --wrapper-config configs/baselines/spectre_ego_small.yaml \
   --seed-id 44 \
+   --overwrite \
   --run-id "$RUN" \
   --device gpu
 

@@ -1412,8 +1412,66 @@ python scripts/evaluate_qed_research.py \
 # ------------------------------------------------------------------------------
 # Recorded result — ZINC, seed 42
 # ------------------------------------------------------------------------------
-# No recorded result in source file.
+Molecular evaluation
+  validity: 0.9849
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9913
+  validity_without_correction: 0.9849
+  fcd: 29.18152951115597
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9849
+  num_invalid_generated_molecules: 151
+  num_valid_generated_molecules_with_projected_formal_charges: 9913
+  num_invalid_generated_molecules_after_projected_formal_charges: 87
+  num_raw_invalid_resolved_by_projected_formal_charges: 64
+  projected_formal_charge_success_rate_on_raw_invalid: 0.423841059602649
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 151
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9652756625038075
+  unique_valid_count: 9507
+  novelty_rate: 1.0
+  novel_unique_valid_count: 9507
+  nspdk_mmd: 0.06804186596506115
+  nspdk_mmd_valid_only: 0.06804186596506115
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.002002436082619344
+  nspdk_proxy_mmd_metric_source: 0.0020129032465488186
+  fcd_num_reference_molecules: 23728
+  fcd_num_valid_generated_molecules: 9849
+  fcd_generated_smiles_source: raw_valid
 
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9849,
+  "validity_without_correction": 0.9849,
+  "qed_mean": 0.46963308139880344,
+  "qed_std_within_run": 0.06898481923384457,
+  "qed_median": 0.4744095723700246,
+  "qed_q10": 0.37843817338718194,
+  "qed_q90": 0.5528398953118452,
+  "qed_unique_valid_mean": 0.4692205776932533,
+  "num_unique_raw_valid": 9507,
+  "qed_yield": 0.4625416218696832,
+  "num_raw_valid_single_component": 9782,
+  "valid_single_component_yield": 0.9782,
+  "qed_single_component_mean": 0.4696766276338255,
+  "qed_ge_0p5_fraction_valid": 0.3394253223677531,
+  "qed_ge_0p5_yield_all": 0.3343,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 24887,
+  "reference_num_raw_valid": 23728,
+  "reference_qed_mean": 0.7512321466819076,
+  "qed_mean_minus_reference": -0.2815990652831042,
+  "qed_wasserstein_1": 0.2815990652831041
+}
 # ==============================================================================
 # ZINC — SEED 43
 # ==============================================================================

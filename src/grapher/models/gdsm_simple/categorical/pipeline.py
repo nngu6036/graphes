@@ -247,9 +247,18 @@ def validate_generation(state,options):
     if state.get('format')!=FORMAT:
         raise ValueError('Categorical diffusion needs a new jointly trained checkpoint; legacy Structure3 cannot be reused')
     cfg=resolve(options); trained=state['categorical_config']
-    for key in ('categories','noise','graphlets','initialization','spectral_conditioning','loss_weights'):
+    for key in ('categories','noise','graphlets','spectral_conditioning','loss_weights'):
         if cfg[key]!=trained[key]:
             raise ValueError(f'Generation cannot change trained attributed_categorical.{key}; retrain under a new run-id')
+    # The degree generator is generation-only: training anchors use the clean
+    # graph degree sequence, never this sampler.  Table-7 ablations may switch
+    # learned vs empirical degree sources while reusing the same denoiser.
+    trained_init=copy.deepcopy(trained['initialization'])
+    requested_init=copy.deepcopy(cfg['initialization'])
+    trained_init.pop('degree_generator',None)
+    requested_init.pop('degree_generator',None)
+    if requested_init!=trained_init:
+        raise ValueError('Generation cannot change trained attributed_categorical.initialization except initialization.degree_generator')
     return cfg
 
 
