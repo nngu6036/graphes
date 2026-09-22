@@ -361,6 +361,83 @@ def _default_experiment(native_dataset: str) -> str:
     return _DEFAULT_EXPERIMENT_BY_NATIVE_DATASET.get(native_dataset, native_dataset)
 
 
+def _mapping_declares_path(value: Any, dotted_path: str) -> bool:
+    """Return whether a nested mapping explicitly declares ``dotted_path``.
+
+    Hydra runs DeFoG configs in struct mode.  Assigning an undeclared key with
+    ``foo.bar=value`` therefore fails before the training entrypoint starts;
+    such keys must be appended with ``+foo.bar=value``.
+    """
+
+    current = value
+    for part in dotted_path.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return False
+        current = current[part]
+    return True
+
+
+def _upstream_declares_dataset_key(
+    defog_root: Path,
+    *,
+    native_dataset: str,
+    experiment: str,
+    key: str,
+) -> bool:
+    """Inspect the upstream dataset/experiment YAML for a dataset key.
+
+    DeFoG's generic dataset profiles intentionally omit optional loader fields
+    such as ``pin_memory`` and its data module accesses them through ``getattr``.
+    Molecular profiles declare the same fields explicitly.  Inspecting both
+    composed sources keeps the wrapper compatible with either shape without
+    hard-coding a per-dataset exception.
+    """
+
+    candidates = (
+        defog_root / "configs" / "dataset" / f"{native_dataset}.yaml",
+        defog_root / "configs" / "experiment" / f"{experiment}.yaml",
+    )
+    for path in candidates:
+        if not path.is_file():
+            continue
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if _mapping_declares_path(loaded, f"dataset.{key}"):
+            return True
+        # Dataset-group files are packaged directly under ``dataset`` by Hydra,
+        # so their top-level keys also count as declarations.
+        if path.parent.name == "dataset" and isinstance(loaded, Mapping):
+            if key in loaded:
+                return True
+    return False
+
+
+def _known_hydra_override(
+    *,
+    hydra_name: str,
+    value: Any,
+    defog_root: Path,
+    native_dataset: str,
+    experiment: str,
+) -> str:
+    """Format a wrapper-owned Hydra override against DeFoG's schema.
+
+    Only dataset keys need schema-sensitive append semantics.  Train/general
+    keys are part of DeFoG's base config.
+    """
+
+    prefix = ""
+    if hydra_name.startswith("dataset."):
+        key = hydra_name.split(".", 1)[1]
+        if not _upstream_declares_dataset_key(
+            defog_root,
+            native_dataset=native_dataset,
+            experiment=experiment,
+            key=key,
+        ):
+            prefix = "+"
+    return f"{prefix}{hydra_name}={value}"
+
+
 def _dataset_profile(benchmark_id: str, native_dataset: str) -> dict[str, str]:
     domain = (
         "molecular" if native_dataset in SUPPORTED_MOLECULAR_DATASETS else "generic"
@@ -627,6 +704,16 @@ def _log_tail(path: Path, *, lines: int = 200) -> str:
 
 def _external_failure_classification(output: str) -> str | None:
     lowered = output.lower()
+    # Prefer the terminal application/configuration failure over warnings from
+    # the runtime preflight.  In particular, nvidia-smi can report an NVML
+    # mismatch while PyTorch CUDA remains usable; that warning must not mask a
+    # later Hydra composition error.
+    if (
+        "hydra.errors.configcompositionexception" in lowered
+        or "omegaconf.errors.configattributeerror" in lowered
+        or ("could not override" in lowered and "hydra" in lowered)
+    ):
+        return "hydra_config_override_error"
     if (
         "nvml_error_lib_rm_version_mismatch" in lowered
         or (
@@ -648,6 +735,14 @@ def _external_failure_hint(output: str) -> str | None:
     """Explain common isolated-runtime failures without hiding the raw log."""
 
     classification = _external_failure_classification(output)
+    if classification == "hydra_config_override_error":
+        return (
+            "DeFoG failed while composing its Hydra configuration. Inspect "
+            "the reported command for a wrapper-managed key that is absent "
+            "from the selected upstream config. GraphER should append such "
+            "optional dataset keys with Hydra's `+` syntax rather than using "
+            "a strict override."
+        )
     if classification == "gpu_driver_library_mismatch":
         return (
             "Detected an NVIDIA NVML driver/library mismatch. GraphER disables "
@@ -1104,7 +1199,15 @@ class DeFoGWrapper(BaseGeneratorWrapper):
             }
             for option_name, hydra_name in known_overrides.items():
                 if option_name in options:
-                    command.append(f"{hydra_name}={options[option_name]}")
+                    command.append(
+                        _known_hydra_override(
+                            hydra_name=hydra_name,
+                            value=options[option_name],
+                            defog_root=defog_root,
+                            native_dataset=native,
+                            experiment=experiment,
+                        )
+                    )
             arbitrary = options.get("hydra_overrides", []) or []
             if isinstance(arbitrary, (str, bytes)) or not isinstance(arbitrary, Sequence):
                 raise TypeError("hydra_overrides must be a sequence of strings.")
