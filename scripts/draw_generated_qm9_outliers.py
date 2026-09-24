@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rank and draw generated QM9 molecules farthest from the training set.
+"""Rank and draw generated QM9 or ZINC molecules farthest from the training set.
 
 FCD and NSPDK are set-level distances, not per-molecule properties.  This
 script uses two principled individual outlier scores:
@@ -75,6 +75,7 @@ def _load_generated_graphs(
         candidates = (
             directory / "molecular_graphs.pkl",
             directory / "generated_graphs.pkl",
+            directory / "base_graphs.pkl",
         )
         path = next((candidate for candidate in candidates if candidate.exists()), candidates[0])
     else:
@@ -285,17 +286,23 @@ def rank_outliers(
     )
 
 
-def _default_output(count: int, ranking: str) -> Path:
-    return Path(f"outputs/qm9_generated_{ranking}_outliers_n{count}.png")
+def _default_output(count: int, ranking: str, dataset: str = "qm9_attributed") -> Path:
+    label = Path(dataset).stem
+    if label == "qm9_attributed":
+        label = "qm9"
+    return Path(f"outputs/{label}_generated_{ranking}_outliers_n{count}.png")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Draw valid generated QM9 molecules farthest from a reference split.",
+        description="Draw valid generated QM9 or ZINC molecules farthest from a reference split.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--generated-dir", help="Directory containing molecular_graphs.pkl.")
+    source.add_argument(
+        "--generated-dir",
+        help="Directory containing molecular_graphs.pkl, generated_graphs.pkl, or base_graphs.pkl.",
+    )
     source.add_argument("--generated-graphs", help="Generated NetworkX graph pickle.")
     parser.add_argument("--dataset", default="qm9_attributed")
     parser.add_argument(
@@ -435,7 +442,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("No generated molecules satisfy the requested thresholds.")
 
     output = (
-        args.output or _default_output(args.count, args.ranking)
+        args.output or _default_output(args.count, args.ranking, args.dataset)
     ).expanduser().resolve()
     if output.suffix.lower() != ".png":
         raise ValueError("--output must be a PNG path.")

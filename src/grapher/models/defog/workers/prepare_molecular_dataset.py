@@ -362,6 +362,14 @@ def _zinc_kekule_edges(
             "GraphER node order."
         )
 
+    # Canonical ZINC preparation already stores explicit Kekule bonds. Match
+    # that representation before comparing: parsing SMILES perceives aromatic
+    # bonds again, even when the serialized molecule is chemically identical.
+    # Legacy aromatic inputs still require comparison before kekulization.
+    if aromatic_count == 0:
+        molecule = Chem.Mol(molecule)
+        Chem.Kekulize(molecule, clearAromaticFlags=True)
+
     molecule_edges: dict[tuple[int, int], int] = {}
     for bond in molecule.GetBonds():
         edge = tuple(sorted((int(bond.GetBeginAtomIdx()), int(bond.GetEndAtomIdx()))))

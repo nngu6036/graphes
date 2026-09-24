@@ -109,7 +109,7 @@ Comparison                        Degree MMD    Clustering MMD     Orbit MMD    
 train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
 spectre_to_test                     0.014736          0.066201      0.003613        0.020746        0.105857
 
-
+# Ego-small
 
 export SPECTRE="/home/quang/SPECTRE"
 export SPECTRE_PYTHON="$(command -v python)"

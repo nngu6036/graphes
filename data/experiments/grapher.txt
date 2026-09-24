@@ -99,9 +99,9 @@ python scripts/evaluate_graph_generation_report.py \
 # Recorded result — Community-small, seed 41
 # ------------------------------------------------------------------------------
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
-gdsm_simple_base_to_test            0.070398          0.772747      0.379034        0.258138        0.552365
-gdsm_final_to_test                  0.012453          0.074927      0.010830        0.052038        0.101208
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.070398          0.772747      0.379034        0.341562        0.552365
+gdsm_final_to_test                  0.012453          0.074927      0.010830        0.028859        0.101208
 
 
 # ==============================================================================
@@ -162,12 +162,11 @@ python scripts/evaluate_graph_generation_report.py \
 # Recorded result — Community-small, seed 42
 # Retained verbatim from the original source file.
 # ------------------------------------------------------------------------------
-: <<'RESULTS_COMMUNITY_SMALL_SEED_42'
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
-gdsm_simple_base_to_test            0.073732          0.785492      0.425264        0.267453        0.567814
-gdsm_final_to_test                  0.009559          0.080085      0.020576        0.057560        0.117862
-RESULTS_COMMUNITY_SMALL_SEED_42
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.073732          0.785492      0.425264        0.356021        0.567814
+gdsm_final_to_test                  0.009559          0.080085      0.020576        0.031795        0.117862
+
 
 # ==============================================================================
 # Community-small — SEED 43
@@ -227,13 +226,12 @@ python scripts/evaluate_graph_generation_report.py \
 # Recorded result — Community-small, seed 43
 # Retained verbatim from the original source file.
 # ------------------------------------------------------------------------------
-: <<'RESULTS_COMMUNITY_SMALL_SEED_43'
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
-gdsm_simple_base_to_test            0.073686          0.781639      0.428165        0.265305        0.559752
-gdsm_final_to_test                  0.015680          0.059785      0.014582        0.051978        0.073168
-RESULTS_COMMUNITY_SMALL_SEED_43
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.073686          0.781639      0.428165        0.345489        0.559752
+gdsm_final_to_test                  0.015680          0.059785      0.014582        0.029287        0.073168
+
 
 # ==============================================================================
 # Community-small — SEED 44
@@ -297,6 +295,7 @@ Comparison                        Degree MMD    Clustering MMD     Orbit MMD    
 train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
 gdsm_simple_base_to_test            0.073171          0.778540      0.418779        0.351482        0.551315
 gdsm_final_to_test                  0.009113          0.051709      0.035813        0.036068        0.094187
+
 # ==============================================================================
 # Community-small — SEED 45
 # ==============================================================================
@@ -482,12 +481,10 @@ python scripts/evaluate_graph_generation_report.py \
 # Recorded result — Ego-small, seed 42
 # Retained verbatim from the original source file.
 # ------------------------------------------------------------------------------
-: <<'RESULTS_EGO_SMALL_SEED_42'
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.005604        0.001697
-gdsm_simple_base_to_test            0.148215          0.142648      0.042097        0.162579        0.089631
-gdsm_final_to_test                  0.027087          0.028338      0.007503        0.020622        0.008749
-RESULTS_EGO_SMALL_SEED_42
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.148215          0.142648      0.042097        0.247210        0.089631
+gdsm_final_to_test                  0.027087          0.028338      0.007503        0.030461        0.008749
 
 # ==============================================================================
 # Ego-small — SEED 43
@@ -548,9 +545,9 @@ python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.005604        0.001697
-gdsm_simple_base_to_test            0.136475          0.141105      0.046870        0.147103        0.051638
-gdsm_final_to_test                  0.027205          0.017537      0.009457        0.020332        0.004976
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.136475          0.141105      0.046870        0.218089        0.051638
+gdsm_final_to_test                  0.027205          0.017537      0.009457        0.026647        0.004976
 
 # ==============================================================================
 # Ego-small — SEED 44
@@ -610,10 +607,9 @@ python scripts/evaluate_graph_generation_report.py \
 # Recorded result — Ego-small, seed 44
 # ------------------------------------------------------------------------------
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.005604        0.001697
-gdsm_simple_base_to_test            0.139813          0.139293      0.040980        0.149403        0.073669
-gdsm_final_to_test                  0.022689          0.024077      0.006923        0.017314        0.003497
-
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.139813          0.139293      0.040980        0.241120        0.073669
+gdsm_final_to_test                  0.022689          0.024077      0.006923        0.025337        0.003497
 # ==============================================================================
 # Ego-small — SEED 45
 # ==============================================================================
@@ -1331,6 +1327,67 @@ python scripts/evaluate_qed_research.py \
   --expected-num-generated 10000 \
   --thresholds 0.5 0.7 \
   --output-dir "$GEN/evaluation_qed"
+Molecular evaluation
+  validity: 0.912
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9566
+  validity_without_correction: 0.912
+  fcd: 9.756835721175214
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9120
+  num_invalid_generated_molecules: 880
+  num_valid_generated_molecules_with_projected_formal_charges: 9566
+  num_invalid_generated_molecules_after_projected_formal_charges: 434
+  num_raw_invalid_resolved_by_projected_formal_charges: 446
+  projected_formal_charge_success_rate_on_raw_invalid: 0.5068181818181818
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 880
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 1.0
+  unique_valid_count: 9120
+  novelty_rate: 1.0
+  novel_unique_valid_count: 9120
+  nspdk_mmd: 0.0022733264936372465
+  nspdk_mmd_valid_only: 0.0022733264936372465
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.00015359602807047312
+  nspdk_proxy_mmd_metric_source: 0.00015318315608811052
+  fcd_num_reference_molecules: 23728
+  fcd_num_valid_generated_molecules: 9120
+  fcd_generated_smiles_source: raw_valid
+
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9120,
+  "validity_without_correction": 0.912,
+  "qed_mean": 0.7364720365056453,
+  "qed_std_within_run": 0.11678122784867977,
+  "qed_median": 0.755818588912359,
+  "qed_q10": 0.5793084457676226,
+  "qed_q90": 0.8667494843668593,
+  "qed_unique_valid_mean": 0.7364720365056453,
+  "num_unique_raw_valid": 9120,
+  "qed_yield": 0.6716624972931448,
+  "num_raw_valid_single_component": 8121,
+  "valid_single_component_yield": 0.8121,
+  "qed_single_component_mean": 0.735659451746276,
+  "qed_ge_0p5_fraction_valid": 0.9532894736842106,
+  "qed_ge_0p5_yield_all": 0.8694,
+  "qed_ge_0p7_fraction_valid": 0.6867324561403508,
+  "qed_ge_0p7_yield_all": 0.6263,
+  "reference_num_graphs": 24887,
+  "reference_num_raw_valid": 23728,
+  "reference_qed_mean": 0.7512321466819076,
+  "qed_mean_minus_reference": -0.014760110176262331,
+  "qed_wasserstein_1": 0.020442781640206412
+}
 
 # ------------------------------------------------------------------------------
 # Recorded result — ZINC, seed 41
@@ -1414,64 +1471,65 @@ python scripts/evaluate_qed_research.py \
 # Recorded result — ZINC, seed 42
 # ------------------------------------------------------------------------------
 Molecular evaluation
-  validity: 0.9849
+  validity: 0.9296
   validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.9913
-  validity_without_correction: 0.9849
-  fcd: 29.18152951115597
+  validity_with_projected_formal_charges: 0.9714
+  validity_without_correction: 0.9296
+  fcd: 10.242715430385047
   num_generated_graphs: 10000
-  num_valid_generated_molecules: 9849
-  num_invalid_generated_molecules: 151
-  num_valid_generated_molecules_with_projected_formal_charges: 9913
-  num_invalid_generated_molecules_after_projected_formal_charges: 87
-  num_raw_invalid_resolved_by_projected_formal_charges: 64
-  projected_formal_charge_success_rate_on_raw_invalid: 0.423841059602649
+  num_valid_generated_molecules: 9296
+  num_invalid_generated_molecules: 704
+  num_valid_generated_molecules_with_projected_formal_charges: 9714
+  num_invalid_generated_molecules_after_projected_formal_charges: 286
+  num_raw_invalid_resolved_by_projected_formal_charges: 418
+  projected_formal_charge_success_rate_on_raw_invalid: 0.59375
   num_valid_generated_molecules_with_correction: 10000
   num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 151
+  num_molecules_corrected_to_valid: 704
   correction_success_rate_on_raw_invalid: 1.0
   metric_molecule_source: raw_valid
   hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 0.9652756625038075
-  unique_valid_count: 9507
-  novelty_rate: 1.0
-  novel_unique_valid_count: 9507
-  nspdk_mmd: 0.06804186596506115
-  nspdk_mmd_valid_only: 0.06804186596506115
+  uniqueness_rate: 1.0
+  unique_valid_count: 9296
+  novelty_rate: 0.9997848537005164
+  novel_unique_valid_count: 9294
+  nspdk_mmd: 0.0029276155277734306
+  nspdk_mmd_valid_only: 0.0029276155277734306
   graphlet_histogram_mmd: None
   graphlet_selected_mass_mmd: None
   graphlet_histogram_mmd_by_order: {}
   graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.002002436082619344
-  nspdk_proxy_mmd_metric_source: 0.0020129032465488186
+  nspdk_proxy_mmd_all_generated: 0.00015508451510053768
+  nspdk_proxy_mmd_metric_source: 0.00015569979119450163
   fcd_num_reference_molecules: 23728
-  fcd_num_valid_generated_molecules: 9849
+  fcd_num_valid_generated_molecules: 9296
   fcd_generated_smiles_source: raw_valid
+
 
 {
   "num_generated_graphs": 10000,
-  "num_raw_valid": 9849,
-  "validity_without_correction": 0.9849,
-  "qed_mean": 0.46963308139880344,
-  "qed_std_within_run": 0.06898481923384457,
-  "qed_median": 0.4744095723700246,
-  "qed_q10": 0.37843817338718194,
-  "qed_q90": 0.5528398953118452,
-  "qed_unique_valid_mean": 0.4692205776932533,
-  "num_unique_raw_valid": 9507,
-  "qed_yield": 0.4625416218696832,
-  "num_raw_valid_single_component": 9782,
-  "valid_single_component_yield": 0.9782,
-  "qed_single_component_mean": 0.4696766276338255,
-  "qed_ge_0p5_fraction_valid": 0.3394253223677531,
-  "qed_ge_0p5_yield_all": 0.3343,
-  "qed_ge_0p7_fraction_valid": 0.0,
-  "qed_ge_0p7_yield_all": 0.0,
+  "num_raw_valid": 9296,
+  "validity_without_correction": 0.9296,
+  "qed_mean": 0.7338981062878628,
+  "qed_std_within_run": 0.11481193210871538,
+  "qed_median": 0.7486015291175925,
+  "qed_q10": 0.5816474140615395,
+  "qed_q90": 0.8638519412936334,
+  "qed_unique_valid_mean": 0.7338981062878628,
+  "num_unique_raw_valid": 9296,
+  "qed_yield": 0.6822316796051994,
+  "num_raw_valid_single_component": 8565,
+  "valid_single_component_yield": 0.8565,
+  "qed_single_component_mean": 0.7338632617626112,
+  "qed_ge_0p5_fraction_valid": 0.9547117039586919,
+  "qed_ge_0p5_yield_all": 0.8875,
+  "qed_ge_0p7_fraction_valid": 0.6764199655765921,
+  "qed_ge_0p7_yield_all": 0.6288,
   "reference_num_graphs": 24887,
   "reference_num_raw_valid": 23728,
   "reference_qed_mean": 0.7512321466819076,
-  "qed_mean_minus_reference": -0.2815990652831042,
-  "qed_wasserstein_1": 0.2815990652831041
+  "qed_mean_minus_reference": -0.017334040394044847,
+  "qed_wasserstein_1": 0.023655691846975774
 }
 # ==============================================================================
 # ZINC — SEED 43
@@ -1801,9 +1859,166 @@ train_to_test                       0.012987          0.027056      0.008995    
 gdsm_simple_base_to_test            0.151447          0.148418      0.043952        0.246062        0.075252
 gdsm_final_no_rewiring_to_test      0.029724          0.022596      0.020263        0.039721        0.007863
 
+## Community-small unguided-rewiring
+N=1024
+
+for SEED in 41 42 43 44 45; do
+  RUN="seed_${SEED}_gdsm_final_g345"
+  CFG="configs/experiments/gdsm_final_ablation/community_small_seed_${SEED}_unguided_rewiring.yaml"
+  GEN_ID="seed_${SEED}_n_${N}_unguided_rewiring"
+
+  echo "========================================"
+  echo "Running seed ${SEED}"
+  echo "RUN=${RUN}"
+  echo "CFG=${CFG}"
+  echo "GEN_ID=${GEN_ID}"
+  echo "========================================"
+
+  PYTHONHASHSEED="$SEED" GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
+  python scripts/run_gdsm_simple_baseline.py \
+    --stage generate \
+    --dataset community_small \
+    --no-common-config \
+    --wrapper-config "$CFG" \
+    --dataset-root outputs/datasets \
+    --serialized-dataset sbm \
+    --output-root outputs/baselines \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --generation-seed "$SEED" \
+    --generation-id "$GEN_ID" \
+    --num-samples "$N" \
+    --device cuda:0
+
+  GEN="outputs/baselines/gdsm_simple/community_small/$RUN/generations/$GEN_ID"
+
+  PYTHONHASHSEED="$SEED" ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/community_small_evaluation.yaml \
+    --generated-dir "$GEN" \
+    --generated-graphs "$GEN/base_graphs.pkl" \
+    --base-graphs "$GEN/initial_graphs.pkl" \
+    --generated-stage gdsm_final_unguided_rewiring \
+    --reference-split test \
+    --generic-mmd-protocol graphrnn \
+    --num-samples "$N" \
+    --output-dir "$GEN/evaluation_topology"
+
+done
+# Seed 41
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.070398          0.772747      0.379034        0.341562        0.552365
+gdsm_final_unguided_rewiring_to_test      0.017937          0.509996      0.193920        0.183742        0.544556
+
+# Seed 42
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.073732          0.785492      0.425264        0.356021        0.567814
+gdsm_final_unguided_rewiring_to_test      0.016213          0.574040      0.240129        0.210541        0.580884
+
+# Seed 43
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.073686          0.781639      0.428165        0.345489        0.559752
+gdsm_final_unguided_rewiring_to_test      0.019761          0.540675      0.237370        0.178397        0.531636
+
+# Seed 44
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.073171          0.778540      0.418779        0.351482        0.551315
+gdsm_final_unguided_rewiring_to_test      0.009322          0.507785      0.290308        0.170986        0.468162
+
+# Seed 45
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.075594          0.792313      0.423220        0.357634        0.552874
+gdsm_final_unguided_rewiring_to_test      0.009150          0.498540      0.241801        0.175649        0.514813
+
+
+## Ego-small unguided-rewiring
+N=1024
+
+for SEED in 41 42 43 44 45; do
+  RUN="seed_${SEED}_gdsm_final_g345"
+  CFG="configs/experiments/gdsm_final_ablation/ego_small_seed_${SEED}_unguided_rewiring.yaml"
+  GEN_ID="seed_${SEED}_n_${N}_unguided_rewiring"
+
+  echo "========================================"
+  echo "Running seed ${SEED}"
+  echo "RUN=${RUN}"
+  echo "CFG=${CFG}"
+  echo "GEN_ID=${GEN_ID}"
+  echo "========================================"
+
+  PYTHONHASHSEED="$SEED" GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
+  python scripts/run_gdsm_simple_baseline.py \
+    --stage generate \
+    --dataset ego_small \
+    --no-common-config \
+    --wrapper-config "$CFG" \
+    --dataset-root outputs/datasets \
+    --serialized-dataset sbm \
+    --output-root outputs/baselines \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --generation-seed "$SEED" \
+    --generation-id "$GEN_ID" \
+    --num-samples "$N" \
+    --device cuda:0
+
+  GEN="outputs/baselines/gdsm_simple/ego_small/$RUN/generations/$GEN_ID"
+
+  PYTHONHASHSEED="$SEED" ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/ego_small_evaluation.yaml \
+    --generated-dir "$GEN" \
+    --generated-graphs "$GEN/base_graphs.pkl" \
+    --base-graphs "$GEN/initial_graphs.pkl" \
+    --generated-stage gdsm_final_unguided_rewiring \
+    --reference-split test \
+    --generic-mmd-protocol graphrnn \
+    --num-samples "$N" \
+    --output-dir "$GEN/evaluation_topology"
+
+done
+
+# Seed 41
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.145914          0.146903      0.048727        0.228012        0.061965
+gdsm_final_unguided_rewiring_to_test      0.023145          0.017951      0.013542        0.021594        0.002156
+# Seed 42
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.148215          0.142648      0.042097        0.247210        0.089631
+gdsm_final_unguided_rewiring_to_test      0.026297          0.026185      0.008167        0.029650        0.008284
+# Seed 43
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.136475          0.141105      0.046870        0.218089        0.051638
+gdsm_final_unguided_rewiring_to_test      0.027739          0.018883      0.009641        0.027502        0.004743
+# Seed 44
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.139813          0.139293      0.040980        0.241120        0.073669
+gdsm_final_unguided_rewiring_to_test      0.024326          0.025188      0.006256        0.025632        0.003305
+# Seed 45
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.138821          0.145835      0.042400        0.247195        0.068350
+gdsm_final_unguided_rewiring_to_test      0.026146          0.027075      0.015243        0.041805        0.009011
+
+
 
 ## Community-small empirical sequence
 # Seed 41
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.075871          0.776494      0.436825        0.350841        0.544472
+gdsm_final_empirical_degree_to_test      0.007002          0.063109      0.010424        0.023573        0.079567
 # Seed 42
 RUN=seed_42_gdsm_final_g345
 N=1024
@@ -1848,5 +2063,92 @@ gdsm_simple_base_to_test            0.073170          0.800086      0.420832    
 gdsm_final_empirical_degree_to_test      0.009380          0.066928      0.016751        0.028784        0.103923
 
 # Seed 43
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.072343          0.799743      0.423613        0.355965        0.575212
+gdsm_final_empirical_degree_to_test      0.016687          0.066913      0.015429        0.028065        0.078834
 # Seed 44
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.074906          0.774310      0.420140        0.344839        0.548687
+gdsm_final_empirical_degree_to_test      0.010808          0.050864      0.033392        0.035119        0.082218
 # Seed 45
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_simple_base_to_test            0.074979          0.782142      0.427370        0.345269        0.548277
+gdsm_final_empirical_degree_to_test      0.004957          0.057198      0.022597        0.026957        0.099913
+
+## Ego-small empirical sequence
+N=1024
+
+for SEED in 41 42 43 44 45; do
+  RUN="seed_${SEED}_gdsm_final_g345"
+  CFG="configs/experiments/gdsm_final_ablation/ego_small_seed_${SEED}_empirical_degree.yaml"
+  GEN_ID="seed_${SEED}_n_${N}_empirical_degree"
+
+  echo "========================================"
+  echo "Running empirical-degree seed ${SEED}"
+  echo "RUN=${RUN}"
+  echo "CFG=${CFG}"
+  echo "GEN_ID=${GEN_ID}"
+  echo "========================================"
+
+  PYTHONHASHSEED="$SEED" GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
+  python scripts/run_gdsm_simple_baseline.py \
+    --stage generate \
+    --dataset ego_small \
+    --no-common-config \
+    --wrapper-config "$CFG" \
+    --dataset-root outputs/datasets \
+    --serialized-dataset sbm \
+    --output-root outputs/baselines \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --generation-seed "$SEED" \
+    --generation-id "$GEN_ID" \
+    --num-samples "$N" \
+    --device cuda:0
+
+  GEN="outputs/baselines/gdsm_simple/ego_small/$RUN/generations/$GEN_ID"
+
+  PYTHONHASHSEED="$SEED" ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/ego_small_evaluation.yaml \
+    --generated-dir "$GEN" \
+    --generated-graphs "$GEN/base_graphs.pkl" \
+    --base-graphs "$GEN/initial_graphs.pkl" \
+    --generated-stage gdsm_final_empirical_degree \
+    --reference-split test \
+    --generic-mmd-protocol graphrnn \
+    --num-samples "$N" \
+    --output-dir "$GEN/evaluation_topology"
+
+done
+
+
+# Seed 41
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.146209          0.142946      0.042826        0.241885        0.083584
+gdsm_final_empirical_degree_to_test      0.017989          0.017793      0.005480        0.014898        0.001554
+# Seed 42
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.145427          0.151748      0.041172        0.246258        0.080550
+gdsm_final_empirical_degree_to_test      0.023816          0.024957      0.007410        0.027220        0.006820
+
+# Seed 43
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.138040          0.138192      0.042592        0.252012        0.075240
+gdsm_final_empirical_degree_to_test      0.021289          0.017270      0.006637        0.019647        0.003367
+# Seed 44
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.153228          0.138058      0.042782        0.251608        0.097105
+gdsm_final_empirical_degree_to_test      0.025383          0.021965      0.006523        0.023196        0.004209
+# Seed 45
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_simple_base_to_test            0.143452          0.154119      0.042450        0.240107        0.073118
+gdsm_final_empirical_degree_to_test      0.028788          0.026060      0.015686        0.039736        0.009819

@@ -33,10 +33,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --output-dir "$GEN_DIR/evaluation_report"
 
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.013361        0.010610
-edge_to_test                        0.014876          0.638844      0.423690        0.173032        0.541492
 
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+edge_to_test                        0.014876          0.638844      0.423690        0.247291        0.541492
 
 RUN=seed_43
 N=1024
@@ -69,13 +69,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
-
-
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.013361        0.010610
-edge_to_test                        0.009483          0.667459      0.386973        0.177834        0.576161
-
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+edge_to_test                        0.009483          0.667459      0.386973        0.256989        0.576161
 
 
 RUN=seed_44
@@ -111,9 +108,11 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.013361        0.010610
-edge_to_test                        0.013989          0.576906      0.405669        0.163098        0.507179
-  # Ego
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+edge_to_test                        0.013989          0.576906      0.405669        0.232067        0.507179
+
+
+# Ego
 
 RUN=seed_42
 N=1024
@@ -148,8 +147,9 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.009149        0.001697
-edge_to_test                        0.019084          0.039872      0.005122        0.074725        0.010922
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+edge_to_test                        0.019084          0.039872      0.005122        0.062032        0.010922
+
 
 RUN=seed_43
 N=1024
@@ -184,11 +184,9 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.009149        0.001697
-edge_to_test                        0.022383          0.038031      0.004929        0.070631        0.015818
-# ==============================================================================
-# EDGE — Ego-small — Seed 44
-# ==============================================================================
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+edge_to_test                        0.022383          0.038031      0.004929        0.057357        0.015818
+
 
 RUN=seed_44
 N=1024
@@ -220,3 +218,7 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/ego_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
+
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+edge_to_test                        0.017476          0.032786      0.005750        0.057722        0.011422

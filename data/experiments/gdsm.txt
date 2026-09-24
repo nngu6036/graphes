@@ -1,40 +1,15 @@
-#!/usr/bin/env bash
-
-# ==============================================================================
-# GDSM baseline experiments
-# ==============================================================================
-#
-# Included experiments only:
-#   - Community-small: seeds 42, 43, 44
-#   - Ego-small:       seeds 42, 43, 44
-#
-# Notes:
-#   - No missing scripts or seeds have been added.
-#   - Each run trains, generates 1,024 graphs, and evaluates generation quality.
-#   - All recorded experiment results are retained verbatim in non-executing
-#     heredoc blocks so this file remains valid Bash.
-#
-# ==============================================================================
-
-export GDSM=/home/quang/GDSM
-export GDSM_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
-
-
-# ##############################################################################
-# DATASET 1/2: COMMUNITY-SMALL
-# ##############################################################################
 
 
 # ==============================================================================
 # Community-small — Seed 42
 # ==============================================================================
 
+export GDSM=/home/quang/GDSM
+export GDSM_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
+
 RUN=seed_42
 N=1024
 
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
 PYTHONPATH=src python scripts/run_gdsm_baseline.py \
   --stage train \
   --dataset community_small \
@@ -44,9 +19,6 @@ PYTHONPATH=src python scripts/run_gdsm_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
-# ------------------------------------------------------------------------------
-# 2. Generate
-# ------------------------------------------------------------------------------
 PYTHONPATH=src python scripts/run_gdsm_baseline.py \
   --stage generate \
   --dataset community_small \
@@ -59,23 +31,16 @@ PYTHONPATH=src python scripts/run_gdsm_baseline.py \
 
 GEN_DIR="outputs/baselines/gdsm/community_small/$RUN/generations/seed_42_n_${N}"
 
-# ------------------------------------------------------------------------------
-# 3. Evaluate
-# ------------------------------------------------------------------------------
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
-# ------------------------------------------------------------------------------
-# Recorded result
-# ------------------------------------------------------------------------------
-: <<'RESULTS_COMMUNITY_SMALL_SEED_42'
+
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
-gdsm_to_test                        0.018339          0.017282      0.007639        0.013240        0.018920
-RESULTS_COMMUNITY_SMALL_SEED_42
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_to_test                        0.018339          0.017282      0.007639        0.009210        0.018920
 
 
 # ==============================================================================
@@ -123,12 +88,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 # Recorded result
 # ------------------------------------------------------------------------------
-: <<'RESULTS_COMMUNITY_SMALL_SEED_43'
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
-gdsm_to_test                        0.007689          0.010017      0.000697        0.020482        0.017881
-RESULTS_COMMUNITY_SMALL_SEED_43
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_to_test                        0.007689          0.010017      0.000697        0.008798        0.017881
 
 
 # ==============================================================================
@@ -176,13 +139,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 # Recorded result
 # ------------------------------------------------------------------------------
-: <<'RESULTS_COMMUNITY_SMALL_SEED_44'
-Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.020486        0.010610
-gdsm_to_test                        0.005802          0.007935      0.000416        0.021648        0.010500
-RESULTS_COMMUNITY_SMALL_SEED_44
 
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdsm_to_test                        0.005802          0.007935      0.000416        0.006345        0.010500
 
 # ##############################################################################
 # DATASET 2/2: EGO-SMALL
@@ -234,12 +194,10 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 # Recorded result
 # ------------------------------------------------------------------------------
-: <<'RESULTS_EGO_SMALL_SEED_42'
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.009729        0.001697
-gdsm_to_test                        0.010434          0.049010      0.005121        0.024742        0.004050
-RESULTS_EGO_SMALL_SEED_42
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_to_test                        0.010434          0.049010      0.005121        0.024016        0.004050
 
 
 # ==============================================================================
@@ -287,12 +245,11 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 # Recorded result
 # ------------------------------------------------------------------------------
-: <<'RESULTS_EGO_SMALL_SEED_43'
+
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.009729        0.001697
-gdsm_to_test                        0.016231          0.081054      0.006538        0.031655        0.002637
-RESULTS_EGO_SMALL_SEED_43
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_to_test                        0.016231          0.081054      0.006538        0.035523        0.002637
 
 
 # ==============================================================================
@@ -340,12 +297,11 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 # Recorded result
 # ------------------------------------------------------------------------------
-: <<'RESULTS_EGO_SMALL_SEED_44'
+
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.009729        0.001697
-gdsm_to_test                        0.015620          0.048295      0.004437        0.024992        0.003747
-RESULTS_EGO_SMALL_SEED_44
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdsm_to_test                        0.015620          0.048295      0.004437        0.028515        0.003747
 
 
 # ==============================================================================

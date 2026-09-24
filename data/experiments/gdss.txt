@@ -1,288 +1,261 @@
 GDSS EXPERIMENT COMMANDS AND RESULTS
 ====================================
 
-Source: gdss(2).txt
-
-Commands and recorded outputs are organized by dataset and seed. Argument values, paths, metric names, and numeric precision are retained. No commands were executed and no additional statistics were calculated.
-
-Experiment index
-================
-
-Dataset          Recorded run labels  Requested samples per run
----------------  -------------------  -------------------------
-Community-small  42, 43, 44                                1024
-Ego-small        42, 43, 44                                1024
-ZINC             42, 43, 44                               10000
-QM9              42, 43, 44                               10000
-
-Dataset order follows the source. Existing command discrepancies are listed in the source notes at the end; they have not been corrected.
-
 1. Community-small
 ==================
-
-Dataset identifier in the baseline commands: community_small. Requested samples per run: 1024.
-
-Results overview
-----------------
-
-Graph-distribution MMD against held-out test graphs (lower is better). The train_to_test row is identical in all three source blocks and is shown once in this overview.
-
-Run label  Comparison     Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
----------  -------------  ----------  --------------  ---------  ------------  ------------
-All three  train_to_test    0.004733        0.009889   0.000399      0.006979      0.010610
-42         gdss_to_test     0.022701        0.053660   0.006722      0.015525      0.093051
-43         gdss_to_test     0.025940        0.070714   0.005136      0.029006      0.120583
-44         gdss_to_test     0.035017        0.057068   0.005585      0.031943      0.146603
 
 1.1 Seed 42
 -----------
 
-Baseline run
-
 export GDSS=/home/quang/GDSS
 export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
 
-PYTHONPATH=src:. python scripts/run_gdss_baseline.py \
+RUN=seed_42
+N=1024
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage train \
   --dataset community_small \
-  --num-samples 1024 \
-  --seed-id 42 \
-  --run-id seed_42 \
+  --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/gdss_community_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
   --device gpu
 
-Graph evaluation
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdss_community_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GDSS_GENERATION_DIR="outputs/baselines/gdss/community_small/seed_42/generations/seed_42_n_1024"
+GEN_DIR="outputs/baselines/gdss/community_small/$RUN/generations/seed_42_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
-  --generated-dir "$GDSS_GENERATION_DIR" \
-  --output-dir "$GDSS_GENERATION_DIR/evaluation_report_seed_42_n_1024"
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
 
-Recorded graph-distribution results
+
+
 
 Graph-distribution MMD against held-out test graphs (lower is better).
 
-Comparison     Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
--------------  ----------  --------------  ---------  ------------  ------------
-train_to_test    0.004733        0.009889   0.000399      0.006979      0.010610
-gdss_to_test     0.022701        0.053660   0.006722      0.015525      0.093051
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdss_to_test                        0.022701          0.053660      0.006722        0.015525        0.093051
 
 1.2 Seed 43
 -----------
 
-Baseline run
-
 export GDSS=/home/quang/GDSS
 export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
 
-PYTHONPATH=src:. python scripts/run_gdss_baseline.py \
+RUN=seed_43
+N=1024
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage train \
   --dataset community_small \
-  --num-samples 1024 \
-  --seed-id 43 \
-  --run-id seed_43 \
+  --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/gdss_community_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
   --device gpu
 
-Graph evaluation
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdss_community_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GDSS_GENERATION_DIR="outputs/baselines/gdss/community_small/seed_43/generations/seed_43_n_1024"
+GEN_DIR="outputs/baselines/gdss/community_small/$RUN/generations/seed_43_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
-  --generated-dir "$GDSS_GENERATION_DIR" \
-  --output-dir "$GDSS_GENERATION_DIR/evaluation_report_seed_43_n_1024"
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
 
-Recorded graph-distribution results
+
 
 Graph-distribution MMD against held-out test graphs (lower is better).
 
-Comparison     Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
--------------  ----------  --------------  ---------  ------------  ------------
-train_to_test    0.004733        0.009889   0.000399      0.006979      0.010610
-gdss_to_test     0.025940        0.070714   0.005136      0.029006      0.120583
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdss_to_test                        0.025940          0.070714      0.005136        0.029006        0.120583
+
 
 1.3 Seed 44
 -----------
 
-Baseline run
 
 export GDSS=/home/quang/GDSS
 export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
 
-PYTHONPATH=src:. python scripts/run_gdss_baseline.py \
+RUN=seed_44
+N=1024
+
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage train \
   --dataset community_small \
-  --num-samples 1024 \
-  --seed-id 44 \
-  --run-id seed_44 \
+  --common-config configs/baselines/common_community_small.yaml \
   --wrapper-config configs/baselines/gdss_community_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
   --device gpu
 
-Graph evaluation
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/gdss_community_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GDSS_GENERATION_DIR="outputs/baselines/gdss/community_small/seed_44/generations/seed_44_n_1024"
+GEN_DIR="outputs/baselines/gdss/community_small/$RUN/generations/seed_44_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/community_small_topology_spectral_graphlet_v2.yaml \
-  --generated-dir "$GDSS_GENERATION_DIR" \
-  --output-dir "$GDSS_GENERATION_DIR/evaluation_report_seed_44_n_1024"
-
-Recorded graph-distribution results
+  --config configs/experiments/baselines/community_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
 
 Graph-distribution MMD against held-out test graphs (lower is better).
 
-Comparison     Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
--------------  ----------  --------------  ---------  ------------  ------------
-train_to_test    0.004733        0.009889   0.000399      0.006979      0.010610
-gdss_to_test     0.035017        0.057068   0.005585      0.031943      0.146603
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+gdss_to_test                        0.035017          0.057068      0.005585        0.031943        0.146603
 
 2. Ego-small
 ============
 
-Dataset identifier in the baseline commands: ego_small. Requested samples per run: 1024.
-
-Results overview
-----------------
-
-Graph-distribution MMD against held-out test graphs (lower is better). The train_to_test row is identical in all three source blocks and is shown once in this overview.
-
-Run label  Comparison     Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
----------  -------------  ----------  --------------  ---------  ------------  ------------
-All three  train_to_test    0.012987        0.027056   0.008995      0.010686      0.001697
-42         gdss_to_test     0.016563        0.030770   0.009539      0.010523      0.013438
-43         gdss_to_test     0.018278        0.037864   0.011178      0.012593      0.025421
-44         gdss_to_test     0.013682        0.038398   0.003356      0.014397      0.010503
-
 2.1 Seed 42
 -----------
 
-Baseline run
-
 export GDSS=/home/quang/GDSS
 export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
+RUN=seed_42
+N=1024
 
-PYTHONPATH=src:. python scripts/run_gdss_baseline.py \
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage train \
   --dataset ego_small \
-  --num-samples 1024 \
-  --seed-id 42 \
-  --run-id seed_42 \
+  --common-config configs/baselines/common_ego_small.yaml \
   --wrapper-config configs/baselines/gdss_ego_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
   --device gpu
 
-Graph evaluation
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/gdss_ego_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GDSS_GENERATION_DIR="outputs/baselines/gdss/ego_small/seed_42/generations/seed_42_n_1024"
+GEN_DIR="outputs/baselines/gdss/ego_small/$RUN/generations/seed_42_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/ego_small_topology_spectral_graphlet_v2.yaml \
-  --generated-dir "$GDSS_GENERATION_DIR" \
-  --generated-stage gdss \
-  --dataset-mismatch-policy warn \
-  --output-dir "$GDSS_GENERATION_DIR/evaluation_report_seed_42_n_1024"
-
-Recorded graph-distribution results
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
 
 Graph-distribution MMD against held-out test graphs (lower is better).
-
-Comparison     Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
--------------  ----------  --------------  ---------  ------------  ------------
-train_to_test    0.012987        0.027056   0.008995      0.010686      0.001697
-gdss_to_test     0.016563        0.030770   0.009539      0.010523      0.013438
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdss_to_test                        0.016563          0.030770      0.009539        0.010523        0.013438
 
 2.2 Seed 43
 -----------
-
-Baseline run
-
 export GDSS=/home/quang/GDSS
 export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
+RUN=seed_43
+N=1024
 
-PYTHONPATH=src:. python scripts/run_gdss_baseline.py \
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage train \
   --dataset ego_small \
-  --num-samples 1024 \
-  --seed-id 43 \
-  --run-id seed_43 \
+  --common-config configs/baselines/common_ego_small.yaml \
   --wrapper-config configs/baselines/gdss_ego_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
   --device gpu
 
-Graph evaluation
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/gdss_ego_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GDSS_GENERATION_DIR="outputs/baselines/gdss/ego_small/seed_43/generations/seed_43_n_1024"
+GEN_DIR="outputs/baselines/gdss/ego_small/$RUN/generations/seed_43_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/ego_small_topology_spectral_graphlet_v2.yaml \
-  --generated-dir "$GDSS_GENERATION_DIR" \
-  --generated-stage gdss \
-  --dataset-mismatch-policy warn \
-  --output-dir "$GDSS_GENERATION_DIR/evaluation_report_seed_43_n_1024"
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
 
-Recorded graph-distribution results
-
-Graph-distribution MMD against held-out test graphs (lower is better).
-
-Comparison     Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
--------------  ----------  --------------  ---------  ------------  ------------
-train_to_test    0.012987        0.027056   0.008995      0.010686      0.001697
-gdss_to_test     0.018278        0.037864   0.011178      0.012593      0.025421
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdss_to_test                        0.018278          0.037864      0.011178        0.012593        0.025421
 
 2.3 Seed 44
 -----------
 
-Baseline run
-
 export GDSS=/home/quang/GDSS
 export GDSS_PYTHON=/home/quang/miniconda3/envs/gdss/bin/python
+RUN=seed_44
+N=1024
 
-PYTHONPATH=src:. python scripts/run_gdss_baseline.py \
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage train \
   --dataset ego_small \
-  --num-samples 1024 \
-  --seed-id 44 \
-  --run-id seed_44 \
+  --common-config configs/baselines/common_ego_small.yaml \
   --wrapper-config configs/baselines/gdss_ego_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
   --device gpu
 
-Graph evaluation
+PYTHONPATH=src python scripts/run_gdss_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/gdss_ego_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GDSS_GENERATION_DIR="outputs/baselines/gdss/ego_small/seed_44/generations/seed_44_n_1024"
+GEN_DIR="outputs/baselines/gdss/ego_small/$RUN/generations/seed_44_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/ego_small_topology_spectral_graphlet_v2.yaml \
-  --generated-dir "$GDSS_GENERATION_DIR" \
-  --generated-stage gdss \
-  --dataset-mismatch-policy warn \
-  --output-dir "$GDSS_GENERATION_DIR/evaluation_report_seed_44_n_1024"
-
-Recorded graph-distribution results
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
 
 Graph-distribution MMD against held-out test graphs (lower is better).
 
-Comparison     Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
--------------  ----------  --------------  ---------  ------------  ------------
-train_to_test    0.012987        0.027056   0.008995      0.010686      0.001697
-gdss_to_test     0.013682        0.038398   0.003356      0.014397      0.010503
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+gdss_to_test                        0.013682          0.038398      0.003356        0.014397        0.010503
 
 3. ZINC
 =======
-
-Dataset identifier in the baseline commands: zinc. Requested samples per run: 10000.
-
-Selected results overview
--------------------------
-
-Values are reproduced at their original precision. Rates remain on their original 0–1 scale; they are not converted to percentages. Complete molecular and QED outputs appear under each run.
-
-Metric                                         Run label 42         Run label 43        Run label 44
---------------------------------------  -------------------  -------------------  ------------------
-validity_without_correction                          0.6317               0.6183              0.4543
-validity_with_projected_formal_charges               0.8755               0.9114              0.6514
-validity_with_correction                                1.0                  1.0                 1.0
-uniqueness_rate                                         1.0                  1.0                 1.0
-novelty_rate                                            1.0                  1.0                 1.0
-nspdk_mmd                                0.0369828846036129  0.04580398267540292  0.0735862041619526
-fcd                                      31.689902531776376   30.023798943337027   37.86836490470712
-qed_mean                                 0.6261321963341093   0.6167319686978721  0.4643278058607356
-qed_std_within_run                      0.14242385559759105  0.15130285271087832  0.1656058469929613
-qed_yield                               0.39552770842425705  0.38132537624589424  0.2109441222025323
 
 3.1 Seed 42
 -----------
@@ -1049,17 +1022,3 @@ Recorded QED results
   "qed_mean_minus_reference": -0.009641616303649458,
   "qed_wasserstein_1": 0.009641616303649429
 }
-
-5. Source notes
-===============
-
-The following differences are present in the original file and are preserved, not repaired:
-
-Location                           Source detail
----------------------------------  ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-QM9: run label 43                  Training uses --seed-id 43, generation uses --seed-id 42, and GEN_DIR names seed_43_n_${N}. The run label alone therefore does not establish the generation seed.
-QM9: QED evaluation                PYTHONHASHSEED=42 appears in the QED commands for all three run labels, including 43 and 44.
-QM9: molecular evaluation dataset  The run-42 molecular evaluation command uses --dataset qm9; the run-43 and run-44 commands use --dataset qm9_attributed. All three QED reference paths use outputs/datasets/qm9_attributed/test.pkl.
-Molecular graphlet outputs         The molecular reports contain None and {} for the graphlet-related fields. These values are retained and are not replaced with zeros or estimated metrics.
-
-These notes identify differences in the recorded text only. The source does not establish whether the commands shown were the exact commands that produced each result block.

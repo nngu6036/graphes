@@ -1,69 +1,16 @@
 DeFoG experiment commands and results
 =====================================
 
-Source: defog(2).txt
-
-Commands and recorded outputs are organized by dataset and seed, in source order. All command arguments,
-paths, metric names, and numerical precision are retained. No experiment commands were executed and no
-additional statistics were calculated.
-
-Not reported denotes an absent value or output; it is not a zero. Source literals such as None and {} are
-retained as written. Source notes identify missing information and apparent inconsistencies without correcting
-the commands or reconciling the results. This is a formatted record, not an executable shell script.
-
-Environment exports are shown only where they occur in the original file. A later run may rely on earlier
-settings. Source-line references identify locations in the original uploaded text, not in this formatted
-version.
-
-Experiment index
-================
-
-Section  Dataset in commands  Run labels  Requested samples per run
--------  -------------------  ----------  -------------------------
-      1  community_small      42, 43, 44                       1024
-      2  ego_small            42, 43, 44                       1024
-      3  qm9                  42, 43, 44                       1024
-      4  zinc                 42, 43, 44                       1024
-
-Run labels identify the supplied command blocks and the reports that follow them; they do not independently
-verify the provenance of a recorded result.
-
 1. DeFoG / Community-small
 ==========================
 
-Dataset identifier in the baseline commands: community_small. Requested samples per run: 1024.
-
-Results overview
-----------------
-
-Each recorded train_to_test row is retained separately. Missing columns are marked Not reported; no cross-seed
-means or standard deviations have been calculated.
-
-Run label  Comparison                    Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
----------  ----------------------------  ----------  --------------  ---------  ------------  ------------
-42         train_to_test                   0.004733        0.009889   0.000399  Not reported  Not reported
-42         defog_seed_42_n_1024_to_test    0.081234        0.100914   0.126767  Not reported  Not reported
-43         train_to_test                   0.004733        0.009889   0.000399  Not reported  Not reported
-43         defog_seed_43_n_1024_to_test    0.137353        0.350735   0.085161  Not reported  Not reported
-44         train_to_test                   0.004733        0.009889   0.000399  Not reported  Not reported
-44         defog_seed_44_to_test           0.073661        0.331439   0.034348  Not reported  Not reported
-
 1.1 Seed 42
 -----------
-
-Run ID: seed_42. Source lines: 1-38.
-
-Source notes applying to this run: N1, N4, N5. See Source notes at the end of this file.
-
-Environment and run settings
-
 export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_42
 N=1024
-
-1. Training
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
   --stage train \
@@ -73,8 +20,6 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --seed-id 42 \
   --run-id "$RUN" \
   --device gpu
-
-2. Generation
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
 .py \
@@ -87,256 +32,225 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --num-samples "$N" \
   --device gpu
 
-Generation directory
-
 GEN_DIR="outputs/baselines/defog/community_small/$RUN/generations/seed_42_n_${N}"
-
-Graph evaluation
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/baselines/community_small_evaluation.yaml \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
-Recorded graph-distribution results
 
-Comparison                    Degree MMD  Clustering MMD  Orbit MMD
-----------------------------  ----------  --------------  ---------
-train_to_test                   0.004733        0.009889   0.000399
-defog_seed_42_n_1024_to_test    0.081234        0.100914   0.126767
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+defog_to_test                       0.081234          0.100914      0.126767        0.131283        0.055113
 
 1.2 Seed 43
 -----------
 
-Run ID: seed_43. Source lines: 39-62.
-
-Source notes applying to this run: N2, N4, N5, N6. See Source notes at the end of this file.
-
-Environment and run settings
-
 export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-Baseline command (stage not specified)
+RUN=seed_43
+N=1024
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage train \
   --dataset community_small \
-  --num-samples 1024 \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/defog_community_small.yaml \
   --seed-id 43 \
-  --run-id seed_43 \
-  --n-epochs 200000 \
-  --epoch-progress-interval 5000
+  --run-id "$RUN" \
+  --device gpu
 
-Generation directory
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+.py \
+  --stage generate \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/defog_community_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
 DEFOG_GENERATION_DIR="outputs/baselines/defog/community_small/seed_43/generations/seed_43_n_1024"
-
-Graph evaluation
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/grapher/community_small_defog_corrector.yaml \
   --generated-dir "$DEFOG_GENERATION_DIR" \
   --dataset-mismatch-policy warn \
   --generated-stage defog_seed_43_n_1024 \
-  
   --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_43_n_1024"
 
-Recorded graph-distribution results
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+defog_seed_43_n_1024_to_test        0.137353          0.350735      0.085161        0.211004        0.190539
 
-Comparison                    Degree MMD  Clustering MMD  Orbit MMD
-----------------------------  ----------  --------------  ---------
-train_to_test                   0.004733        0.009889   0.000399
-defog_seed_43_n_1024_to_test    0.137353        0.350735   0.085161
 
 1.3 Seed 44
 -----------
 
-Run ID: seed_44. Source lines: 63-88.
-
-Source notes applying to this run: N4, N5, N6. See Source notes at the end of this file.
-
-Environment and run settings
-
 export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-Baseline command (stage not specified)
+RUN=seed_44
+N=1024
+
+YTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage train \
+  --dataset community_small \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/defog_community_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --device gpu
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
+.py \
+  --stage generate \
   --dataset community_small \
-  --num-samples 1024 \
+  --common-config configs/baselines/common_community_small.yaml \
+  --wrapper-config configs/baselines/defog_community_small.yaml \
   --seed-id 44 \
-  --run-id seed_44 \
-  --n-epochs 200000 \
-  --epoch-progress-interval 5000
-
-Generation directory
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
 DEFOG_GENERATION_DIR="outputs/baselines/defog/community_small/seed_44/generations/seed_44_n_1024"
-
-Graph evaluation
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --config configs/experiments/grapher/community_small_defog_corrector.yaml \
   --generated-dir "$DEFOG_GENERATION_DIR" \
-  --generated-stage defog_seed_44 \
   --dataset-mismatch-policy warn \
+  --generated-stage defog_seed_43_n_1024 \
   --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_44_n_1024"
 
-Recorded graph-distribution results
-
 Graph-distribution MMD against held-out test graphs (lower is better)
-
-Comparison             Degree MMD  Clustering MMD  Orbit MMD
----------------------  ----------  --------------  ---------
-train_to_test            0.004733        0.009889   0.000399
-defog_seed_44_to_test    0.073661        0.331439   0.034348
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
+defog_seed_43_n_1024_to_test        0.073661          0.331439      0.034348        0.130636        0.225127
 
 2. DeFoG / Ego-small
 ====================
 
-Dataset identifier in the baseline commands: ego_small. Requested samples per run: 1024.
-
-Results overview
-----------------
-
-Each recorded train_to_test row is retained separately. Missing columns are marked Not reported; no cross-seed
-means or standard deviations have been calculated.
-
-Run label  Comparison                    Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
----------  ----------------------------  ----------  --------------  ---------  ------------  ------------
-42         train_to_test                   0.012987        0.027056   0.008995  Not reported  Not reported
-42         defog_seed_42_n_1024_to_test    0.015736        0.013895   0.005367  Not reported  Not reported
-43         train_to_test                   0.012987        0.027056   0.008995  Not reported  Not reported
-43         defog_seed_43_n_1024_to_test    0.008929        0.013610   0.004895  Not reported  Not reported
-44         train_to_test                   0.012987        0.027056   0.008995  Not reported  Not reported
-44         defog_seed_44_n_1024_to_test    0.013563        0.014316   0.006790  Not reported  Not reported
-
 2.1 Seed 42
 -----------
 
-Run ID: seed_42. Source lines: 89-112.
-
-Source notes applying to this run: N3, N4, N6. See Source notes at the end of this file.
-
-Environment and run settings
-
 export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
-
-Baseline command (stage not specified)
+RUN=seed_42
+N=1024
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage train \
   --dataset ego_small \
-  --num-samples 1024 \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/defog_ego_small.yaml \
   --seed-id 42 \
-  --run-id seed_42 \
-  --n-epochs 200000 \
+  --run-id "$RUN" \
+  --device gpu
 
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/defog_ego_small.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-Generation directory
-
-DEFOG_GENERATION_DIR="outputs/baselines/defog/ego_small/seed_42/generations/seed_42_n_1024"
-
-Graph evaluation
+GEN_DIR="outputs/baselines/defog/ego_small/$RUN/generations/seed_42_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/ego_small_defog_corrector.yaml \
-  --generated-dir "$DEFOG_GENERATION_DIR" \
-  --generated-stage defog_seed_42_n_1024 \
-  --dataset-mismatch-policy warn \
-  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_42_n_1024"
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
 
-Recorded graph-distribution results
-
-Comparison                    Degree MMD  Clustering MMD  Orbit MMD
-----------------------------  ----------  --------------  ---------
-train_to_test                   0.012987        0.027056   0.008995
-defog_seed_42_n_1024_to_test    0.015736        0.013895   0.005367
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+defog_to_test                       0.016628          0.020069      0.010294        0.012418        0.003000
 
 2.2 Seed 43
 -----------
-
-Run ID: seed_43. Source lines: 113-136.
-
-Source notes applying to this run: N3, N4, N6. See Source notes at the end of this file.
-
-Environment and run settings
-
 export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
-
-Baseline command (stage not specified)
+RUN=seed_43
+N=1024
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage train \
   --dataset ego_small \
-  --num-samples 1024 \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/defog_ego_small.yaml \
   --seed-id 43 \
-  --run-id seed_43 \
-  --n-epochs 200000 \
+  --run-id "$RUN" \
+  --device gpu
 
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/defog_ego_small.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-Generation directory
-
-DEFOG_GENERATION_DIR="outputs/baselines/defog/ego_small/seed_43/generations/seed_43_n_1024"
-
-Graph evaluation
+GEN_DIR="outputs/baselines/defog/ego_small/$RUN/generations/seed_43_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/ego_small_defog_corrector.yaml \
-  --generated-dir "$DEFOG_GENERATION_DIR" \
-  --generated-stage defog_seed_43_n_1024 \
-  --dataset-mismatch-policy warn \
-  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_43_n_1024"
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
 
-Recorded graph-distribution results
-
-Comparison                    Degree MMD  Clustering MMD  Orbit MMD
-----------------------------  ----------  --------------  ---------
-train_to_test                   0.012987        0.027056   0.008995
-defog_seed_43_n_1024_to_test    0.008929        0.013610   0.004895
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+defog_to_test                       0.021864          0.034343      0.009783        0.017910        0.004983
 
 2.3 Seed 44
 -----------
 
-Run ID: seed_44. Source lines: 137-161.
-
-Source notes applying to this run: N3, N4, N6. See Source notes at the end of this file.
-
-Environment and run settings
-
 export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
-
-Baseline command (stage not specified)
+RUN=seed_44
+N=1024
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage train \
   --dataset ego_small \
-  --num-samples 1024 \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/defog_ego_small.yaml \
   --seed-id 44 \
-  --run-id seed_44 \
-  --n-epochs 200000 \
+  --run-id "$RUN" \
+  --device gpu
 
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage generate \
+  --dataset ego_small \
+  --common-config configs/baselines/common_ego_small.yaml \
+  --wrapper-config configs/baselines/defog_ego_small.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-Generation directory
-
-DEFOG_GENERATION_DIR="outputs/baselines/defog/ego_small/seed_44/generations/seed_44_n_1024"
-
-Graph evaluation
+GEN_DIR="outputs/baselines/defog/ego_small/$RUN/generations/seed_44_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/grapher/ego_small_defog_corrector.yaml \
-  --generated-dir "$DEFOG_GENERATION_DIR" \
-  --generated-stage defog_seed_44_n_1024 \
-  --dataset-mismatch-policy warn \
-  --output-dir "$DEFOG_GENERATION_DIR/evaluation_report_seed_44_n_1024"
+  --config configs/experiments/baselines/ego_small_evaluation.yaml \
+  --generated-dir "$GEN_DIR" \
+  --output-dir "$GEN_DIR/evaluation_report"
 
-Recorded graph-distribution results
 
-Comparison                    Degree MMD  Clustering MMD  Orbit MMD
-----------------------------  ----------  --------------  ---------
-train_to_test                   0.012987        0.027056   0.008995
-defog_seed_44_n_1024_to_test    0.013563        0.014316   0.006790
+Graph-distribution MMD against held-out test graphs (lower is better)
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+defog_to_test                       0.027115          0.029118      0.012415        0.022268        0.005848
+
 
 3. DeFoG / QM9
 ==============
@@ -374,260 +288,395 @@ confirmation of a common raw-valid or corrected-valid evaluation subset.
 3.1 Seed 42
 -----------
 
-Run ID: seed_42. Source lines: 162-213.
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-Source notes applying to this run: N6, N7, N8, N9. See Source notes at the end of this file.
+RUN=seed_42
+N=10000
 
-Baseline command (stage not specified)
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage train \
   --dataset qm9 \
-  --num-samples 1024 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/defog_qm9.yaml \
   --seed-id 42 \
-  --run-id seed_42 \
-  --n-epochs 1000 \
-  --epoch-progress-interval 10
+  --run-id "$RUN" \
+  --device gpu
 
-Molecular evaluation command
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/defog_qm9.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/defog/qm9/$RUN/generations/seed_42_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs \
-    outputs/baselines/defog/qm9/seed_42/generations/seed_42_n_1024/base_graphs.pkl \
+  --generated-dir "$GEN_DIR" \
   --dataset-root outputs/datasets \
-  --dataset qm9_attributed \
+  --dataset qm9_attributed  \
   --reference-split test \
   --train-split train \
-  --output-dir \
-    outputs/baselines/defog/qm9/seed_42/generations/seed_42_n_1024/evaluation_corrected_fcd \
-  --fcd-use-corrected \
   --require-fcd \
-   --hogdiff-compatible-metrics
+  --output-dir "$GEN_DIR/evaluation_molecules"
 
-Recorded molecular evaluation
+PYTHONHASHSEED=42 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated "$N" \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
 
-Metric                                                    Recorded value
-------------------------------------------------  ----------------------
-validity                                                     0.998046875
-validity_with_correction                                             1.0
-validity_without_correction                                  0.998046875
-fcd                                                  0.40319552824583127
-num_generated_graphs                                                1024
-num_valid_generated_molecules                                       1022
-num_invalid_generated_molecules                                        2
-num_valid_generated_molecules_with_correction                       1024
-num_invalid_generated_molecules_after_correction                       0
-num_molecules_corrected_to_valid                                       2
-correction_success_rate_on_raw_invalid                               1.0
-metric_molecule_source                                         raw_valid
-hogdiff_compatible_distribution_metrics                            False
-uniqueness_rate                                       0.9980430528375733
-unique_valid_count                                                  1020
-novelty_rate                                          0.2950980392156863
-novel_unique_valid_count                                             301
-nspdk_mmd                                          0.0009917596562961264
-nspdk_mmd_valid_only                               0.0009917596562961264
-nspdk_proxy_mmd_all_generated                     1.6335990359385668e-05
-nspdk_proxy_mmd_metric_source                     1.6488629021953298e-05
-fcd_num_reference_molecules                                        12997
-fcd_num_valid_generated_molecules                                   1024
-fcd_generated_smiles_source                        valid_with_correction
 
-QED output
+Molecular evaluation
+  validity: 0.9895
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9937
+  validity_without_correction: 0.9895
+  fcd: 0.13198491263608148
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9895
+  num_invalid_generated_molecules: 105
+  num_valid_generated_molecules_with_projected_formal_charges: 9937
+  num_invalid_generated_molecules_after_projected_formal_charges: 63
+  num_raw_invalid_resolved_by_projected_formal_charges: 42
+  projected_formal_charge_success_rate_on_raw_invalid: 0.4
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 105
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9657402728650833
+  unique_valid_count: 9556
+  novelty_rate: 0.33779824194223523
+  novel_unique_valid_count: 3228
+  nspdk_mmd: 0.00036802026990102453
+  nspdk_mmd_valid_only: 0.00036802026990102453
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 8.38510097549059e-06
+  nspdk_proxy_mmd_metric_source: 8.899946226642085e-06
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9895
+  fcd_generated_smiles_source: raw_valid
 
-Not reported in the source.
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9895,
+  "validity_without_correction": 0.9895,
+  "qed_mean": 0.4668257533228135,
+  "qed_std_within_run": 0.07238450999169438,
+  "qed_median": 0.4724732224249674,
+  "qed_q10": 0.36779807828629874,
+  "qed_q90": 0.5550884687093055,
+  "qed_unique_valid_mean": 0.46673499532997803,
+  "num_unique_raw_valid": 9556,
+  "qed_yield": 0.46192408291292375,
+  "num_raw_valid_single_component": 9838,
+  "valid_single_component_yield": 0.9838,
+  "qed_single_component_mean": 0.4668984192006372,
+  "qed_ge_0p5_fraction_valid": 0.3366346639717029,
+  "qed_ge_0p5_yield_all": 0.3331,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": 0.0007255252308238092,
+  "qed_wasserstein_1": 0.0012799096198541282
+}
 
 3.2 Seed 43
 -----------
 
-Run ID: seed_43. Source lines: 214-263.
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-Source notes applying to this run: N6, N8, N9. See Source notes at the end of this file.
+RUN=seed_43
+N=10000
 
-Baseline command (stage not specified)
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage train \
   --dataset qm9 \
-  --num-samples 1024 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/defog_qm9.yaml \
   --seed-id 43 \
-  --run-id seed_43 \
-  --n-epochs 1000 \
-  --epoch-progress-interval 10
+  --run-id "$RUN" \
+  --device gpu
 
-Molecular evaluation command
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/defog_qm9.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/defog/qm9/$RUN/generations/seed_43_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs \
-    outputs/baselines/defog/qm9/seed_43/generations/seed_43_n_1024/base_graphs.pkl \
+  --generated-dir "$GEN_DIR" \
   --dataset-root outputs/datasets \
-  --dataset qm9_attributed \
+  --dataset qm9_attributed  \
   --reference-split test \
   --train-split train \
-  --output-dir \
-    outputs/baselines/defog/qm9/seed_43/generations/seed_43_n_1024/evaluation_corrected_fcd \
-  --fcd-use-corrected \
   --require-fcd \
- --hogdiff-compatible-metrics
+  --output-dir "$GEN_DIR/evaluation_molecules"
 
-Recorded molecular evaluation
+PYTHONHASHSEED=42 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated "$N" \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
 
-Metric                                                   Recorded value
-------------------------------------------------  ---------------------
-validity                                                   0.9892578125
-validity_with_correction                                            1.0
-validity_without_correction                                0.9892578125
-fcd                                                  0.5553791342021164
-num_generated_graphs                                               1024
-num_valid_generated_molecules                                      1013
-num_invalid_generated_molecules                                      11
-num_valid_generated_molecules_with_correction                      1024
-num_invalid_generated_molecules_after_correction                      0
-num_molecules_corrected_to_valid                                     11
-correction_success_rate_on_raw_invalid                              1.0
-metric_molecule_source                                  corrected_valid
-hogdiff_compatible_distribution_metrics                            True
-uniqueness_rate                                             0.994140625
-unique_valid_count                                                 1018
-novelty_rate                                        0.27013752455795675
-novel_unique_valid_count                                            275
-nspdk_mmd                                         0.0016661199696893856
-nspdk_mmd_valid_only                              0.0016661199696893856
-nspdk_proxy_mmd_all_generated                     2.456079776661987e-05
-nspdk_proxy_mmd_metric_source                     3.630559176637885e-05
-fcd_num_reference_molecules                                       12997
-fcd_num_valid_generated_molecules                                  1024
-fcd_generated_smiles_source                       valid_with_correction
+Molecular evaluation
+  validity: 0.9896
+  validity_with_correction: 0.9997
+  validity_with_projected_formal_charges: 0.9937
+  validity_without_correction: 0.9896
+  fcd: 0.1875179454322513
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9896
+  num_invalid_generated_molecules: 104
+  num_valid_generated_molecules_with_projected_formal_charges: 9937
+  num_invalid_generated_molecules_after_projected_formal_charges: 63
+  num_raw_invalid_resolved_by_projected_formal_charges: 41
+  projected_formal_charge_success_rate_on_raw_invalid: 0.3942307692307692
+  num_valid_generated_molecules_with_correction: 9997
+  num_invalid_generated_molecules_after_correction: 3
+  num_molecules_corrected_to_valid: 101
+  correction_success_rate_on_raw_invalid: 0.9711538461538461
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.963823767178658
+  unique_valid_count: 9538
+  novelty_rate: 0.3563640176137555
+  novel_unique_valid_count: 3399
+  nspdk_mmd: 0.000548511677405884
+  nspdk_mmd_valid_only: 0.000548511677405884
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.847206029386552e-05
+  nspdk_proxy_mmd_metric_source: 1.7727464677238306e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9896
+  fcd_generated_smiles_source: raw_valid
 
 QED output
 
-Not reported in the source.
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9896,
+  "validity_without_correction": 0.9896,
+  "qed_mean": 0.459502663211056,
+  "qed_std_within_run": 0.07391062236680078,
+  "qed_median": 0.46631033445777714,
+  "qed_q10": 0.3559708515888318,
+  "qed_q90": 0.5484084829639377,
+  "qed_unique_valid_mean": 0.4593792458954252,
+  "num_unique_raw_valid": 9538,
+  "qed_yield": 0.45472383551365936,
+  "num_raw_valid_single_component": 9821,
+  "valid_single_component_yield": 0.9821,
+  "qed_single_component_mean": 0.45953974426800975,
+  "qed_ge_0p5_fraction_valid": 0.3037590945836702,
+  "qed_ge_0p5_yield_all": 0.3006,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": -0.006597564880933715,
+  "qed_wasserstein_1": 0.0066129762747806995
+}
 
 3.3 Seed 44
 -----------
 
-Run ID: seed_44. Source lines: 264-308.
 
-Source notes applying to this run: N6, N8, N9. See Source notes at the end of this file.
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-Baseline command (stage not specified)
+RUN=seed_44
+N=10000
+
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage train \
   --dataset qm9 \
-  --num-samples 1024 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/defog_qm9.yaml \
   --seed-id 44 \
-  --run-id seed_44 \
-  --n-epochs 1000 \
-  --epoch-progress-interval 10
+  --run-id "$RUN" \
+  --device gpu
 
-Molecular evaluation command
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/defog_qm9.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/defog/qm9/$RUN/generations/seed_44_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
-  --generated-graphs \
-    outputs/baselines/defog/qm9/seed_44/generations/seed_44_n_1024/base_graphs.pkl \
+  --generated-dir "$GEN_DIR" \
   --dataset-root outputs/datasets \
-  --dataset qm9_attributed \
+  --dataset qm9_attributed  \
   --reference-split test \
   --train-split train \
-  --output-dir \
-    outputs/baselines/defog/qm9/seed_44/generations/seed_44_n_1024/evaluation_corrected_fcd \
-  --fcd-use-corrected \
   --require-fcd \
- --hogdiff-compatible-metrics
+  --output-dir "$GEN_DIR/evaluation_molecules"
 
-Recorded molecular evaluation
+PYTHONHASHSEED=42 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated "$N" \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
 
-Metric                                                    Recorded value
-------------------------------------------------  ----------------------
-validity                                                             1.0
-validity_with_correction                                             1.0
-validity_without_correction                                 0.9873046875
-fcd                                                  0.41492557962705945
-num_generated_graphs                                                1024
-num_valid_generated_molecules                                       1011
-num_invalid_generated_molecules                                       13
-num_valid_generated_molecules_with_correction                       1024
-num_invalid_generated_molecules_after_correction                       0
-num_molecules_corrected_to_valid                                      13
-correction_success_rate_on_raw_invalid                               1.0
-uniqueness_rate                                       0.9960435212660732
-unique_valid_count                                                  1007
-novelty_rate                                         0.25521350546176763
-novel_unique_valid_count                                             257
-nspdk_mmd                                         1.9870636841085286e-05
-nspdk_mmd_valid_only                               1.967684767045536e-05
-fcd_num_reference_molecules                                        12997
-fcd_num_valid_generated_molecules                                   1024
-fcd_generated_smiles_source                        valid_with_correction
+
+Molecular evaluation
+  validity: 0.9908
+  validity_with_correction: 0.9998
+  validity_with_projected_formal_charges: 0.9936
+  validity_without_correction: 0.9908
+  fcd: 0.10574547113206023
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9908
+  num_invalid_generated_molecules: 92
+  num_valid_generated_molecules_with_projected_formal_charges: 9936
+  num_invalid_generated_molecules_after_projected_formal_charges: 64
+  num_raw_invalid_resolved_by_projected_formal_charges: 28
+  projected_formal_charge_success_rate_on_raw_invalid: 0.30434782608695654
+  num_valid_generated_molecules_with_correction: 9998
+  num_invalid_generated_molecules_after_correction: 2
+  num_molecules_corrected_to_valid: 90
+  correction_success_rate_on_raw_invalid: 0.9782608695652174
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9671982236576504
+  unique_valid_count: 9583
+  novelty_rate: 0.34822080768026714
+  novel_unique_valid_count: 3337
+  nspdk_mmd: 0.00032084875746664425
+  nspdk_mmd_valid_only: 0.00032084875746664425
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 6.143777338467841e-06
+  nspdk_proxy_mmd_metric_source: 6.122940969567192e-06
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9908
+  fcd_generated_smiles_source: raw_valid
 
 QED output
 
-Not reported in the source.
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9908,
+  "validity_without_correction": 0.9908,
+  "qed_mean": 0.46986171288124773,
+  "qed_std_within_run": 0.07365614914322655,
+  "qed_median": 0.47695586324983574,
+  "qed_q10": 0.36708178187062407,
+  "qed_q90": 0.5584724674651512,
+  "qed_unique_valid_mean": 0.469787834762698,
+  "num_unique_raw_valid": 9583,
+  "qed_yield": 0.46553898512273956,
+  "num_raw_valid_single_component": 9875,
+  "valid_single_component_yield": 0.9875,
+  "qed_single_component_mean": 0.4698820219150012,
+  "qed_ge_0p5_fraction_valid": 0.36182882519176424,
+  "qed_ge_0p5_yield_all": 0.3585,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": 0.0037614847892580294,
+  "qed_wasserstein_1": 0.0037893091903754526
+}
 
 4. DeFoG / ZINC
 ===============
 
-Dataset identifier in the baseline commands: zinc. Requested samples per run: 1024.
-
-Selected results overview
--------------------------
-
-Values retain their original precision and scale; rates have not been converted to percentages. Full recorded
-molecular fields and any supplied QED output appear below each run.
-
-Metric                                            Run label 42           Run label 43           Run label 44
----------------------------------------  ---------------------  ---------------------  ---------------------
-num_generated_graphs                                      1024                   1024                   1024
-validity                                          0.9541015625           0.9501953125           0.9501953125
-validity_without_correction                       0.9541015625           0.9501953125           0.9501953125
-validity_with_projected_formal_charges            Not reported           Not reported           Not reported
-validity_with_correction                                   1.0                    1.0                    1.0
-uniqueness_rate                                            1.0                    1.0                    1.0
-novelty_rate                                               1.0                    1.0                    1.0
-nspdk_mmd                                  0.07871783198463919    0.07129218292194929    0.07098284397706747
-nspdk_mmd_valid_only                       0.07871783198463919    0.07129218292194929    0.07098284397706747
-fcd                                          5.685046958416905      5.542722391707194      5.542722391707194
-metric_molecule_source                         corrected_valid        corrected_valid        corrected_valid
-hogdiff_compatible_distribution_metrics                   True                   True                   True
-fcd_generated_smiles_source              valid_with_correction  valid_with_correction  valid_with_correction
-qed_mean                                          Not reported           Not reported           Not reported
-qed_std_within_run                                Not reported           Not reported           Not reported
-qed_yield                                         Not reported           Not reported           Not reported
-
 4.1 Seed 42
 -----------
 
-Run ID: seed_42_e300. Source lines: 309-360.
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-Source notes applying to this run: N6, N9. See Source notes at the end of this file.
+RUN=seed_42
+N=10000
 
-Baseline command (stage not specified)
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage train \
   --dataset zinc \
-  --num-samples 1024 \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/defog_zinc.yaml \
   --seed-id 42 \
-  --run-id seed_42_e300 \
-  --n-epochs 300 \
-  --wrapper-config configs/baselines/defog_zinc_paper_sampling.yaml \
-  --epoch-progress-interval 1
+  --run-id "$RUN" \
+  --device gpu
 
-Generation directory
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage generate \
+  --dataset zinc \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/defog_zinc.yaml \
+  --seed-id 42 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GEN_DIR="outputs/baselines/defog/zinc/seed_42_e300/generations/seed_42_n_1024"
-
-Molecular evaluation command
+GEN_DIR="outputs/baselines/defog/zinc/$RUN/generations/seed_42_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
   --dataset-root outputs/datasets \
-  --dataset zinc \
+  --dataset zinc  \
   --reference-split test \
   --train-split train \
-  --output-dir "$GEN_DIR/evaluation" \
-  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
-  --fcd-use-corrected \
   --require-fcd \
-   --hogdiff-compatible-metrics
+  --output-dir "$GEN_DIR/evaluation_molecules"
 
-Recorded molecular evaluation
+PYTHONHASHSEED=42 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN/evaluation_qed"
 
 Metric                                                    Recorded value
 ------------------------------------------------  ----------------------
@@ -663,39 +712,52 @@ Not reported in the source.
 4.2 Seed 43
 -----------
 
-Run ID: seed_43_e300. Source lines: 361-410.
+export DEFOG=/home/quang/DeFoG
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-Source notes applying to this run: N6, N9, N10. See Source notes at the end of this file.
+RUN=seed_43_e1000
+N=10000
 
-Baseline command (stage not specified)
 
 PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage train \
   --dataset zinc \
-  --num-samples 1024 \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/defog_zinc.yaml \
   --seed-id 43 \
-  --run-id seed_43_e300 \
-  --n-epochs 300 \
-  --wrapper-config configs/baselines/defog_zinc_paper_sampling.yaml \
-  --epoch-progress-interval 1
+  --run-id "$RUN" \
+  --device gpu
 
-Generation directory
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage generate \
+  --dataset zinc \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/defog_zinc.yaml \
+  --seed-id 43 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GEN_DIR="outputs/baselines/defog/zinc/seed_43_e300/generations/seed_43_n_1024"
-
-Molecular evaluation command
+GEN_DIR="outputs/baselines/defog/zinc/$RUN/generations/seed_4_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
   --dataset-root outputs/datasets \
-  --dataset zinc \
+  --dataset zinc  \
   --reference-split test \
   --train-split train \
-  --output-dir "$GEN_DIR/evaluation" \
-  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
-  --fcd-use-corrected \
   --require-fcd \
-   --hogdiff-compatible-metrics
+  --output-dir "$GEN_DIR/evaluation_molecules"
 
-Recorded molecular evaluation
+PYTHONHASHSEED=42 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN/evaluation_qed"
 
 Metric                                                   Recorded value
 ------------------------------------------------  ---------------------
@@ -730,40 +792,52 @@ Not reported in the source.
 
 4.3 Seed 44
 -----------
+export DEFOG=/home/quang/DeFog
+export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-Run ID: seed_44_e300. Source lines: 411-462.
+RUN=seed_44_e1000
+N=10000
 
-Source notes applying to this run: N6, N9, N10. See Source notes at the end of this file.
 
-Baseline command (stage not specified)
-
-  PYTHONPATH=src python scripts/run_defog_baseline.py \
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage train \
   --dataset zinc \
-  --num-samples 1024 \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/defog_zinc.yaml \
   --seed-id 44 \
-  --run-id seed_44_e300 \
-  --n-epochs 300 \
-  --wrapper-config configs/baselines/defog_zinc_paper_sampling.yaml \
-  --epoch-progress-interval 1
+  --run-id "$RUN" \
+  --device gpu
 
-Generation directory
+PYTHONPATH=src python scripts/run_defog_baseline.py \
+  --stage generate \
+  --dataset zinc \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/defog_zinc.yaml \
+  --seed-id 44 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
 
-GEN_DIR="outputs/baselines/defog/zinc/seed_44_e300/generations/seed_44_n_1024"
-
-Molecular evaluation command
+GEN_DIR="outputs/baselines/defog/zinc/$RUN/generations/seed_44_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
   --dataset-root outputs/datasets \
-  --dataset zinc \
+  --dataset zinc  \
   --reference-split test \
   --train-split train \
-  --output-dir "$GEN_DIR/evaluation" \
-  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
-  --fcd-use-corrected \
- --require-fcd \
-   --hogdiff-compatible-metrics
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
 
-Recorded molecular evaluation
+PYTHONHASHSEED=42 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/zinc/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
 
 Metric                                                   Recorded value
 ------------------------------------------------  ---------------------
