@@ -14,7 +14,7 @@ OUT="${OUT:-outputs/ablations/${DATASET}_final_connectivity}"
 baseline_args=()
 fixed_args=()
 for seed in $SEEDS; do
-  run="seed_${seed}_gdsm_simple_g345"
+  run="seed_${seed}_gdsm_final_g345"
   baseline_gid="seed_${seed}_n_${N}_connectivity_baseline"
   fixed_gid="seed_${seed}_n_${N}_connectivity_filter"
 
