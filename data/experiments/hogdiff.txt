@@ -677,7 +677,7 @@ Molecular evaluation
 export HOGDIFF=/home/quang/HOG-Diff
 export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
 
-RUN=seed_42_e1000
+RUN=seed_43_e1000
 N=10000
 
 PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
@@ -685,7 +685,7 @@ PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
   --dataset zinc \
   --common-config configs/baselines/common_zinc.yaml \
   --wrapper-config configs/baselines/hog_diff_zinc.yaml \
-  --seed-id 42 \
+  --seed-id 43 \
   --overwrite \
   --run-id "$RUN" \
   --device gpu
@@ -695,13 +695,13 @@ PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
   --dataset zinc \
   --common-config configs/baselines/common_zinc.yaml \
   --wrapper-config configs/baselines/hog_diff_zinc.yaml \
-  --seed-id 42 \
+  --seed-id 43 \
   --overwrite \
   --run-id "$RUN" \
   --num-samples "$N" \
   --device gpu
 
-GEN_DIR="outputs/baselines/hog_diff/zinc/$RUN/generations/seed_42_n_${N}"
+GEN_DIR="outputs/baselines/hog_diff/zinc/$RUN/generations/seed_43_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
