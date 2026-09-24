@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Paired GraphER ablation: ordinary final sampler vs connected-final rejection/resampling.
 #
-# IMPORTANT: this script reuses the *frozen gdsm_final_g345 training run* and its
-# exact resolved model config.  It does not call run_grapher_research.sh, because
-# that launcher has a different default RUN/config family and can therefore point
-# generation at the wrong managed training manifest / degree-prior checkpoint.
+# This launcher binds generation to the MANAGED TRAINING MANIFEST.  The gdsm_simple
+# wrapper always reconstructs the trained options from train/manifest.json and then
+# applies generation-only overrides.  Therefore no outputs/final_configs/... YAML is
+# required and there is no risk of selecting a different degree-prior checkpoint.
 set -euo pipefail
 
 DATASET="${1:-zinc}"
@@ -35,53 +35,93 @@ fixed_args=()
 for seed in $SEEDS; do
   [[ "$seed" =~ ^[0-9]+$ ]] || { echo "Invalid seed: $seed" >&2; exit 2; }
 
-  # This is the run-id produced by scripts/run_gdsm_final.sh with the default
-  # RUN_TAG=gdsm_final_g345.
   run="seed_${seed}_${RUN_TAG}"
   run_root="${OUTPUT_ROOT}/gdsm_simple/${DATASET}/${run}"
   train_manifest="${run_root}/train/manifest.json"
-  main_cfg="outputs/final_configs/${DATASET}/${run}/model.yaml"
 
   if [[ ! -f "$train_manifest" ]]; then
     echo "Missing trained GraphER run: $train_manifest" >&2
-    echo "Expected a completed final run with RUN_TAG=$RUN_TAG for seed $seed." >&2
-    echo "Available runs under ${OUTPUT_ROOT}/gdsm_simple/${DATASET}:" >&2
-    find "${OUTPUT_ROOT}/gdsm_simple/${DATASET}" -maxdepth 2 -path '*/train/manifest.json' -print 2>/dev/null >&2 || true
-    exit 1
-  fi
-  if [[ ! -f "$main_cfg" ]]; then
-    echo "Missing exact resolved final config: $main_cfg" >&2
-    echo "Do not substitute configs/experiments/grapher_research/* here; the final" >&2
-    echo "experiment resolves seed-specific degree-prior checkpoint paths." >&2
+    echo "Expected a completed managed run with RUN_TAG=$RUN_TAG for seed $seed." >&2
+    echo "Available managed runs under ${OUTPUT_ROOT}/gdsm_simple/${DATASET}:" >&2
+    find "${OUTPUT_ROOT}/gdsm_simple/${DATASET}" -maxdepth 3 -path '*/train/manifest.json' -print 2>/dev/null >&2 || true
     exit 1
   fi
 
   resolved_dir="${OUT}/resolved/${run}"
   mkdir -p "$resolved_dir"
-  fixed_cfg="${resolved_dir}/connectivity_filter_model.yaml"
+  baseline_cfg="${resolved_dir}/baseline_generation_overlay.yaml"
+  fixed_cfg="${resolved_dir}/connectivity_filter_generation_overlay.yaml"
+  train_snapshot="${resolved_dir}/managed_training_options.yaml"
 
-  # Create a generation-only overlay from the exact config used by the frozen
-  # final run.  The ONLY model/sampler change is final connectedness acceptance.
-  "$PYTHON" - "$main_cfg" "$fixed_cfg" "$MAX_ATTEMPT_MULTIPLIER" <<'PY'
+  # Validate the managed run and write two GENERATION-ONLY overlays.
+  # Baseline: no model/sampler override at all (runtime is supplied by CLI).
+  # Fixed: only final_acceptance is changed.  The wrapper recursively merges this
+  # overlay into manifest['options'], so all trained settings and the exact
+  # seed-specific degree-prior checkpoint remain those recorded at training time.
+  "$PYTHON" - "$train_manifest" "$baseline_cfg" "$fixed_cfg" "$train_snapshot" \
+    "$MAX_ATTEMPT_MULTIPLIER" "$run" "$seed" <<'PY'
+import json
 import math
 import sys
 from pathlib import Path
 import yaml
 
-src, dst, multiplier = sys.argv[1], sys.argv[2], float(sys.argv[3])
+manifest_path, baseline_path, fixed_path, snapshot_path, multiplier, expected_run, expected_seed = sys.argv[1:]
+multiplier = float(multiplier)
+expected_seed = int(expected_seed)
 if not math.isfinite(multiplier) or multiplier < 1:
     raise SystemExit('MAX_ATTEMPT_MULTIPLIER must be finite and >= 1')
-obj = yaml.safe_load(Path(src).read_text())
-cat = obj['gdsm_simple']['extensions']['attributed_categorical']
-cat['final_acceptance'] = {
-    'require_connected': True,
-    'max_attempt_multiplier': multiplier,
+
+manifest = json.loads(Path(manifest_path).read_text())
+if manifest.get('model_id') != 'gdsm_simple':
+    raise SystemExit(f"{manifest_path}: expected model_id=gdsm_simple, got {manifest.get('model_id')!r}")
+if manifest.get('run_id') not in (None, expected_run):
+    raise SystemExit(f"{manifest_path}: run_id mismatch: {manifest.get('run_id')!r} != {expected_run!r}")
+if int(manifest.get('train_seed', expected_seed)) != expected_seed:
+    raise SystemExit(f"{manifest_path}: train_seed mismatch")
+options = manifest.get('options')
+if not isinstance(options, dict):
+    raise SystemExit(f"{manifest_path}: managed manifest has no options mapping")
+cat = options.get('extensions', {}).get('attributed_categorical', {})
+if not isinstance(cat, dict) or not cat.get('enabled', False):
+    raise SystemExit(f"{manifest_path}: managed run is not attributed_categorical")
+
+# Provenance snapshot for the ablation record only; generation reads the same
+# options directly from the managed training manifest.
+Path(snapshot_path).write_text(yaml.safe_dump({'gdsm_simple': options}, sort_keys=False))
+
+baseline = {'gdsm_simple': {}}
+fixed = {
+    'gdsm_simple': {
+        'extensions': {
+            'attributed_categorical': {
+                'final_acceptance': {
+                    'require_connected': True,
+                    'max_attempt_multiplier': multiplier,
+                }
+            }
+        }
+    }
 }
-text = yaml.safe_dump(obj, sort_keys=False)
-p = Path(dst)
-if p.exists() and p.read_text() != text:
-    raise SystemExit(f'Connectivity ablation config collision at {p}; use a new OUT directory')
-p.write_text(text)
+
+def locked_write(path, obj):
+    p = Path(path)
+    text = yaml.safe_dump(obj, sort_keys=False)
+    if p.exists() and yaml.safe_load(p.read_text()) != obj:
+        raise SystemExit(f'Ablation overlay collision at {p}; use a new OUT directory')
+    if not p.exists():
+        p.write_text(text)
+
+locked_write(baseline_path, baseline)
+locked_write(fixed_path, fixed)
+
+prior = cat.get('initialization', {}).get('degree_generator', {}).get('checkpoint_path')
+checkpoint = manifest.get('checkpoint', {}).get('path')
+print(f'managed training manifest: {manifest_path}')
+print(f'managed model checkpoint: {checkpoint}')
+print(f'managed degree-prior checkpoint: {prior}')
+print(f'baseline overlay: {baseline_path} (no generation override)')
+print(f'connectivity overlay: {fixed_path}')
 PY
 
   baseline_gid="seed_${seed}_n_${N}_connectivity_baseline"
@@ -94,7 +134,7 @@ PY
     --stage generate \
     --dataset "$DATASET" \
     --no-common-config \
-    --wrapper-config "$main_cfg" \
+    --wrapper-config "$baseline_cfg" \
     --dataset-root "$DATASET_ROOT" \
     --serialized-dataset "$SERIAL" \
     --output-root "$OUTPUT_ROOT" \
