@@ -230,3 +230,18 @@ def test_research_configs_are_consumed_and_budget_preserved(dataset,variant,tmp_
     if dataset in ('community_small','ego_small'):
         ntrain=64 if dataset=='community_small' else 128
         assert op['train']['epochs']*((ntrain+op['train']['batch_size']-1)//op['train']['batch_size'])==20000
+
+
+@pytest.mark.parametrize('dataset',['qm9','zinc'])
+def test_molecular_research_connectivity_fix_and_sampling_ablation(dataset,tmp_path):
+    main=Path(f'configs/experiments/grapher_research/{dataset}_g345.yaml')
+    control=Path(f'configs/experiments/grapher_research/{dataset}_g345_connectivity_filter.yaml')
+    req_main=TrainRequest(RunSpec('gdsm_simple',dataset,'main_connectivity',42),DatasetReference(dataset,tmp_path),config_path=main)
+    req_control=TrainRequest(RunSpec('gdsm_simple',dataset,'fixed_connectivity',42),DatasetReference(dataset,tmp_path),config_path=control)
+    cfg_main=resolve(GDSMSimpleWrapper()._options(req_main))
+    cfg_control=resolve(GDSMSimpleWrapper()._options(req_control))
+    assert cfg_main['final_acceptance']=={'require_connected':False,'max_attempt_multiplier':10.0}
+    assert cfg_control['final_acceptance']=={'require_connected':True,'max_attempt_multiplier':10.0}
+    # This ablation changes sampling only; every trained field stays identical.
+    for key in ('categories','noise','graphlets','spectral_conditioning','loss_weights','initialization'):
+        assert cfg_main[key]==cfg_control[key]

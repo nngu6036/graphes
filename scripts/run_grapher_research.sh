@@ -19,6 +19,11 @@ SUFFIX='';TRAIN_SUFFIX=''
 case "$VARIANT" in
  main) ;;
  no_guidance|final_only) SUFFIX="_$VARIANT" ;;
+ connectivity_filter)
+  if [[ "$DATASET" != qm9 && "$DATASET" != zinc ]]; then
+   echo 'connectivity_filter is a molecular-only sampling ablation/fix (qm9 or zinc)' >&2; exit 2
+  fi
+  SUFFIX="_$VARIANT" ;;
  backbone_only|categorical_only|k3|k34) SUFFIX="_$VARIANT";TRAIN_SUFFIX="$SUFFIX" ;;
  *) echo 'Unsupported ablation' >&2; exit 2 ;;
 esac
@@ -80,7 +85,7 @@ subprocess.run([sys.executable,'scripts/train_degree_generator.py','--config',sy
 PY
 }
 train() {
- if [[ "$VARIANT" == no_guidance || "$VARIANT" == final_only ]]; then
+ if [[ "$VARIANT" == no_guidance || "$VARIANT" == final_only || "$VARIANT" == connectivity_filter ]]; then
   echo 'This is a sampling-only ablation. Train main first; run this variant with generate/audit/evaluate.' >&2; return 2
  fi
  "$PYTHON" scripts/run_gdsm_simple_baseline.py --stage train --dataset "$DATASET" --no-common-config \

@@ -19,6 +19,12 @@ DEFAULTS={
                 'preserve_connectivity_if_connected':True,'min_improvement':1e-8,
                 'require_structure_improvement':True,
                 'weights':{'graphlet':1.,'mass':1.,'clustering':.5,'orbit':.25,'spectral':.25,'edge':.1}},
+    # Generation-only sampler acceptance.  This is intentionally separate from
+    # local rewiring: categorical reverse transitions may create disconnected
+    # states, so molecular profiles can reject a disconnected FINAL sample and
+    # continue sampling until the requested number of connected molecules is
+    # returned.  The raw acceptance/yield is reported in the generation manifest.
+    'final_acceptance':{'require_connected':False,'max_attempt_multiplier':10.0},
     'save_trajectory':False,
 }
 
@@ -53,7 +59,7 @@ def resolve(options):
         raise ValueError('Disable legacy degree/HH/rewiring flags; categorical.guidance controls event-local swaps')
     if ext.get('structural_summary','none') != 'none':
         raise ValueError('Use attributed_categorical.graphlets, not legacy structural_summary')
-    for section in ('noise','guidance','loss_weights'):
+    for section in ('noise','guidance','loss_weights','final_acceptance'):
         _unknown(cfg[section],DEFAULTS[section],section)
     _unknown(cfg['guidance']['weights'],DEFAULTS['guidance']['weights'],'guidance.weights')
     if cfg['noise']['type']!='marginal' or cfg['noise']['schedule']!='cosine_exact_terminal':
@@ -103,6 +109,13 @@ def resolve(options):
         raise ValueError('Invalid guidance schedule')
     if int(guide['proposal_budget'])==0 or int(guide['valid_candidate_budget'])==0: raise ValueError('Use positive budgets or -1 for exhaustive candidates')
     if not math.isfinite(guide['min_improvement']) or guide['min_improvement']<0: raise ValueError('Invalid minimum improvement')
+    acceptance=cfg['final_acceptance']
+    if type(acceptance['require_connected']) is not bool:
+        raise ValueError('final_acceptance.require_connected must be boolean')
+    multiplier=float(acceptance['max_attempt_multiplier'])
+    if not math.isfinite(multiplier) or multiplier<1.0:
+        raise ValueError('final_acceptance.max_attempt_multiplier must be finite and >= 1')
+    acceptance['max_attempt_multiplier']=multiplier
     for key in ('epochs','batch_size','validation_every','log_every'):
         if int(options['train'].get(key,1))<1: raise ValueError(f'train.{key} must be positive')
     if int(options['diffusion']['steps'])<2 or int(options['sample']['steps'])<1: raise ValueError('Invalid diffusion/sample steps')

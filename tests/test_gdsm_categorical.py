@@ -345,6 +345,49 @@ def test_generation_reproducible_and_no_guidance_is_runtime_ablation(trained_cat
     assert all(not row['guidance_events'] for row in diag['graphs'])
 
 
+def test_final_connected_acceptance_rejects_and_resamples_without_retraining(trained_categorical,monkeypatch):
+    import grapher.models.gdsm_simple.categorical.pipeline as pipeline
+    wrapper,request,artifacts,_=trained_categorical
+    real_nx=pipeline.nx
+    calls={'connected':0}
+    class NXProxy:
+        @staticmethod
+        def is_graphical(*args,**kwargs): return real_nx.is_graphical(*args,**kwargs)
+        @staticmethod
+        def number_connected_components(*args,**kwargs): return real_nx.number_connected_components(*args,**kwargs)
+        @staticmethod
+        def connected_components(*args,**kwargs): return real_nx.connected_components(*args,**kwargs)
+        @staticmethod
+        def is_connected(graph):
+            calls['connected']+=1
+            # Force one sampler-level rejection, then use real connectivity.
+            if calls['connected']==1: return False
+            return real_nx.is_connected(graph)
+    monkeypatch.setattr(pipeline,'nx',NXProxy)
+    gen=wrapper.generate(GenerateRequest(
+        request.run,artifacts.checkpoint_path,2,31415,generation_id='connected_acceptance',
+        options={'runtime':{'device':'cpu'},'extensions':{'attributed_categorical':{
+            'guidance':{'enabled':False},
+            'final_acceptance':{'require_connected':True,'max_attempt_multiplier':50.0},
+        }}}
+    ))
+    graphs=readp(gen.generation_dir,'base_graphs.pkl')
+    initials=readp(gen.generation_dir,'initial_graphs.pkl')
+    pre=readp(gen.generation_dir,'final_pre_rewire_graphs.pkl')
+    manifest=json.loads(gen.manifest_path.read_text())
+    diag=json.loads((gen.generation_dir/'final_acceptance_diagnostics.json').read_text())
+    assert len(graphs)==len(initials)==len(pre)==2
+    assert all(real_nx.is_connected(g) for g in graphs)
+    assert manifest['final_sample_acceptance']['mode']=='reject_and_resample'
+    assert manifest['rejected_final_graphs']>=1 and manifest['num_attempted']>manifest['num_generated']
+    assert diag['num_rejected_disconnected']>=1 and diag['generation_yield']<1.0
+    assert (gen.generation_dir/'rejected_disconnected_graphs.pkl').is_file()
+    assert len(readp(gen.generation_dir,'rejected_disconnected_graphs.pkl'))==manifest['rejected_final_graphs']
+    from grapher.models.gdsm_simple.categorical.evaluation import audit
+    audited=audit(gen.generation_dir)
+    assert audited['connectedness_rate']==1.0 and audited['rejected_disconnected_final_graphs']>=1
+
+
 def test_dynamic_basis_is_passed_to_next_network_call(trained_categorical,monkeypatch):
     wrapper,request,artifacts,_=trained_categorical
     original=SpectralCategoricalDenoiser.forward;seen=[]
@@ -404,6 +447,21 @@ def test_new_config_rejects_unsupported_or_invalid_settings(key,value):
     if isinstance(value,dict):cfg[key].update(value)
     else:cfg[key]=value
     with pytest.raises(ValueError):resolve(opt)
+
+
+@pytest.mark.parametrize('value',[0.5,float('inf'),float('nan')])
+def test_final_acceptance_rejects_bad_attempt_multiplier(value):
+    op=options();op['extensions']['attributed_categorical']['final_acceptance']['max_attempt_multiplier']=value
+    with pytest.raises(ValueError,match='max_attempt_multiplier'): resolve(op)
+
+
+def test_final_acceptance_is_generation_only_checkpoint_compatible(trained_categorical):
+    wrapper,request,artifacts,_=trained_categorical
+    state=torch.load(artifacts.checkpoint_path,map_location='cpu',weights_only=False)
+    op=wrapper._options(request)
+    op['extensions']['attributed_categorical']['final_acceptance']={'require_connected':True,'max_attempt_multiplier':7.0}
+    cfg=validate_generation(state,op)
+    assert cfg['final_acceptance']['require_connected'] and cfg['final_acceptance']['max_attempt_multiplier']==7.0
 
 
 def test_legacy_degree_flags_cannot_leak_into_new_sampler():

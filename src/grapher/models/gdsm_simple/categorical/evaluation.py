@@ -50,11 +50,19 @@ def audit(generated_dir):
         initial_match+=int(np.array_equal((e>0).sum(1),(e0>0).sum(1)))
         connected+=int(nx.is_connected(g))
     diag=json.loads((root/'rewiring_diagnostics.json').read_text())['aggregate']
+    final_acceptance=manifest.get('final_sample_acceptance',{})
+    if final_acceptance.get('require_connected',False) and connected!=n:
+        raise AssertionError('Final connected-sample acceptance is enabled but a returned graph is disconnected')
+    if int(manifest.get('rejected_final_graphs',0))!=int(diag.get('rejected_disconnected_final_graphs',0)):
+        raise AssertionError('Manifest/refinement diagnostics disagree on final connectivity rejections')
     return {'status':'passed','num_graphs':n,'artifact_hashes_verified':True,
             'node_counts_preserved':True,'final_local_node_types_preserved':True,
             'final_local_indexed_degrees_and_typed_degrees_preserved':True,
             'prior_degree_preservation_rate':prior_match/n,'initial_degree_preservation_rate':initial_match/n,
-            'connectedness_rate':connected/n,'max_eigenpair_reconstruction_error':max_error,
+            'connectedness_rate':connected/n,'raw_final_connectedness_rate':diag.get('raw_final_connectedness_rate',connected/n),
+            'generation_yield':diag.get('generation_yield',1.0),
+            'rejected_disconnected_final_graphs':diag.get('rejected_disconnected_final_graphs',0),
+            'max_eigenpair_reconstruction_error':max_error,
             'max_eigenvector_orthogonality_error':max_orthogonal_error,
             'recorded_basis_updates_per_graph':diag['basis_updates_per_graph'],
             'recorded_categorical_degree_change_steps_mean':diag['categorical_degree_change_steps_mean'],

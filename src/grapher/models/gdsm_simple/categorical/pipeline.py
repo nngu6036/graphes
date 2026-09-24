@@ -293,8 +293,23 @@ def generate(wrapper,request,state,manifest,options):
     outputs=[]; initials=[]; pre_final=[]; anchors_saved=[]; degree_samples=[]
     final_values=[]; final_vectors=[]; predictions=[]; diagnostics=[]; trajectories=[]
     started=time.monotonic(); batch_size=int(options['generation_batch_size']); guide=cfg['guidance']
+    acceptance=cfg['final_acceptance']
+    require_connected=bool(acceptance['require_connected'])
+    max_graph_attempts=(int(np.ceil(request.num_graphs*float(acceptance['max_attempt_multiplier'])))
+                        if require_connected else request.num_graphs)
+    attempted_graphs=0; connected_attempts=0; rejected_disconnected=0; rejection_records=[]; rejected_graphs=[]
     while len(outputs)<request.num_graphs:
-        b=min(batch_size,request.num_graphs-len(outputs)); ds=[]; aa=[]; init_rows=[]
+        remaining_attempts=max_graph_attempts-attempted_graphs
+        if remaining_attempts<=0:
+            raise RuntimeError(
+                'Final connected-sample acceptance exhausted its graph-attempt budget: '
+                f'accepted={len(outputs)}/{request.num_graphs}, attempted={attempted_graphs}, '
+                f'rejected_disconnected={rejected_disconnected}, max_attempts={max_graph_attempts}. '
+                'Increase attributed_categorical.final_acceptance.max_attempt_multiplier '
+                'or diagnose the categorical sampler.'
+            )
+        b=min(batch_size,request.num_graphs-len(outputs),remaining_attempts); ds=[]; aa=[]; init_rows=[]
+        batch_attempt_start=attempted_graphs; attempted_graphs+=b
         for _ in range(b):
             if sampler is None:
                 d=np.sort(np.asarray(state['basis_degree_sequences'][int(prior_rng.integers(len(state['basis_degree_sequences'])))],np.int64))[::-1]
@@ -320,11 +335,11 @@ def generate(wrapper,request,state,manifest,options):
         x,e=draw_graph(px,pe,mask,noise_rng)
         z=(anchor+torch.randn(anchor.shape,device=device,generator=noise_rng))*mask
         current_pairs=eigenpairs(e,mask)
-        rows=[]
+        rows=[]; batch_initials=[]; batch_pre_final=[None]*b
         for i,d in enumerate(ds):
             n=len(d); ex=e[i,:n,:n].cpu().numpy(); xx=x[i,:n].cpu().numpy()
-            initials.append(decode_graph(xx,ex,vocab)); degree_samples.append(d.tolist()); anchors_saved.append(aa[i])
-            rows.append({'sample_index':len(outputs)+i,'num_nodes':n,'initialization':init_rows[i],
+            batch_initials.append(decode_graph(xx,ex,vocab))
+            rows.append({'sample_index':None,'attempt_index':batch_attempt_start+i,'num_nodes':n,'initialization':init_rows[i],
                          'categorical_degree_change_steps':0,'node_category_change_steps':0,'edge_recolor_steps':0,
                          'basis_updates':1,'guidance_events':[],'trajectory':[]})
         for t,s in zip(times,times[1:]):
@@ -349,7 +364,7 @@ def generate(wrapper,request,state,manifest,options):
                 if not (event or s==0 or cfg['save_trajectory']):
                     continue
                 xx=new_x[i,:n].cpu().numpy(); ee=new_e[i,:n,:n].cpu().numpy()
-                if s==0: pre_final.append(decode_graph(xx,ee,vocab))
+                if s==0: batch_pre_final[i]=decode_graph(xx,ee,vocab)
                 if event:
                     targets=predictions_numpy(pred,i,n)
                     ee,rd=refine(xx,ee,targets,basis,bins,guide,refine_rng)
@@ -367,14 +382,30 @@ def generate(wrapper,request,state,manifest,options):
             for row in rows: row['basis_updates']+=1
         for i,d in enumerate(ds):
             n=len(d); xx=x[i,:n].cpu().numpy(); ee=e[i,:n,:n].cpu().numpy()
-            graph=decode_graph(xx,ee,vocab); outputs.append(graph)
+            graph=decode_graph(xx,ee,vocab); connected=nx.is_connected(graph)
+            connected_attempts+=int(connected)
+            if require_connected and not connected:
+                rejected_disconnected+=1
+                components=sorted((len(c) for c in nx.connected_components(graph)),reverse=True)
+                rejection_records.append({
+                    'attempt_index':rows[i]['attempt_index'],'reason':'disconnected_final_graph',
+                    'num_nodes':n,'num_edges':int(graph.number_of_edges()),
+                    'num_components':len(components),'component_sizes':components,
+                    'accepted_guidance_steps':int(sum(ev['accepted_steps'] for ev in rows[i]['guidance_events'])),
+                })
+                rejected_graphs.append(graph)
+                continue
+            accepted_index=len(outputs); rows[i]['sample_index']=accepted_index
+            initial=batch_initials[i]
+            outputs.append(graph); initials.append(initial); pre_final.append(batch_pre_final[i])
+            degree_samples.append(d.tolist()); anchors_saved.append(aa[i])
             values=current_pairs[0][i,:n].cpu().numpy(); vectors=current_pairs[1][i,:n,:n].cpu().numpy()
             final_values.append(values); final_vectors.append(vectors)
             predictions.append(predictions_numpy(pred,i,n))
-            actual=(ee>0).sum(1); initial=initials[rows[i]['sample_index']]
+            actual=(ee>0).sum(1)
             rows[i].update({'final_degrees':actual.tolist(),'prior_degree_preserved':bool(np.array_equal(np.sort(actual),np.sort(d))),
                             'initial_degree_preserved':bool(np.array_equal(actual,np.array([initial.degree(v) for v in range(n)]))),
-                            'connected':nx.is_connected(graph),
+                            'connected':connected,
                             'final_eigenpair_reconstruction_max_error':float(np.max(np.abs((vectors*(values*np.sqrt(n))[None])@vectors.T-(ee>0)))),
                             'final_typed_graphlet_overflow_mass':(basis.overflow_mean(basis.summary(xx,ee)[0]) if getattr(basis,'multiscale',False) else float(basis.summary(xx,ee)[0][-1]))})
             if getattr(basis,'multiscale',False):
@@ -382,7 +413,8 @@ def generate(wrapper,request,state,manifest,options):
             if cfg['save_trajectory']: trajectories.append(rows[i].pop('trajectory'))
             else: rows[i].pop('trajectory')
             diagnostics.append(rows[i])
-        print(f'[gdsm-categorical] generated {len(outputs)}/{request.num_graphs}',flush=True)
+        print(f'[gdsm-categorical] generated {len(outputs)}/{request.num_graphs} attempts={attempted_graphs} '
+              f'rejected_disconnected={rejected_disconnected}',flush=True)
     target.parent.mkdir(parents=True,exist_ok=True)
     staging=Path(tempfile.mkdtemp(prefix='.gdsm_categorical_generation_',dir=target.parent))
     try:
@@ -392,12 +424,18 @@ def generate(wrapper,request,state,manifest,options):
                  'final_adjacency_eigenvalues.pkl':final_values,'final_eigenvectors.pkl':final_vectors,
                  'predicted_summaries.pkl':predictions}
         if request.run.dataset_id in ('qm9','zinc'): objects['molecular_graphs.pkl']=outputs
+        if rejected_graphs: objects['rejected_disconnected_graphs.pkl']=rejected_graphs
         if cfg['save_trajectory']: objects['categorical_trajectories.pkl']=trajectories
         hashes={}
         for name,obj in objects.items():
             with (staging/name).open('wb') as f: pickle.dump(obj,f,protocol=pickle.HIGHEST_PROTOCOL)
             hashes[name]=_sha256(staging/name)
         aggregate={'num_graphs':len(outputs),'requested':request.num_graphs,
+                   'generation_attempts':attempted_graphs,
+                   'rejected_disconnected_final_graphs':rejected_disconnected,
+                   'replacement_attempts':attempted_graphs-len(outputs),
+                   'generation_yield':len(outputs)/max(attempted_graphs,1),
+                   'raw_final_connectedness_rate':connected_attempts/max(attempted_graphs,1),
                    'prior_degree_preservation_rate':float(np.mean([r['prior_degree_preserved'] for r in diagnostics])),
                    'initial_degree_preservation_rate':float(np.mean([r['initial_degree_preserved'] for r in diagnostics])),
                    'connectedness_rate':float(np.mean([r['connected'] for r in diagnostics])),
@@ -405,12 +443,19 @@ def generate(wrapper,request,state,manifest,options):
                    'mean_accepted_steps':float(np.mean([sum(ev['accepted_steps'] for ev in r['guidance_events']) for r in diagnostics])),
                    'basis_updates_per_graph':sample_steps+1,
                    'max_final_eigenpair_reconstruction_error':max(r['final_eigenpair_reconstruction_max_error'] for r in diagnostics)}
-        _write_json(staging/'rewiring_diagnostics.json',{'aggregate':aggregate,'graphs':diagnostics})
+        _write_json(staging/'rewiring_diagnostics.json',{'aggregate':aggregate,'graphs':diagnostics,
+                    'final_rejections':rejection_records})
+        _write_json(staging/'final_acceptance_diagnostics.json',{
+                    'config':acceptance,'num_requested':request.num_graphs,'num_attempted':attempted_graphs,
+                    'num_returned':len(outputs),'num_rejected_disconnected':rejected_disconnected,
+                    'raw_final_connectedness_rate':aggregate['raw_final_connectedness_rate'],
+                    'generation_yield':aggregate['generation_yield'],'records':rejection_records})
         _write_json(staging/'categorical_schema.json',schema)
         generation_manifest={
             'format':'grapher_gdsm_spectral_categorical_generation_v1','model_id':wrapper.model_id,
             'run_id':request.run.run_id,'generation_id':request.resolved_generation_id,'generation_seed':request.generation_seed,
             'num_requested':request.num_graphs,'num_generated':len(outputs),'generation_count':len(outputs),
+            'num_attempted':attempted_graphs,'generation_yield':aggregate['generation_yield'],
             'domain':'attributed','duration_seconds':time.monotonic()-started,
             'base_graphs':{'path':'base_graphs.pkl','sha256':hashes['base_graphs.pkl'],'role':'final_categorical_graph_after_local_refinement'},
             'initial_graphs':{'path':'initial_graphs.pkl','role':'terminal_categorical_marginal_samples_not_degree_exact'},
@@ -422,8 +467,12 @@ def generate(wrapper,request,state,manifest,options):
                       'basis':'recomputed_from_current_binary_categorical_adjacency_every_step','fixed_initial_eigenbasis':False,
                       'initial_degree_projection':False,'edge_absorbing_noise':False,'construct_projector':False},
             'prior_note':'Degrees initialize a soft spectral anchor only. The fixed anchor remains the source-centred coordinate offset; categories start independently at the exact marginal endpoint.',
-            'sampling_intervention_note':'Local rewiring and spectral feedback modify the learned reverse kernel; no exact likelihood/ConStruct constraint guarantee is claimed.',
-            'posthoc_repair':False,'largest_component_filter':False,'rejected_final_graphs':0,
+            'sampling_intervention_note':'Local rewiring, spectral feedback, and optional final-sample acceptance modify the learned reverse kernel; no exact likelihood/ConStruct constraint guarantee is claimed.',
+            'final_sample_acceptance':{**acceptance,'mode':('reject_and_resample' if require_connected else 'disabled'),
+                                       'num_attempted':attempted_graphs,'num_rejected_disconnected':rejected_disconnected,
+                                       'generation_yield':aggregate['generation_yield'],
+                                       'diagnostics_path':'final_acceptance_diagnostics.json'},
+            'posthoc_repair':False,'largest_component_filter':False,'rejected_final_graphs':rejected_disconnected,
         }
         _write_json(staging/'manifest.json',generation_manifest)
         (staging/'generation.log').write_text(json.dumps(aggregate,indent=2)+'\n')
