@@ -632,26 +632,6 @@ Recorded QED results
 4. QM9
 ======
 
-Dataset identifier in the baseline commands: qm9. Requested samples per run: 10000.
-
-Selected results overview
--------------------------
-
-Values are reproduced at their original precision. Rates remain on their original 0–1 scale; they are not converted to percentages. Complete molecular and QED outputs appear under each run.
-
-Metric                                           Run label 42           Run label 43          Run label 44
---------------------------------------  ---------------------  ---------------------  --------------------
-validity_without_correction                            0.7758                 0.7879                0.8313
-validity_with_projected_formal_charges                 0.9569                 0.9673                0.9615
-validity_with_correction                                  1.0                    1.0                   1.0
-uniqueness_rate                            0.9894302655323537     0.9951770529254982    0.9930229760615903
-novelty_rate                               0.8484887962480459     0.8586914934319602    0.8575408843125378
-nspdk_mmd                               0.0037298025706858765  0.0019958732227799503  0.003006139492419159
-fcd                                         2.858028249306198      2.275179086119863    2.7032612490933197
-qed_mean                                  0.45898230655361344     0.4532004375933125   0.45645861178834024
-qed_std_within_run                        0.08460972830350395    0.08039988753626837   0.08031001250164298
-qed_yield                                  0.3560784734242939    0.35707662477977203    0.3794540439796464
-
 4.1 Seed 42
 -----------
 
@@ -691,7 +671,7 @@ GEN_DIR="outputs/baselines/gdss/qm9/$RUN/generations/seed_42_n_${N}"
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
   --dataset-root outputs/datasets \
-  --dataset qm9  \
+  --dataset qm9_attributed  \
   --reference-split test \
   --train-split train \
   --require-fcd \

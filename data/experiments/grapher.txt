@@ -723,17 +723,12 @@ GEN=outputs/baselines/gdsm_simple/qm9/seed_41_gdsm_final_g345/generations/seed_4
 # ------------------------------------------------------------------------------
 PYTHONHASHSEED=41 PYTHONPATH=src \
 python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN/molecular_graphs.pkl" \
+  --generated-dir "$GEN" \
   --dataset-root outputs/datasets \
   --dataset qm9_attributed \
   --reference-split test \
   --train-split train \
-  --metric-molecule-source raw_valid \
-  --nspdk-backend eden \
-  --nspdk-complexity 4 \
-  --nspdk-bond-label-mode hogdiff \
   --require-fcd \
-  --fcd-device cuda:0 \
   --output-dir "$GEN/evaluation_molecules"
 
 # ------------------------------------------------------------------------------
@@ -831,7 +826,6 @@ python scripts/evaluate_qed_research.py \
 # Recorded result — QM9, seed 42
 # Retained verbatim from the original source file.
 # ------------------------------------------------------------------------------
-: <<'RESULTS_QM9_SEED_42'
 Molecular evaluation
   validity: 0.9765
   validity_with_correction: 1.0
@@ -866,7 +860,6 @@ Molecular evaluation
   fcd_num_reference_molecules: 12997
   fcd_num_valid_generated_molecules: 9765
   fcd_generated_smiles_source: raw_valid
-
 {
   "num_generated_graphs": 10000,
   "num_raw_valid": 9765,
@@ -891,7 +884,7 @@ Molecular evaluation
   "reference_qed_mean": 0.4661002280919897,
   "qed_mean_minus_reference": -4.736684068018526e-05,
   "qed_wasserstein_1": 0.005514292415127005
-RESULTS_QM9_SEED_42
+}
 
 # ==============================================================================
 # QM9 — SEED 43
@@ -970,7 +963,6 @@ python scripts/evaluate_qed_research.py \
 # Recorded result — QM9, seed 43
 # Retained verbatim from the original source file.
 # ------------------------------------------------------------------------------
-: <<'RESULTS_QM9_SEED_43'
 Molecular evaluation
   validity: 0.9849
   validity_with_correction: 1.0
@@ -1006,7 +998,6 @@ Molecular evaluation
   fcd_num_valid_generated_molecules: 9849
   fcd_generated_smiles_source: raw_valid
 
-
 {
   "num_generated_graphs": 10000,
   "num_raw_valid": 9849,
@@ -1032,7 +1023,6 @@ Molecular evaluation
   "qed_mean_minus_reference": 0.0035328533068137435,
   "qed_wasserstein_1": 0.0045641705640885105
 }
-RESULTS_QM9_SEED_43
 
 # ==============================================================================
 # QM9 — SEED 44
@@ -1111,7 +1101,6 @@ python scripts/evaluate_qed_research.py \
 # Recorded result — QM9, seed 44
 # Retained verbatim from the original source file.
 # ------------------------------------------------------------------------------
-: <<'RESULTS_QM9_SEED_44'
 Molecular evaluation
   validity: 0.976
   validity_with_correction: 1.0
@@ -1146,7 +1135,6 @@ Molecular evaluation
   fcd_num_reference_molecules: 12997
   fcd_num_valid_generated_molecules: 9760
   fcd_generated_smiles_source: raw_valid
-
 {
   "num_generated_graphs": 10000,
   "num_raw_valid": 9760,
@@ -1171,7 +1159,8 @@ Molecular evaluation
   "reference_qed_mean": 0.4661002280919897,
   "qed_mean_minus_reference": 0.0014746798809143202,
   "qed_wasserstein_1": 0.005463862403880713
-RESULTS_QM9_SEED_44
+}
+
 
 # ==============================================================================
 # QM9 — SEED 45
@@ -1607,7 +1596,66 @@ python scripts/evaluate_qed_research.py \
 # ------------------------------------------------------------------------------
 # Recorded result — ZINC, seed 43
 # ------------------------------------------------------------------------------
-# No recorded result in source file.
+Molecular evaluation
+  validity: 0.9289
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.942
+  validity_without_correction: 0.9289
+  fcd: 4.793306060475892
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9289
+  num_invalid_generated_molecules: 711
+  num_valid_generated_molecules_with_projected_formal_charges: 9420
+  num_invalid_generated_molecules_after_projected_formal_charges: 580
+  num_raw_invalid_resolved_by_projected_formal_charges: 131
+  projected_formal_charge_success_rate_on_raw_invalid: 0.18424753867791843
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 711
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.999784691570675
+  unique_valid_count: 9287
+  novelty_rate: 1.0
+  novel_unique_valid_count: 9287
+  nspdk_mmd: 0.00303097840836843
+  nspdk_mmd_valid_only: 0.00303097840836843
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.6922913567661677e-05
+  nspdk_proxy_mmd_metric_source: 1.7546408802925567e-05
+  fcd_num_reference_molecules: 1000
+  fcd_num_valid_generated_molecules: 9289
+  fcd_generated_smiles_source: raw_valid
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9289,
+  "validity_without_correction": 0.9289,
+  "qed_mean": 0.7338255184737279,
+  "qed_std_within_run": 0.13918415063650927,
+  "qed_median": 0.7650872805613761,
+  "qed_q10": 0.5317453204680606,
+  "qed_q90": 0.885752634838345,
+  "qed_unique_valid_mean": 0.7338011414091935,
+  "num_unique_raw_valid": 9287,
+  "qed_yield": 0.6816505241102471,
+  "num_raw_valid_single_component": 7710,
+  "valid_single_component_yield": 0.771,
+  "qed_single_component_mean": 0.7394973062891376,
+  "qed_ge_0p5_fraction_valid": 0.9251803208095597,
+  "qed_ge_0p5_yield_all": 0.8594,
+  "qed_ge_0p7_fraction_valid": 0.6662719345462375,
+  "qed_ge_0p7_yield_all": 0.6189,
+  "reference_num_graphs": 1000,
+  "reference_num_raw_valid": 1000,
+  "reference_qed_mean": 0.7351596889447009,
+  "qed_mean_minus_reference": -0.0013341704709729507,
+  "qed_wasserstein_1": 0.00580952886679463
+}
 
 # ==============================================================================
 # ZINC — SEED 44

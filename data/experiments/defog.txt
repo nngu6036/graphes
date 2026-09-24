@@ -255,36 +255,6 @@ defog_to_test                       0.027115          0.029118      0.012415    
 3. DeFoG / QM9
 ==============
 
-Dataset identifier in the baseline commands: qm9. Requested samples per run: 1024.
-
-Selected results overview
--------------------------
-
-Values retain their original precision and scale; rates have not been converted to percentages. Full recorded
-molecular fields and any supplied QED output appear below each run.
-
-Metric                                            Run label 42           Run label 43            Run label 44
----------------------------------------  ---------------------  ---------------------  ----------------------
-num_generated_graphs                                      1024                   1024                    1024
-validity                                           0.998046875           0.9892578125                     1.0
-validity_without_correction                        0.998046875           0.9892578125            0.9873046875
-validity_with_projected_formal_charges            Not reported           Not reported            Not reported
-validity_with_correction                                   1.0                    1.0                     1.0
-uniqueness_rate                             0.9980430528375733            0.994140625      0.9960435212660732
-novelty_rate                                0.2950980392156863    0.27013752455795675     0.25521350546176763
-nspdk_mmd                                0.0009917596562961264  0.0016661199696893856  1.9870636841085286e-05
-nspdk_mmd_valid_only                     0.0009917596562961264  0.0016661199696893856   1.967684767045536e-05
-fcd                                        0.40319552824583127     0.5553791342021164     0.41492557962705945
-metric_molecule_source                               raw_valid        corrected_valid            Not reported
-hogdiff_compatible_distribution_metrics                  False                   True            Not reported
-fcd_generated_smiles_source              valid_with_correction  valid_with_correction   valid_with_correction
-qed_mean                                          Not reported           Not reported            Not reported
-qed_std_within_run                                Not reported           Not reported            Not reported
-qed_yield                                         Not reported           Not reported            Not reported
-
-Source notes N7-N9 describe differences and gaps in the molecular reporting. Do not treat the overview as
-confirmation of a common raw-valid or corrected-valid evaluation subset.
-
 3.1 Seed 42
 -----------
 
@@ -437,7 +407,7 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
 
-PYTHONHASHSEED=42 PYTHONPATH=src \
+PYTHONHASHSEED=43 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
@@ -483,32 +453,32 @@ Molecular evaluation
   fcd_generated_smiles_source: raw_valid
 
 QED output
-
 {
   "num_generated_graphs": 10000,
-  "num_raw_valid": 9896,
-  "validity_without_correction": 0.9896,
-  "qed_mean": 0.459502663211056,
-  "qed_std_within_run": 0.07391062236680078,
-  "qed_median": 0.46631033445777714,
-  "qed_q10": 0.3559708515888318,
-  "qed_q90": 0.5484084829639377,
-  "qed_unique_valid_mean": 0.4593792458954252,
-  "num_unique_raw_valid": 9538,
-  "qed_yield": 0.45472383551365936,
-  "num_raw_valid_single_component": 9821,
-  "valid_single_component_yield": 0.9821,
-  "qed_single_component_mean": 0.45953974426800975,
-  "qed_ge_0p5_fraction_valid": 0.3037590945836702,
-  "qed_ge_0p5_yield_all": 0.3006,
+  "num_raw_valid": 9908,
+  "validity_without_correction": 0.9908,
+  "qed_mean": 0.46986171288124773,
+  "qed_std_within_run": 0.07365614914322655,
+  "qed_median": 0.47695586324983574,
+  "qed_q10": 0.36708178187062407,
+  "qed_q90": 0.5584724674651512,
+  "qed_unique_valid_mean": 0.469787834762698,
+  "num_unique_raw_valid": 9583,
+  "qed_yield": 0.46553898512273956,
+  "num_raw_valid_single_component": 9875,
+  "valid_single_component_yield": 0.9875,
+  "qed_single_component_mean": 0.4698820219150012,
+  "qed_ge_0p5_fraction_valid": 0.36182882519176424,
+  "qed_ge_0p5_yield_all": 0.3585,
   "qed_ge_0p7_fraction_valid": 0.0,
   "qed_ge_0p7_yield_all": 0.0,
   "reference_num_graphs": 13083,
   "reference_num_raw_valid": 12997,
   "reference_qed_mean": 0.4661002280919897,
-  "qed_mean_minus_reference": -0.006597564880933715,
-  "qed_wasserstein_1": 0.0066129762747806995
+  "qed_mean_minus_reference": 0.0037614847892580294,
+  "qed_wasserstein_1": 0.0037893091903754526
 }
+
 
 3.3 Seed 44
 -----------
@@ -551,7 +521,7 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
 
-PYTHONHASHSEED=42 PYTHONPATH=src \
+PYTHONHASHSEED=44 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
@@ -598,32 +568,32 @@ Molecular evaluation
   fcd_generated_smiles_source: raw_valid
 
 QED output
-
 {
   "num_generated_graphs": 10000,
-  "num_raw_valid": 9908,
-  "validity_without_correction": 0.9908,
-  "qed_mean": 0.46986171288124773,
-  "qed_std_within_run": 0.07365614914322655,
-  "qed_median": 0.47695586324983574,
-  "qed_q10": 0.36708178187062407,
-  "qed_q90": 0.5584724674651512,
-  "qed_unique_valid_mean": 0.469787834762698,
-  "num_unique_raw_valid": 9583,
-  "qed_yield": 0.46553898512273956,
-  "num_raw_valid_single_component": 9875,
-  "valid_single_component_yield": 0.9875,
-  "qed_single_component_mean": 0.4698820219150012,
-  "qed_ge_0p5_fraction_valid": 0.36182882519176424,
-  "qed_ge_0p5_yield_all": 0.3585,
+  "num_raw_valid": 9896,
+  "validity_without_correction": 0.9896,
+  "qed_mean": 0.459502663211056,
+  "qed_std_within_run": 0.07391062236680078,
+  "qed_median": 0.46631033445777714,
+  "qed_q10": 0.3559708515888318,
+  "qed_q90": 0.5484084829639377,
+  "qed_unique_valid_mean": 0.4593792458954252,
+  "num_unique_raw_valid": 9538,
+  "qed_yield": 0.45472383551365936,
+  "num_raw_valid_single_component": 9821,
+  "valid_single_component_yield": 0.9821,
+  "qed_single_component_mean": 0.45953974426800975,
+  "qed_ge_0p5_fraction_valid": 0.3037590945836702,
+  "qed_ge_0p5_yield_all": 0.3006,
   "qed_ge_0p7_fraction_valid": 0.0,
   "qed_ge_0p7_yield_all": 0.0,
   "reference_num_graphs": 13083,
   "reference_num_raw_valid": 12997,
   "reference_qed_mean": 0.4661002280919897,
-  "qed_mean_minus_reference": 0.0037614847892580294,
-  "qed_wasserstein_1": 0.0037893091903754526
+  "qed_mean_minus_reference": -0.006597564880933715,
+  "qed_wasserstein_1": 0.0066129762747806995
 }
+
 
 4. DeFoG / ZINC
 ===============
@@ -678,36 +648,69 @@ python scripts/evaluate_qed_research.py \
   --thresholds 0.5 0.7 \
   --output-dir "$GEN/evaluation_qed"
 
-Metric                                                    Recorded value
-------------------------------------------------  ----------------------
-validity                                                    0.9541015625
-validity_with_correction                                             1.0
-validity_without_correction                                 0.9541015625
-fcd                                                    5.685046958416905
-num_generated_graphs                                                1024
-num_valid_generated_molecules                                        977
-num_invalid_generated_molecules                                       47
-num_valid_generated_molecules_with_correction                       1024
-num_invalid_generated_molecules_after_correction                       0
-num_molecules_corrected_to_valid                                      47
-correction_success_rate_on_raw_invalid                               1.0
-metric_molecule_source                                   corrected_valid
-hogdiff_compatible_distribution_metrics                             True
-uniqueness_rate                                                      1.0
-unique_valid_count                                                  1024
-novelty_rate                                                         1.0
-novel_unique_valid_count                                            1024
-nspdk_mmd                                            0.07871783198463919
-nspdk_mmd_valid_only                                 0.07871783198463919
-nspdk_proxy_mmd_all_generated                     4.5523096063289875e-05
-nspdk_proxy_mmd_metric_source                      0.0006378263261031195
-fcd_num_reference_molecules                                         1000
-fcd_num_valid_generated_molecules                                   1024
-fcd_generated_smiles_source                        valid_with_correction
+
+Molecular evaluation
+  validity: 0.9289
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.942
+  validity_without_correction: 0.9289
+  fcd: 4.793250758043385
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9289
+  num_invalid_generated_molecules: 711
+  num_valid_generated_molecules_with_projected_formal_charges: 9420
+  num_invalid_generated_molecules_after_projected_formal_charges: 580
+  num_raw_invalid_resolved_by_projected_formal_charges: 131
+  projected_formal_charge_success_rate_on_raw_invalid: 0.18424753867791843
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 711
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.999784691570675
+  unique_valid_count: 9287
+  novelty_rate: 1.0
+  novel_unique_valid_count: 9287
+  nspdk_mmd: 0.003001955628339013
+  nspdk_mmd_valid_only: 0.003001955628339013
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.6922913567659468e-05
+  nspdk_proxy_mmd_metric_source: 1.754640880292192e-05
+  fcd_num_reference_molecules: 1000
+  fcd_num_valid_generated_molecules: 9289
+  fcd_generated_smiles_source: raw_valid
 
 QED output
 
-Not reported in the source.
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9289,
+  "validity_without_correction": 0.9289,
+  "qed_mean": 0.7348488387515012,
+  "qed_std_within_run": 0.13802412963156854,
+  "qed_median": 0.7653654867804127,
+  "qed_q10": 0.5360758171987733,
+  "qed_q90": 0.885752634838345,
+  "qed_unique_valid_mean": 0.7348246820638974,
+  "num_unique_raw_valid": 9287,
+  "qed_yield": 0.6826010863162704,
+  "num_raw_valid_single_component": 7710,
+  "valid_single_component_yield": 0.771,
+  "qed_single_component_mean": 0.7402737332571879,
+  "qed_ge_0p5_fraction_valid": 0.9284099472494348,
+  "qed_ge_0p5_yield_all": 0.8624,
+  "qed_ge_0p7_fraction_valid": 0.6682097104101625,
+  "qed_ge_0p7_yield_all": 0.6207,
+  "reference_num_graphs": 1000,
+  "reference_num_raw_valid": 1000,
+  "reference_qed_mean": 0.7351596889447009,
+  "qed_mean_minus_reference": -0.0003108501931996521,
+  "qed_wasserstein_1": 0.006219574649873123
+}
 
 4.2 Seed 43
 -----------
@@ -738,7 +741,7 @@ PYTHONPATH=src python scripts/run_defog_baseline.py \
   --num-samples "$N" \
   --device gpu
 
-GEN_DIR="outputs/baselines/defog/zinc/$RUN/generations/seed_4_n_${N}"
+GEN_DIR="outputs/baselines/defog/zinc/$RUN/generations/seed_43_n_${N}"
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -749,7 +752,7 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
 
-PYTHONHASHSEED=42 PYTHONPATH=src \
+PYTHONHASHSEED=43 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --reference-graphs outputs/datasets/zinc/test.pkl \
@@ -829,7 +832,7 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
 
-PYTHONHASHSEED=42 PYTHONPATH=src \
+PYTHONHASHSEED=44 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --reference-graphs outputs/datasets/zinc/test.pkl \
