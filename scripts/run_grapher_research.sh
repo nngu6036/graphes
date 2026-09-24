@@ -28,7 +28,7 @@ case "$VARIANT" in
  *) echo 'Unsupported ablation' >&2; exit 2 ;;
 esac
 TEMPLATE="configs/experiments/grapher_research/${DATASET}_g345${SUFFIX}.yaml"
-RUN="${RUN:-seed_${SEED}_gdsm_simple_g345${TRAIN_SUFFIX}}"
+RUN="${RUN:-seed_${SEED}_grapher_g345${TRAIN_SUFFIX}}"
 ROOT=outputs/datasets
 OUT=outputs/baselines
 if [[ -z "${N:-}" ]]; then

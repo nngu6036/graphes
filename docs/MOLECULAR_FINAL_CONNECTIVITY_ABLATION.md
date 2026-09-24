@@ -82,3 +82,12 @@ A negative `FCD` or `NSPDK` delta means the connectivity-conditioned sampler imp
 ## Why filtering is final-only
 
 GraphER's categorical reverse transitions can add/delete/recolor edges after earlier guidance events. Enforcing connectedness only at terminal initialization would therefore not guarantee a connected final molecule. Final-sample acceptance directly enforces the property on the object that is actually returned while leaving the learned reverse process and event-local same-type rewiring unchanged.
+
+## Final-suite checkpoint binding
+
+The paired launcher reuses the frozen `gdsm_final_g345` run for each seed and the exact
+resolved model YAML under `outputs/final_configs/<dataset>/<run>/model.yaml`.  The
+connectivity variant is created as a generation-only copy of that YAML with only
+`attributed_categorical.final_acceptance` changed.  This avoids accidentally selecting
+a different managed run ID or a different degree-prior checkpoint through the generic
+research launcher.
