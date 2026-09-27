@@ -72,6 +72,8 @@ def generate(cfg, checkpoint_path, output_dir, *, num_graphs, seed, device="auto
                              "refinement": "final_only" if cfg["refinement"]["enabled"] else "disabled",
                              "refinement_feedback_into_diffusion": False,
                              "categorical_edge_head": False, "spectral_stochastic_state": False,
+                             "soft_degree_consistency_trained": bool(cfg["schema_version"] >= 2),
+                             "normalized_laplacian_consistency_trained": bool(cfg["schema_version"] >= 2),
                              "degree_vae": False, "eigenbasis": False,
                              "repair": "none", "reject_invalid_graphs": False,
                              "full_trajectory_degree_preservation": False}}
@@ -134,8 +136,11 @@ def generate(cfg, checkpoint_path, output_dir, *, num_graphs, seed, device="auto
                 tick = time.monotonic()
                 if cfg["refinement"]["enabled"]:
                     target = prediction_targets(pred, j, n, basis, scaled_clean=w)
-                    final_e, diag = refine(x, e, target, basis, codec, cfg["graphlets"]["clustering_bins"],
-                                           cfg["refinement"], refine_rng)
+                    final_e, diag = refine(
+                        x, e, target, basis, codec, cfg["graphlets"]["clustering_bins"],
+                        cfg["refinement"], refine_rng,
+                        spectral_mode=cfg["spectral"]["normalization"],
+                        consistency=cfg.get("consistency"), edge_scale=codec.scale)
                 else:
                     final_e = e.copy()
                     diag = {"accepted_steps": 0, "tested_candidates": 0, "changed": False,

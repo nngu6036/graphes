@@ -1,4 +1,10 @@
-"""Explicit, checked configuration for the independent Option-C experiment."""
+"""Explicit, checked configuration for the independent Option-C experiment.
+
+Schema v1 is the original weighted-adjacency Option C. Schema v2 adds
+soft-threshold degree consistency and normalized-Laplacian spectral consistency
+while keeping the same stochastic state: categorical nodes + continuous weighted
+adjacency. The old schema remains supported so existing checkpoints stay usable.
+"""
 from __future__ import annotations
 
 import copy
@@ -8,8 +14,7 @@ from typing import Any
 
 import yaml
 
-# Every provided YAML declares these fields; no baseline/common-config merge.
-FIELDS = {
+COMMON_FIELDS = {
     "schema_version": None,
     "dataset": {"benchmark", "name", "root", "config_path"},
     "categories": {"node_attribute", "node_categories", "edge_attribute", "edge_categories"},
@@ -17,10 +22,8 @@ FIELDS = {
     "node_noise": {"type", "schedule", "pseudocount"},
     "diffusion": {"steps", "prediction"},
     "model": {"max_nodes", "hidden_dim", "num_layers", "num_heads", "ff_dim", "dropout"},
-    "spectral": {"normalization", "solver_device", "dtype"},
     "graphlets": {"sizes", "size_weights", "connected_only", "counting", "clustering_bins",
                   "max_vocab_per_size", "min_train_count", "max_connected_subsets"},
-    "loss_weights": {"node", "adjacency", "spectral", "graphlet", "mass", "clustering", "orbit"},
     "training": {"epochs", "batch_size", "lr", "weight_decay", "grad_norm", "validation_every",
                  "validation_seed", "log_every", "log_every_batches", "checkpoint_every",
                  "permutation_augmentation", "ema_decay", "cache_dir"},
@@ -29,6 +32,20 @@ FIELDS = {
                    "preserve_connectivity_if_connected", "require_structure_improvement",
                    "min_improvement", "weights"},
     "protocol": {"seeds", "generated_graphs_per_seed", "full_training_split"},
+}
+
+FIELDS_V1 = {
+    **COMMON_FIELDS,
+    "spectral": {"normalization", "solver_device", "dtype"},
+    "loss_weights": {"node", "adjacency", "spectral", "graphlet", "mass", "clustering", "orbit"},
+}
+
+FIELDS_V2 = {
+    **COMMON_FIELDS,
+    "spectral": {"normalization", "solver_device", "dtype"},
+    "consistency": {"soft_threshold_physical", "temperature_physical", "degree_normalization",
+                    "normalized_laplacian_epsilon"},
+    "loss_weights": {"node", "adjacency", "degree", "spectral", "graphlet", "mass", "clustering", "orbit"},
 }
 
 
@@ -44,24 +61,40 @@ def _positive(value: Any, name: str, *, integer: bool = False, allow_zero: bool 
 
 def validate_config(config: dict) -> dict:
     """Reject misspelled/unimplemented options rather than silently ignoring them."""
-    if not isinstance(config, dict) or set(config) != set(FIELDS):
-        missing = set(FIELDS) - set(config or {})
-        extra = set(config or {}) - set(FIELDS)
-        raise ValueError(f"Option-C config fields: missing={sorted(missing)}, unknown={sorted(extra)}")
+    if not isinstance(config, dict):
+        raise ValueError("option_c must be a mapping")
+    version = config.get("schema_version")
+    if version not in (1, 2):
+        raise ValueError("option_c.schema_version must be 1 (original) or 2 (soft-consistency)")
+    fields = FIELDS_V1 if version == 1 else FIELDS_V2
+    if set(config) != set(fields):
+        missing = set(fields) - set(config)
+        extra = set(config) - set(fields)
+        raise ValueError(f"Option-C schema v{version} fields: missing={sorted(missing)}, unknown={sorted(extra)}")
     cfg = copy.deepcopy(config)
-    if cfg["schema_version"] != 1:
-        raise ValueError("Only option_c.schema_version=1 is supported")
-    for section, keys in FIELDS.items():
+    for section, keys in fields.items():
         if keys is not None and (not isinstance(cfg[section], dict) or set(cfg[section]) != keys):
             raise ValueError(f"option_c.{section} must declare exactly {sorted(keys)}")
     if cfg["diffusion"]["prediction"] != "clean_adjacency":
         raise ValueError("Option C predicts clean weighted adjacency, not epsilon or an independent spectrum")
     if cfg["node_noise"]["type"] != "marginal" or cfg["node_noise"]["schedule"] != "cosine_exact_terminal":
         raise ValueError("Node diffusion uses the existing marginal, exact-terminal cosine process")
-    if cfg["spectral"]["normalization"] != "sqrt_n" or cfg["spectral"]["dtype"] != "float64":
-        raise ValueError("Spectral loss uses eigenvalues of scaled W divided by sqrt(n), in float64")
+    if cfg["spectral"]["dtype"] != "float64":
+        raise ValueError("Spectral consistency is evaluated in float64")
     if cfg["spectral"]["solver_device"] not in ("cpu", "model"):
         raise ValueError("spectral.solver_device must be cpu or model")
+    if version == 1:
+        if cfg["spectral"]["normalization"] != "sqrt_n":
+            raise ValueError("Schema v1 uses weighted-adjacency eigenvalues divided by sqrt(n)")
+    else:
+        if cfg["spectral"]["normalization"] != "normalized_laplacian":
+            raise ValueError("Schema v2 spectral.normalization must be normalized_laplacian")
+        cc = cfg["consistency"]
+        _positive(cc["soft_threshold_physical"], "consistency.soft_threshold_physical")
+        _positive(cc["temperature_physical"], "consistency.temperature_physical")
+        _positive(cc["normalized_laplacian_epsilon"], "consistency.normalized_laplacian_epsilon")
+        if cc["degree_normalization"] != "n_minus_one":
+            raise ValueError("consistency.degree_normalization must be n_minus_one")
     if cfg["sampling"]["sampler"] not in ("ddpm", "ddim"):
         raise ValueError("sampling.sampler must be ddpm or ddim")
     if cfg["refinement"]["timing"] != "final_only":
@@ -132,6 +165,8 @@ def validate_config(config: dict) -> dict:
             _positive(value, f"loss weight {name}", allow_zero=True)
     if cfg["loss_weights"]["adjacency"] <= 0 or cfg["loss_weights"]["node"] <= 0:
         raise ValueError("Both adjacency and node denoising losses must be positive")
+    if version == 2 and cfg["loss_weights"]["degree"] <= 0:
+        raise ValueError("Schema v2 requires a positive soft-degree consistency weight")
     if cfg["refinement"]["enabled"]:
         for key in ("graphlet", "mass", "clustering", "orbit", "spectral"):
             if cfg["refinement"]["weights"][key] > 0 and cfg["loss_weights"][key] == 0:
@@ -142,7 +177,6 @@ def validate_config(config: dict) -> dict:
         _positive(value, "protocol.seeds", integer=True, allow_zero=True)
     if not cfg["protocol"]["seeds"]:
         raise ValueError("protocol.seeds cannot be empty")
-    # Map by actual attribute VALUE, not by a sorted vocabulary's tensor index.
     mapping = {str(k): float(v) for k, v in cfg["edge_representation"]["weights"].items()}
     categories = cfg["categories"]["edge_categories"]
     if set(mapping) != {str(v) for v in categories}:
@@ -152,6 +186,11 @@ def validate_config(config: dict) -> dict:
         raise ValueError("Present-edge weights must be finite, positive and distinct")
     if max(weights) > cfg["edge_representation"]["scale"]:
         raise ValueError("edge_representation.scale must be at least the largest physical edge weight")
+    if version == 2:
+        threshold = float(cfg["consistency"]["soft_threshold_physical"])
+        decoder_threshold = .5 * min(weights)
+        if not math.isclose(threshold, decoder_threshold, rel_tol=0., abs_tol=1e-12):
+            raise ValueError("soft_threshold_physical must equal the final decoder's no-edge/first-edge midpoint")
     cfg["edge_representation"]["weights"] = mapping
     return cfg
 
@@ -166,9 +205,11 @@ def load_config(path: str | Path) -> dict:
 
 def generation_contract(cfg: dict) -> dict:
     """Training semantics that cannot be changed at sampling time."""
-    result = {key: copy.deepcopy(cfg[key]) for key in (
-        "schema_version", "categories", "edge_representation", "node_noise", "diffusion",
-        "model", "spectral", "graphlets", "loss_weights")}
+    keys = ["schema_version", "categories", "edge_representation", "node_noise", "diffusion",
+            "model", "spectral", "graphlets", "loss_weights"]
+    if cfg["schema_version"] >= 2:
+        keys.append("consistency")
+    result = {key: copy.deepcopy(cfg[key]) for key in keys}
     result["dataset"] = {k: cfg["dataset"][k] for k in ("benchmark", "name")}
     return result
 

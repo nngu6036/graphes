@@ -34,7 +34,10 @@ def loss_batch(model, rows, basis, cfg, schedule, node_noise, generator, device,
     eps = symmetric_noise(batch["mask"], generator)
     wt = q_sample(batch["w"], eps, schedule, t, batch["mask"])
     pred = model(xt, wt, t, batch["mask"], len(schedule)-1)
-    return joint_loss(pred, batch, basis, cfg["loss_weights"], cfg["spectral"])
+    return joint_loss(pred, batch, basis, cfg["loss_weights"], cfg["spectral"],
+                      schema_version=cfg["schema_version"],
+                      consistency_cfg=cfg.get("consistency"),
+                      edge_scale=cfg["edge_representation"]["scale"])
 
 
 def _run_epoch(model, rows, basis, cfg, schedule, node_noise, generator, device,
@@ -101,7 +104,11 @@ def train(cfg, output_dir, *, seed, device="auto", resume=False, overwrite=False
                 "contract": {"nodes": "learned_categorical_diffusion_with_training_empirical_marginal_noise",
                              "edges": "gaussian_diffusion_of_scaled_weighted_adjacency",
                              "edge_prediction": "clean_scalar_weight_no_edge_softmax",
-                             "spectral_role": "differentiable_auxiliary_loss_on_predicted_weighted_adjacency",
+                             "spectral_role": ("soft_topology_normalized_laplacian_consistency"
+                                               if cfg["schema_version"] >= 2 else
+                                               "differentiable_auxiliary_loss_on_predicted_weighted_adjacency"),
+                             "degree_consistency": ("soft_threshold_ordinary_degree_n_minus_one_normalized"
+                                                    if cfg["schema_version"] >= 2 else "none"),
                              "spectral_stochastic_state": False, "degree_vae_required": False,
                              "eigenbasis_required": False, "rewiring_during_training": False,
                              "test_used_for_training": False}}

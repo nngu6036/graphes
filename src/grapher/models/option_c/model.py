@@ -1,8 +1,10 @@
 """Equivariant node/pair denoiser with scalar adjacency regression.
 
 There is no categorical edge softmax, predicted eigenbasis, spectral transformer,
-separate spectral output head, or spectral stochastic state. Ordered weighted
-adjacency eigenvalues are used by the loss, not to reconstruct a second graph.
+separate spectral output head, or spectral stochastic state. Structural consistency
+losses are derived directly from the predicted clean weighted adjacency; schema v1
+uses weighted-adjacency eigenvalues, while schema v2 uses soft degrees and the
+normalized-Laplacian spectrum of a differentiable edge-presence relaxation.
 """
 from __future__ import annotations
 

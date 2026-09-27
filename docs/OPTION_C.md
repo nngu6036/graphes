@@ -1,5 +1,11 @@
 # Option C: categorical nodes and continuous weighted-adjacency diffusion
 
+> **Schema v2 available.** The soft-threshold degree + normalized-Laplacian
+> consistency variant is documented in `docs/OPTION_C_SOFT_CONSISTENCY.md` and
+> configured under `configs/experiments/option_c_soft_consistency/`. The original
+> schema-v1 configs in this document remain supported for matched comparison.
+
+
 This is a new implementation for the uploaded `graphes(5).zip` codebase. It is
 not a switch inside the simple-GDSM wrapper and is not an implementation of
 HoG-Diff. Existing source files, runners, dataset configurations and baseline
@@ -17,7 +23,9 @@ profiles are left unchanged.
 Use the existing GraphES Python environment and run from the repository root
 with `PYTHONPATH=src`. No external baseline checkout or degree-VAE checkpoint
 is needed. Model/optimizer checkpoints contain state dictionaries, tensors and
-primitive metadata and are loaded with `weights_only=True`. Prepared NetworkX
+primitive metadata. Newer PyTorch uses restricted `weights_only=True` loading;
+legacy PyTorch versions that do not expose that argument use the compatibility
+path for trusted local checkpoints. Prepared NetworkX
 pickles and the local preprocessing cache remain trusted, code-executing pickle
 artifacts: do not load untrusted dataset/cache files.
 

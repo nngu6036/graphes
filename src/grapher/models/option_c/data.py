@@ -28,7 +28,7 @@ from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 from .diffusion import WeightedEdgeCodec
 from .runtime import sha256, object_hash, atomic_write, write_json
 
-CACHE_FORMAT = "grapher_option_c_preprocessed_v1"
+CACHE_FORMAT = "grapher_option_c_preprocessed_v2"
 
 
 def _protocol_id(config):
@@ -90,13 +90,28 @@ def _check_split_sizes(provenance, train, val):
             raise ValueError(f"Frozen {name} split expects {expected} graphs; found {len(graphs)}. No subsampling is allowed.")
 
 
+def _normalized_laplacian_spectrum(topology: np.ndarray) -> np.ndarray:
+    """Match the evaluator's isolate-stable normalized-Laplacian convention."""
+    adjacency = (np.asarray(topology) > 0).astype(np.float64)
+    degrees = adjacency.sum(axis=1)
+    inv_sqrt = np.zeros_like(degrees)
+    inv_sqrt[degrees > 0] = 1.0 / np.sqrt(degrees[degrees > 0])
+    laplacian = np.diag((degrees > 0).astype(np.float64)) - (
+        inv_sqrt[:, None] * adjacency * inv_sqrt[None, :]
+    )
+    return np.linalg.eigvalsh(laplacian).astype(np.float32)
+
+
 def _record(graph, vocab, codec, cfg):
     x, e = encode_graph(graph, vocab, cfg["model"]["max_nodes"])
     w = codec.encode(e)
     clustering, orbit = topology_summary(e, cfg["graphlets"]["clustering_bins"])
     counts = count_multi(x, e, cfg["graphlets"]["sizes"], limit=cfg["graphlets"]["max_connected_subsets"])
-    return {"x": x, "e": e, "w": w,
-            "spectrum": (np.linalg.eigvalsh(w.astype(np.float64)) / len(x)**.5).astype(np.float32),
+    if int(cfg["schema_version"]) >= 2:
+        spectrum = _normalized_laplacian_spectrum(e)
+    else:
+        spectrum = (np.linalg.eigvalsh(w.astype(np.float64)) / len(x)**.5).astype(np.float32)
+    return {"x": x, "e": e, "w": w, "spectrum": spectrum,
             "clustering": clustering, "orbit": orbit, "counts": counts}
 
 
@@ -143,6 +158,10 @@ def prepare_records(train_graphs, val_graphs, cfg):
               "node_distribution_role": "terminal_categorical_noise_not_fixed_final_composition",
               "edge_physical_weights_by_index": codec.values.tolist(), "edge_scale": codec.scale,
               "edge_thresholds_physical": codec.thresholds.tolist(),
+              "spectral_target": ("normalized_laplacian_eigenvalues_of_clean_unweighted_topology"
+                                  if int(cfg["schema_version"]) >= 2 else
+                                  "weighted_adjacency_eigenvalues_divided_by_sqrt_n"),
+              "soft_consistency": cfg.get("consistency"),
               "training_graphlet_vocabulary_coverage": coverage, **basis.schema()}
     return train, val, schema
 
@@ -152,7 +171,9 @@ def load_data(cfg: dict):
     code_paths = {Path(__file__), Path(inspect.getfile(count_multi)), Path(inspect.getfile(encode_graph)),
                   Path(inspect.getfile(GraphCategoryVocabulary)), Path(inspect.getfile(WeightedEdgeCodec))}
     key = object_hash({"format": CACHE_FORMAT, "provenance": provenance,
+                       "schema_version": cfg["schema_version"],
                        "categories": cfg["categories"], "edge_representation": cfg["edge_representation"],
+                       "spectral": cfg["spectral"], "consistency": cfg.get("consistency"),
                        "graphlets": cfg["graphlets"], "node_noise": cfg["node_noise"],
                        "max_nodes": cfg["model"]["max_nodes"],
                        "preprocessing_code": {str(p.resolve().relative_to(Path(__file__).resolve().parents[2])): sha256(p)

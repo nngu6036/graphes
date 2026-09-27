@@ -1,0 +1,116 @@
+# Option C v2: categorical node diffusion + continuous weighted adjacency diffusion.
+# New consistency losses operate on the predicted clean weighted adjacency itself:
+#   A_soft = sigmoid((W_hat - threshold)/temperature)
+#   degree loss = MSE of ordinary degrees from A_soft, normalized by (n-1)
+#   spectral loss = MSE of normalized-Laplacian eigenvalues from A_soft
+# Clean targets use the evaluator-compatible isolate convention.
+# No categorical edge head, independent spectral stochastic state, degree VAE, or sampled eigenbasis.
+option_c:
+  schema_version: 2
+  dataset:
+    benchmark: ego_small
+    name: ego_small
+    root: outputs/datasets
+    config_path: configs/datasets/ego_small.yaml
+  categories:
+    node_attribute: null
+    edge_attribute: null
+    node_categories:
+    - 0
+    edge_categories:
+    - 1
+  edge_representation:
+    weights:
+      1: 1.0
+    scale: 1.0
+  node_noise:
+    type: marginal
+    schedule: cosine_exact_terminal
+    pseudocount: 0.001
+  diffusion:
+    steps: 500
+    prediction: clean_adjacency
+  model:
+    max_nodes: 18
+    hidden_dim: 128
+    num_layers: 4
+    num_heads: 4
+    ff_dim: 256
+    dropout: 0.0
+  spectral:
+    normalization: normalized_laplacian
+    solver_device: cpu
+    dtype: float64
+  consistency:
+    soft_threshold_physical: 0.5
+    temperature_physical: 0.1
+    degree_normalization: n_minus_one
+    normalized_laplacian_epsilon: 1.0e-08
+  graphlets:
+    sizes:
+    - 3
+    - 4
+    - 5
+    size_weights:
+    - 1.0
+    - 1.0
+    - 1.0
+    connected_only: true
+    counting: exact_connected
+    clustering_bins: 100
+    max_vocab_per_size: null
+    min_train_count: 1
+    max_connected_subsets: 1000000
+  loss_weights:
+    node: 1.0
+    adjacency: 1.0
+    degree: 1.0
+    spectral: 1.0
+    graphlet: 0.5
+    mass: 0.5
+    clustering: 0.5
+    orbit: 0.25
+  training:
+    epochs: 5000
+    batch_size: 32
+    lr: 0.0002
+    weight_decay: 1.0e-06
+    grad_norm: 1.0
+    validation_every: 50
+    validation_seed: 123456
+    log_every: 50
+    log_every_batches: 100
+    checkpoint_every: 50
+    permutation_augmentation: true
+    ema_decay: 0.0
+    cache_dir: outputs/cache/option_c_soft_consistency
+  sampling:
+    steps: 500
+    batch_size: 32
+    sampler: ddpm
+    clip_clean: true
+    use_ema: false
+    save_continuous: true
+  refinement:
+    enabled: true
+    timing: final_only
+    max_steps: 2
+    proposal_budget: 128
+    valid_candidate_budget: 64
+    preserve_connectivity_if_connected: true
+    require_structure_improvement: true
+    min_improvement: 1.0e-08
+    weights:
+      graphlet: 1.0
+      mass: 1.0
+      clustering: 0.5
+      orbit: 0.25
+      spectral: 0.25
+      adjacency: 0.1
+  protocol:
+    seeds:
+    - 42
+    - 43
+    - 44
+    generated_graphs_per_seed: 1024
+    full_training_split: true
