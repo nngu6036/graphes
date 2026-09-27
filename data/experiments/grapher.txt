@@ -1437,6 +1437,10 @@ python scripts/evaluate_qed_research.py \
   --expected-num-generated 10000 \
   --thresholds 0.5 0.7 \
   --output-dir "$GEN/evaluation_qed"
+
+# ------------------------------------------------------------------------------
+# Recorded result — ZINC, seed 41
+# ------------------------------------------------------------------------------
 Molecular evaluation
   validity: 0.912
   validity_with_correction: 1.0
@@ -1499,10 +1503,6 @@ Molecular evaluation
   "qed_wasserstein_1": 0.020442781640206412
 }
 
-# ------------------------------------------------------------------------------
-# Recorded result — ZINC, seed 41
-# ------------------------------------------------------------------------------
-# No recorded result in source file.
 
 # ==============================================================================
 # ZINC — SEED 42
