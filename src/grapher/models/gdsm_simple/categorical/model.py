@@ -5,6 +5,7 @@ is the sole adjacency; spectral scores are decoder features, never a competing
 threshold graph. Only the actual current binary topology supplies eigenvectors.
 """
 from __future__ import annotations
+import inspect
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -62,7 +63,11 @@ class SpectralCategoricalDenoiser(nn.Module):
         self.spec_input=nn.Linear(4,hidden_dim) # z_t, anchor, spectral rank, graph size
         self.graph_to_spectral=nn.Linear(hidden_dim,hidden_dim)
         layer=nn.TransformerEncoderLayer(hidden_dim,num_heads,ff_dim,dropout,batch_first=True,activation="gelu")
-        self.spectral=nn.TransformerEncoder(layer,num_layers,enable_nested_tensor=False)
+        # Older baseline environments predate the nested-tensor option.
+        encoder_options = {}
+        if "enable_nested_tensor" in inspect.signature(nn.TransformerEncoder).parameters:
+            encoder_options["enable_nested_tensor"] = False
+        self.spectral=nn.TransformerEncoder(layer,num_layers,**encoder_options)
         self.spec_out=nn.Sequential(nn.LayerNorm(hidden_dim),nn.Linear(hidden_dim,1))
         self.spectral_to_graph=nn.Linear(hidden_dim,hidden_dim)
         self.proposal_input=mlp(1,hidden_dim,hidden_dim)

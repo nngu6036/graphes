@@ -25,6 +25,29 @@ from grapher.rewiring_mlp.attributed.data import GraphCategoryVocabulary
 torch.set_num_threads(1)
 
 
+def test_transformer_encoder_legacy_constructor(monkeypatch):
+    from grapher.models.gdsm_simple.categorical import model as model_module
+
+    kwargs = dict(node_classes=2, edge_classes=3, graphlet_classes=4,
+                  hidden_dim=8, num_layers=1, num_heads=2, ff_dim=16)
+    current = SpectralCategoricalDenoiser(**kwargs)
+    encoder_class = torch.nn.TransformerEncoder
+
+    # Simulate the older public signature; unexpected kwargs must raise.
+    def legacy_encoder(encoder_layer, num_layers, norm=None):
+        return encoder_class(encoder_layer, num_layers, norm=norm)
+
+    monkeypatch.setattr(model_module.nn, 'TransformerEncoder', legacy_encoder)
+    legacy = SpectralCategoricalDenoiser(**kwargs)
+    legacy.load_state_dict(current.state_dict(), strict=True)
+    legacy.train()
+    inputs = torch.randn(2, 4, 8, requires_grad=True)
+    output = legacy.spectral(inputs, src_key_padding_mask=torch.zeros(2, 4, dtype=torch.bool))
+    assert output.shape == inputs.shape and torch.isfinite(output).all()
+    output.square().sum().backward()
+    assert inputs.grad is not None and torch.isfinite(inputs.grad).all()
+
+
 def labelled(g):
     g=g.copy()
     nx.set_node_attributes(g,{v:'C' if i%2 else 'N' for i,v in enumerate(g.nodes)},'atom')

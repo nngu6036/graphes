@@ -747,7 +747,66 @@ python scripts/evaluate_qed_research.py \
 # ------------------------------------------------------------------------------
 # Recorded result — QM9, seed 41
 # ------------------------------------------------------------------------------
-# No recorded result in source file.
+Molecular evaluation
+  validity: 0.9784
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9866
+  validity_without_correction: 0.9784
+  fcd: 0.21702676011789634
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9784
+  num_invalid_generated_molecules: 216
+  num_valid_generated_molecules_with_projected_formal_charges: 9866
+  num_invalid_generated_molecules_after_projected_formal_charges: 134
+  num_raw_invalid_resolved_by_projected_formal_charges: 82
+  projected_formal_charge_success_rate_on_raw_invalid: 0.37962962962962965
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 216
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9707686017988553
+  unique_valid_count: 9498
+  novelty_rate: 0.4655716993051169
+  novel_unique_valid_count: 4422
+  nspdk_mmd: 0.0007358129648549655
+  nspdk_mmd_valid_only: 0.0007358129648549655
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.8625943288968653e-05
+  nspdk_proxy_mmd_metric_source: 2.024601972782202e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9784
+  fcd_generated_smiles_source: raw_valid
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9784,
+  "validity_without_correction": 0.9784,
+  "qed_mean": 0.46490211940549464,
+  "qed_std_within_run": 0.06969244329843952,
+  "qed_median": 0.4710527634300783,
+  "qed_q10": 0.3707723226769476,
+  "qed_q90": 0.5499734642733026,
+  "qed_unique_valid_mean": 0.46475345816908176,
+  "num_unique_raw_valid": 9498,
+  "qed_yield": 0.4548602336263355,
+  "num_raw_valid_single_component": 9738,
+  "valid_single_component_yield": 0.9738,
+  "qed_single_component_mean": 0.4650154703720321,
+  "qed_ge_0p5_fraction_valid": 0.31398201144726084,
+  "qed_ge_0p5_yield_all": 0.3072,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": -0.0011981086864950585,
+  "qed_wasserstein_1": 0.0034338665734234986
+}
 
 # ==============================================================================
 # QM9 — SEED 42
@@ -827,63 +886,65 @@ python scripts/evaluate_qed_research.py \
 # Retained verbatim from the original source file.
 # ------------------------------------------------------------------------------
 Molecular evaluation
-  validity: 0.9765
+  validity: 0.9883
   validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.9851
-  validity_without_correction: 0.9765
-  fcd: 0.2382448449525718
+  validity_with_projected_formal_charges: 0.994
+  validity_without_correction: 0.9883
+  fcd: 0.426061147551664
   num_generated_graphs: 10000
-  num_valid_generated_molecules: 9765
-  num_invalid_generated_molecules: 235
-  num_valid_generated_molecules_with_projected_formal_charges: 9851
-  num_invalid_generated_molecules_after_projected_formal_charges: 149
-  num_raw_invalid_resolved_by_projected_formal_charges: 86
-  projected_formal_charge_success_rate_on_raw_invalid: 0.3659574468085106
+  num_valid_generated_molecules: 9883
+  num_invalid_generated_molecules: 117
+  num_valid_generated_molecules_with_projected_formal_charges: 9940
+  num_invalid_generated_molecules_after_projected_formal_charges: 60
+  num_raw_invalid_resolved_by_projected_formal_charges: 57
+  projected_formal_charge_success_rate_on_raw_invalid: 0.48717948717948717
   num_valid_generated_molecules_with_correction: 10000
   num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 235
+  num_molecules_corrected_to_valid: 117
   correction_success_rate_on_raw_invalid: 1.0
   metric_molecule_source: raw_valid
   hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 0.9720430107526882
-  unique_valid_count: 9492
-  novelty_rate: 0.46818373367045935
-  novel_unique_valid_count: 4444
-  nspdk_mmd: 0.0007958647284085985
-  nspdk_mmd_valid_only: 0.0007958647284085985
+  uniqueness_rate: 0.9666093291510675
+  unique_valid_count: 9553
+  novelty_rate: 0.454830943159217
+  novel_unique_valid_count: 4345
+  nspdk_mmd: 0.001174077370960553
+  nspdk_mmd_valid_only: 0.001174077370960553
   graphlet_histogram_mmd: None
   graphlet_selected_mass_mmd: None
   graphlet_histogram_mmd_by_order: {}
   graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 1.0386403711144133e-05
-  nspdk_proxy_mmd_metric_source: 1.0245539025693481e-05
+  nspdk_proxy_mmd_all_generated: 5.6664172598992104e-05
+  nspdk_proxy_mmd_metric_source: 6.148599992450478e-05
   fcd_num_reference_molecules: 12997
-  fcd_num_valid_generated_molecules: 9765
+  fcd_num_valid_generated_molecules: 9883
   fcd_generated_smiles_source: raw_valid
+
+
 {
   "num_generated_graphs": 10000,
-  "num_raw_valid": 9765,
-  "validity_without_correction": 0.9765,
-  "qed_mean": 0.4660528612513095,
-  "qed_std_within_run": 0.06729425804320252,
-  "qed_median": 0.47125701289261895,
-  "qed_q10": 0.37711278039426227,
-  "qed_q90": 0.5492492131769379,
-  "qed_unique_valid_mean": 0.46581702019816035,
-  "num_unique_raw_valid": 9492,
-  "qed_yield": 0.4551006190119033,
-  "num_raw_valid_single_component": 9713,
-  "valid_single_component_yield": 0.9713,
-  "qed_single_component_mean": 0.46621448560513556,
-  "qed_ge_0p5_fraction_valid": 0.3091653865847414,
-  "qed_ge_0p5_yield_all": 0.3019,
+  "num_raw_valid": 9883,
+  "validity_without_correction": 0.9883,
+  "qed_mean": 0.47011230200834353,
+  "qed_std_within_run": 0.06726021316983341,
+  "qed_median": 0.4744095723700246,
+  "qed_q10": 0.38249067771263456,
+  "qed_q90": 0.5522650515333525,
+  "qed_unique_valid_mean": 0.4698278464754319,
+  "num_unique_raw_valid": 9553,
+  "qed_yield": 0.464611988074846,
+  "num_raw_valid_single_component": 9783,
+  "valid_single_component_yield": 0.9783,
+  "qed_single_component_mean": 0.4700615505204652,
+  "qed_ge_0p5_fraction_valid": 0.33309723768086613,
+  "qed_ge_0p5_yield_all": 0.3292,
   "qed_ge_0p7_fraction_valid": 0.0,
   "qed_ge_0p7_yield_all": 0.0,
   "reference_num_graphs": 13083,
   "reference_num_raw_valid": 12997,
   "reference_qed_mean": 0.4661002280919897,
-  "qed_mean_minus_reference": -4.736684068018526e-05,
-  "qed_wasserstein_1": 0.005514292415127005
+  "qed_mean_minus_reference": 0.004012073916353831,
+  "qed_wasserstein_1": 0.005607036987383179
 }
 
 # ==============================================================================
@@ -1238,7 +1299,67 @@ python scripts/evaluate_qed_research.py \
 # ------------------------------------------------------------------------------
 # Recorded result — QM9, seed 45
 # ------------------------------------------------------------------------------
-# No recorded result in source file.
+
+Molecular evaluation
+  validity: 0.99
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9967
+  validity_without_correction: 0.99
+  fcd: 0.25989243316485755
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9900
+  num_invalid_generated_molecules: 100
+  num_valid_generated_molecules_with_projected_formal_charges: 9967
+  num_invalid_generated_molecules_after_projected_formal_charges: 33
+  num_raw_invalid_resolved_by_projected_formal_charges: 67
+  projected_formal_charge_success_rate_on_raw_invalid: 0.67
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 100
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9613131313131313
+  unique_valid_count: 9517
+  novelty_rate: 0.4655878953451718
+  novel_unique_valid_count: 4431
+  nspdk_mmd: 0.0009592364185347145
+  nspdk_mmd_valid_only: 0.0009592364185347145
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.2723019809276576e-05
+  nspdk_proxy_mmd_metric_source: 1.3676777190856838e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9900
+  fcd_generated_smiles_source: raw_valid
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9900,
+  "validity_without_correction": 0.99,
+  "qed_mean": 0.46961111605930894,
+  "qed_std_within_run": 0.06926334734183866,
+  "qed_median": 0.474397941208581,
+  "qed_q10": 0.3791734126012881,
+  "qed_q90": 0.5531901927788614,
+  "qed_unique_valid_mean": 0.46925520115289965,
+  "num_unique_raw_valid": 9517,
+  "qed_yield": 0.46491500489871734,
+  "num_raw_valid_single_component": 9827,
+  "valid_single_component_yield": 0.9827,
+  "qed_single_component_mean": 0.46966451919499347,
+  "qed_ge_0p5_fraction_valid": 0.3412121212121212,
+  "qed_ge_0p5_yield_all": 0.3378,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": 0.003510887967319243,
+  "qed_wasserstein_1": 0.004229988685997757
+}
 
 # ##############################################################################
 # DATASET 4/4: ZINC
