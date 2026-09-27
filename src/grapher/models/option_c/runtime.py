@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import platform
 import random
 import tempfile
+import warnings
 from pathlib import Path
 
 import networkx as nx
@@ -48,8 +50,37 @@ def save_torch(path, state) -> None:
 
 
 def load_checkpoint(path: str | Path) -> dict:
+    """Load a trusted Option-C checkpoint with legacy PyTorch compatibility.
+
+    Older torch.load implementations forward unknown keywords to pickle.Unpickler,
+    so passing weights_only (even False) fails before the checkpoint is loaded.
+    Detect explicit API support rather than parsing the PyTorch version or retrying
+    arbitrary deserialization errors. Restricted-load errors must never trigger
+    an automatic unrestricted-pickle retry on newer PyTorch.
+    """
     from . import CHECKPOINT_FORMAT
-    state = torch.load(path, map_location="cpu", weights_only=True)
+
+    try:
+        parameters = inspect.signature(torch.load).parameters
+    except (TypeError, ValueError):
+        # An opaque/decorated loader is not evidence that unrestricted loading is
+        # required. Request the restricted path and let any load error propagate.
+        parameters = None
+
+    load_kwargs = {"map_location": "cpu"}
+    if parameters is None or "weights_only" in parameters:
+        load_kwargs["weights_only"] = True
+    else:
+        warnings.warn(
+            "This torch.load implementation does not support weights_only. "
+            "Loading this Option-C checkpoint with legacy pickle deserialization. "
+            "Only load checkpoints you created yourself or otherwise trust; "
+            "legacy pickle loading can execute code from the checkpoint.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    state = torch.load(path, **load_kwargs)
     if not isinstance(state, dict) or state.get("format") != CHECKPOINT_FORMAT:
         raise ValueError("Expected a new Option-C checkpoint; old GDSM/categorical checkpoints are incompatible")
     return state
