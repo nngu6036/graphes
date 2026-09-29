@@ -108,3 +108,52 @@ def spectral_reverse(current, clean_prediction, anchor, alpha_bar, t, s, mask):
     at, ass = alpha_bar[t, None], alpha_bar[s, None]
     eps = (current-anchor-at.sqrt()*(clean_prediction-anchor))/(1-at).sqrt().clamp_min(1e-12)
     return (anchor + ass.sqrt()*(clean_prediction-anchor) + (1-ass).sqrt()*eps) * mask
+
+
+def draw_bonds(prob, support, mask, generator):
+    """Draw labels 1..K only for existing unordered edges; zero is a sentinel.
+
+    `prob` has K REAL bond categories, not K+1 categories including no-edge.
+    No multinomial is evaluated on nonedges, padding or the diagonal.
+    """
+    if support.dtype != torch.bool or support.shape != (len(mask), mask.shape[1], mask.shape[1]):
+        raise ValueError('Bond support must be a boolean [B,N,N] tensor')
+    if not torch.equal(support, support.transpose(1, 2)) or (support & ~pair_mask(mask)).any():
+        raise ValueError('Bond support must be symmetric, loop-free and unpadded')
+    if prob.shape[:-1] != support.shape or prob.shape[-1] < 1:
+        raise ValueError('Expected K positive bond categories on [B,N,N,K]')
+    out = torch.zeros_like(support, dtype=torch.long)
+    active = torch.nonzero(torch.triu(support, diagonal=1), as_tuple=True)
+    if len(active[0]):
+        if prob.shape[-1] == 1:
+            draws = torch.ones(len(active[0]), dtype=torch.long, device=out.device)
+        else:
+            selected = prob[active]
+            if not torch.isfinite(selected).all() or (selected < 0).any() or (selected.sum(-1) <= 0).any():
+                raise ValueError('Invalid probabilities on existing bonds')
+            draws = draw_categories(selected, generator) + 1
+        out[active] = draws
+        out[active[0], active[2], active[1]] = draws
+    if not torch.equal(out > 0, support):
+        raise AssertionError('Bond sampling changed the authoritative topology')
+    return out
+
+
+def bond_forward_probs(noise, clean_edges, t):
+    """Noise real bonds; pairs absent from the clean graph have no bond target."""
+    q = noise.forward_probs((clean_edges - 1).clamp_min(0), t)
+    return torch.where((clean_edges > 0)[..., None], q, noise.marginal)
+
+
+def bond_reverse_probs(noise, clean_probs, current_edges, t, s):
+    """Posterior for persistent bonds; fresh q_s mixture for newly born bonds.
+
+    There is no y_t for a pair absent from the current topology. A new edge
+    therefore cannot reuse no-edge as a bond observation or call it a posterior.
+    At s=0 its birth distribution is simply the predicted clean bond law.
+    The exact posterior claim applies ONLY to the fixed-support bond chain.
+    """
+    posterior = noise.reverse_probs(clean_probs, (current_edges - 1).clamp_min(0), t, s)
+    retention = _expand(noise.alpha_bar[s], clean_probs.ndim)
+    births = retention * clean_probs + (1 - retention) * noise.marginal
+    return torch.where((current_edges > 0)[..., None], posterior, births)

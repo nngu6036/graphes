@@ -32,7 +32,8 @@ def audit(generated_dir):
     n=len(final)
     if not n or any(len(a)!=n for a in (initial,pre,degrees,vals,vectors)):
         raise ValueError('Empty or mismatched output batches')
-    prior_match=initial_match=connected=0;max_error=0.;max_orthogonal_error=0.
+    hard_degree=manifest.get('decode',{}).get('ordinary_indexed_degrees_preserved_every_step',False)
+    prior_match=initial_match=indexed_match=connected=0;max_error=0.;max_orthogonal_error=0.
     for i,(g,g0,gpre,d,z,u) in enumerate(zip(final,initial,pre,degrees,vals,vectors)):
         if len(g)!=len(g0) or len(g)!=len(gpre) or len(g)!=len(d):raise AssertionError('Node count changed')
         x,e=encode_graph(g,vocab,len(g));xp,ep=encode_graph(gpre,vocab,len(g))
@@ -46,6 +47,10 @@ def audit(generated_dir):
         orth=float(np.max(np.abs(u.T@u-np.eye(len(g)))))
         max_error=max(max_error,error);max_orthogonal_error=max(max_orthogonal_error,orth)
         if error>2e-4 or orth>2e-4:raise AssertionError(f'Final eigenpairs do not represent retained adjacency #{i}')
+        indexed_match+=int(np.array_equal((e>0).sum(1),d))
+        if hard_degree:
+            np.testing.assert_array_equal((e0>0).sum(1),d)
+            np.testing.assert_array_equal((e>0).sum(1),d)
         prior_match+=int(np.array_equal(np.sort((e>0).sum(1)),np.sort(d)))
         initial_match+=int(np.array_equal((e>0).sum(1),(e0>0).sum(1)))
         connected+=int(nx.is_connected(g))
@@ -55,7 +60,25 @@ def audit(generated_dir):
         raise AssertionError('Final connected-sample acceptance is enabled but a returned graph is disconnected')
     if int(manifest.get('rejected_final_graphs',0))!=int(diag.get('rejected_disconnected_final_graphs',0)):
         raise AssertionError('Manifest/refinement diagnostics disagree on final connectivity rejections')
-    return {'status':'passed','num_graphs':n,'artifact_hashes_verified':True,
+    trajectory_checked=False
+    if hard_degree:
+        if diag['categorical_degree_change_steps_mean']!=0 or diag['indexed_prior_degree_preservation_rate']!=1.0:
+            raise AssertionError('Hard-degree diagnostics report an invariant violation')
+        if manifest['categorical_config']['topology']['require_connected'] and connected!=n:
+            raise AssertionError('Connected degree topology returned a disconnected graph')
+        if (root/'categorical_trajectories.pkl').is_file():
+            traces=load_pickle(root/'categorical_trajectories.pkl')
+            if len(traces)!=n: raise AssertionError('Trajectory count mismatch')
+            for trace,d in zip(traces,degrees):
+                if len(trace)!=len(manifest['sampling_timesteps'])-1:
+                    raise AssertionError('Missing reverse-step trajectory states')
+                for step in trace:
+                    edge=np.asarray(step['edge_categories'])
+                    if not np.array_equal(edge,edge.T) or np.diag(edge).any():
+                        raise AssertionError('Malformed trajectory edge tensor')
+                    np.testing.assert_array_equal((edge>0).sum(1),d)
+            trajectory_checked=True
+    result={'status':'passed','num_graphs':n,'artifact_hashes_verified':True,
             'node_counts_preserved':True,'final_local_node_types_preserved':True,
             'final_local_indexed_degrees_and_typed_degrees_preserved':True,
             'prior_degree_preservation_rate':prior_match/n,'initial_degree_preservation_rate':initial_match/n,
@@ -66,7 +89,16 @@ def audit(generated_dir):
             'max_eigenvector_orthogonality_error':max_orthogonal_error,
             'recorded_basis_updates_per_graph':diag['basis_updates_per_graph'],
             'recorded_categorical_degree_change_steps_mean':diag['categorical_degree_change_steps_mean'],
-            'degree_changes_are_allowed_not_required':True}
+            'degree_changes_are_allowed_not_required':not hard_degree}
+    if hard_degree:
+        result.update({'indexed_prior_degree_preservation_rate':indexed_match/n,
+                       'all_saved_trajectory_degrees_verified':trajectory_checked,
+                       'ordinary_degree_constraint':'hard_at_every_reverse_step',
+                       'typed_degree_preservation_guaranteed':False,
+                       'final_local_indexed_degrees_and_typed_degrees_preserved':None,
+                       'final_local_node_types_preserved':None,
+                       'final_local_audit_note':'No post-bond local rewiring in topology-first mode; pre and final artifacts coincide.'})
+    return result
 
 
 def rbf_mmd2(a,b,sigma=1.,block=256):

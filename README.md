@@ -1421,3 +1421,17 @@ See [the Option-A guide](docs/GDSM_SIMPLE_OPTION_A.md) for the strict
 initialization-only training configurations, compatibility sampling with existing
 Structure3 checkpoints, Community-small/Ego-small commands, and degree audits.
 The original degree-constrained modes remain unchanged.
+
+## Degree-exact spectral topology and bond-only categorical labels (opt-in)
+
+The `spectral_degree` topology mode separates binary edge existence from
+categorical bond labels. It realizes a sampled indexed ordinary-degree sequence
+exactly, updates topology only with degree-preserving swaps, and samples real
+bond categories only on selected edges. Generic graphs bypass edge classification.
+The existing joint categorical mode is unchanged and remains the default.
+
+This variant requires a newly trained denoiser; it does not reuse a joint
+edge/no-edge checkpoint. Ordinary degree preservation is not typed-degree or
+chemical-valence preservation. See [design and guarantees](docs/SPECTRAL_DEGREE_BOND_ONLY.md),
+[explicit commands](docs/SPECTRAL_DEGREE_BOND_ONLY_COMMANDS.md), and the standalone
+configs in `configs/experiments/gdsm_spectral_degree_explicit/`.

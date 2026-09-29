@@ -68,7 +68,12 @@ def energy(x,e,target,basis,bins,weights,*,counts=None):
         raw['spectral']=float(np.mean((values-target['spectrum'])**2))
     else: raw['spectral']=0.
     ij=np.triu_indices(len(x),1)
-    raw['edge']=float(-np.log(np.maximum(target['edge_probs'][ij[0],ij[1],e[ij]],1e-12)).mean()) if len(ij[0]) else 0.
+    if target.get('bond_only',False):
+        if weights['edge']:
+            raise ValueError('Bond-only predictions cannot score edge existence; set edge weight to zero')
+        raw['edge']=0.
+    else:
+        raw['edge']=float(-np.log(np.maximum(target['edge_probs'][ij[0],ij[1],e[ij]],1e-12)).mean()) if len(ij[0]) else 0.
     result={'total':structure+weights['spectral']*raw['spectral']+weights['edge']*raw['edge'],'structure':structure,**raw}
     if per_order is not None: result['by_order']=per_order
     return result

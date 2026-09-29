@@ -10,6 +10,12 @@ DEFAULTS={
     'graphlets':{'size':3,'connected_only':True,'clustering_bins':100},
     'initialization':{'mode':'degree_basis','ridge':.001,'diagonal_weight':1.,'basis_max_per_size':32,
                       'degree_generator':{'type':'empirical','fallback':'error','postprocess_policy':'reject_only'}},
+    # Opt-in: topology is authoritative; the categorical head has no no-edge class.
+    'topology':{'mode':'categorical','require_connected':False,
+                'train_swap_attempts_per_edge':10.0,'initial_swap_attempts_per_edge':10.0,
+                'every':10,'start_fraction':1.0,'max_steps_per_event':2,
+                'proposal_budget':128,'valid_candidate_budget':64,
+                'preserve_connectivity_if_connected':True,'min_improvement':1e-8},
     'spectral_conditioning':True,
     'spectrum_feedback':.05,
     'feedback_start_fraction':.2,
@@ -95,6 +101,31 @@ def resolve(options):
     if init['degree_generator'].get('fallback','error')!='error' or init['degree_generator'].get('postprocess_policy','reject_only')!='reject_only':
         raise ValueError('Degree prior requires fallback=error and postprocess_policy=reject_only')
     if not math.isfinite(float(init['ridge'])) or not math.isfinite(float(init['diagonal_weight'])) or init['ridge']<=0 or init['diagonal_weight']<0 or int(init['basis_max_per_size'])<1: raise ValueError('Invalid anchor settings')
+    topology=cfg['topology']
+    _unknown(topology,DEFAULTS['topology'],'topology')
+    if topology['mode'] not in ('categorical','spectral_degree'):
+        raise ValueError("topology.mode must be 'categorical' or 'spectral_degree'")
+    for key in ('require_connected','preserve_connectivity_if_connected'):
+        if type(topology[key]) is not bool:
+            raise ValueError(f'topology.{key} must be boolean')
+    for key in ('train_swap_attempts_per_edge','initial_swap_attempts_per_edge','min_improvement'):
+        if not math.isfinite(float(topology[key])) or float(topology[key])<0:
+            raise ValueError(f'topology.{key} must be finite and nonnegative')
+    for key in ('every','max_steps_per_event','proposal_budget','valid_candidate_budget'):
+        value=topology[key]
+        if type(value) is not int or (key=='every' and value<1) or (key=='max_steps_per_event' and value<0) or (key in ('proposal_budget','valid_candidate_budget') and value not in (-1,) and value<1):
+            raise ValueError(f'Invalid topology.{key}')
+    if not math.isfinite(float(topology['start_fraction'])) or not 0<=float(topology['start_fraction'])<=1:
+        raise ValueError('topology.start_fraction must be in [0,1]')
+    if topology['mode']=='spectral_degree':
+        if init['mode']!='degree_basis' or not cfg['spectral_conditioning']:
+            raise ValueError('spectral_degree requires degree_basis initialization and spectral conditioning')
+        if float(cfg['guidance']['weights']['edge'])!=0.:
+            raise ValueError('Set guidance.weights.edge=0: bond-only probabilities are not edge-existence scores')
+        if topology['require_connected'] and not topology['preserve_connectivity_if_connected']:
+            raise ValueError('Connected topology requires connectivity-preserving spectral swaps')
+        if topology['require_connected'] and cfg['guidance']['enabled'] and not cfg['guidance']['preserve_connectivity_if_connected']:
+            raise ValueError('Connected topology requires connectivity-preserving structural swaps')
     for v in list(cfg['loss_weights'].values())+list(cfg['guidance']['weights'].values()):
         if not math.isfinite(float(v)) or float(v)<0: raise ValueError('Loss/energy weights must be finite and nonnegative')
     if not any(cfg['loss_weights'].values()): raise ValueError('At least one loss is required')
