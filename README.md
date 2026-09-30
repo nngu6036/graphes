@@ -10,6 +10,25 @@ The repository is organized for controlled experiments: prepared dataset splits
 are frozen, generated artifacts are run-scoped, and baseline outputs are routed
 through the same evaluation code whenever the graph representation permits it.
 
+## Fixed training eigenbasis + exact degree decoding (30 September 2026)
+
+A new opt-in generation mode samples one same-size eigenvector basis from the
+checkpoint's training-only reservoir and retains it for every spectral proposal.
+The existing bounded 2-switch decoder enforces exact indexed ordinary degrees;
+generic graphs have no edge/no-edge head and attributed graphs keep bond-only
+sampling. Existing bond-only v2 checkpoints can run this **generation-only
+ablation without retraining**; the training objective is unchanged.
+
+Use `configs/experiments/gdsm_training_basis_degree_explicit/` (four datasets,
+seeds 42–44). The Community-small seed-42 control changes only the basis source.
+Both control and treatment disable current-graph spectral feedback.
+
+See [implementation and scope](docs/GDSM_TRAINING_BASIS_DEGREE.md),
+[explicit commands](docs/GDSM_TRAINING_BASIS_COMMANDS.md) and
+[test results](docs/GDSM_TRAINING_BASIS_TEST_REPORT.json).
+No global projection optimum, fixed target spectrum, chemical validity or
+benchmark-quality improvement is claimed.
+
 ## GDSM spectral–categorical attributed extension (17 September 2026)
 
 New opt-in node/edge marginal categorical diffusion coupled to binary-adjacency

@@ -14,7 +14,8 @@ DEFAULTS={
     # spectral topology; the categorical head then contains real bond types only.
     'topology':{'mode':'categorical','decoder':'degree_preserving','threshold':.5,
                 'max_swaps_per_step':2,'proposal_budget':128,
-                'initial_random_swaps_per_edge':4,'preserve_connectivity':False},
+                'initial_random_swaps_per_edge':4,'preserve_connectivity':False,
+                'basis_source':'current_graph'},
     'spectral_conditioning':True,
     'spectrum_feedback':.05,
     'feedback_start_fraction':.2,
@@ -31,6 +32,7 @@ DEFAULTS={
     # returned.  The raw acceptance/yield is reported in the generation manifest.
     'final_acceptance':{'require_connected':False,'max_attempt_multiplier':10.0},
     'save_trajectory':False,
+    'save_degree_trajectory':False,
 }
 
 
@@ -71,6 +73,17 @@ def resolve(options):
         raise ValueError('This variant supports marginal node/edge noise with cosine_exact_terminal only')
     if not math.isfinite(float(cfg['noise']['pseudocount'])) or cfg['noise']['pseudocount']<=0: raise ValueError('noise.pseudocount must be >0')
     topology=cfg['topology']
+    if topology['basis_source'] not in ('current_graph','training_bank'):
+        raise ValueError("topology.basis_source must be 'current_graph' or 'training_bank'")
+    if type(cfg['save_degree_trajectory']) is not bool:
+        raise ValueError('save_degree_trajectory must be boolean')
+    if topology['basis_source']=='training_bank':
+        if topology['mode']!='spectral' or topology['decoder']!='degree_preserving':
+            raise ValueError('training_bank requires spectral topology with degree_preserving decoding')
+        if cfg['initialization']['mode']!='degree_basis':
+            raise ValueError('training_bank requires degree_basis initialization')
+        if float(cfg['spectrum_feedback'])!=0.:
+            raise ValueError('training_bank requires spectrum_feedback: 0.0; current-graph sorted eigenvalues are not fixed-basis coordinates')
     if topology['mode'] not in ('categorical','spectral'):
         raise ValueError("topology.mode must be 'categorical' or 'spectral'")
     if topology['decoder'] not in ('degree_preserving','threshold'):

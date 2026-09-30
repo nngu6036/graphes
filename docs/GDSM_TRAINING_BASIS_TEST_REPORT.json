@@ -1,0 +1,201 @@
+{
+  "source_archive": "graphes(20260930-065815).zip",
+  "source_archive_sha256": "4b42a14b5a15a37e16e99081ba81873c834e07ccba7a27c7fc597c3293146bb8",
+  "implementation": "Generation-only fixed training-basis proposals with degree-preserving decoding",
+  "model_parameter_shapes_changed": false,
+  "training_loss_and_corruption_changed": false,
+  "old_bond_only_v2_checkpoint_reuse_tested": true,
+  "training_conditioning": "current_corrupted_graph_proposals",
+  "generation_conditioning": "fixed_same_size_checkpoint_training_bank_proposals",
+  "benchmark_quality_improvement_established": false,
+  "environment": {
+    "python": "3.13.5",
+    "torch": "2.10.0+cpu",
+    "numpy": "2.3.5",
+    "networkx": "3.6.1",
+    "scipy": "1.17.0",
+    "cuda_available": false
+  },
+  "new_tests": {
+    "file": "tests/test_gdsm_training_basis.py",
+    "passed": 48
+  },
+  "focused_regression": {
+    "tests": 352,
+    "passed": 347,
+    "failed": 0,
+    "skipped": 5,
+    "errors": 0,
+    "duration_seconds": 10.752,
+    "failures": [],
+    "skips": [
+      {
+        "test": "tests.test_gdsm_categorical::test_categorical_cuda_smoke",
+        "message": "Real CUDA device unavailable"
+      },
+      {
+        "test": "tests.test_gdsm_categorical_eigh::test_real_cuda_degenerate_graphs_and_output_device[9-auto]",
+        "message": "Real CUDA device unavailable"
+      },
+      {
+        "test": "tests.test_gdsm_categorical_eigh::test_real_cuda_degenerate_graphs_and_output_device[9-cpu]",
+        "message": "Real CUDA device unavailable"
+      },
+      {
+        "test": "tests.test_gdsm_categorical_eigh::test_real_cuda_degenerate_graphs_and_output_device[38-auto]",
+        "message": "Real CUDA device unavailable"
+      },
+      {
+        "test": "tests.test_gdsm_categorical_eigh::test_real_cuda_degenerate_graphs_and_output_device[38-cpu]",
+        "message": "Real CUDA device unavailable"
+      }
+    ]
+  },
+  "full_project_suite": {
+    "tests": 647,
+    "passed": 637,
+    "failed": 2,
+    "skipped": 8,
+    "errors": 0,
+    "duration_seconds": 22.097,
+    "failures": [
+      {
+        "test": "tests.test_baseline_exposure_budgets::test_effective_default_epoch_budgets[spectre-community_small]",
+        "message": "assert 500 == 10000"
+      },
+      {
+        "test": "tests.test_baseline_exposure_budgets::test_effective_default_epoch_budgets[spectre-ego_small]",
+        "message": "assert 270 == 10000"
+      }
+    ],
+    "skips": [
+      {
+        "test": "tests.test_degree_sampler_device::test_real_cuda_embedded_model[gpu]",
+        "message": "requires a real CUDA GPU"
+      },
+      {
+        "test": "tests.test_degree_sampler_device::test_real_cuda_embedded_model[cuda]",
+        "message": "requires a real CUDA GPU"
+      },
+      {
+        "test": "tests.test_degree_sampler_device::test_real_cuda_embedded_model[auto]",
+        "message": "requires a real CUDA GPU"
+      },
+      {
+        "test": "tests.test_gdsm_categorical::test_categorical_cuda_smoke",
+        "message": "Real CUDA device unavailable"
+      },
+      {
+        "test": "tests.test_gdsm_categorical_eigh::test_real_cuda_degenerate_graphs_and_output_device[9-auto]",
+        "message": "Real CUDA device unavailable"
+      },
+      {
+        "test": "tests.test_gdsm_categorical_eigh::test_real_cuda_degenerate_graphs_and_output_device[9-cpu]",
+        "message": "Real CUDA device unavailable"
+      },
+      {
+        "test": "tests.test_gdsm_categorical_eigh::test_real_cuda_degenerate_graphs_and_output_device[38-auto]",
+        "message": "Real CUDA device unavailable"
+      },
+      {
+        "test": "tests.test_gdsm_categorical_eigh::test_real_cuda_degenerate_graphs_and_output_device[38-cpu]",
+        "message": "Real CUDA device unavailable"
+      }
+    ]
+  },
+  "existing_failures_confirmed_on_unmodified_archive": {
+    "command": "PYTHONPATH=src OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 pytest -q tests/test_baseline_exposure_budgets.py -k spectre",
+    "failed": 2,
+    "passed": 2,
+    "deselected": 43,
+    "notes": "Same Community-small and Ego-small SPECTRE epoch-budget assertions fail in the unmodified uploaded source."
+  },
+  "additional_attempt_note": "One intermediate full-suite invocation timed out without completing; a subsequent full run completed in 22.10 seconds with only the two reproduced pre-existing failures.",
+  "cli_smoke_tests": {
+    "community_small": {
+      "train_generate": "passed",
+      "audit": {
+        "status": "passed",
+        "num_graphs": 3,
+        "artifact_hashes_verified": true,
+        "node_counts_preserved": true,
+        "final_local_node_types_preserved": true,
+        "final_local_indexed_degrees_and_typed_degrees_preserved": true,
+        "prior_degree_preservation_rate": 1.0,
+        "initial_degree_preservation_rate": 1.0,
+        "connectedness_rate": 1.0,
+        "raw_final_connectedness_rate": 1.0,
+        "generation_yield": 1.0,
+        "rejected_disconnected_final_graphs": 0,
+        "max_eigenpair_reconstruction_error": 8.93963282234386e-08,
+        "max_eigenvector_orthogonality_error": 5.960464477539063e-08,
+        "recorded_basis_updates_per_graph": 1,
+        "recorded_categorical_degree_change_steps_mean": 0.0,
+        "degree_changes_are_allowed_not_required": false,
+        "spectral_topology_mode": true,
+        "bond_support_verified_against_final_pre_rewire_graph": true,
+        "indexed_degree_guaranteed": true,
+        "prior_indexed_degree_preservation_rate": 1.0,
+        "saved_intermediate_degrees_verified": true,
+        "saved_intermediate_degree_vectors_verified": true,
+        "saved_full_intermediate_graphs_verified": false,
+        "fixed_training_eigenbasis": true,
+        "sampled_basis_matches_checkpoint": true,
+        "sampled_basis_checkpoint_check": "verified",
+        "final_spectral_proposal_matches_saved_training_basis": true,
+        "max_fixed_basis_proposal_error": 1.742488141970311e-08,
+        "recorded_decoder_basis_updates_after_initialization": 0
+      }
+    },
+    "qm9": {
+      "train_generate": "passed",
+      "audit": {
+        "status": "passed",
+        "num_graphs": 3,
+        "artifact_hashes_verified": true,
+        "node_counts_preserved": true,
+        "final_local_node_types_preserved": true,
+        "final_local_indexed_degrees_and_typed_degrees_preserved": true,
+        "prior_degree_preservation_rate": 1.0,
+        "initial_degree_preservation_rate": 1.0,
+        "connectedness_rate": 1.0,
+        "raw_final_connectedness_rate": 1.0,
+        "generation_yield": 1.0,
+        "rejected_disconnected_final_graphs": 0,
+        "max_eigenpair_reconstruction_error": 8.93963282234386e-08,
+        "max_eigenvector_orthogonality_error": 5.960464477539063e-08,
+        "recorded_basis_updates_per_graph": 1,
+        "recorded_categorical_degree_change_steps_mean": 0.0,
+        "degree_changes_are_allowed_not_required": false,
+        "spectral_topology_mode": true,
+        "bond_support_verified_against_final_pre_rewire_graph": true,
+        "indexed_degree_guaranteed": true,
+        "prior_indexed_degree_preservation_rate": 1.0,
+        "saved_intermediate_degrees_verified": true,
+        "saved_intermediate_degree_vectors_verified": true,
+        "saved_full_intermediate_graphs_verified": false,
+        "fixed_training_eigenbasis": true,
+        "sampled_basis_matches_checkpoint": true,
+        "sampled_basis_checkpoint_check": "verified",
+        "final_spectral_proposal_matches_saved_training_basis": true,
+        "max_fixed_basis_proposal_error": 1.895569623489024e-08,
+        "recorded_decoder_basis_updates_after_initialization": 0
+      }
+    }
+  },
+  "cli_smoke_scope": {
+    "data": "tiny synthetic generic and attributed graphs, not benchmark datasets",
+    "train_epochs": 2,
+    "sample_steps": 4,
+    "graphs_per_domain": 3,
+    "device": "cpu"
+  },
+  "not_run": [
+    "full benchmark training",
+    "1024-graph benchmark quality comparison",
+    "10000-molecule benchmark quality comparison",
+    "CUDA execution",
+    "FCD/NSPDK benchmark evaluation"
+  ],
+  "guarantee_scope": "Indexed ordinary degrees and configured connectivity in discrete generated graphs; not typed degrees, valence, spectral equality or global score optimality."
+}

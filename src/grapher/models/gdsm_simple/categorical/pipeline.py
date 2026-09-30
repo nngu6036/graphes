@@ -26,6 +26,7 @@ from .model import SpectralCategoricalDenoiser, losses, predictions_numpy
 from .noise import (MarginalNoise, cosine_alpha_bar, draw_graph, spectral_q_sample, spectral_reverse,
                     draw_bonds, draw_categories, forward_bond_graph, reverse_bonds)
 from .topology import initial_support, decode_topology
+from .training_basis import sample_training_basis, basis_digest
 from .spectral import degree_anchor, eigenpairs
 from .refiner import refine
 from .multiscale import (TypedGraphletsMulti, fit_basis, pack_training_counts,
@@ -63,7 +64,8 @@ def prepare_data(train_graphs,val_graphs,max_nodes,cfg,seed):
     vocab=GraphCategoryVocabulary.from_graphs(train_graphs,cfg['categories'])
     bins=int(cfg['graphlets']['clustering_bins'])
     rng=np.random.default_rng(seed+271)
-    reservoir=defaultdict(list); seen_sizes=defaultdict(int); all_keys=set()
+    reservoir=defaultdict(list); reservoir_metadata=defaultdict(list)
+    seen_sizes=defaultdict(int); all_keys=set()
     train=[]; val=[]
     multi=cfg['graphlets'].get('sizes') is not None
     all_counts={k:Counter() for k in cfg['graphlets']['sizes']} if multi else None
@@ -74,10 +76,15 @@ def prepare_data(train_graphs,val_graphs,max_nodes,cfg,seed):
     for i,g in enumerate(train_graphs):
         row,u=make_record(g,vocab,max_nodes,bins,cfg['graphlets']); train.append(row)
         n=len(row['x']); seen_sizes[n]+=1
-        if len(reservoir[n])<limit: reservoir[n].append(u)
+        donor={'training_graph_index':i,'num_nodes':n,'basis_sha256':basis_digest(u),
+               'indexed_degrees':row['degrees'].tolist(),
+               'normalized_adjacency_eigenvalues':row['z'].tolist()}
+        if len(reservoir[n])<limit:
+            reservoir[n].append(u); reservoir_metadata[n].append(donor)
         else:
             j=int(rng.integers(seen_sizes[n]))
-            if j<limit: reservoir[n][j]=u
+            if j<limit:
+                reservoir[n][j]=u; reservoir_metadata[n][j]=donor
         if multi:
             for k in all_counts: all_counts[k].update(row['counts'][k])
             row['counts']=pack_training_counts(row['counts'],codebooks)
@@ -123,6 +130,9 @@ def prepare_data(train_graphs,val_graphs,max_nodes,cfg,seed):
         'graphlets':'connected_induced_typed_3_plus_overflow_and_connected_triple_mass',
         'unseen_validation_sizes_haar_anchor_fallback':sorted(unseen_validation_sizes),
         'mean_anchor_row_sum_rmse':float(np.mean(anchor_residuals)) if anchor_residuals else 0.,
+        'basis_bank_provenance':{'source_split':'train','sampling':'per_size_uniform_reservoir',
+                                 'limit_per_size':limit,'training_counts_by_size':dict(seen_sizes),
+                                 'entries':dict(reservoir_metadata)},
     }
     if _spectral_topology(cfg):
         bonds=edge_counts[1:]+pseudo
@@ -282,7 +292,10 @@ def train(wrapper,request,options):
                 'categorical_adjacency_is_authoritative':False,
                 'original_degrees_enforced':cfg['topology']['decoder']=='degree_preserving',
                 'degree_constraint_scope':'generation_only_not_training_corruption',
-                'checkpoint_format':SPECTRAL_TOPOLOGY_FORMAT})
+                'checkpoint_format':SPECTRAL_TOPOLOGY_FORMAT,
+                'training_proposal_basis':'current_corrupted_graph',
+                'configured_generation_basis':cfg['topology']['basis_source'],
+                'training_bank_generation_is_sampling_intervention':cfg['topology']['basis_source']=='training_bank'})
         _write_json(staging/'manifest.json',manifest)
         if layout.train_dir.exists(): shutil.rmtree(layout.train_dir)
         staging.replace(layout.train_dir)
@@ -305,6 +318,9 @@ def validate_generation(state,options):
         raise ValueError('Checkpoint model architecture and topology mode disagree')
     # Decoder policy/budgets are generation controls; the head vocabulary and
     # training objective are shared by threshold and constrained decoding.
+    # basis_source is also generation-only: existing v2 checkpoints already
+    # contain the training bank. This changes conditioning at sampling, not
+    # parameter shapes or the forward/training distribution.
 
     for key in ('categories','noise','graphlets','spectral_conditioning','loss_weights'):
         if cfg[key]!=trained[key]:
@@ -338,6 +354,7 @@ def generate(wrapper,request,state,manifest,options):
     xn,en=_noise_models(schema,abar,cfg)
     spectral_mode=_spectral_topology(cfg)
     fixed_degrees=spectral_mode and cfg['topology']['decoder']=='degree_preserving'
+    fixed_training_basis=cfg['topology']['basis_source']=='training_bank'
     sample_steps=int(options['sample']['steps'])
     times=np.rint(np.linspace(total,0,sample_steps+1)).astype(int).tolist()
     if any(s>=t for t,s in zip(times,times[1:])): raise ValueError('Sampling schedule must strictly decrease')
@@ -354,6 +371,7 @@ def generate(wrapper,request,state,manifest,options):
     else: sampler,prior_info=None,{'type':'unused_gaussian_initialization','learned':False}
     outputs=[]; initials=[]; pre_final=[]; anchors_saved=[]; degree_samples=[]
     final_values=[]; final_vectors=[]; predictions=[]; diagnostics=[]; trajectories=[]
+    sampled_bases=[]; basis_records=[]; degree_trajectories=[]
     started=time.monotonic(); batch_size=int(options['generation_batch_size']); guide=cfg['guidance']
     acceptance=cfg['final_acceptance']
     require_connected=bool(acceptance['require_connected'])
@@ -383,16 +401,39 @@ def generate(wrapper,request,state,manifest,options):
             n=len(d)
             if n<1 or n>state['max_nodes'] or not nx.is_graphical(d.tolist()):
                 raise ValueError('Degree prior returned an invalid or oversized sequence; no silent fallback')
-            u,idx,fallback=_basis_for_size(bank,n,basis_rng)
+            basis_record=None
+            if fixed_training_basis:
+                u,idx,basis_record=sample_training_basis(bank,n,basis_rng)
+                fallback=False
+                entries=schema.get('basis_bank_provenance',{}).get('entries',{})
+                same_size_entries=entries.get(n,entries.get(str(n),[]))
+                if same_size_entries:
+                    donor=same_size_entries[idx]
+                    if donor['basis_sha256']!=basis_record['basis_sha256']:
+                        raise ValueError('Training bank and saved donor provenance disagree')
+                    basis_record['training_graph_index']=donor['training_graph_index']
+                else:
+                    # Older v2 checkpoints contain the training bank but not
+                    # reservoir-to-source-graph indices. Do not invent them.
+                    basis_record['training_graph_index']=None
+            else:
+                u,idx,fallback=_basis_for_size(bank,n,basis_rng)
             if init['mode']=='degree_basis':
                 anchor,ad=degree_anchor(u,d,init['ridge'],init['diagonal_weight'])
             else: anchor,ad=np.zeros(n,np.float32),{}
             ds.append(d); aa.append(anchor); initial_bases.append(u)
             init_rows.append({'basis_bank_index_within_size':idx,'haar_basis_fallback':fallback,
-                              'anchor':ad,'degree_sampling':dd})
+                              'anchor':ad,'degree_sampling':dd,
+                              **({'decoder_basis':basis_record} if fixed_training_basis else {})})
         width=max(map(len,ds)); mask=torch.zeros((b,width),dtype=torch.bool,device=device)
         anchor=torch.zeros((b,width),device=device)
         for i,d in enumerate(ds): mask[i,:len(d)]=True; anchor[i,:len(d)]=torch.as_tensor(aa[i],device=device)
+        proposal_basis=None
+        if fixed_training_basis:
+            proposal_basis=torch.zeros((b,width,width),device=device)
+            for i,u in enumerate(initial_bases):
+                proposal_basis[i,:len(u),:len(u)]=torch.as_tensor(u,device=device)
+            original_proposal_basis=proposal_basis.clone()
         px=xn.marginal.expand(b,width,-1); pe=en.marginal.expand(b,width,width,-1)
         target_degrees=torch.zeros((b,width),dtype=torch.long,device=device)
         for i,d in enumerate(ds):
@@ -419,7 +460,10 @@ def generate(wrapper,request,state,manifest,options):
         else:
             x,e=draw_graph(px,pe,mask,noise_rng)
             z=(anchor+torch.randn(anchor.shape,device=device,generator=noise_rng))*mask
-        current_pairs=eigenpairs(e,mask)
+        # The fixed donor basis is never overwritten with the discrete graph's
+        # eigenvectors. Actual eigenpairs are needed only for final artifacts.
+        current_pairs=None if fixed_training_basis else eigenpairs(e,mask)
+        degree_history=[(e>0).sum(2)] if cfg['save_degree_trajectory'] else []
         rows=[]; batch_initials=[]; batch_pre_final=[None]*b
         for i,d in enumerate(ds):
             n=len(d); ex=e[i,:n,:n].cpu().numpy(); xx=x[i,:n].cpu().numpy()
@@ -429,10 +473,12 @@ def generate(wrapper,request,state,manifest,options):
                          'spectral_degree_change_steps':0,'spectral_edge_change_steps':0,
                          'spectral_topology_accepted_swaps':0,'spectral_topology_tested_candidates':0,
                          'bond_topology_violation_steps':0,'indexed_degree_violation_steps':0,
-                         'basis_updates':1,'guidance_events':[],'trajectory':[]})
+                         'basis_updates':1,
+                         'graph_eigenpair_recomputations':0 if fixed_training_basis else 1,
+                         'guidance_events':[],'trajectory':[]})
         for t,s in zip(times,times[1:]):
             tv=torch.full((b,),t,device=device,dtype=torch.long); sv=torch.full((b,),s,device=device,dtype=torch.long)
-            kwargs={}
+            kwargs={'proposal_basis':proposal_basis} if fixed_training_basis else {}
             if spectral_mode:
                 def topology_decoder(scores):
                     return decode_topology(scores,e,mask,target_degrees,cfg['topology'],topology_rng)
@@ -482,16 +528,30 @@ def generate(wrapper,request,state,manifest,options):
                     rows[i]['guidance_events'].append({'from_t':t,'to_t':s,**rd})
                 if cfg['save_trajectory']:
                     rows[i]['trajectory'].append({'t':s,'node_categories':xx.copy(),'edge_categories':ee.copy()})
-            # This recomputation is unconditional: even no accepted swap or only
-            # a categorical update must be represented in the next decoder basis.
             if fixed_degrees and not torch.equal((new_e>0).sum(2),target_degrees):
                 raise AssertionError('A reverse transition or structural swap changed the fixed indexed degrees')
-            current_pairs=eigenpairs(new_e,mask)
-            coefficient=float(cfg['spectrum_feedback']) if feedback_active else 0.
-            guided=(1-coefficient)*pred['clean_spectrum']+coefficient*current_pairs[0]
+            if cfg['save_degree_trajectory']:
+                degree_history.append((new_e>0).sum(2))
+            if fixed_training_basis:
+                # No sorted-current-eigenvalue feedback into donor coordinates.
+                # The spectrum follows the existing reverse process; the hard
+                # constraint belongs to the separate discrete graph state.
+                guided=pred['clean_spectrum']
+                if s==0:
+                    current_pairs=eigenpairs(new_e,mask)
+                    for row in rows: row['graph_eigenpair_recomputations']+=1
+            else:
+                current_pairs=eigenpairs(new_e,mask)
+                coefficient=float(cfg['spectrum_feedback']) if feedback_active else 0.
+                guided=(1-coefficient)*pred['clean_spectrum']+coefficient*current_pairs[0]
+                for row in rows:
+                    row['basis_updates']+=1; row['graph_eigenpair_recomputations']+=1
             z=spectral_reverse(z,guided,anchor,abar,tv,sv,mask)
             x,e=new_x,new_e
-            for row in rows: row['basis_updates']+=1
+        if fixed_training_basis and not torch.equal(proposal_basis,original_proposal_basis):
+            raise AssertionError('The sampled training eigenbasis was modified during generation')
+        if cfg['save_degree_trajectory']:
+            degree_history_np=torch.stack(degree_history,dim=1).cpu().numpy().astype(np.int32)
         for i,d in enumerate(ds):
             n=len(d); xx=x[i,:n].cpu().numpy(); ee=e[i,:n,:n].cpu().numpy()
             graph=decode_graph(xx,ee,vocab); connected=nx.is_connected(graph)
@@ -514,6 +574,21 @@ def generate(wrapper,request,state,manifest,options):
             values=current_pairs[0][i,:n].cpu().numpy(); vectors=current_pairs[1][i,:n,:n].cpu().numpy()
             final_values.append(values); final_vectors.append(vectors)
             predictions.append(predictions_numpy(pred,i,n))
+            if cfg['save_degree_trajectory']:
+                degree_trajectories.append(degree_history_np[i,:,:n].copy())
+            if fixed_training_basis:
+                sampled_bases.append(proposal_basis[i,:n,:n].cpu().numpy().copy())
+                record=copy.deepcopy(init_rows[i]['decoder_basis'])
+                record['sample_index']=accepted_index
+                record['checkpoint_sha256']=manifest['checkpoint']['sha256']
+                record['training_split_sha256']=manifest['dataset'].get('split_sha256',{}).get('train')
+                basis_records.append(record)
+                offdiag=~np.eye(n,dtype=bool)
+                score=predictions[-1]['spectral_scores']
+                support=predictions[-1]['topology_support']
+                rows[i]['decoder_basis_fixed']=True
+                rows[i]['final_projection_offdiagonal_rmse']=(float(np.sqrt(np.mean((score[offdiag]-support[offdiag])**2))) if n>1 else 0.)
+                rows[i]['final_realized_vs_predicted_spectrum_rmse']=float(np.sqrt(np.mean((values-predictions[-1]['spectrum'])**2)))
             actual=(ee>0).sum(1)
             rows[i].update({'final_degrees':actual.tolist(),'prior_indexed_degree_preserved':bool(np.array_equal(actual,d)),'prior_degree_preserved':bool(np.array_equal(np.sort(actual),np.sort(d))),
                             'initial_degree_preserved':bool(np.array_equal(actual,np.array([initial.degree(v) for v in range(n)]))),
@@ -538,6 +613,11 @@ def generate(wrapper,request,state,manifest,options):
         if request.run.dataset_id in ('qm9','zinc'): objects['molecular_graphs.pkl']=outputs
         if rejected_graphs: objects['rejected_disconnected_graphs.pkl']=rejected_graphs
         if cfg['save_trajectory']: objects['categorical_trajectories.pkl']=trajectories
+        if cfg['save_degree_trajectory']:
+            objects['degree_trajectories.pkl']={'timesteps':times,'indexed_degrees':degree_trajectories}
+        if fixed_training_basis:
+            objects['sampled_training_eigenvectors.pkl']=sampled_bases
+            objects['sampled_training_basis_records.pkl']=basis_records
         hashes={}
         for name,obj in objects.items():
             with (staging/name).open('wb') as f: pickle.dump(obj,f,protocol=pickle.HIGHEST_PROTOCOL)
@@ -553,7 +633,8 @@ def generate(wrapper,request,state,manifest,options):
                    'connectedness_rate':float(np.mean([r['connected'] for r in diagnostics])),
                    'categorical_degree_change_steps_mean':float(np.mean([r['categorical_degree_change_steps'] for r in diagnostics])),
                    'mean_accepted_steps':float(np.mean([sum(ev['accepted_steps'] for ev in r['guidance_events']) for r in diagnostics])),
-                   'basis_updates_per_graph':sample_steps+1,
+                   'basis_updates_per_graph':1 if fixed_training_basis else sample_steps+1,
+                   'graph_eigenpair_recomputations_per_graph':1 if fixed_training_basis else sample_steps+1,
                    'max_final_eigenpair_reconstruction_error':max(r['final_eigenpair_reconstruction_max_error'] for r in diagnostics)}
         if spectral_mode:
             aggregate.update({
@@ -563,6 +644,12 @@ def generate(wrapper,request,state,manifest,options):
                 'spectral_edge_change_steps_mean':float(np.mean([r['spectral_edge_change_steps'] for r in diagnostics])),
                 'spectral_topology_accepted_swaps_mean':float(np.mean([r['spectral_topology_accepted_swaps'] for r in diagnostics])),
                 'indexed_degree_guaranteed':fixed_degrees})
+        if fixed_training_basis:
+            aggregate.update({'fixed_training_eigenbasis':True,
+                              'decoder_basis_updates_after_initialization':0,
+                              'sampled_basis_fallbacks':0,
+                              'final_projection_offdiagonal_rmse_mean':float(np.mean([r['final_projection_offdiagonal_rmse'] for r in diagnostics])),
+                              'final_realized_vs_predicted_spectrum_rmse_mean':float(np.mean([r['final_realized_vs_predicted_spectrum_rmse'] for r in diagnostics]))})
         _write_json(staging/'rewiring_diagnostics.json',{'aggregate':aggregate,'graphs':diagnostics,
                     'final_rejections':rejection_records})
         _write_json(staging/'final_acceptance_diagnostics.json',{
@@ -614,6 +701,39 @@ def generate(wrapper,request,state,manifest,options):
             generation_manifest['prior_note']=('The sampled ordinary-degree sequence initializes both the spectral anchor and a feasible indexed-degree topology; spectral and structural swaps retain these degrees.' if fixed_degrees else 'The sampled degrees initialize a soft spectral anchor only; spectral thresholding may change degrees.')
             generation_manifest['sampling_intervention_note']=('Topology is a spectral-guided decoding intervention, not an exact joint reverse posterior. The bounded 2-switch decoder guarantees indexed ordinary degrees, not a globally optimal score projection, typed degrees, valence, or exact spectral realization.' if fixed_degrees else 'Threshold topology is a spectral-guided decoding intervention. Bond resampling preserves the selected support, but successive spectral thresholds may change degrees.')
             generation_manifest['initialization_uses_havel_hakimi']=fixed_degrees
+        generation_manifest['degree_trace']={'saved':bool(cfg['save_degree_trajectory']),
+                                             'path':'degree_trajectories.pkl' if cfg['save_degree_trajectory'] else None,
+                                             'includes_initial_and_every_reverse_step':bool(cfg['save_degree_trajectory']),
+                                             'scope':'recorded_indexed_degree_vectors_not_full_graphs'}
+        if fixed_training_basis:
+            generation_manifest['decode'].update({
+                'basis':'sampled_training_eigenvectors_fixed_for_trajectory',
+                'basis_source':'training_bank','fixed_initial_eigenbasis':True,
+                'basis_selection':'uniform_same_size_checkpoint_reservoir',
+                'basis_row_order':'stored_donor_order',
+                'missing_basis_policy':'error_no_fallback',
+                'proposal':'U_train_diag_sqrt_n_times_predicted_clean_eigenvalues_U_train_transpose',
+                'spectral_projection':'bounded_degree_preserving_score_improving_2_switches',
+                'global_projection_optimality_guarantee':False,
+                'eigenvalues_alone_enforce_degrees':False,
+                'final_graph_shares_sampled_basis_guaranteed':False,
+                'current_graph_sorted_spectrum_feedback':False,
+                'training_proposal_basis':'current_corrupted_graph',
+                'generation_basis_differs_from_training':True,
+                'training_eigenvector_provenance':'checkpoint_basis_bank_training_split_only'})
+            generation_manifest['sampled_training_eigenvectors']={
+                'path':'sampled_training_eigenvectors.pkl',
+                'records_path':'sampled_training_basis_records.pkl',
+                'role':'fixed_decoder_bases_not_final_graph_eigenvectors'}
+            generation_manifest['prior_note']=(
+                'The sampled degrees define the discrete invariant. A same-size training-bank basis supplies '
+                'the soft ridge spectral anchor AND every proposal. The Gaussian terminal latent itself '
+                'need not have these row sums. Indexed HH initialization and valid 2-switches enforce degrees.')
+            generation_manifest['sampling_intervention_note']=(
+                'Generation-only fixed-training-basis ablation on the existing joint denoiser. Training '
+                'still conditions pair/summary layers on current-corrupted-graph spectral proposals. '
+                'This conditioning shift and constrained decoding are not an exact GSDM reverse SDE. '
+                'No claim of better quality, global projection optimality, or exact spectral/typed-degree realization.')
         _write_json(staging/'manifest.json',generation_manifest)
         (staging/'generation.log').write_text(json.dumps(aggregate,indent=2)+'\n')
         if target.exists(): shutil.rmtree(target)
