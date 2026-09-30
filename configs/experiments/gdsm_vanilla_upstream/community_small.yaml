@@ -1,0 +1,42 @@
+# Released Community-small GSDM training horizon, useful as a source-fidelity control.
+gdsm_simple:
+  variant: vanilla_gsdm
+  train:
+    epochs: 200
+    batch_size: 128
+    lr: 0.01
+    weight_decay: 0.0001
+    grad_norm: 1.0
+    lr_schedule: true
+    lr_decay: 0.999
+    ema: 0.999
+    validation_every: 1
+    log_every: 10
+  model:
+    max_nodes: 20
+    max_feat_num: 20
+    hidden_dim: 32
+    depth: 3
+  sde:
+    x: {type: vp, beta_min: 0.1, beta_max: 1.0, num_scales: 1000}
+    spectrum: {type: vp, beta_min: 0.1, beta_max: 1.0, num_scales: 1000}
+    eps: 1.0e-5
+    eigen_mask: official_extremes
+  sample:
+    predictor: euler
+    corrector: langevin
+    snr: 0.05
+    scale_eps: 0.7
+    n_steps: 1
+    noise_removal: true
+    probability_flow: false
+    eps: 1.0e-4
+    threshold: 0.5
+    use_ema: false
+  generation_batch_size: 128
+  runtime: {device: auto}
+  extensions:
+    degree_conditioning: false
+    hh_initialization: false
+    degree_preserving_rewiring: false
+    structural_summary: none

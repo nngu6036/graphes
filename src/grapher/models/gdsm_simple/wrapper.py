@@ -172,6 +172,7 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
     supported_datasets = frozenset({"community_small", "ego_small", "grid", "qm9", "zinc", "attributed"})
 
     default_options: dict[str, Any] = {
+        "variant": "legacy_simple",
         "train": {
             "epochs": 200,
             "batch_size": 64,
@@ -231,16 +232,50 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
     def _options(self, request: TrainRequest) -> dict[str, Any]:
         request_options = copy.deepcopy(dict(request.options))
         comparison_defaults = request_options.pop("comparison_defaults", {}) or {}
-        options = _deep_update(copy.deepcopy(self.default_options), comparison_defaults)
+
+        selected: dict[str, Any] = {}
         if request.config_path is not None:
             raw = yaml.safe_load(request.config_path.read_text(encoding="utf-8")) or {}
-            selected = raw.get(self.model_id, raw)
-            if not isinstance(selected, Mapping):
+            raw_selected = raw.get(self.model_id, raw)
+            if not isinstance(raw_selected, Mapping):
                 raise TypeError("gdsm_simple config section must be a mapping")
+            selected = copy.deepcopy(dict(raw_selected))
+
+        requested_variant = str(
+            request_options.get(
+                "variant",
+                selected.get(
+                    "variant",
+                    comparison_defaults.get("variant", self.default_options.get("variant", "legacy_simple")),
+                ),
+            )
+        ).lower()
+
+        if requested_variant in {"vanilla_gsdm", "vanilla", "gsdm"}:
+            from grapher.models.gdsm_simple.vanilla_gsdm import (
+                default_vanilla_options,
+                validate_options,
+            )
+
+            options = default_vanilla_options()
+            options["variant"] = "vanilla_gsdm"
+            options["extensions"] = {
+                "degree_conditioning": False,
+                "hh_initialization": False,
+                "degree_preserving_rewiring": False,
+                "structural_summary": "none",
+            }
+            options = _deep_update(options, comparison_defaults)
             options = _deep_update(options, selected)
+            options = _deep_update(options, request_options)
+            validate_options(options)
+            return options
+
+        options = _deep_update(copy.deepcopy(self.default_options), comparison_defaults)
+        options = _deep_update(options, selected)
         options = _deep_update(options, request_options)
         allowed = {
-            "train", "model", "diffusion", "sample", "generation_batch_size",
+            "variant", "train", "model", "diffusion", "sde", "sample", "generation_batch_size",
             "runtime", "extensions", "comparison_reference", "training_estimates",
         }
         unknown = sorted(set(options) - allowed)
@@ -279,6 +314,9 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         if request.resume_from is not None:
             raise ValueError("gdsm_simple resume is not implemented")
         options = self._options(request)
+        if str(options.get("variant", "legacy_simple")).lower() in {"vanilla_gsdm", "vanilla", "gsdm"}:
+            from grapher.models.gdsm_simple.vanilla_gsdm import train
+            return train(self, request, options)
         if categorical_enabled(options.get("extensions", {})):
             from grapher.models.gdsm_simple.categorical.pipeline import train
             return train(self, request, options)
@@ -490,6 +528,9 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             raise ValueError(f"Unsupported gdsm_simple generation overrides: {unknown}")
         _deep_update(options, request.options)
         generation_extensions = options.get("extensions", {}) or {}
+        if state.get("format") == "gdsm_simple_vanilla_gsdm_checkpoint_v1" or str(options.get("variant", "legacy_simple")).lower() in {"vanilla_gsdm", "vanilla", "gsdm"}:
+            from grapher.models.gdsm_simple.vanilla_gsdm import generate
+            return generate(self, request, state, manifest, options)
         if state.get("format") in ("gdsm_spectral_categorical_checkpoint_v1", "gdsm_spectral_topology_bond_only_checkpoint_v2") or categorical_enabled(generation_extensions):
             from grapher.models.gdsm_simple.categorical.pipeline import generate
             return generate(self, request, state, manifest, options)

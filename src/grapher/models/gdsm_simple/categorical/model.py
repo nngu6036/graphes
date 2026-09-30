@@ -2,9 +2,8 @@
 
 Node indices are never confused with spectral ranks. Legacy mode uses categorical edges as adjacency. In spectral-topology mode,
 spectral decoding alone chooses edge existence and the edge head predicts K
-real bond types, only on that support. Generation can use a fixed training
-eigenbasis instead of the dynamically recomputed current-graph eigenbasis.
-The neural parameters and normalized adjacency-eigenvalue target are unchanged.
+real bond types, only on that support. The uploaded spectral representation and
+dynamic eigenbasis implementation are unchanged.
 """
 from __future__ import annotations
 import inspect
@@ -14,7 +13,6 @@ from torch.nn import functional as F
 from grapher.models.gdsm_simple.model import sinusoidal_time_embedding
 from .noise import pair_mask
 from .spectral import eigenpairs, spectral_proposal
-from .training_basis import fixed_basis_proposal
 
 
 def mlp(input_dim, hidden, output_dim):
@@ -98,7 +96,7 @@ class SpectralCategoricalDenoiser(nn.Module):
         self.orbit_head=nn.Linear(hidden_dim,4)
 
     def forward(self,x,e,z,t,anchor,mask,diffusion_steps,*,current_pairs=None,
-                edge_support=None,topology_decoder=None,proposal_basis=None):
+                edge_support=None,topology_decoder=None):
         if mask.ndim!=2 or z.shape!=mask.shape or x.shape!=mask.shape or anchor.shape!=mask.shape:
             raise ValueError("Expected node, mask, spectrum and anchor shapes [B,N]")
         if e.shape!=(len(mask),mask.shape[1],mask.shape[1]) or not torch.equal(e,e.transpose(1,2)):
@@ -128,17 +126,10 @@ class SpectralCategoricalDenoiser(nn.Module):
         scale=(bound/spectrum.abs().amax(1).clamp_min(1e-12)).clamp(max=1.)
         spectrum=spectrum*scale[:,None]*mask
         spectral_context=mean_nodes(sh,mask)
-        if proposal_basis is not None:
-            if not self.bond_only:
-                raise ValueError('A fixed proposal basis requires spectral-topology bond-only mode')
-            # The donor columns are saved coordinates, not the eigenspaces of e.
-            # In particular, do NOT average using current-graph degeneracy blocks.
-            scores=fixed_basis_proposal(spectrum,proposal_basis,mask)
-        else:
-            if current_pairs is None:
-                current_pairs=eigenpairs(e,mask)
-            values,vectors=current_pairs
-            scores=spectral_proposal(spectrum,values,vectors,mask)
+        if current_pairs is None:
+            current_pairs=eigenpairs(e,mask)
+        values,vectors=current_pairs
+        scores=spectral_proposal(spectrum,values,vectors,mask)
         if self.spectral_conditioning:
             pair=pair+self.proposal_input(scores[...,None])*active[...,None]
             h=h+self.spectral_to_graph(spectral_context)[:,None,:]*mask[...,None]
@@ -184,8 +175,6 @@ class SpectralCategoricalDenoiser(nn.Module):
                 "graphlet_logits":self.graphlet_head(pooled),"graphlet_mass":self.mass_head(pooled).sigmoid(),
                 "clustering_logits":self.clustering_head(pooled),"orbit_log_mean":F.softplus(self.orbit_head(pooled)),
                 "spectral_scores":scores}
-        if proposal_basis is not None:
-            result['fixed_training_basis']=True
         if self.bond_only:
             result['bond_only']=True
             result['edge_support']=edge_support
@@ -262,9 +251,6 @@ def predictions_numpy(pred,index,n):
         'orbit':pred['orbit_log_mean'][index].detach().cpu().numpy(),
     }
 
-    if pred.get('fixed_training_basis'):
-        result['spectral_scores']=pred['spectral_scores'][index,:n,:n].detach().cpu().numpy()
-        result['fixed_training_basis']=True
     if pred.get('bond_only'):
         support=pred['edge_support'][index,:n,:n].detach().cpu().numpy()
         bonds=result['edge_probs']
