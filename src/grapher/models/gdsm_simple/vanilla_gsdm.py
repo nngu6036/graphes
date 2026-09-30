@@ -11,9 +11,12 @@ This module implements the generic-graph spectral diffusion core used in
   predictor-corrector reverse process, reconstructs the continuous adjacency,
   and thresholds it once at the end.
 
-No degree prior, Havel-Hakimi constructor, categorical edge head, graphlet
-head, rewiring, or post-hoc repair is used in this path.  It is intentionally
-kept as the clean baseline on which later GraphES features can be added.
+The base ``vanilla_gsdm`` variant has no degree prior.  The controlled
+``vanilla_gsdm_dhvae`` ablation co-trains an auxiliary DH-VAE on the same
+training split and samples one degree sequence per generated graph, but those
+sequences are *not* used by the spectral sampler or the thresholded topology.
+Neither variant uses Havel-Hakimi construction, degree projection, categorical
+edge prediction, graphlet guidance, rewiring, or post-hoc repair.
 """
 from __future__ import annotations
 
@@ -39,13 +42,23 @@ import yaml
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+from grapher.models.dhvae_hh.degree_sampler import DegreeVAESampler
+from grapher.models.dhvae_hh.degree_vae import (
+    DegreeHistogramVAE,
+    DegreeVectorizer,
+    build_degree_vae,
+    degree_vae_loss,
+)
+
 from grapher.models.artifacts import ArtifactLayout
 from grapher.models.base import GenerateRequest, GenerationArtifacts, TrainRequest, TrainingArtifacts
 from grapher.models.errors import ArtifactCollisionError
 from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 
 
-CHECKPOINT_FORMAT = "gdsm_simple_vanilla_gsdm_checkpoint_v1"
+CHECKPOINT_FORMAT_V1 = "gdsm_simple_vanilla_gsdm_checkpoint_v1"
+CHECKPOINT_FORMAT = "gdsm_simple_vanilla_gsdm_checkpoint_v2"
+SUPPORTED_CHECKPOINT_FORMATS = {CHECKPOINT_FORMAT_V1, CHECKPOINT_FORMAT}
 TRAINING_FORMAT = "grapher_gdsm_simple_vanilla_gsdm_training_v1"
 GENERATION_FORMAT = "grapher_gdsm_simple_vanilla_gsdm_generation_v1"
 
@@ -162,6 +175,44 @@ def default_vanilla_options() -> dict[str, Any]:
             "threshold": 0.5,
             "use_ema": False,
         },
+        "degree_prior": {
+            "enabled": False,
+            "batch_size": 64,
+            "latent_dim": 32,
+            "hidden_dim": 128,
+            "size_condition_dim": 16,
+            "edge_condition_dim": 16,
+            "use_edge_count_conditioning": True,
+            "prior_condition_on_edges": True,
+            "prior_type": "conditional_gmm",
+            "prior_components": 4,
+            "prior_hidden_dim": 128,
+            "prior_logvar_min": -6.0,
+            "prior_logvar_max": 4.0,
+            "num_layers": 2,
+            "dropout": 0.0,
+            "learning_rate": 1.0e-3,
+            "weight_decay": 1.0e-5,
+            "kl_loss_weight": 0.005,
+            "kl_warmup_epochs": 50,
+            "node_count_loss_weight": 1.0,
+            "edge_count_loss_weight": 2.0,
+            "degree_histogram_loss_weight": 5.0,
+            "degree_moment_loss_weight": 0.25,
+            "prior_distribution_loss_weight": 1.0,
+            "prior_distribution_kernel_sigma": 0.2,
+            "aggregate_prior_moment_loss_weight": 0.05,
+            "require_connected": True,
+            "sample_num_nodes": "empirical",
+            "sample_num_edges": "model",
+            "exact_degree_sum_conditioning": True,
+            "max_resample": 500,
+            "model_resample_attempts": 32,
+            "parity_conditioned": False,
+            "max_parity_resample": 1,
+            "postprocess_policy": "reject_only",
+            "fallback": "error",
+        },
         "generation_batch_size": 128,
         "runtime": {"device": "auto"},
     }
@@ -169,14 +220,26 @@ def default_vanilla_options() -> dict[str, Any]:
 
 def validate_options(options: Mapping[str, Any]) -> None:
     allowed = {
-        "variant", "train", "model", "sde", "sample", "generation_batch_size",
+        "variant", "train", "model", "sde", "sample", "degree_prior", "generation_batch_size",
         "runtime", "extensions", "comparison_reference", "training_estimates", "diffusion",
     }
     unknown = sorted(set(options) - allowed)
     if unknown:
         raise ValueError(f"Unknown vanilla GSDM options: {unknown}")
-    if str(options.get("variant", "")).lower() not in {"vanilla_gsdm", "vanilla", "gsdm"}:
-        raise ValueError("vanilla GSDM pipeline requires variant: vanilla_gsdm")
+    variant = str(options.get("variant", "")).lower()
+    if variant not in {"vanilla_gsdm", "vanilla", "gsdm", "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae"}:
+        raise ValueError("vanilla GSDM pipeline requires variant vanilla_gsdm or vanilla_gsdm_dhvae")
+    degree_prior = options.get("degree_prior", {}) or {}
+    prior_enabled = bool(degree_prior.get("enabled", False))
+    if variant in {"vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae"} and not prior_enabled:
+        raise ValueError("vanilla_gsdm_dhvae requires degree_prior.enabled=true")
+    if variant in {"vanilla_gsdm", "vanilla", "gsdm"} and prior_enabled:
+        raise ValueError("Use variant: vanilla_gsdm_dhvae when degree_prior.enabled=true")
+    if prior_enabled:
+        if int(degree_prior.get("batch_size", 0)) <= 0:
+            raise ValueError("degree_prior.batch_size must be positive")
+        if str(degree_prior.get("sample_num_nodes", "empirical")).lower() not in {"empirical", "model"}:
+            raise ValueError("degree_prior.sample_num_nodes must be empirical or model")
     extensions = options.get("extensions", {}) or {}
     enabled = []
     for key, value in extensions.items():
@@ -521,6 +584,192 @@ def _make_sdes(options: Mapping[str, Any], device: torch.device) -> tuple[VPSDE,
     )
 
 
+
+def _degree_targets_to_tensors(
+    targets: Mapping[str, np.ndarray], device: torch.device,
+) -> dict[str, torch.Tensor]:
+    out: dict[str, torch.Tensor] = {}
+    for key, value in targets.items():
+        tensor = torch.as_tensor(value, device=device)
+        if key in {"num_nodes", "num_nodes_count", "num_edges_count"}:
+            tensor = tensor.long()
+        else:
+            tensor = tensor.float()
+        out[key] = tensor
+    return out
+
+
+def _build_degree_prior_training(
+    train_graphs: list[nx.Graph],
+    cfg: Mapping[str, Any],
+    device: torch.device,
+) -> dict[str, Any]:
+    """Build the auxiliary DH-VAE used by the Stage-1 ablation.
+
+    It is deliberately independent of the GSDM networks.  "Joint" here means
+    co-trained in the same managed training run/epoch schedule and saved in the
+    same checkpoint, not a shared latent or cross-conditioned objective yet.
+    """
+
+    vectorizer = DegreeVectorizer.fit(
+        train_graphs,
+        max_degree=None,
+        require_connected=bool(cfg.get("require_connected", True)),
+    )
+    x_np, targets_np = vectorizer.to_training_arrays(train_graphs)
+    inputs = torch.as_tensor(x_np, dtype=torch.float32)
+    loader = DataLoader(
+        TensorDataset(inputs, torch.arange(inputs.shape[0])),
+        batch_size=int(cfg.get("batch_size", 64)),
+        shuffle=True,
+        drop_last=False,
+    )
+    targets = _degree_targets_to_tensors(targets_np, device)
+    model = build_degree_vae(
+        vectorizer,
+        latent_dim=int(cfg.get("latent_dim", 32)),
+        hidden_dim=int(cfg.get("hidden_dim", 128)),
+        size_condition_dim=int(cfg.get("size_condition_dim", 16)),
+        edge_condition_dim=int(cfg.get("edge_condition_dim", 16)),
+        use_edge_count_conditioning=bool(cfg.get("use_edge_count_conditioning", True)),
+        prior_condition_on_edges=bool(cfg.get("prior_condition_on_edges", True)),
+        prior_type=str(cfg.get("prior_type", "conditional_gmm")),
+        prior_components=int(cfg.get("prior_components", 4)),
+        prior_hidden_dim=int(cfg.get("prior_hidden_dim", cfg.get("hidden_dim", 128))),
+        prior_logvar_min=float(cfg.get("prior_logvar_min", -6.0)),
+        prior_logvar_max=float(cfg.get("prior_logvar_max", 4.0)),
+        num_layers=int(cfg.get("num_layers", 2)),
+        dropout=float(cfg.get("dropout", 0.0)),
+    ).to(device)
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=float(cfg.get("learning_rate", 1.0e-3)),
+        weight_decay=float(cfg.get("weight_decay", 1.0e-5)),
+    )
+    weights = {
+        "num_nodes": float(cfg.get("node_count_loss_weight", 1.0)),
+        "num_edges": float(cfg.get("edge_count_loss_weight", 2.0)),
+        "degree": float(cfg.get("degree_histogram_loss_weight", 5.0)),
+        "degree_moment": float(cfg.get("degree_moment_loss_weight", 0.25)),
+        "aggregate_prior_moment": float(cfg.get("aggregate_prior_moment_loss_weight", 0.05)),
+        "prior_distribution": float(cfg.get("prior_distribution_loss_weight", 1.0)),
+    }
+    return {
+        "model": model,
+        "vectorizer": vectorizer,
+        "loader": loader,
+        "targets": targets,
+        "optimizer": optimizer,
+        "weights": weights,
+    }
+
+
+def _train_degree_prior_epoch(
+    bundle: Mapping[str, Any],
+    cfg: Mapping[str, Any],
+    *,
+    epoch: int,
+    device: torch.device,
+) -> dict[str, float]:
+    model: DegreeHistogramVAE = bundle["model"]
+    loader: DataLoader = bundle["loader"]
+    all_targets: Mapping[str, torch.Tensor] = bundle["targets"]
+    optimizer: torch.optim.Optimizer = bundle["optimizer"]
+    weights: Mapping[str, float] = bundle["weights"]
+
+    model.train()
+    rows: dict[str, list[float]] = {}
+    beta = float(cfg.get("kl_loss_weight", 0.005))
+    warmup = int(cfg.get("kl_warmup_epochs", 0))
+    effective_beta = beta * (min(float(epoch) / warmup, 1.0) if warmup else 1.0)
+    for batch_inputs, batch_indices in loader:
+        batch_inputs = batch_inputs.to(device)
+        indices = batch_indices.to(device)
+        targets = {key: value[indices] for key, value in all_targets.items()}
+        outputs, mu, logvar = model(
+            batch_inputs,
+            targets["num_nodes_count"],
+            targets.get("num_edges_count"),
+        )
+        prior_outputs = None
+        if float(weights.get("prior_distribution", 0.0)) > 0.0:
+            prior_z = model.sample_prior(
+                targets["num_nodes_count"],
+                edge_counts=targets.get("num_edges_count"),
+                prior_mode="model",
+            )
+            prior_outputs = model.decode(
+                prior_z,
+                targets["num_nodes_count"],
+                targets.get("num_edges_count"),
+            )
+        loss, metrics = degree_vae_loss(
+            outputs,
+            targets,
+            mu,
+            logvar,
+            beta=effective_beta,
+            weights=dict(weights),
+            prior_outputs=prior_outputs,
+            prior_distribution_sigma=float(cfg.get("prior_distribution_kernel_sigma", 0.2)),
+        )
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+        optimizer.step()
+        for key, value in metrics.items():
+            rows.setdefault(key, []).append(float(value))
+    result = {key: float(np.mean(values)) for key, values in rows.items()}
+    result["beta"] = float(effective_beta)
+    return result
+
+
+def _degree_prior_payload(bundle: Mapping[str, Any], cfg: Mapping[str, Any]) -> dict[str, Any]:
+    model: DegreeHistogramVAE = bundle["model"]
+    vectorizer: DegreeVectorizer = bundle["vectorizer"]
+    return {
+        "enabled": True,
+        "role": "auxiliary_unconstrained_degree_sequence_prior",
+        "used_for_gsdm_generation": False,
+        "model_state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()},
+        "model_config": model.model_config(),
+        "vectorizer": copy.deepcopy(vectorizer.__dict__),
+        "sampling_config": {
+            key: copy.deepcopy(cfg.get(key))
+            for key in (
+                "sample_num_nodes",
+                "sample_num_edges",
+                "exact_degree_sum_conditioning",
+                "max_resample",
+                "model_resample_attempts",
+                "parity_conditioned",
+                "max_parity_resample",
+                "fallback",
+                "postprocess_policy",
+            )
+        },
+    }
+
+
+def _load_embedded_degree_prior(
+    state: Mapping[str, Any], device: torch.device,
+) -> tuple[DegreeHistogramVAE, DegreeVectorizer, Mapping[str, Any]]:
+    payload = state.get("degree_prior")
+    if not isinstance(payload, Mapping) or not bool(payload.get("enabled", False)):
+        raise RuntimeError("Checkpoint does not contain the jointly trained auxiliary DH-VAE")
+    model_cfg = dict(payload["model_config"])
+    architecture_version = int(model_cfg.pop("architecture_version", 4))
+    if architecture_version != 4:
+        raise RuntimeError(
+            f"Expected embedded DH-VAE architecture version 4, found {architecture_version}"
+        )
+    vectorizer = DegreeVectorizer(**dict(payload["vectorizer"]))
+    model = DegreeHistogramVAE(**model_cfg).to(device)
+    model.load_state_dict(payload["model_state_dict"])
+    model.eval()
+    return model, vectorizer, payload
+
+
 def training_artifacts(wrapper, request: TrainRequest) -> TrainingArtifacts:
     layout = request.run.layout
     return TrainingArtifacts(
@@ -551,6 +800,9 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
     ArtifactLayout.require_available(layout.train_dir, overwrite=request.overwrite)
     _seed_everything(request.run.train_seed)
     device = _resolve_device(options.get("runtime", {}))
+    variant = str(options.get("variant", "vanilla_gsdm")).lower()
+    degree_cfg = dict(options.get("degree_prior", {}) or {})
+    degree_prior_enabled = bool(degree_cfg.get("enabled", False))
     train_graphs = _graphs(request.dataset.split_paths["train"])
     val_graphs = _graphs(request.dataset.split_paths["val"])
     configured_max = options["model"].get("max_nodes")
@@ -572,6 +824,21 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
     )
     model_x, model_lam = _build_models(model_cfg, device)
     sde_x, sde_lam = _make_sdes(options, device)
+    degree_bundle = None
+    degree_fork_devices = (
+        [device.index if device.index is not None else torch.cuda.current_device()]
+        if device.type == "cuda" else []
+    )
+    if degree_prior_enabled:
+        # Keep the auxiliary prior's stochasticity from perturbing the vanilla
+        # GSDM training trajectory.  This makes Stage 1 a clean observational
+        # ablation: the GSDM networks see exactly the same RNG stream as the
+        # vanilla run for the same seed/config.
+        with torch.random.fork_rng(devices=degree_fork_devices, enabled=True):
+            torch.manual_seed(request.run.train_seed + 700001)
+            if device.type == "cuda":
+                torch.cuda.manual_seed_all(request.run.train_seed + 700001)
+            degree_bundle = _build_degree_prior_training(train_graphs, degree_cfg, device)
     train_cfg = options["train"]
     optimizers = [
         torch.optim.Adam(model_x.parameters(), lr=float(train_cfg["lr"]), weight_decay=float(train_cfg.get("weight_decay", 0.0))),
@@ -622,6 +889,16 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     total_x += float(lx.item()) * b
                     total_l += float(ll.item()) * b
                     total_n += b
+                degree_metrics = None
+                if degree_bundle is not None:
+                    with torch.random.fork_rng(devices=degree_fork_devices, enabled=True):
+                        degree_seed = request.run.train_seed + 700001 + epoch
+                        torch.manual_seed(degree_seed)
+                        if device.type == "cuda":
+                            torch.cuda.manual_seed_all(degree_seed)
+                        degree_metrics = _train_degree_prior_epoch(
+                            degree_bundle, degree_cfg, epoch=epoch, device=device
+                        )
                 if bool(train_cfg.get("lr_schedule", True)):
                     for scheduler in schedulers:
                         scheduler.step()
@@ -631,6 +908,12 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     "train_spectrum_loss": total_l / max(total_n, 1),
                 }
                 record["train_loss"] = record["train_node_loss"] + record["train_spectrum_loss"]
+                if degree_metrics is not None:
+                    record["train_degree_prior_loss"] = float(degree_metrics["loss"])
+                    record["train_degree_prior_degree_loss"] = float(degree_metrics["degree_loss"])
+                    record["train_degree_prior_kl_loss"] = float(degree_metrics["kl_loss"])
+                    record["train_degree_prior_beta"] = float(degree_metrics["beta"])
+                    record["train_joint_loss"] = record["train_loss"] + record["train_degree_prior_loss"]
                 if epoch == 1 or epoch % val_every == 0 or epoch == epochs:
                     model_x.eval(); model_lam.eval()
                     vx = vl = vn = 0.0
@@ -657,6 +940,11 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                         f"train={record['train_loss']:.6f} "
                         f"node={record['train_node_loss']:.6f} spectrum={record['train_spectrum_loss']:.6f}"
                     )
+                    if "train_degree_prior_loss" in record:
+                        line += (
+                            f" dhvae={record['train_degree_prior_loss']:.6f}"
+                            f" dh_degree={record['train_degree_prior_degree_loss']:.6f}"
+                        )
                     if "val_loss" in record:
                         line += f" val={record['val_loss']:.6f}"
                     print(line, flush=True)
@@ -667,7 +955,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
         checkpoint_path = checkpoint_dir / "gdsm_simple.pt"
         checkpoint = {
             "format": CHECKPOINT_FORMAT,
-            "variant": "vanilla_gsdm",
+            "variant": variant,
             "model_x_state": {k: v.detach().cpu() for k, v in model_x.state_dict().items()},
             "model_spectrum_state": {k: v.detach().cpu() for k, v in model_lam.state_dict().items()},
             "ema_x_state": ema_x.shadow,
@@ -682,6 +970,11 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
             "node_feature_init": "degree_one_hot",
             "history": history,
             "train_seed": request.run.train_seed,
+            "degree_prior": (
+                _degree_prior_payload(degree_bundle, degree_cfg)
+                if degree_bundle is not None
+                else {"enabled": False, "used_for_gsdm_generation": False}
+            ),
         }
         torch.save(checkpoint, checkpoint_path)
         resolved = copy.deepcopy(dict(options))
@@ -694,7 +987,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
         manifest = {
             "format": TRAINING_FORMAT,
             "model_id": wrapper.model_id,
-            "variant": "vanilla_gsdm",
+            "variant": variant,
             "run_id": request.run.run_id,
             "train_seed": request.run.train_seed,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -715,6 +1008,11 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                 "generation_basis": "uniform_training_adjacency_eigenbasis_joint_with_node_count",
                 "reverse_sampler": "Euler_Maruyama_plus_optional_Langevin_corrector",
                 "discretization": "single_final_threshold",
+                "auxiliary_degree_prior": (
+                    "jointly_trained_DH-VAE_independent_of_GSDM"
+                    if degree_prior_enabled else "none"
+                ),
+                "degree_prior_used_for_graph_generation": False,
                 "degree_constraint": False,
                 "rewiring": False,
                 "categorical_edge_head": False,
@@ -733,7 +1031,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
             "dataset_id": request.run.dataset_id,
             "run_id": request.run.run_id,
             "train_seed": request.run.train_seed,
-            "variant": "vanilla_gsdm",
+            "variant": variant,
         })
         return training_artifacts(wrapper, request)
     except BaseException:
@@ -915,8 +1213,10 @@ def sample_batch(
 
 def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manifest: Mapping[str, Any], options: Mapping[str, Any]) -> GenerationArtifacts:
     validate_options(options)
-    if state.get("format") != CHECKPOINT_FORMAT:
-        raise RuntimeError(f"Expected {CHECKPOINT_FORMAT}, found {state.get('format')!r}")
+    if state.get("format") not in SUPPORTED_CHECKPOINT_FORMATS:
+        raise RuntimeError(
+            f"Expected one of {sorted(SUPPORTED_CHECKPOINT_FORMATS)}, found {state.get('format')!r}"
+        )
     device = _resolve_device(options.get("runtime", {}))
     _seed_everything(request.generation_seed)
     model_cfg = state["model_config"]
@@ -942,6 +1242,13 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     generator = torch.Generator(device=device).manual_seed(request.generation_seed)
     eigen_mask_mode = str(state["sde"].get("eigen_mask", "official_extremes"))
     threshold = float(sample_cfg.get("threshold", 0.5))
+    variant = str(state.get("variant", options.get("variant", "vanilla_gsdm"))).lower()
+    degree_payload = state.get("degree_prior", {})
+    degree_prior_enabled = bool(
+        isinstance(degree_payload, Mapping) and degree_payload.get("enabled", False)
+    )
+    if variant in {"vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae"} and not degree_prior_enabled:
+        raise RuntimeError("vanilla_gsdm_dhvae generation requires an embedded jointly trained DH-VAE")
     graphs: list[nx.Graph] = []
     continuous: list[np.ndarray] = []
     spectra: list[np.ndarray] = []
@@ -976,6 +1283,58 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 basis_indices.append(int(idx))
             print(f"Vanilla-GSDM generated {len(graphs)}/{request.num_graphs}", flush=True)
 
+    degree_sequences: list[list[int]] = []
+    degree_summaries: list[dict[str, Any]] = []
+    if degree_prior_enabled:
+        degree_model, degree_vectorizer, degree_payload = _load_embedded_degree_prior(state, device)
+        saved_sampling = dict(degree_payload.get("sampling_config", {}) or {})
+        requested_sampling = dict(options.get("degree_prior", {}) or {})
+        sampling = {**saved_sampling, **{
+            key: requested_sampling[key]
+            for key in saved_sampling
+            if key in requested_sampling
+        }}
+        degree_rng = np.random.default_rng(request.generation_seed + 900001)
+        # Degree sampling uses its own RNG stream.  It cannot alter the GSDM
+        # graph sample because graph generation above is already complete and
+        # no sampled degree value is passed back into the spectral model.
+        fork_devices = (
+            [device.index if device.index is not None else torch.cuda.current_device()]
+            if device.type == "cuda" else []
+        )
+        with torch.random.fork_rng(devices=fork_devices, enabled=True):
+            degree_seed = request.generation_seed + 900001
+            torch.manual_seed(degree_seed)
+            if device.type == "cuda":
+                torch.cuda.manual_seed_all(degree_seed)
+            sampler = DegreeVAESampler(
+                "<embedded>",
+                device=str(device),
+                deterministic=False,
+                seed=degree_seed,
+                sample_num_nodes=str(sampling.get("sample_num_nodes", "empirical")),
+                sample_num_edges=str(sampling.get("sample_num_edges", "model")),
+                exact_degree_sum_conditioning=bool(sampling.get("exact_degree_sum_conditioning", True)),
+                max_resample=int(sampling.get("max_resample", 500)),
+                model_resample_attempts=int(sampling.get("model_resample_attempts", 32)),
+                parity_conditioned=bool(sampling.get("parity_conditioned", False)),
+                max_parity_resample=int(sampling.get("max_parity_resample", 1)),
+                fallback=str(sampling.get("fallback", "error")),
+                postprocess_policy=str(sampling.get("postprocess_policy", "reject_only")),
+                model=degree_model,
+                vectorizer=degree_vectorizer,
+            )
+            for index in range(request.num_graphs):
+                summary = sampler.sample(degree_rng)
+                sequence = [int(v) for v in summary["degree_sequence"]]
+                degree_sequences.append(sequence)
+                degree_summaries.append(_jsonable(summary))
+                if (index + 1) % max(1, min(128, request.num_graphs)) == 0 or index + 1 == request.num_graphs:
+                    print(
+                        f"Auxiliary DH-VAE sampled {index + 1}/{request.num_graphs} degree sequences",
+                        flush=True,
+                    )
+
     layout = request.run.layout
     generation_id = request.resolved_generation_id
     target = layout.generation_dir(generation_id)
@@ -995,13 +1354,22 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
         index_path = staging / "sampled_basis_indices.pkl"
         with index_path.open("wb") as handle:
             pickle.dump(basis_indices, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        degree_sequence_path = None
+        degree_summary_path = None
+        if degree_sequences:
+            degree_sequence_path = staging / "sampled_degree_sequences.pkl"
+            with degree_sequence_path.open("wb") as handle:
+                pickle.dump(degree_sequences, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            degree_summary_path = staging / "sampled_degree_summaries.pkl"
+            with degree_summary_path.open("wb") as handle:
+                pickle.dump(degree_summaries, handle, protocol=pickle.HIGHEST_PROTOCOL)
         graph_hash = _sha256(graph_path)
         connected = [g.number_of_nodes() <= 1 or nx.is_connected(g) for g in graphs]
         degree_sums = [sum(dict(g.degree()).values()) for g in graphs]
         _write_json(staging / "manifest.json", {
             "format": GENERATION_FORMAT,
             "model_id": wrapper.model_id,
-            "variant": "vanilla_gsdm",
+            "variant": variant,
             "run_id": request.run.run_id,
             "generation_id": generation_id,
             "generation_seed": request.generation_seed,
@@ -1015,12 +1383,28 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "path": "sampled_basis_indices.pkl", "sha256": _sha256(index_path),
                 "role": "uniform indices into training-only adjacency/eigenbasis bank",
             },
+            "sampled_degree_sequences": (
+                {
+                    "path": "sampled_degree_sequences.pkl",
+                    "sha256": _sha256(degree_sequence_path),
+                    "count": len(degree_sequences),
+                    "role": "auxiliary_DH-VAE_samples_not_used_for_graph_generation",
+                }
+                if degree_sequence_path is not None else None
+            ),
+            "sampled_degree_summaries": (
+                {"path": "sampled_degree_summaries.pkl", "sha256": _sha256(degree_summary_path)}
+                if degree_summary_path is not None else None
+            ),
             "checkpoint": {"path": str(request.checkpoint_path.resolve()), "sha256": _sha256(request.checkpoint_path)},
             "sampling": {
                 "node_count": "jointly_sampled_with_training_eigenbasis",
                 "eigenvectors": "training_split_empirical",
                 "reverse_process": "coupled_VP_spectral_predictor_corrector",
                 "threshold": threshold,
+                "auxiliary_degree_prior": "DH-VAE" if degree_prior_enabled else "none",
+                "degree_sequences_sampled": len(degree_sequences),
+                "degree_sequences_used_for_graph_generation": False,
                 "posthoc_repair": False,
                 "rewiring": False,
                 "degree_constraint": False,

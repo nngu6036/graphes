@@ -11,7 +11,7 @@ import re
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import networkx as nx
 
@@ -23,6 +23,7 @@ from grapher.rewiring_mlp.evaluation.metrics import (
     mmd_orbit,
     mmd_orbit_graphrnn,
 )
+from grapher.rewiring_mlp.evaluation.degree_sequences import evaluate_degree_sequence_sets
 from grapher.rewiring_mlp.molecular.graph_io import nx_to_rdkit_mol, require_rdkit
 from grapher.properties.summary import (
     clustering_histogram,
@@ -56,6 +57,77 @@ def _load_graph_list(path: Path) -> list[nx.Graph]:
     if not graphs:
         raise ValueError(f"{path} contains no graphs.")
     return graphs
+
+
+def _load_degree_sequence_list(path: Path) -> list[list[int]]:
+    value = load_pickle(path)
+    if not isinstance(value, (list, tuple)):
+        raise TypeError(f"{path} does not contain a degree-sequence list.")
+    sequences: list[list[int]] = []
+    for index, sequence in enumerate(value):
+        if not isinstance(sequence, (list, tuple)):
+            raise TypeError(f"Degree sequence {index} in {path} is not a list/tuple.")
+        row = [int(v) for v in sequence]
+        if any(v < 0 for v in row):
+            raise ValueError(f"Degree sequence {index} in {path} contains a negative degree.")
+        sequences.append(sorted(row, reverse=True))
+    if not sequences:
+        raise ValueError(f"{path} contains no degree sequences.")
+    return sequences
+
+
+def _graph_degree_sequences(graphs: Sequence[nx.Graph]) -> list[list[int]]:
+    return [
+        sorted([int(degree) for _, degree in graph.degree()], reverse=True)
+        for graph in graphs
+    ]
+
+
+def _resolve_sampled_degree_sequences(
+    generated_dir: Path,
+    generation_manifest: dict[str, Any] | None,
+) -> Path | None:
+    record = (
+        generation_manifest.get("sampled_degree_sequences")
+        if isinstance(generation_manifest, dict)
+        else None
+    )
+    if isinstance(record, dict) and record.get("path"):
+        candidate = generated_dir / str(record["path"])
+        if candidate.is_file():
+            expected = record.get("sha256")
+            if expected is not None and _sha256(candidate) != str(expected):
+                raise RuntimeError(
+                    f"Sampled degree-sequence artifact hash mismatch: {candidate}"
+                )
+            return candidate
+    fallback = generated_dir / "sampled_degree_sequences.pkl"
+    return fallback if fallback.is_file() else None
+
+
+def _print_degree_sequence_prior(metrics: Mapping[str, Any], *, reference_split: str) -> None:
+    print("\nAuxiliary generated degree-sequence MMD (lower is better)")
+    print(f"{'Comparison':38s}{'Degree MMD':>14s}")
+    print(
+        f"{f'dhvae_degree_sequences_to_{reference_split}':38s}"
+        f"{float(metrics['degree_histogram_mmd_graphrnn']):14.6f}"
+    )
+
+
+def _write_degree_sequence_csv(
+    metrics: Mapping[str, Any], path: Path, *, reference_split: str
+) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=("comparison", "degree_mmd", "num_candidate_sequences", "num_reference_sequences")
+        )
+        writer.writeheader()
+        writer.writerow({
+            "comparison": f"dhvae_degree_sequences_to_{reference_split}",
+            "degree_mmd": float(metrics["degree_histogram_mmd_graphrnn"]),
+            "num_candidate_sequences": int(metrics["num_candidate_sequences"]),
+            "num_reference_sequences": int(metrics["num_reference_sequences"]),
+        })
 
 
 def _load_json_mapping(path: Path) -> dict[str, Any] | None:
@@ -985,6 +1057,14 @@ def main() -> None:
     if training_manifest_path is not None:
         print(f"Training manifest: {training_manifest_path}", flush=True)
     generated_graphs = _load_graph_list(generated_path)
+    sampled_degree_path = _resolve_sampled_degree_sequences(
+        generated_dir, generation_manifest
+    )
+    sampled_degree_sequences = (
+        _load_degree_sequence_list(sampled_degree_path)
+        if sampled_degree_path is not None
+        else []
+    )
     base_graphs = (
         _load_graph_list(base_path)
         if base_path is not None and base_path.is_file()
@@ -1017,6 +1097,24 @@ def main() -> None:
         raise ValueError("No generated graphs are available.")
     reference = reference_graphs[:reference_count]
     generated = generated_graphs[:generated_count]
+    degree_sequence_prior_metrics: dict[str, Any] | None = None
+    if sampled_degree_sequences:
+        degree_candidate_count = len(sampled_degree_sequences)
+        if args.max_graphs is not None:
+            degree_candidate_count = min(degree_candidate_count, int(args.max_graphs))
+        degree_candidates = sampled_degree_sequences[:degree_candidate_count]
+        degree_sequence_prior_metrics = evaluate_degree_sequence_sets(
+            _graph_degree_sequences(reference),
+            degree_candidates,
+            train=_graph_degree_sequences(train_graphs) if train_graphs else None,
+            degree_mmd_sigma=None,
+        )
+        degree_sequence_prior_metrics = {
+            **degree_sequence_prior_metrics,
+            "artifact_path": str(sampled_degree_path),
+            "comparison": f"dhvae_degree_sequences_to_{reference_split}",
+            "used_for_graph_generation": False,
+        }
     molecular = is_molecular_evaluation(dataset_cfg, generated_graphs)
     graphlet_options = {
         "k_min": int(evaluation_cfg.get("graphlet_k_min", 3)),
@@ -1091,9 +1189,16 @@ def main() -> None:
 
     csv_path = output_dir / "graph_mmd_metrics.csv"
     json_path = output_dir / "graph_evaluation_report.json"
+    degree_sequence_csv_path = output_dir / "degree_sequence_mmd.csv"
     molecular_csv_path = output_dir / "molecular_quality_metrics.csv"
     valid_smiles_path = output_dir / "valid_generated.smi"
     _write_csv(rows, csv_path)
+    if degree_sequence_prior_metrics is not None:
+        _write_degree_sequence_csv(
+            degree_sequence_prior_metrics,
+            degree_sequence_csv_path,
+            reference_split=reference_split,
+        )
     molecular_metrics: dict[str, Any] | None = None
     molecular_stage_rows: list[dict[str, Any]] = []
     molecular_stage_errors: dict[str, dict[str, int]] = {}
@@ -1177,6 +1282,10 @@ def main() -> None:
             "num_reference_graphs": len(reference),
             "num_generated_graphs_evaluated": len(generated),
             "metrics": rows,
+            "sampled_degree_sequences": (
+                str(sampled_degree_path) if sampled_degree_path is not None else None
+            ),
+            "degree_sequence_prior": degree_sequence_prior_metrics,
             "molecular_evaluation": molecular,
             "molecular_quality": molecular_metrics,
             "molecular_quality_by_stage": {
@@ -1219,9 +1328,15 @@ def main() -> None:
         json_path,
     )
     _print_table(rows, reference_split=reference_split)
+    if degree_sequence_prior_metrics is not None:
+        _print_degree_sequence_prior(
+            degree_sequence_prior_metrics, reference_split=reference_split
+        )
     if molecular_metrics is not None:
         _print_molecular_metrics(molecular_stage_rows)
     print(f"Saved metrics: {csv_path}")
+    if degree_sequence_prior_metrics is not None:
+        print(f"Saved metrics: {degree_sequence_csv_path}")
     if molecular_metrics is not None:
         print(f"Saved metrics: {molecular_csv_path}")
         print(f"Saved SMILES:  {valid_smiles_path}")

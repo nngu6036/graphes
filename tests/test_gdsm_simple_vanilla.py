@@ -227,3 +227,89 @@ gdsm_simple:
     assert "diffusion" not in options
     assert "num_layers" not in options["model"]
     assert "rewiring" not in options["extensions"]
+
+
+def joint_dhvae_options() -> dict:
+    options = vanilla_options()
+    options["variant"] = "vanilla_gsdm_dhvae"
+    options["degree_prior"] = {
+        "enabled": True,
+        "batch_size": 4,
+        "latent_dim": 4,
+        "hidden_dim": 8,
+        "size_condition_dim": 4,
+        "edge_condition_dim": 4,
+        "use_edge_count_conditioning": True,
+        "prior_condition_on_edges": True,
+        "prior_type": "conditional_gmm",
+        "prior_components": 2,
+        "prior_hidden_dim": 8,
+        "prior_logvar_min": -6.0,
+        "prior_logvar_max": 4.0,
+        "num_layers": 2,
+        "dropout": 0.0,
+        "learning_rate": 1.0e-3,
+        "weight_decay": 0.0,
+        "kl_loss_weight": 0.005,
+        "kl_warmup_epochs": 1,
+        "node_count_loss_weight": 1.0,
+        "edge_count_loss_weight": 1.0,
+        "degree_histogram_loss_weight": 2.0,
+        "degree_moment_loss_weight": 0.1,
+        "prior_distribution_loss_weight": 0.0,
+        "prior_distribution_kernel_sigma": 0.2,
+        "aggregate_prior_moment_loss_weight": 0.0,
+        "require_connected": True,
+        "sample_num_nodes": "empirical",
+        "sample_num_edges": "model",
+        "exact_degree_sum_conditioning": True,
+        "max_resample": 20,
+        "model_resample_attempts": 2,
+        "parity_conditioned": False,
+        "max_parity_resample": 1,
+        "postprocess_policy": "repair",
+        "fallback": "empirical_nearest_n",
+    }
+    return options
+
+
+def test_joint_dhvae_is_auxiliary_and_does_not_change_vanilla_gsdm_training(tmp_path):
+    torch.set_num_threads(1)
+    dataset, _ = _write_dataset(tmp_path)
+    wrapper = GDSMSimpleWrapper()
+    vanilla_run = RunSpec("gdsm_simple", "community_small", "vanilla-control", 77, tmp_path / "runs")
+    joint_run = RunSpec("gdsm_simple", "community_small", "joint", 77, tmp_path / "runs")
+
+    vanilla_artifacts = wrapper.train(TrainRequest(vanilla_run, dataset, options=vanilla_options()))
+    joint_artifacts = wrapper.train(TrainRequest(joint_run, dataset, options=joint_dhvae_options()))
+    vanilla_state = torch.load(vanilla_artifacts.checkpoint_path, map_location="cpu", weights_only=False)
+    joint_state = torch.load(joint_artifacts.checkpoint_path, map_location="cpu", weights_only=False)
+
+    for key in ("model_x_state", "model_spectrum_state"):
+        assert vanilla_state[key].keys() == joint_state[key].keys()
+        for name in vanilla_state[key]:
+            torch.testing.assert_close(vanilla_state[key][name], joint_state[key][name], rtol=0, atol=0)
+
+    assert joint_state["variant"] == "vanilla_gsdm_dhvae"
+    assert joint_state["degree_prior"]["enabled"] is True
+    assert joint_state["degree_prior"]["used_for_gsdm_generation"] is False
+    assert "train_degree_prior_loss" in joint_state["history"][-1]
+
+
+def test_joint_dhvae_generation_saves_one_unused_degree_sequence_per_graph(tmp_path):
+    torch.set_num_threads(1)
+    dataset, _ = _write_dataset(tmp_path)
+    wrapper = GDSMSimpleWrapper()
+    run = RunSpec("gdsm_simple", "community_small", "joint-generate", 88, tmp_path / "runs")
+    artifacts = wrapper.train(TrainRequest(run, dataset, options=joint_dhvae_options()))
+    result = wrapper.generate(
+        GenerateRequest(run, artifacts.checkpoint_path, 6, 1234, generation_id="samples")
+    )
+    with (result.generation_dir / "sampled_degree_sequences.pkl").open("rb") as handle:
+        sequences = pickle.load(handle)
+    assert len(sequences) == 6
+    assert all(isinstance(seq, list) and seq for seq in sequences)
+    record = json.loads((result.generation_dir / "manifest.json").read_text())
+    assert record["sampled_degree_sequences"]["count"] == 6
+    assert record["sampling"]["degree_sequences_used_for_graph_generation"] is False
+    assert record["sampling"]["degree_constraint"] is False

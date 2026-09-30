@@ -77,3 +77,26 @@ def test_comparison_reports_descriptor_progress_and_preserves_metrics(capsys):
     assert "degree MMD: 1/1" in output
     assert "clustering MMD: 1/1" in output
     assert "Completed generated_to_test" in output
+
+
+def test_auxiliary_degree_sequence_artifact_reports_graphrnn_degree_mmd(tmp_path, capsys):
+    import pickle
+
+    sequences = [[2, 2, 2, 2], [1, 2, 2, 1]]
+    path = tmp_path / "sampled_degree_sequences.pkl"
+    with path.open("wb") as handle:
+        pickle.dump(sequences, handle)
+
+    loaded = report._load_degree_sequence_list(path)
+    assert loaded == [[2, 2, 2, 2], [2, 2, 1, 1]]
+    reference_graphs = [nx.cycle_graph(4), nx.path_graph(4)]
+    metrics = report.evaluate_degree_sequence_sets(
+        report._graph_degree_sequences(reference_graphs),
+        loaded,
+        train=report._graph_degree_sequences(reference_graphs),
+    )
+    assert metrics["degree_histogram_mmd_graphrnn"] == pytest.approx(0.0, abs=1e-12)
+    report._print_degree_sequence_prior(metrics, reference_split="test")
+    output = capsys.readouterr().out
+    assert "Auxiliary generated degree-sequence MMD" in output
+    assert "dhvae_degree_sequences_to_test" in output
