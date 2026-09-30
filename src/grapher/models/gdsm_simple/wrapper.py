@@ -490,7 +490,7 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             raise ValueError(f"Unsupported gdsm_simple generation overrides: {unknown}")
         _deep_update(options, request.options)
         generation_extensions = options.get("extensions", {}) or {}
-        if state.get("format") == "gdsm_spectral_categorical_checkpoint_v1" or categorical_enabled(generation_extensions):
+        if state.get("format") in ("gdsm_spectral_categorical_checkpoint_v1", "gdsm_spectral_topology_bond_only_checkpoint_v2") or categorical_enabled(generation_extensions):
             from grapher.models.gdsm_simple.categorical.pipeline import generate
             return generate(self, request, state, manifest, options)
         if state.get("format") == "gdsm_simple_structure3_checkpoint_v2" or structure_enabled(generation_extensions):

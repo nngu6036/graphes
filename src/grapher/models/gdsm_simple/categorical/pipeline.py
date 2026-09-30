@@ -23,13 +23,29 @@ from grapher.rewiring_mlp.attributed.data import GraphCategoryVocabulary
 from .config import resolve
 from .data import TypedGraphlets3, make_record, collate, permute_aligned, decode_graph
 from .model import SpectralCategoricalDenoiser, losses, predictions_numpy
-from .noise import MarginalNoise, cosine_alpha_bar, draw_graph, spectral_q_sample, spectral_reverse
+from .noise import (MarginalNoise, cosine_alpha_bar, draw_graph, spectral_q_sample, spectral_reverse,
+                    draw_bonds, draw_categories, forward_bond_graph, reverse_bonds)
+from .topology import initial_support, decode_topology
 from .spectral import degree_anchor, eigenpairs
 from .refiner import refine
 from .multiscale import (TypedGraphletsMulti, fit_basis, pack_training_counts,
                          remap_training_counts, pack_basis_counts)
 
 FORMAT='gdsm_spectral_categorical_checkpoint_v1'
+SPECTRAL_TOPOLOGY_FORMAT='gdsm_spectral_topology_bond_only_checkpoint_v2'
+
+
+def _spectral_topology(cfg):
+    return cfg.get('topology',{}).get('mode','categorical')=='spectral'
+
+
+def _noise_models(schema, schedule, cfg):
+    nodes=MarginalNoise(schema['node_marginal'],schedule)
+    # All pair counts (including absence) still describe topology corruption.
+    # The real-bond marginal excludes absence and is normalized independently.
+    key='bond_marginal' if _spectral_topology(cfg) else 'edge_marginal'
+    return nodes,MarginalNoise(schema[key],schedule)
+
 
 
 def _basis_for_size(bank, n, rng):
@@ -108,6 +124,13 @@ def prepare_data(train_graphs,val_graphs,max_nodes,cfg,seed):
         'unseen_validation_sizes_haar_anchor_fallback':sorted(unseen_validation_sizes),
         'mean_anchor_row_sum_rmse':float(np.mean(anchor_residuals)) if anchor_residuals else 0.,
     }
+    if _spectral_topology(cfg):
+        bonds=edge_counts[1:]+pseudo
+        metadata.update({'bond_marginal':(bonds/bonds.sum()).tolist(),
+                         'bond_category_counts':edge_counts[1:].tolist(),
+                         'bond_head_class_to_stored_label':list(range(1,vocab.num_edge_categories)),
+                         'bond_head_includes_no_edge':False,
+                         'bond_loss_mask':'clean_present_unordered_edges_only'})
     if multi:
         metadata.update(basis.schema())
         metadata['training_graphlet_vocabulary_coverage']=coverage
@@ -121,6 +144,8 @@ def _make_model_config(options,cfg,vocab,basis,max_nodes):
                 hidden_dim=int(mc['hidden_dim']),num_layers=int(mc['num_layers']),num_heads=int(mc['num_heads']),
                 ff_dim=int(mc['ff_dim']),dropout=float(mc['dropout']),
                 clustering_bins=int(cfg['graphlets']['clustering_bins']),spectral_conditioning=cfg['spectral_conditioning'])
+    if _spectral_topology(cfg):
+        config['bond_only']=True
     if getattr(basis,'multiscale',False):
         config.update(graphlet_block_sizes=list(basis.block_sizes),graphlet_orders=list(basis.orders),
                       graphlet_size_weights=basis.size_weights.tolist())
@@ -132,10 +157,19 @@ def _loss_batch(model,records,basis,cfg,schedule,node_noise,edge_noise,generator
     if permutations: batch=permute_aligned(batch,generator)
     mask=batch['mask']; total=len(schedule)-1
     t=torch.randint(1,total+1,(len(records),),device=device,generator=generator)
-    xt,et=draw_graph(node_noise.forward_probs(batch['x'],t),edge_noise.forward_probs(batch['e'],t),mask,generator)
+    if _spectral_topology(cfg):
+        # Binary topology corruption is separate from K-class bond corruption.
+        # This training forward process is unchanged in its marginal topology;
+        # constrained generation is explicitly a guided decoding intervention.
+        em=torch.as_tensor(cfg['_topology_marginal'],device=device,dtype=schedule.dtype)
+        topology_noise=MarginalNoise(em,schedule)
+        xt,et=forward_bond_graph(node_noise,edge_noise,topology_noise,batch['x'],batch['e'],t,mask,generator)
+    else:
+        xt,et=draw_graph(node_noise.forward_probs(batch['x'],t),edge_noise.forward_probs(batch['e'],t),mask,generator)
     noise=torch.randn(batch['z'].shape,device=device,generator=generator)*mask
     zt=spectral_q_sample(batch['z'],noise,batch['anchor'],schedule,t,mask)
-    pred=model(xt,et,zt,t,batch['anchor'],mask,total)
+    kwargs={'edge_support':batch['e']>0} if _spectral_topology(cfg) else {}
+    pred=model(xt,et,zt,t,batch['anchor'],mask,total,**kwargs)
     return losses(pred,batch,cfg['loss_weights'])
 
 
@@ -164,7 +198,11 @@ def train(wrapper,request,options):
     mc=_make_model_config(options,cfg,vocab,basis,max_nodes)
     model=SpectralCategoricalDenoiser(**mc).to(device)
     schedule=cosine_alpha_bar(int(options['diffusion']['steps']),device=device)
-    xn=MarginalNoise(metadata['node_marginal'],schedule); en=MarginalNoise(metadata['edge_marginal'],schedule)
+    xn,en=_noise_models(metadata,schedule,cfg)
+    # Keep this derived training-only marginal out of the saved configuration.
+    loss_cfg=copy.deepcopy(cfg)
+    if _spectral_topology(cfg):
+        em=metadata['edge_marginal']; loss_cfg['_topology_marginal']=[em[0],sum(em[1:])]
     tc=options['train']
     optimizer=torch.optim.AdamW(model.parameters(),lr=float(tc['lr']),weight_decay=float(tc['weight_decay']))
     torch_rng=torch.Generator(device=device).manual_seed(request.run.train_seed+91)
@@ -181,7 +219,7 @@ def train(wrapper,request,options):
                 order=order_rng.permutation(len(train_rows))
                 for start in range(0,len(order),batch_size):
                     rows=[train_rows[i] for i in order[start:start+batch_size]]
-                    loss,parts=_loss_batch(model,rows,basis,cfg,schedule,xn,en,torch_rng,device,permutations=True)
+                    loss,parts=_loss_batch(model,rows,basis,loss_cfg,schedule,xn,en,torch_rng,device,permutations=True)
                     if not torch.isfinite(loss): raise FloatingPointError('Nonfinite joint training loss')
                     optimizer.zero_grad(set_to_none=True); loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(),float(tc.get('grad_norm') or 1.))
@@ -195,7 +233,7 @@ def train(wrapper,request,options):
                     with torch.no_grad():
                         for start in range(0,len(val_rows),batch_size):
                             rows=val_rows[start:start+batch_size]
-                            loss,parts=_loss_batch(model,rows,basis,cfg,schedule,xn,en,vrng,device,permutations=False)
+                            loss,parts=_loss_batch(model,rows,basis,loss_cfg,schedule,xn,en,vrng,device,permutations=False)
                             for key,value in {'loss':loss,**parts}.items(): vsums[key]+=float(value)*len(rows)
                             vcount+=len(rows)
                     row.update({'val_'+k:v/vcount for k,v in vsums.items()})
@@ -208,7 +246,7 @@ def train(wrapper,request,options):
                     print(f"[gdsm-categorical] epoch={epoch} train={row['train_loss']:.5f} best_val={best:.5f}",flush=True)
         (staging/'checkpoints').mkdir()
         checkpoint=staging/'checkpoints/gdsm_simple.pt'
-        state={'format':FORMAT,'model_state':best_state,'model_config':mc,'categorical_config':cfg,
+        state={'format':(SPECTRAL_TOPOLOGY_FORMAT if _spectral_topology(cfg) else FORMAT),'model_state':best_state,'model_config':mc,'categorical_config':cfg,
                'diffusion_steps':len(schedule)-1,'schema':metadata,'basis_bank':bank,
                'basis_degree_sequences':[r['degrees'].tolist() for r in train_rows],
                'max_nodes':max_nodes,'optimizer_steps':optimizer_steps,'best_epoch':best_epoch,'best_val_loss':best,'history':history}
@@ -233,6 +271,18 @@ def train(wrapper,request,options):
                               'spectral_proposal_degeneracy':'mean_coefficients_within_equal_current_eigenvalue_blocks',
                               'rewiring_during_training':False,'original_degrees_enforced':False},
                   'test_used_for_training':False}
+        if _spectral_topology(cfg):
+            manifest['contract'].update({
+                'edge_existence':'spectral_decoder_not_categorical_head',
+                'categorical_noise':'marginal_nodes_and_real_bonds_separate_binary_topology_noise',
+                'bond_head_includes_no_edge':False,
+                'bond_head_classes':vocab.num_edge_categories-1,
+                'bond_loss_mask':'clean_present_unordered_edges_only',
+                'generic_learned_edge_head':False if vocab.num_edge_categories==2 else None,
+                'categorical_adjacency_is_authoritative':False,
+                'original_degrees_enforced':cfg['topology']['decoder']=='degree_preserving',
+                'degree_constraint_scope':'generation_only_not_training_corruption',
+                'checkpoint_format':SPECTRAL_TOPOLOGY_FORMAT})
         _write_json(staging/'manifest.json',manifest)
         if layout.train_dir.exists(): shutil.rmtree(layout.train_dir)
         staging.replace(layout.train_dir)
@@ -244,9 +294,18 @@ def train(wrapper,request,options):
 
 
 def validate_generation(state,options):
-    if state.get('format')!=FORMAT:
-        raise ValueError('Categorical diffusion needs a new jointly trained checkpoint; legacy Structure3 cannot be reused')
-    cfg=resolve(options); trained=state['categorical_config']
+    cfg=resolve(options)
+    expected=SPECTRAL_TOPOLOGY_FORMAT if _spectral_topology(cfg) else FORMAT
+    if state.get('format')!=expected:
+        raise ValueError('Checkpoint edge/topology contract differs: spectral-topology bond-only mode requires retraining under a new run-id')
+    trained=state['categorical_config']
+    if _spectral_topology(cfg) != _spectral_topology(trained):
+        raise ValueError('Generation cannot change the trained topology mode; retrain')
+    if bool(state['model_config'].get('bond_only',False)) != _spectral_topology(cfg):
+        raise ValueError('Checkpoint model architecture and topology mode disagree')
+    # Decoder policy/budgets are generation controls; the head vocabulary and
+    # training objective are shared by threshold and constrained decoding.
+
     for key in ('categories','noise','graphlets','spectral_conditioning','loss_weights'):
         if cfg[key]!=trained[key]:
             raise ValueError(f'Generation cannot change trained attributed_categorical.{key}; retrain under a new run-id')
@@ -276,7 +335,9 @@ def generate(wrapper,request,state,manifest,options):
     schema=state['schema']; vocab=GraphCategoryVocabulary.from_dict(schema['category_vocabulary'])
     basis=TypedGraphletsMulti.from_schema(schema) if schema.get('graphlet_schema_version')==2 else TypedGraphlets3(schema['graphlet_keys'])
     bins=int(cfg['graphlets']['clustering_bins'])
-    xn=MarginalNoise(schema['node_marginal'],abar); en=MarginalNoise(schema['edge_marginal'],abar)
+    xn,en=_noise_models(schema,abar,cfg)
+    spectral_mode=_spectral_topology(cfg)
+    fixed_degrees=spectral_mode and cfg['topology']['decoder']=='degree_preserving'
     sample_steps=int(options['sample']['steps'])
     times=np.rint(np.linspace(total,0,sample_steps+1)).astype(int).tolist()
     if any(s>=t for t,s in zip(times,times[1:])): raise ValueError('Sampling schedule must strictly decrease')
@@ -284,6 +345,7 @@ def generate(wrapper,request,state,manifest,options):
     prior_rng=np.random.default_rng(request.generation_seed+1009)
     basis_rng=np.random.default_rng(request.generation_seed+2003)
     refine_rng=np.random.default_rng(request.generation_seed+1000003)
+    topology_rng=np.random.default_rng(request.generation_seed+3001)
     bank={int(k):v for k,v in state['basis_bank'].items()}
     init=cfg['initialization']
     if init['mode']=='degree_basis':
@@ -308,7 +370,7 @@ def generate(wrapper,request,state,manifest,options):
                 'Increase attributed_categorical.final_acceptance.max_attempt_multiplier '
                 'or diagnose the categorical sampler.'
             )
-        b=min(batch_size,request.num_graphs-len(outputs),remaining_attempts); ds=[]; aa=[]; init_rows=[]
+        b=min(batch_size,request.num_graphs-len(outputs),remaining_attempts); ds=[]; aa=[]; init_rows=[]; initial_bases=[]
         batch_attempt_start=attempted_graphs; attempted_graphs+=b
         for _ in range(b):
             if sampler is None:
@@ -325,15 +387,38 @@ def generate(wrapper,request,state,manifest,options):
             if init['mode']=='degree_basis':
                 anchor,ad=degree_anchor(u,d,init['ridge'],init['diagonal_weight'])
             else: anchor,ad=np.zeros(n,np.float32),{}
-            ds.append(d); aa.append(anchor)
+            ds.append(d); aa.append(anchor); initial_bases.append(u)
             init_rows.append({'basis_bank_index_within_size':idx,'haar_basis_fallback':fallback,
                               'anchor':ad,'degree_sampling':dd})
         width=max(map(len,ds)); mask=torch.zeros((b,width),dtype=torch.bool,device=device)
         anchor=torch.zeros((b,width),device=device)
         for i,d in enumerate(ds): mask[i,:len(d)]=True; anchor[i,:len(d)]=torch.as_tensor(aa[i],device=device)
         px=xn.marginal.expand(b,width,-1); pe=en.marginal.expand(b,width,width,-1)
-        x,e=draw_graph(px,pe,mask,noise_rng)
-        z=(anchor+torch.randn(anchor.shape,device=device,generator=noise_rng))*mask
+        target_degrees=torch.zeros((b,width),dtype=torch.long,device=device)
+        for i,d in enumerate(ds):
+            target_degrees[i,:len(d)]=torch.as_tensor(d.copy(),device=device)
+        if spectral_mode:
+            # Spectral latent and topology, not bond categories, initialize
+            # edge existence. Bond labels are then drawn on this support only.
+            z=(anchor+torch.randn(anchor.shape,device=device,generator=noise_rng))*mask
+            support=torch.zeros((b,width,width),dtype=torch.bool,device=device)
+            if fixed_degrees:
+                for i,d in enumerate(ds):
+                    a,info=initial_support(d,cfg['topology'],topology_rng)
+                    support[i,:len(d),:len(d)]=torch.as_tensor(a,device=device)
+                    init_rows[i]['topology']=info
+            else:
+                # Initial basis comes from the existing training-only bank.
+                initial_scores=torch.zeros((b,width,width),device=device)
+                for i,d in enumerate(ds):
+                    n=len(d); u=torch.as_tensor(initial_bases[i],device=device)
+                    initial_scores[i,:n,:n]=(u*(z[i,:n]*n**.5)[None])@u.T
+                support,_=decode_topology(initial_scores,support.long(),mask,target_degrees,cfg['topology'],topology_rng)
+            x=draw_categories(px,noise_rng).masked_fill(~mask,0)
+            e=draw_bonds(pe,support,mask,noise_rng)
+        else:
+            x,e=draw_graph(px,pe,mask,noise_rng)
+            z=(anchor+torch.randn(anchor.shape,device=device,generator=noise_rng))*mask
         current_pairs=eigenpairs(e,mask)
         rows=[]; batch_initials=[]; batch_pre_final=[None]*b
         for i,d in enumerate(ds):
@@ -341,14 +426,39 @@ def generate(wrapper,request,state,manifest,options):
             batch_initials.append(decode_graph(xx,ex,vocab))
             rows.append({'sample_index':None,'attempt_index':batch_attempt_start+i,'num_nodes':n,'initialization':init_rows[i],
                          'categorical_degree_change_steps':0,'node_category_change_steps':0,'edge_recolor_steps':0,
+                         'spectral_degree_change_steps':0,'spectral_edge_change_steps':0,
+                         'spectral_topology_accepted_swaps':0,'spectral_topology_tested_candidates':0,
+                         'bond_topology_violation_steps':0,'indexed_degree_violation_steps':0,
                          'basis_updates':1,'guidance_events':[],'trajectory':[]})
         for t,s in zip(times,times[1:]):
             tv=torch.full((b,),t,device=device,dtype=torch.long); sv=torch.full((b,),s,device=device,dtype=torch.long)
-            pred=model(x,e,z,tv,anchor,mask,total,current_pairs=current_pairs)
+            kwargs={}
+            if spectral_mode:
+                def topology_decoder(scores):
+                    return decode_topology(scores,e,mask,target_degrees,cfg['topology'],topology_rng)
+                kwargs['topology_decoder']=topology_decoder
+            pred=model(x,e,z,tv,anchor,mask,total,current_pairs=current_pairs,**kwargs)
             rp_x=xn.reverse_probs(pred['node_logits'].softmax(-1),x,tv,sv)
-            rp_e=en.reverse_probs(pred['edge_logits'].softmax(-1),e,tv,sv)
-            new_x,new_e=draw_graph(rp_x,rp_e,mask,noise_rng)
-            degree_changed=((e>0).sum(2)!=(new_e>0).sum(2)).any(1).cpu().tolist()
+            if spectral_mode:
+                support=pred['edge_support']
+                new_x=draw_categories(rp_x,noise_rng).masked_fill(~mask,0)
+                new_e=reverse_bonds(pred['edge_logits'].softmax(-1),e,support,en,tv,sv,mask,noise_rng)
+                # This is the requested hard separation of topology and bonds.
+                if not torch.equal(new_e>0,support):
+                    raise AssertionError('Categorical bond sampling changed spectral topology')
+                spectral_changes=((e>0).sum(2)!=support.sum(2)).any(1).cpu().tolist()
+                topology_changes=((e>0)!=support).any(2).any(1).cpu().tolist()
+                degree_changed=[False]*b
+                for i in range(b):
+                    rows[i]['spectral_degree_change_steps']+=int(spectral_changes[i])
+                    rows[i]['spectral_edge_change_steps']+=int(topology_changes[i])
+                    td=pred['topology_diagnostics'][i]
+                    rows[i]['spectral_topology_accepted_swaps']+=td.get('accepted_swaps',0)
+                    rows[i]['spectral_topology_tested_candidates']+=td.get('tested_candidates',0)
+            else:
+                rp_e=en.reverse_probs(pred['edge_logits'].softmax(-1),e,tv,sv)
+                new_x,new_e=draw_graph(rp_x,rp_e,mask,noise_rng)
+                degree_changed=((e>0).sum(2)!=(new_e>0).sum(2)).any(1).cpu().tolist()
             node_changed=((x!=new_x)&mask).any(1).cpu().tolist()
             recolored=((e>0)&(new_e>0)&(e!=new_e)).any(2).any(1).cpu().tolist()
             event=bool(guide['enabled']) and s/total<=guide['start_fraction'] and (s==0 or s%int(guide['every'])==0)
@@ -374,6 +484,8 @@ def generate(wrapper,request,state,manifest,options):
                     rows[i]['trajectory'].append({'t':s,'node_categories':xx.copy(),'edge_categories':ee.copy()})
             # This recomputation is unconditional: even no accepted swap or only
             # a categorical update must be represented in the next decoder basis.
+            if fixed_degrees and not torch.equal((new_e>0).sum(2),target_degrees):
+                raise AssertionError('A reverse transition or structural swap changed the fixed indexed degrees')
             current_pairs=eigenpairs(new_e,mask)
             coefficient=float(cfg['spectrum_feedback']) if feedback_active else 0.
             guided=(1-coefficient)*pred['clean_spectrum']+coefficient*current_pairs[0]
@@ -403,7 +515,7 @@ def generate(wrapper,request,state,manifest,options):
             final_values.append(values); final_vectors.append(vectors)
             predictions.append(predictions_numpy(pred,i,n))
             actual=(ee>0).sum(1)
-            rows[i].update({'final_degrees':actual.tolist(),'prior_degree_preserved':bool(np.array_equal(np.sort(actual),np.sort(d))),
+            rows[i].update({'final_degrees':actual.tolist(),'prior_indexed_degree_preserved':bool(np.array_equal(actual,d)),'prior_degree_preserved':bool(np.array_equal(np.sort(actual),np.sort(d))),
                             'initial_degree_preserved':bool(np.array_equal(actual,np.array([initial.degree(v) for v in range(n)]))),
                             'connected':connected,
                             'final_eigenpair_reconstruction_max_error':float(np.max(np.abs((vectors*(values*np.sqrt(n))[None])@vectors.T-(ee>0)))),
@@ -443,6 +555,14 @@ def generate(wrapper,request,state,manifest,options):
                    'mean_accepted_steps':float(np.mean([sum(ev['accepted_steps'] for ev in r['guidance_events']) for r in diagnostics])),
                    'basis_updates_per_graph':sample_steps+1,
                    'max_final_eigenpair_reconstruction_error':max(r['final_eigenpair_reconstruction_max_error'] for r in diagnostics)}
+        if spectral_mode:
+            aggregate.update({
+                'bond_topology_preservation_rate':1.0,
+                'prior_indexed_degree_preservation_rate':float(np.mean([r['prior_indexed_degree_preserved'] for r in diagnostics])),
+                'spectral_degree_change_steps_mean':float(np.mean([r['spectral_degree_change_steps'] for r in diagnostics])),
+                'spectral_edge_change_steps_mean':float(np.mean([r['spectral_edge_change_steps'] for r in diagnostics])),
+                'spectral_topology_accepted_swaps_mean':float(np.mean([r['spectral_topology_accepted_swaps'] for r in diagnostics])),
+                'indexed_degree_guaranteed':fixed_degrees})
         _write_json(staging/'rewiring_diagnostics.json',{'aggregate':aggregate,'graphs':diagnostics,
                     'final_rejections':rejection_records})
         _write_json(staging/'final_acceptance_diagnostics.json',{
@@ -474,6 +594,26 @@ def generate(wrapper,request,state,manifest,options):
                                        'diagnostics_path':'final_acceptance_diagnostics.json'},
             'posthoc_repair':False,'largest_component_filter':False,'rejected_final_graphs':rejected_disconnected,
         }
+        if spectral_mode:
+            generation_manifest['decode'].update({
+                'categorical_edge_state_is_authoritative':False,
+                'edge_existence_authority':'spectral_topology_decoder',
+                'spectral_thresholding':not fixed_degrees,
+                'initial_degree_projection':fixed_degrees,
+                'topology_decoder':cfg['topology']['decoder'],
+                'bond_head_includes_no_edge':False,
+                'bond_head_classes':vocab.num_edge_categories-1,
+                'bond_sampling_mask':'present_spectral_topology_edges_only',
+                'new_edge_bond_initialization':'q_s_marginal_of_predicted_clean_bond',
+                'exact_indexed_degree_guarantee':fixed_degrees,
+                'typed_degree_or_valence_guarantee':False,
+                'connectivity_guarantee':fixed_degrees and cfg['topology']['preserve_connectivity']})
+            generation_manifest['base_graphs']['role']='spectral_topology_with_conditional_bond_labels_after_optional_degree_preserving_guidance'
+            generation_manifest['initial_graphs']['role']=('exact_indexed_degree_realization_with_marginal_bond_types' if fixed_degrees else 'initial_spectral_threshold_support_with_marginal_bond_types')
+            generation_manifest['final_pre_rewire_graphs']['role']='spectral_topology_with_bond_draw_before_final_structural_swaps'
+            generation_manifest['prior_note']=('The sampled ordinary-degree sequence initializes both the spectral anchor and a feasible indexed-degree topology; spectral and structural swaps retain these degrees.' if fixed_degrees else 'The sampled degrees initialize a soft spectral anchor only; spectral thresholding may change degrees.')
+            generation_manifest['sampling_intervention_note']=('Topology is a spectral-guided decoding intervention, not an exact joint reverse posterior. The bounded 2-switch decoder guarantees indexed ordinary degrees, not a globally optimal score projection, typed degrees, valence, or exact spectral realization.' if fixed_degrees else 'Threshold topology is a spectral-guided decoding intervention. Bond resampling preserves the selected support, but successive spectral thresholds may change degrees.')
+            generation_manifest['initialization_uses_havel_hakimi']=fixed_degrees
         _write_json(staging/'manifest.json',generation_manifest)
         (staging/'generation.log').write_text(json.dumps(aggregate,indent=2)+'\n')
         if target.exists(): shutil.rmtree(target)

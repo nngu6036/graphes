@@ -758,7 +758,7 @@ Recorded QED results
 4.2 Seed 43
 -----------
 
-Source note: this block is labelled by RUN=seed_43 and its training seed. Its generation command uses --seed-id 42, while GEN_DIR refers to seed_43. These values are retained as written.
+Source note: this block is labelled by RUN=seed_43 and its training seed. Its generation command uses --seed-id 43, while GEN_DIR refers to seed_43. These values are retained as written.
 
 Training
 
@@ -784,7 +784,7 @@ PYTHONPATH=src python scripts/run_gdss_baseline.py \
   --dataset qm9 \
   --common-config configs/baselines/common_qm9.yaml \
   --wrapper-config configs/baselines/gdss_qm9.yaml \
-  --seed-id 42 \
+  --seed-id 43 \
   --run-id "$RUN" \
   --num-samples "$N" \
   --device gpu
@@ -816,41 +816,41 @@ python scripts/evaluate_qed_research.py \
 
 Recorded molecular evaluation
 
-Metric                                                                  Recorded value
---------------------------------------------------------------  ----------------------
-validity                                                                        0.7879
-validity_with_correction                                                           1.0
-validity_with_projected_formal_charges                                          0.9673
-validity_without_correction                                                     0.7879
-fcd                                                                  2.275179086119863
-num_generated_graphs                                                             10000
-num_valid_generated_molecules                                                     7879
-num_invalid_generated_molecules                                                   2121
-num_valid_generated_molecules_with_projected_formal_charges                       9673
-num_invalid_generated_molecules_after_projected_formal_charges                     327
-num_raw_invalid_resolved_by_projected_formal_charges                              1794
-projected_formal_charge_success_rate_on_raw_invalid                 0.8458274398868458
-num_valid_generated_molecules_with_correction                                    10000
-num_invalid_generated_molecules_after_correction                                     0
-num_molecules_corrected_to_valid                                                  2121
-correction_success_rate_on_raw_invalid                                             1.0
-metric_molecule_source                                                       raw_valid
-hogdiff_compatible_distribution_metrics                                          False
-uniqueness_rate                                                     0.9951770529254982
-unique_valid_count                                                                7841
-novelty_rate                                                        0.8586914934319602
-novel_unique_valid_count                                                          6733
-nspdk_mmd                                                        0.0019958732227799503
-nspdk_mmd_valid_only                                             0.0019958732227799503
-graphlet_histogram_mmd                                                            None
-graphlet_selected_mass_mmd                                                        None
-graphlet_histogram_mmd_by_order                                                     {}
-graphlet_selected_mass_mmd_by_order                                                 {}
-nspdk_proxy_mmd_all_generated                                   0.00014376657916480496
-nspdk_proxy_mmd_metric_source                                   0.00010670923021207747
-fcd_num_reference_molecules                                                      12997
-fcd_num_valid_generated_molecules                                                 7879
-fcd_generated_smiles_source                                                  raw_valid
+Molecular evaluation
+  validity: 0.7879
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9673
+  validity_without_correction: 0.7879
+  fcd: 2.27490265756607
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 7879
+  num_invalid_generated_molecules: 2121
+  num_valid_generated_molecules_with_projected_formal_charges: 9673
+  num_invalid_generated_molecules_after_projected_formal_charges: 327
+  num_raw_invalid_resolved_by_projected_formal_charges: 1794
+  projected_formal_charge_success_rate_on_raw_invalid: 0.8458274398868458
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 2121
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9951770529254982
+  unique_valid_count: 7841
+  novelty_rate: 0.8586914934319602
+  novel_unique_valid_count: 6733
+  nspdk_mmd: 0.0019965067226664196
+  nspdk_mmd_valid_only: 0.0019965067226664196
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.00014376657916461504
+  nspdk_proxy_mmd_metric_source: 0.00010670923021193287
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 7879
+  fcd_generated_smiles_source: raw_valid
+                                                raw_valid
 
 Recorded QED results
 
@@ -858,26 +858,26 @@ Recorded QED results
   "num_generated_graphs": 10000,
   "num_raw_valid": 7879,
   "validity_without_correction": 0.7879,
-  "qed_mean": 0.4532004375933125,
-  "qed_std_within_run": 0.08039988753626837,
-  "qed_median": 0.4663649632231751,
-  "qed_q10": 0.34241654614403044,
-  "qed_q90": 0.5417886957095531,
-  "qed_unique_valid_mean": 0.4530584272088628,
+  "qed_mean": 0.4531639834687145,
+  "qed_std_within_run": 0.0804081549835765,
+  "qed_median": 0.4663185901301006,
+  "qed_q10": 0.3423623010874802,
+  "qed_q90": 0.5417507581221082,
+  "qed_unique_valid_mean": 0.453021796415889,
   "num_unique_raw_valid": 7841,
-  "qed_yield": 0.35707662477977203,
+  "qed_yield": 0.35704790257500124,
   "num_raw_valid_single_component": 7364,
   "valid_single_component_yield": 0.7364,
-  "qed_single_component_mean": 0.4549405495888683,
-  "qed_ge_0p5_fraction_valid": 0.2912806193679401,
-  "qed_ge_0p5_yield_all": 0.2295,
+  "qed_single_component_mean": 0.4549015460517,
+  "qed_ge_0p5_fraction_valid": 0.29102678004822946,
+  "qed_ge_0p5_yield_all": 0.2293,
   "qed_ge_0p7_fraction_valid": 0.0,
   "qed_ge_0p7_yield_all": 0.0,
   "reference_num_graphs": 13083,
   "reference_num_raw_valid": 12997,
   "reference_qed_mean": 0.4661002280919897,
-  "qed_mean_minus_reference": -0.012899790498677177,
-  "qed_wasserstein_1": 0.012899790498677243
+  "qed_mean_minus_reference": -0.012936244623275195,
+  "qed_wasserstein_1": 0.012936244623275259
 }
 
 4.3 Seed 44

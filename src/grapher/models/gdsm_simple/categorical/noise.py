@@ -2,7 +2,9 @@
 
 Original implementation of Q(a)=a I+(1-a) 1 m^T and the clean-endpoint
 posterior mixture. Both node and edge chains use marginal, NOT absorbing, noise.
-The exact finite-T terminal marginal avoids a train/sample endpoint mismatch.
+The marginal chains have an exact finite-T terminal endpoint. Spectral topology
+decoding is a separate sampling intervention and has no exact joint-posterior
+or constrained-terminal-distribution claim.
 """
 from __future__ import annotations
 
@@ -108,3 +110,69 @@ def spectral_reverse(current, clean_prediction, anchor, alpha_bar, t, s, mask):
     at, ass = alpha_bar[t, None], alpha_bar[s, None]
     eps = (current-anchor-at.sqrt()*(clean_prediction-anchor))/(1-at).sqrt().clamp_min(1e-12)
     return (anchor + ass.sqrt()*(clean_prediction-anchor) + (1-ass).sqrt()*eps) * mask
+
+
+def draw_bonds(bond_probs, support, mask, generator):
+    """Draw real bond categories only on selected unordered topology edges.
+
+    Probability class k maps to stored edge label k+1. Label 0 is a storage
+    sentinel for absent edges, not a category in this distribution. Padding,
+    diagonals and absent pairs are never passed to torch.multinomial.
+    """
+    active = pair_mask(mask)
+    if support.shape != active.shape or support.dtype != torch.bool:
+        raise ValueError('Bond support must be boolean [B,N,N]')
+    if not torch.equal(support, support.transpose(1,2)) or bool((support & ~active).any()):
+        raise ValueError('Bond support must be symmetric, loop-free and unpadded')
+    if bond_probs.shape[:-1] != support.shape or bond_probs.shape[-1] < 1:
+        raise ValueError('Expected at least one real bond category')
+    edges = torch.zeros_like(support, dtype=torch.long)
+    upper = support & torch.ones_like(support).triu(1)
+    if bool(upper.any()):
+        probs = bond_probs[upper]
+        if not bool(torch.isfinite(probs).all()) or bool((probs<0).any()) or bool((probs.sum(-1)<=0).any()):
+            raise ValueError('Invalid probabilities on present bonds')
+        draws = (torch.zeros(len(probs),device=edges.device,dtype=torch.long)
+                 if probs.shape[-1]==1 else draw_categories(probs,generator))
+        edges[upper] = draws + 1
+        edges = edges + edges.transpose(1,2)
+    if not torch.equal(edges>0, support):
+        raise AssertionError('Bond sampling changed topology')
+    return edges
+
+
+def forward_bond_graph(node_noise, bond_noise, topology_noise, clean_x, clean_e, t, mask, generator):
+    """Independent binary-support corruption plus real-bond-only corruption.
+
+    Existing clean bonds use the K-class marginal kernel. A false-positive
+    noisy topology edge has no clean bond type and is coloured from the bond
+    marginal. The bond denoising loss is applied only to clean present bonds.
+    """
+    x, binary = draw_graph(node_noise.forward_probs(clean_x,t),
+                           topology_noise.forward_probs((clean_e>0).long(),t),mask,generator)
+    # The clamped dummy for absent pairs is never used as their bond target.
+    probs = bond_noise.forward_probs((clean_e-1).clamp_min(0),t)
+    probs = torch.where((clean_e>0)[...,None],probs,bond_noise.marginal)
+    return x, draw_bonds(probs,binary.bool(),mask,generator)
+
+
+def reverse_bonds(clean_probs, current_edges, support, noise, t, s, mask, generator):
+    """Keep exact K-class skip posteriors on surviving bonds.
+
+    Newly introduced topology edges have no previous bond label. For them,
+    sample q_s(b | predicted clean bond) = alpha_s*p0 + (1-alpha_s)*m.
+    Do not invent a previous 'single bond', or treat absence as a bond class.
+    The topology intervention itself is not an exact categorical posterior.
+    """
+    if clean_probs.shape[-1] != len(noise.marginal):
+        raise ValueError('Bond head and bond-noise vocabulary differ')
+    if len(noise.marginal)==1:
+        return draw_bonds(clean_probs,support,mask,generator)
+    a = noise.alpha_bar[s,None,None,None]
+    probs = a*clean_probs + (1-a)*noise.marginal
+    surviving = support & (current_edges>0)
+    if bool(surviving.any()):
+        tv = t[:,None,None].expand_as(current_edges)[surviving]
+        sv = s[:,None,None].expand_as(current_edges)[surviving]
+        probs[surviving] = noise.reverse_probs(clean_probs[surviving],current_edges[surviving]-1,tv,sv)
+    return draw_bonds(probs,support,mask,generator)

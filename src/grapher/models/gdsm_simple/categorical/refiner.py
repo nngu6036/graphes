@@ -1,8 +1,10 @@
 """Generation-only typed structural refinement, not a ConStruct projector.
 
 Same-type double-edge swaps preserve the CURRENT graph's indexed degrees,
-node types and per-node typed degrees. The following categorical transition
-may change all of them. No permanent blocking table or initial-degree mask.
+node types and per-node typed degrees. In legacy mode the next categorical
+transition may change all of them. In spectral-topology mode bond recolouring
+can change typed degrees, but ordinary degrees come from the topology decoder.
+No permanent blocking table is introduced.
 """
 from __future__ import annotations
 from itertools import combinations
@@ -68,7 +70,13 @@ def energy(x,e,target,basis,bins,weights,*,counts=None):
         raw['spectral']=float(np.mean((values-target['spectrum'])**2))
     else: raw['spectral']=0.
     ij=np.triu_indices(len(x),1)
-    raw['edge']=float(-np.log(np.maximum(target['edge_probs'][ij[0],ij[1],e[ij]],1e-12)).mean()) if len(ij[0]) else 0.
+    if target.get('bond_only'):
+        # The bond head is evaluated only on the pre-refinement support. It
+        # provides no meaningful likelihood for newly proposed edges; do not
+        # use a deterministic support mask as an anti-rewiring penalty.
+        raw['edge']=0.
+    else:
+        raw['edge']=float(-np.log(np.maximum(target['edge_probs'][ij[0],ij[1],e[ij]],1e-12)).mean()) if len(ij[0]) else 0.
     result={'total':structure+weights['spectral']*raw['spectral']+weights['edge']*raw['edge'],'structure':structure,**raw}
     if per_order is not None: result['by_order']=per_order
     return result

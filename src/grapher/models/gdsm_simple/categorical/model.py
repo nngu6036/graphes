@@ -1,8 +1,9 @@
 """Joint spectral-rank transformer and permutation-equivariant categorical graph net.
 
-Node indices are never confused with spectral ranks. The categorical edge state
-is the sole adjacency; spectral scores are decoder features, never a competing
-threshold graph. Only the actual current binary topology supplies eigenvectors.
+Node indices are never confused with spectral ranks. Legacy mode uses categorical edges as adjacency. In spectral-topology mode,
+spectral decoding alone chooses edge existence and the edge head predicts K
+real bond types, only on that support. The uploaded spectral representation and
+dynamic eigenbasis implementation are unchanged.
 """
 from __future__ import annotations
 import inspect
@@ -49,11 +50,16 @@ class SpectralCategoricalDenoiser(nn.Module):
     def __init__(self, *, node_classes, edge_classes, graphlet_classes,
                  hidden_dim=128, num_layers=3, num_heads=4, ff_dim=256,
                  dropout=0., clustering_bins=100, spectral_conditioning=True, max_nodes=38,
-                 graphlet_block_sizes=None, graphlet_orders=None, graphlet_size_weights=None):
+                 graphlet_block_sizes=None, graphlet_orders=None, graphlet_size_weights=None,
+                 bond_only=False):
         super().__init__()
         if hidden_dim < 4 or hidden_dim % num_heads or num_layers < 1:
             raise ValueError("Invalid hidden dimension, head count, or layer count")
         self.node_classes,self.edge_classes=node_classes,edge_classes
+        self.bond_only=bool(bond_only)
+        self.bond_classes=edge_classes-1 if self.bond_only else edge_classes
+        if self.bond_classes<1:
+            raise ValueError('At least one real edge type is required')
         self.hidden_dim,self.max_nodes=hidden_dim,max_nodes
         self.spectral_conditioning=bool(spectral_conditioning)
         self.time=mlp(hidden_dim,hidden_dim,hidden_dim)
@@ -73,7 +79,10 @@ class SpectralCategoricalDenoiser(nn.Module):
         self.proposal_input=mlp(1,hidden_dim,hidden_dim)
         self.layers=nn.ModuleList(GraphLayer(hidden_dim) for _ in range(num_layers))
         self.node_head=nn.Linear(hidden_dim,node_classes)
-        self.edge_head=mlp(hidden_dim+2*node_classes,hidden_dim,edge_classes)
+        # Generic graphs have only one possible present-edge type: existence
+        # is entirely spectral, so there is no learned categorical edge head.
+        self.edge_head=(None if self.bond_only and self.bond_classes==1 else
+                        mlp(hidden_dim+2*node_classes,hidden_dim,self.bond_classes))
         self.summary=mlp(3*hidden_dim+node_classes+edge_classes,hidden_dim,hidden_dim)
         self.graphlet_head=nn.Linear(hidden_dim,graphlet_classes)
         self.graphlet_block_sizes=tuple(graphlet_block_sizes or ())
@@ -86,7 +95,8 @@ class SpectralCategoricalDenoiser(nn.Module):
         self.clustering_head=nn.Linear(hidden_dim,clustering_bins)
         self.orbit_head=nn.Linear(hidden_dim,4)
 
-    def forward(self,x,e,z,t,anchor,mask,diffusion_steps,*,current_pairs=None):
+    def forward(self,x,e,z,t,anchor,mask,diffusion_steps,*,current_pairs=None,
+                edge_support=None,topology_decoder=None):
         if mask.ndim!=2 or z.shape!=mask.shape or x.shape!=mask.shape or anchor.shape!=mask.shape:
             raise ValueError("Expected node, mask, spectrum and anchor shapes [B,N]")
         if e.shape!=(len(mask),mask.shape[1],mask.shape[1]) or not torch.equal(e,e.transpose(1,2)):
@@ -132,16 +142,43 @@ class SpectralCategoricalDenoiser(nn.Module):
         node_logits=self.node_head(h)*mask[...,None]
         px=node_logits.softmax(-1)*mask[...,None]
         pi,pj=px[:,:,None,:],px[:,None,:,:]
-        edge_logits=self.edge_head(torch.cat((pair,pi+pj,(pi-pj).abs()),-1))
-        edge_logits=.5*(edge_logits+edge_logits.transpose(1,2))
-        edge_logits=edge_logits*active[...,None]
-        pe=edge_logits.softmax(-1)*active[...,None]
+        edge_features=torch.cat((pair,pi+pj,(pi-pj).abs()),-1)
+        topology_diagnostics=None
+        if self.bond_only:
+            if topology_decoder is not None:
+                if edge_support is not None:
+                    raise ValueError('Provide a topology decoder or an edge support, not both')
+                edge_support,topology_diagnostics=topology_decoder(scores)
+            if edge_support is None:
+                raise ValueError('Spectral topology requires an explicit edge support or decoder')
+            if (edge_support.dtype!=torch.bool or edge_support.shape!=active.shape or
+                    not torch.equal(edge_support,edge_support.transpose(1,2)) or
+                    bool((edge_support & ~active).any())):
+                raise ValueError('Invalid spectral edge support')
+            edge_logits=pair.new_zeros((*active.shape,self.bond_classes))
+            upper=edge_support & torch.ones_like(edge_support).triu(1)
+            if self.edge_head is not None and bool(upper.any()):
+                # Do not evaluate the head for absent edges, padding or loops.
+                edge_logits[upper]=self.edge_head(edge_features[upper])
+                edge_logits=edge_logits+edge_logits.transpose(1,2)
+            # Keep clean support out of the structural prediction heads during
+            # training: it is a selection mask for bond supervision ONLY.
+            pe=one_e
+        else:
+            edge_logits=self.edge_head(edge_features)
+            edge_logits=.5*(edge_logits+edge_logits.transpose(1,2))
+            edge_logits=edge_logits*active[...,None]
+            pe=edge_logits.softmax(-1)*active[...,None]
         pooled=self.summary(torch.cat((mean_nodes(h,mask),mean_pairs(pair,active),summary_spectral,
                                        mean_nodes(px,mask),mean_pairs(pe,active)),-1))
         result={"clean_spectrum":spectrum,"node_logits":node_logits,"edge_logits":edge_logits,
                 "graphlet_logits":self.graphlet_head(pooled),"graphlet_mass":self.mass_head(pooled).sigmoid(),
                 "clustering_logits":self.clustering_head(pooled),"orbit_log_mean":F.softplus(self.orbit_head(pooled)),
                 "spectral_scores":scores}
+        if self.bond_only:
+            result['bond_only']=True
+            result['edge_support']=edge_support
+            result['topology_diagnostics']=topology_diagnostics
         if self.graphlet_block_sizes:
             result['graphlet_block_sizes']=self.graphlet_block_sizes
             result['graphlet_orders']=self.graphlet_orders
@@ -184,7 +221,8 @@ def losses(pred,target,weights):
     parts={
         'spectral':((pred['clean_spectrum']-target['z']).square()*mask).sum()/mask.sum(),
         'node':masked_ce(pred['node_logits'],target['x'],mask),
-        'edge':masked_ce(pred['edge_logits'],target['e'],upper),
+        'edge':(masked_ce(pred['edge_logits'],(target['e']-1).clamp_min(0),upper & (target['e']>0))
+                if pred.get('bond_only') else masked_ce(pred['edge_logits'],target['e'],upper)),
         'graphlet':graphlet,
         'mass':mass_loss,
         'clustering':F.kl_div(logc,target['clustering'],reduction='batchmean')+F.mse_loss(logc.exp().cumsum(-1),target['clustering'].cumsum(-1)),
@@ -213,6 +251,19 @@ def predictions_numpy(pred,index,n):
         'orbit':pred['orbit_log_mean'][index].detach().cpu().numpy(),
     }
 
+    if pred.get('bond_only'):
+        support=pred['edge_support'][index,:n,:n].detach().cpu().numpy()
+        bonds=result['edge_probs']
+        import numpy as np
+        # Preserve the public stored-label layout [0=no-edge, 1..K=bonds]
+        # for audits/refinement. This is not a learned no-edge probability.
+        full=np.zeros((*support.shape,bonds.shape[-1]+1),dtype=bonds.dtype)
+        full[...,0]=~support
+        full[...,1:]=bonds*support[...,None]
+        result['edge_probs']=full
+        result['bond_probs']=bonds
+        result['topology_support']=support
+        result['bond_only']=True
     if multi:
         result['graphlet_orders']=list(pred['graphlet_orders'])
         result['graphlet_block_sizes']=list(pred['graphlet_block_sizes'])

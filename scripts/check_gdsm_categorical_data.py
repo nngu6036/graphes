@@ -30,6 +30,9 @@ def main():
     print(json.dumps({'status':'passed','split_fingerprint':ref.fingerprint(),'checked':counts,
                       'category_vocabulary':v.to_dict(),'test_content_read':False,'max_nodes':max_nodes,
                       'ordinary_degree_checkpoint':cfg['initialization']['degree_generator'].get('checkpoint_path'),
-                      'degree_prior_is_not_a_hard_constraint':True},indent=2))
+                      'degree_prior_is_not_a_hard_constraint':not (cfg['topology']['mode']=='spectral' and cfg['topology']['decoder']=='degree_preserving'),
+                      'edge_existence_mode':cfg['topology']['mode'],
+                      'topology_decoder':cfg['topology']['decoder'],
+                      'bond_head_includes_no_edge':cfg['topology']['mode']=='categorical'},indent=2))
 
 if __name__=='__main__':main()

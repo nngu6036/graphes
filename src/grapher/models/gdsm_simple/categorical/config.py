@@ -10,6 +10,11 @@ DEFAULTS={
     'graphlets':{'size':3,'connected_only':True,'clustering_bins':100},
     'initialization':{'mode':'degree_basis','ridge':.001,'diagonal_weight':1.,'basis_max_per_size':32,
                       'degree_generator':{'type':'empirical','fallback':'error','postprocess_policy':'reject_only'}},
+    # Legacy behaviour stays the default. New experiments explicitly select
+    # spectral topology; the categorical head then contains real bond types only.
+    'topology':{'mode':'categorical','decoder':'degree_preserving','threshold':.5,
+                'max_swaps_per_step':2,'proposal_budget':128,
+                'initial_random_swaps_per_edge':4,'preserve_connectivity':False},
     'spectral_conditioning':True,
     'spectrum_feedback':.05,
     'feedback_start_fraction':.2,
@@ -59,12 +64,35 @@ def resolve(options):
         raise ValueError('Disable legacy degree/HH/rewiring flags; categorical.guidance controls event-local swaps')
     if ext.get('structural_summary','none') != 'none':
         raise ValueError('Use attributed_categorical.graphlets, not legacy structural_summary')
-    for section in ('noise','guidance','loss_weights','final_acceptance'):
+    for section in ('noise','guidance','loss_weights','final_acceptance','topology'):
         _unknown(cfg[section],DEFAULTS[section],section)
     _unknown(cfg['guidance']['weights'],DEFAULTS['guidance']['weights'],'guidance.weights')
     if cfg['noise']['type']!='marginal' or cfg['noise']['schedule']!='cosine_exact_terminal':
         raise ValueError('This variant supports marginal node/edge noise with cosine_exact_terminal only')
     if not math.isfinite(float(cfg['noise']['pseudocount'])) or cfg['noise']['pseudocount']<=0: raise ValueError('noise.pseudocount must be >0')
+    topology=cfg['topology']
+    if topology['mode'] not in ('categorical','spectral'):
+        raise ValueError("topology.mode must be 'categorical' or 'spectral'")
+    if topology['decoder'] not in ('degree_preserving','threshold'):
+        raise ValueError("topology.decoder must be 'degree_preserving' or 'threshold'")
+    if not math.isfinite(float(topology['threshold'])):
+        raise ValueError('topology.threshold must be finite')
+    for key in ('max_swaps_per_step','initial_random_swaps_per_edge'):
+        if type(topology[key]) is not int or topology[key]<0:
+            raise ValueError(f'topology.{key} must be a nonnegative integer')
+    if type(topology['proposal_budget']) is not int or topology['proposal_budget']<1:
+        raise ValueError('topology.proposal_budget must be a positive integer')
+    if type(topology['preserve_connectivity']) is not bool:
+        raise ValueError('topology.preserve_connectivity must be boolean')
+    if topology['mode']=='spectral':
+        if not cfg['spectral_conditioning'] or float(cfg['loss_weights']['spectral'])<=0:
+            raise ValueError('Spectral topology requires spectral_conditioning and a positive spectral loss')
+        if topology['decoder']=='degree_preserving' and cfg['initialization']['mode']!='degree_basis':
+            raise ValueError('Degree-preserving spectral topology requires degree_basis initialization')
+        if topology['decoder']=='threshold' and topology['preserve_connectivity']:
+            raise ValueError('Threshold decoding cannot guarantee connectivity')
+        if topology['preserve_connectivity'] and not cfg['guidance']['preserve_connectivity_if_connected']:
+            raise ValueError('Structural guidance must preserve the requested connectivity invariant')
     gc=cfg['graphlets']
     _unknown(gc,{**DEFAULTS['graphlets'],**MULTISCALE_DEFAULTS},'graphlets')
     if gc.get('sizes') is not None:

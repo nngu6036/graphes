@@ -230,10 +230,11 @@ PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
   --generated-dir "$GEN_DIR" \
   --output-dir "$GEN_DIR/evaluation_report"
 
-Graph-distribution MMD against held-out test graphs (lower is better)
+
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.009729        0.001697
-hog_diff_to_test                    0.036673          0.049233      0.010289        0.038652        0.024643
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
+hog_diff_to_test                    0.036673          0.049233      0.010289        0.032708        0.024643
+
 
 # QM9
 export HOGDIFF=/home/quang/HOG-Diff

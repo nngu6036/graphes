@@ -452,33 +452,32 @@ Molecular evaluation
   fcd_num_valid_generated_molecules: 9896
   fcd_generated_smiles_source: raw_valid
 
-QED output
+
 {
   "num_generated_graphs": 10000,
-  "num_raw_valid": 9908,
-  "validity_without_correction": 0.9908,
-  "qed_mean": 0.46986171288124773,
-  "qed_std_within_run": 0.07365614914322655,
-  "qed_median": 0.47695586324983574,
-  "qed_q10": 0.36708178187062407,
-  "qed_q90": 0.5584724674651512,
-  "qed_unique_valid_mean": 0.469787834762698,
-  "num_unique_raw_valid": 9583,
-  "qed_yield": 0.46553898512273956,
-  "num_raw_valid_single_component": 9875,
-  "valid_single_component_yield": 0.9875,
-  "qed_single_component_mean": 0.4698820219150012,
-  "qed_ge_0p5_fraction_valid": 0.36182882519176424,
-  "qed_ge_0p5_yield_all": 0.3585,
+  "num_raw_valid": 9896,
+  "validity_without_correction": 0.9896,
+  "qed_mean": 0.459502663211056,
+  "qed_std_within_run": 0.07391062236680078,
+  "qed_median": 0.46631033445777714,
+  "qed_q10": 0.3559708515888318,
+  "qed_q90": 0.5484084829639377,
+  "qed_unique_valid_mean": 0.4593792458954252,
+  "num_unique_raw_valid": 9538,
+  "qed_yield": 0.45472383551365936,
+  "num_raw_valid_single_component": 9821,
+  "valid_single_component_yield": 0.9821,
+  "qed_single_component_mean": 0.45953974426800975,
+  "qed_ge_0p5_fraction_valid": 0.3037590945836702,
+  "qed_ge_0p5_yield_all": 0.3006,
   "qed_ge_0p7_fraction_valid": 0.0,
   "qed_ge_0p7_yield_all": 0.0,
   "reference_num_graphs": 13083,
   "reference_num_raw_valid": 12997,
   "reference_qed_mean": 0.4661002280919897,
-  "qed_mean_minus_reference": 0.0037614847892580294,
-  "qed_wasserstein_1": 0.0037893091903754526
+  "qed_mean_minus_reference": -0.006597564880933715,
+  "qed_wasserstein_1": 0.0066129762747806995
 }
-
 
 3.3 Seed 44
 -----------
@@ -570,28 +569,28 @@ Molecular evaluation
 QED output
 {
   "num_generated_graphs": 10000,
-  "num_raw_valid": 9896,
-  "validity_without_correction": 0.9896,
-  "qed_mean": 0.459502663211056,
-  "qed_std_within_run": 0.07391062236680078,
-  "qed_median": 0.46631033445777714,
-  "qed_q10": 0.3559708515888318,
-  "qed_q90": 0.5484084829639377,
-  "qed_unique_valid_mean": 0.4593792458954252,
-  "num_unique_raw_valid": 9538,
-  "qed_yield": 0.45472383551365936,
-  "num_raw_valid_single_component": 9821,
-  "valid_single_component_yield": 0.9821,
-  "qed_single_component_mean": 0.45953974426800975,
-  "qed_ge_0p5_fraction_valid": 0.3037590945836702,
-  "qed_ge_0p5_yield_all": 0.3006,
+  "num_raw_valid": 9908,
+  "validity_without_correction": 0.9908,
+  "qed_mean": 0.46986171288124773,
+  "qed_std_within_run": 0.07365614914322655,
+  "qed_median": 0.47695586324983574,
+  "qed_q10": 0.36708178187062407,
+  "qed_q90": 0.5584724674651512,
+  "qed_unique_valid_mean": 0.469787834762698,
+  "num_unique_raw_valid": 9583,
+  "qed_yield": 0.46553898512273956,
+  "num_raw_valid_single_component": 9875,
+  "valid_single_component_yield": 0.9875,
+  "qed_single_component_mean": 0.4698820219150012,
+  "qed_ge_0p5_fraction_valid": 0.36182882519176424,
+  "qed_ge_0p5_yield_all": 0.3585,
   "qed_ge_0p7_fraction_valid": 0.0,
   "qed_ge_0p7_yield_all": 0.0,
   "reference_num_graphs": 13083,
   "reference_num_raw_valid": 12997,
   "reference_qed_mean": 0.4661002280919897,
-  "qed_mean_minus_reference": -0.006597564880933715,
-  "qed_wasserstein_1": 0.0066129762747806995
+  "qed_mean_minus_reference": 0.0037614847892580294,
+  "qed_wasserstein_1": 0.0037893091903754526
 }
 
 

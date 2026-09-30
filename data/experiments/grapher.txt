@@ -1932,7 +1932,31 @@ python scripts/evaluate_qed_research.py \
 # ------------------------------------------------------------------------------
 # Recorded result — ZINC, seed 45
 # ------------------------------------------------------------------------------
-# No recorded result in source file.
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9233,
+  "validity_without_correction": 0.9233,
+  "qed_mean": 0.7357701511954587,
+  "qed_std_within_run": 0.11433404645337965,
+  "qed_median": 0.7511030310575707,
+  "qed_q10": 0.586140547059345,
+  "qed_q90": 0.8667904756356265,
+  "qed_unique_valid_mean": 0.7357701511954587,
+  "num_unique_raw_valid": 9233,
+  "qed_yield": 0.6793365805987664,
+  "num_raw_valid_single_component": 8384,
+  "valid_single_component_yield": 0.8384,
+  "qed_single_component_mean": 0.7362043450754738,
+  "qed_ge_0p5_fraction_valid": 0.958518358063468,
+  "qed_ge_0p5_yield_all": 0.885,
+  "qed_ge_0p7_fraction_valid": 0.6760532871222787,
+  "qed_ge_0p7_yield_all": 0.6242,
+  "reference_num_graphs": 24887,
+  "reference_num_raw_valid": 23728,
+  "reference_qed_mean": 0.7512321466819076,
+  "qed_mean_minus_reference": -0.015461995486448887,
+  "qed_wasserstein_1": 0.023031008687063106
+}
 
 
 ## Communuty small , no rewiring
@@ -1974,6 +1998,42 @@ for SEED in 41 42 43 44 45; do
     --num-samples "$N" \
     --output-dir "$GEN/evaluation_topology"
 done
+
+
+Molecular evaluation
+  validity: 0.9233
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9724
+  validity_without_correction: 0.9233
+  fcd: 10.241545676639632
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9233
+  num_invalid_generated_molecules: 767
+  num_valid_generated_molecules_with_projected_formal_charges: 9724
+  num_invalid_generated_molecules_after_projected_formal_charges: 276
+  num_raw_invalid_resolved_by_projected_formal_charges: 491
+  projected_formal_charge_success_rate_on_raw_invalid: 0.6401564537157758
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 767
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 1.0
+  unique_valid_count: 9233
+  novelty_rate: 1.0
+  novel_unique_valid_count: 9233
+  nspdk_mmd: 0.002572138359386782
+  nspdk_mmd_valid_only: 0.002572138359386782
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.00015139621158285184
+  nspdk_proxy_mmd_metric_source: 0.00015123565330337358
+  fcd_num_reference_molecules: 23728
+  fcd_num_valid_generated_molecules: 9233
+  fcd_generated_smiles_source: raw_valid
 
 # Seet 41
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD

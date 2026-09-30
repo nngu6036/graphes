@@ -32,7 +32,15 @@ def audit(generated_dir):
     n=len(final)
     if not n or any(len(a)!=n for a in (initial,pre,degrees,vals,vectors)):
         raise ValueError('Empty or mismatched output batches')
-    prior_match=initial_match=connected=0;max_error=0.;max_orthogonal_error=0.
+    spectral_mode=manifest.get('decode',{}).get('edge_existence_authority')=='spectral_topology_decoder'
+    fixed_degrees=bool(manifest.get('decode',{}).get('exact_indexed_degree_guarantee',False))
+    predictions=load_pickle(root/'predicted_summaries.pkl') if spectral_mode else None
+    trajectories=load_pickle(root/'categorical_trajectories.pkl') if (root/'categorical_trajectories.pkl').is_file() else None
+    if predictions is not None and len(predictions)!=n:
+        raise AssertionError('Predicted spectral supports and graph counts differ')
+    if trajectories is not None and len(trajectories)!=n:
+        raise AssertionError('Trajectory and graph counts differ')
+    prior_match=initial_match=indexed_match=connected=0;max_error=0.;max_orthogonal_error=0.
     for i,(g,g0,gpre,d,z,u) in enumerate(zip(final,initial,pre,degrees,vals,vectors)):
         if len(g)!=len(g0) or len(g)!=len(gpre) or len(g)!=len(d):raise AssertionError('Node count changed')
         x,e=encode_graph(g,vocab,len(g));xp,ep=encode_graph(gpre,vocab,len(g))
@@ -46,10 +54,29 @@ def audit(generated_dir):
         orth=float(np.max(np.abs(u.T@u-np.eye(len(g)))))
         max_error=max(max_error,error);max_orthogonal_error=max(max_orthogonal_error,orth)
         if error>2e-4 or orth>2e-4:raise AssertionError(f'Final eigenpairs do not represent retained adjacency #{i}')
+        indexed_match+=int(np.array_equal((e>0).sum(1),d))
+        if spectral_mode:
+            support=np.asarray(predictions[i]['topology_support'],dtype=bool)
+            np.testing.assert_array_equal(ep>0,support,err_msg='Final bond draw altered spectral support')
+            if manifest['decode']['bond_head_includes_no_edge']:
+                raise AssertionError('Spectral topology cannot use a no-edge bond class')
+        if fixed_degrees:
+            np.testing.assert_array_equal((e0>0).sum(1),d,err_msg='Initial indexed degrees differ from prior')
+            np.testing.assert_array_equal((e>0).sum(1),d,err_msg='Final indexed degrees differ from prior')
+            if trajectories is not None:
+                for step in trajectories[i]:
+                    labels=np.asarray(step['edge_categories'])
+                    if not np.array_equal(labels,labels.T) or np.any(np.diag(labels)):
+                        raise AssertionError('Invalid categorical topology in trajectory')
+                    np.testing.assert_array_equal((labels>0).sum(1),d,err_msg='Intermediate indexed degrees changed')
         prior_match+=int(np.array_equal(np.sort((e>0).sum(1)),np.sort(d)))
         initial_match+=int(np.array_equal((e>0).sum(1),(e0>0).sum(1)))
         connected+=int(nx.is_connected(g))
     diag=json.loads((root/'rewiring_diagnostics.json').read_text())['aggregate']
+    if spectral_mode and diag['categorical_degree_change_steps_mean']!=0:
+        raise AssertionError('Bond sampling is recorded as changing node degrees')
+    if fixed_degrees and diag['spectral_degree_change_steps_mean']!=0:
+        raise AssertionError('Degree-preserving spectral decoder is recorded as changing degrees')
     final_acceptance=manifest.get('final_sample_acceptance',{})
     if final_acceptance.get('require_connected',False) and connected!=n:
         raise AssertionError('Final connected-sample acceptance is enabled but a returned graph is disconnected')
@@ -66,7 +93,12 @@ def audit(generated_dir):
             'max_eigenvector_orthogonality_error':max_orthogonal_error,
             'recorded_basis_updates_per_graph':diag['basis_updates_per_graph'],
             'recorded_categorical_degree_change_steps_mean':diag['categorical_degree_change_steps_mean'],
-            'degree_changes_are_allowed_not_required':True}
+            'degree_changes_are_allowed_not_required':not fixed_degrees,
+            'spectral_topology_mode':spectral_mode,
+            'bond_support_verified_against_final_pre_rewire_graph':spectral_mode,
+            'indexed_degree_guaranteed':fixed_degrees,
+            'prior_indexed_degree_preservation_rate':indexed_match/n,
+            'saved_intermediate_degrees_verified':fixed_degrees and trajectories is not None}
 
 
 def rbf_mmd2(a,b,sigma=1.,block=256):
