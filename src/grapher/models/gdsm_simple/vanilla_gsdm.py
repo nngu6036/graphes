@@ -25,7 +25,9 @@ The ``vanilla_laplacian_loggap`` ablation diffuses training-standardized
 logarithms of successive nontrivial Laplacian eigenvalue gaps without any
 structural auxiliary head.  The ``vanilla_laplacian_loggap_graphlet`` Stage-2b
 variant adds a k=3,4,5 connected graphlet-summary head that shares the spectral
-denoiser encoder and is trained jointly as an auxiliary objective.  That joint
+denoiser encoder and is trained jointly as an auxiliary objective.  The same
+shared encoder can additionally predict a node clustering-coefficient histogram
+and a 15-role ORCA orbit-count histogram (with log-total magnitude).  That joint
 variant can optionally enrich the current noisy graph state with random-walk
 arrival node features and truncated shortest-path pair features, and can use
 either the released-style DenseGCN backbone or a dense PPGN pair-tensor
@@ -266,7 +268,8 @@ def default_vanilla_options() -> dict[str, Any]:
             "use_ema": False,
         },
         "graphlet_refinement": {"enabled": False},
-        "graphlet_summary": {"enabled": False},
+        "graphlet_summary": {"enabled": False},  # legacy graphlet-only alias
+        "structure_summary": {"enabled": False},
         "degree_prior": {
             "enabled": False,
             "batch_size": 64,
@@ -310,9 +313,80 @@ def default_vanilla_options() -> dict[str, Any]:
     }
 
 
+def _resolved_structure_summary_config(options: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a canonical joint structural-summary configuration.
+
+    ``graphlet_summary`` is kept as a backwards-compatible graphlet-only alias.
+    New experiments should use ``structure_summary`` so graphlet, clustering,
+    and orbit targets can share the same spectrum/PPGN encoder.
+    """
+    raw_structure = dict(options.get("structure_summary", {}) or {})
+    raw_graphlet = dict(options.get("graphlet_summary", {}) or {})
+    if bool(raw_structure.get("enabled", False)):
+        if bool(raw_graphlet.get("enabled", False)):
+            raise ValueError(
+                "Use either structure_summary or legacy graphlet_summary, not both."
+            )
+        graphlet = dict(raw_structure.get("graphlet", {}) or {})
+        clustering = dict(raw_structure.get("clustering", {}) or {})
+        orbit = dict(raw_structure.get("orbit", {}) or {})
+        return {
+            "enabled": True,
+            "loss_weight": float(raw_structure.get("loss_weight", 0.10)),
+            "graphlet": {
+                "enabled": bool(graphlet.get("enabled", True)),
+                "orders": list(graphlet.get("orders", [3, 4, 5])),
+                "histogram_weight": float(graphlet.get("histogram_weight", 1.0)),
+                "mass_weight": float(graphlet.get("mass_weight", 0.25)),
+            },
+            "clustering": {
+                "enabled": bool(clustering.get("enabled", False)),
+                "bins": int(clustering.get("bins", 100)),
+                "histogram_weight": float(clustering.get("histogram_weight", 0.25)),
+                "cdf_weight": float(clustering.get("cdf_weight", 1.0)),
+            },
+            "orbit": {
+                "enabled": bool(orbit.get("enabled", False)),
+                "width": int(orbit.get("width", 15)),
+                "histogram_weight": float(orbit.get("histogram_weight", 0.25)),
+                "log_total_weight": float(orbit.get("log_total_weight", 0.10)),
+            },
+        }
+    if bool(raw_graphlet.get("enabled", False)):
+        return {
+            "enabled": True,
+            "loss_weight": float(raw_graphlet.get("loss_weight", 0.10)),
+            "graphlet": {
+                "enabled": True,
+                "orders": list(raw_graphlet.get("orders", [3, 4, 5])),
+                "histogram_weight": float(raw_graphlet.get("histogram_weight", 1.0)),
+                "mass_weight": float(raw_graphlet.get("mass_weight", 0.25)),
+            },
+            "clustering": {
+                "enabled": False,
+                "bins": 100,
+                "histogram_weight": 0.0,
+                "cdf_weight": 0.0,
+            },
+            "orbit": {
+                "enabled": False,
+                "width": 15,
+                "histogram_weight": 0.0,
+                "log_total_weight": 0.0,
+            },
+        }
+    return {
+        "enabled": False,
+        "loss_weight": 0.0,
+        "graphlet": {"enabled": False, "orders": [3, 4, 5], "histogram_weight": 0.0, "mass_weight": 0.0},
+        "clustering": {"enabled": False, "bins": 100, "histogram_weight": 0.0, "cdf_weight": 0.0},
+        "orbit": {"enabled": False, "width": 15, "histogram_weight": 0.0, "log_total_weight": 0.0},
+    }
+
+
 def validate_options(options: Mapping[str, Any]) -> None:
     allowed = {
-        "variant", "train", "model", "sde", "sample", "degree_prior", "graphlet_refinement", "graphlet_summary", "structural_features", "generation_batch_size",
+        "variant", "train", "model", "sde", "sample", "degree_prior", "graphlet_refinement", "graphlet_summary", "structure_summary", "structural_features", "generation_batch_size",
         "runtime", "extensions", "comparison_reference", "training_estimates", "diffusion",
     }
     unknown = sorted(set(options) - allowed)
@@ -342,17 +416,44 @@ def validate_options(options: Mapping[str, Any]) -> None:
             "Stage-2 vanilla_laplacian_gsdm is a clean spectral-operator ablation and "
             "does not enable the auxiliary DH-VAE"
         )
-    graphlet_summary_cfg = options.get("graphlet_summary", {}) or {}
-    graphlet_summary_enabled = bool(graphlet_summary_cfg.get("enabled", False))
+    summary_cfg = _resolved_structure_summary_config(options)
+    summary_enabled = bool(summary_cfg.get("enabled", False))
     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
-        if not graphlet_summary_enabled:
-            raise ValueError("Laplacian log-gap graphlet variants require graphlet_summary.enabled=true")
-        if list(graphlet_summary_cfg.get("orders", [3, 4, 5])) != [3, 4, 5]:
-            raise ValueError("log-gap graphlet ablation is fixed to graphlet orders 3,4,5")
-        if float(graphlet_summary_cfg.get("loss_weight", 0.0)) < 0.0:
-            raise ValueError("graphlet_summary.loss_weight must be nonnegative")
-    elif graphlet_summary_enabled:
-        raise ValueError("graphlet_summary.enabled=true requires a Laplacian log-gap graphlet variant")
+        if not summary_enabled:
+            raise ValueError(
+                "Laplacian log-gap graphlet variants require structure_summary.enabled=true "
+                "or legacy graphlet_summary.enabled=true"
+            )
+        graphlet_cfg = dict(summary_cfg.get("graphlet", {}) or {})
+        if not bool(graphlet_cfg.get("enabled", False)):
+            raise ValueError("The selected joint structural model requires graphlet.enabled=true")
+        if list(graphlet_cfg.get("orders", [3, 4, 5])) != [3, 4, 5]:
+            raise ValueError("log-gap structural ablation is fixed to graphlet orders 3,4,5")
+        if float(summary_cfg.get("loss_weight", 0.0)) < 0.0:
+            raise ValueError("structure-summary loss_weight must be nonnegative")
+        clustering_cfg = dict(summary_cfg.get("clustering", {}) or {})
+        if bool(clustering_cfg.get("enabled", False)):
+            bins = int(clustering_cfg.get("bins", 100))
+            if bins < 2:
+                raise ValueError("structure_summary.clustering.bins must be >= 2")
+        orbit_cfg = dict(summary_cfg.get("orbit", {}) or {})
+        if bool(orbit_cfg.get("enabled", False)) and int(orbit_cfg.get("width", 15)) != 15:
+            raise ValueError(
+                "structure_summary.orbit.width must be 15 (standard ORCA node orbits 0..14)"
+            )
+        for section, keys in (
+            (graphlet_cfg, ("histogram_weight", "mass_weight")),
+            (clustering_cfg, ("histogram_weight", "cdf_weight")),
+            (orbit_cfg, ("histogram_weight", "log_total_weight")),
+        ):
+            for key in keys:
+                if float(section.get(key, 0.0)) < 0.0:
+                    raise ValueError(f"structure-summary {key} must be nonnegative")
+    elif summary_enabled:
+        raise ValueError(
+            "structure_summary/graphlet_summary can only be enabled for a Laplacian "
+            "log-gap joint structural variant"
+        )
 
     model_cfg = options.get("model", {}) or {}
     legacy_backbone = str(model_cfg.get("backbone", "dense_gcn")).lower()
@@ -797,6 +898,8 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         depth: int,
         graphlet_slices: tuple[tuple[int, int], ...],
         structural_features: Mapping[str, Any] | None = None,
+        clustering_bins: int = 0,
+        orbit_width: int = 0,
         ppgn_hidden_dim: int = 64,
         ppgn_depth: int = 4,
         ppgn_residual_scale: float = 0.1,
@@ -840,6 +943,20 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         width = self.graphlet_slices[-1][1]
         self.graphlet_logits = MLP(shared_dim, 2 * shared_dim, width, 2)
         self.graphlet_mass_logits = MLP(shared_dim, 2 * shared_dim, len(self.graphlet_slices), 2)
+        self.clustering_bins = int(clustering_bins)
+        self.orbit_width = int(orbit_width)
+        self.clustering_logits = (
+            MLP(shared_dim, 2 * shared_dim, self.clustering_bins, 2)
+            if self.clustering_bins > 0 else None
+        )
+        self.orbit_histogram_logits = (
+            MLP(shared_dim, 2 * shared_dim, self.orbit_width, 2)
+            if self.orbit_width > 0 else None
+        )
+        self.orbit_log_total_raw = (
+            MLP(shared_dim, 2 * shared_dim, 1, 2)
+            if self.orbit_width > 0 else None
+        )
 
     def _encode(
         self,
@@ -891,6 +1008,11 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
             "graphlet_logits": self.graphlet_logits(shared),
             "graphlet_mass_logits": self.graphlet_mass_logits(shared),
         }
+        if self.clustering_logits is not None:
+            outputs["clustering_logits"] = self.clustering_logits(shared)
+        if self.orbit_histogram_logits is not None and self.orbit_log_total_raw is not None:
+            outputs["orbit_histogram_logits"] = self.orbit_histogram_logits(shared)
+            outputs["orbit_log_total_raw"] = self.orbit_log_total_raw(shared)
         for name, value in outputs.items():
             if not torch.isfinite(value).all():
                 raise FloatingPointError(f"Non-finite {name} from PPGN spectrum/graphlet score")
@@ -918,6 +1040,28 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         if not torch.isfinite(hist).all() or not torch.isfinite(mass).all():
             raise FloatingPointError("Non-finite graphlet summary from PPGN auxiliary head")
         return hist, mass
+
+    def structure_means_from_outputs(
+        self,
+        outputs: Mapping[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        graphlet_hist, graphlet_mass = self.graphlet_means_from_outputs(outputs)
+        result = {
+            "graphlet_histogram": graphlet_hist,
+            "graphlet_mass": graphlet_mass,
+        }
+        if "clustering_logits" in outputs:
+            result["clustering_histogram"] = torch.softmax(outputs["clustering_logits"], dim=-1)
+        if "orbit_histogram_logits" in outputs and "orbit_log_total_raw" in outputs:
+            orbit_hist = torch.softmax(outputs["orbit_histogram_logits"], dim=-1)
+            orbit_log_total = F.softplus(outputs["orbit_log_total_raw"])
+            result["orbit_histogram"] = orbit_hist
+            result["orbit_log_total"] = orbit_log_total
+            result["orbit_mean_counts"] = orbit_hist * torch.expm1(orbit_log_total)
+        for name, value in result.items():
+            if not torch.isfinite(value).all():
+                raise FloatingPointError(f"Non-finite {name} from PPGN structural summary")
+        return result
 
 
 def _is_joint_graphlet_score(model: nn.Module) -> bool:
@@ -1134,6 +1278,8 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
         depth: int,
         graphlet_slices: tuple[tuple[int, int], ...],
         structural_features: Mapping[str, Any] | None = None,
+        clustering_bins: int = 0,
+        orbit_width: int = 0,
     ) -> None:
         super().__init__(
             max_feat_num=max_feat_num,
@@ -1176,6 +1322,20 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
             len(self.graphlet_slices),
             2,
         )
+        self.clustering_bins = int(clustering_bins)
+        self.orbit_width = int(orbit_width)
+        self.clustering_logits = (
+            MLP(shared_dim, 2 * shared_dim, self.clustering_bins, 2)
+            if self.clustering_bins > 0 else None
+        )
+        self.orbit_histogram_logits = (
+            MLP(shared_dim, 2 * shared_dim, self.orbit_width, 2)
+            if self.orbit_width > 0 else None
+        )
+        self.orbit_log_total_raw = (
+            MLP(shared_dim, 2 * shared_dim, 1, 2)
+            if self.orbit_width > 0 else None
+        )
 
     def _encode(
         self,
@@ -1211,11 +1371,17 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
     ) -> dict[str, torch.Tensor]:
         del eigenvectors
         shared = self._encode(x, adj, flags, eigenvalues)
-        return {
+        outputs = {
             "spectrum": self.spectrum_final(shared),
             "graphlet_logits": self.graphlet_logits(shared),
             "graphlet_mass_logits": self.graphlet_mass_logits(shared),
         }
+        if self.clustering_logits is not None:
+            outputs["clustering_logits"] = self.clustering_logits(shared)
+        if self.orbit_histogram_logits is not None and self.orbit_log_total_raw is not None:
+            outputs["orbit_histogram_logits"] = self.orbit_histogram_logits(shared)
+            outputs["orbit_log_total_raw"] = self.orbit_log_total_raw(shared)
+        return outputs
 
     def forward(
         self,
@@ -1237,6 +1403,25 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
             hist[:, start:stop] = torch.softmax(logits[:, start:stop], dim=-1)
         mass = torch.sigmoid(outputs["graphlet_mass_logits"])
         return hist, mass
+
+    def structure_means_from_outputs(
+        self,
+        outputs: Mapping[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        graphlet_hist, graphlet_mass = self.graphlet_means_from_outputs(outputs)
+        result = {
+            "graphlet_histogram": graphlet_hist,
+            "graphlet_mass": graphlet_mass,
+        }
+        if "clustering_logits" in outputs:
+            result["clustering_histogram"] = torch.softmax(outputs["clustering_logits"], dim=-1)
+        if "orbit_histogram_logits" in outputs and "orbit_log_total_raw" in outputs:
+            orbit_hist = torch.softmax(outputs["orbit_histogram_logits"], dim=-1)
+            orbit_log_total = F.softplus(outputs["orbit_log_total_raw"])
+            result["orbit_histogram"] = orbit_hist
+            result["orbit_log_total"] = orbit_log_total
+            result["orbit_mean_counts"] = orbit_hist * torch.expm1(orbit_log_total)
+        return result
 
 
 class VPSDE:
@@ -1552,14 +1737,29 @@ def _padded_dataset(
 
 
 
-def _joint_graphlet_targets(
+def _joint_structure_targets(
     graphs: list[nx.Graph],
-) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+    structure_cfg: Mapping[str, Any],
+) -> tuple[tuple[torch.Tensor, ...], dict[str, Any]]:
+    """Extract clean structural targets for the joint auxiliary heads.
+
+    The orbit representation is a 15-bin histogram over the standard ORCA
+    node-orbit roles (0..14), built from the evaluator-compatible mean per-node
+    orbit count vector.  A separate ``log1p(total orbit mass)`` target retains
+    magnitude information that the normalized histogram would otherwise lose.
+    """
     from dataclasses import asdict
     from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
     from grapher.rewiring_mlp.generic.graphlets import extract_topology_graphlet_target
-    from grapher.rewiring_mlp.properties.summary import SummaryConfig
+    from grapher.rewiring_mlp.properties.summary import (
+        SummaryConfig,
+        clustering_histogram,
+        python_orbit_count_vector,
+    )
 
+    graphlet_cfg = dict(structure_cfg.get("graphlet", {}) or {})
+    clustering_cfg = dict(structure_cfg.get("clustering", {}) or {})
+    orbit_cfg = dict(structure_cfg.get("orbit", {}) or {})
     cfg = SummaryConfig.from_dict(
         {
             "clustering_summary": False,
@@ -1576,28 +1776,191 @@ def _joint_graphlet_targets(
         }
     )
     basis = TopologyGraphletBasis.from_config(cfg)
-    targets = []
-    masses = []
+    graphlet_targets: list[np.ndarray] = []
+    graphlet_masses: list[np.ndarray] = []
+    clustering_targets: list[np.ndarray] = []
+    orbit_histograms: list[np.ndarray] = []
+    orbit_log_totals: list[np.ndarray] = []
+    clustering_bins = int(clustering_cfg.get("bins", 100))
+    orbit_width = int(orbit_cfg.get("width", 15))
+
     for graph in graphs:
+        g = nx.convert_node_labels_to_integers(graph, ordering="sorted")
         target, mass = extract_topology_graphlet_target(
-            nx.convert_node_labels_to_integers(graph, ordering="sorted"),
+            g,
             graphlet_basis=basis,
             summary_config=cfg,
         )
-        targets.append(target.astype(np.float32))
-        masses.append(mass.astype(np.float32))
+        graphlet_targets.append(target.astype(np.float32))
+        graphlet_masses.append(mass.astype(np.float32))
+
+        if bool(clustering_cfg.get("enabled", False)):
+            clustering_targets.append(
+                clustering_histogram(g, bins=clustering_bins).astype(np.float32)
+            )
+        else:
+            clustering_targets.append(np.zeros(clustering_bins, dtype=np.float32))
+
+        if bool(orbit_cfg.get("enabled", False)):
+            counts = np.maximum(
+                np.asarray(python_orbit_count_vector(g), dtype=np.float64).reshape(-1),
+                0.0,
+            )
+            if counts.size != orbit_width:
+                raise ValueError(
+                    f"Expected orbit target width {orbit_width}, got {counts.size}."
+                )
+            total = float(counts.sum())
+            hist = counts / total if total > 0.0 else np.zeros_like(counts)
+            orbit_histograms.append(hist.astype(np.float32))
+            orbit_log_totals.append(np.asarray([np.log1p(total)], dtype=np.float32))
+        else:
+            orbit_histograms.append(np.zeros(orbit_width, dtype=np.float32))
+            orbit_log_totals.append(np.zeros(1, dtype=np.float32))
+
     meta = {
         "graphlet_slices": [list(pair) for pair in basis.slices],
         "graphlet_basis": basis.to_dict(),
         "summary_config": asdict(cfg),
         "width": int(basis.width),
-        "orders": [3, 4, 5],
+        "orders": list(graphlet_cfg.get("orders", [3, 4, 5])),
+        "clustering_enabled": bool(clustering_cfg.get("enabled", False)),
+        "clustering_bins": clustering_bins,
+        "clustering_representation": "normalized_node_clustering_coefficient_histogram_[0,1]",
+        "orbit_enabled": bool(orbit_cfg.get("enabled", False)),
+        "orbit_width": orbit_width,
+        "orbit_representation": "normalized_histogram_over_mean_per_node_ORCA_0_14_plus_log1p_total",
     }
-    return (
-        torch.tensor(np.stack(targets), dtype=torch.float32),
-        torch.tensor(np.stack(masses), dtype=torch.float32),
-        meta,
+    tensors = (
+        torch.tensor(np.stack(graphlet_targets), dtype=torch.float32),
+        torch.tensor(np.stack(graphlet_masses), dtype=torch.float32),
+        torch.tensor(np.stack(clustering_targets), dtype=torch.float32),
+        torch.tensor(np.stack(orbit_histograms), dtype=torch.float32),
+        torch.tensor(np.stack(orbit_log_totals), dtype=torch.float32),
     )
+    return tensors, meta
+
+
+def _joint_graphlet_targets(
+    graphs: list[nx.Graph],
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+    """Backwards-compatible graphlet-only target helper used by older tests."""
+    cfg = {
+        "enabled": True,
+        "graphlet": {"enabled": True, "orders": [3, 4, 5]},
+        "clustering": {"enabled": False, "bins": 100},
+        "orbit": {"enabled": False, "width": 15},
+    }
+    tensors, meta = _joint_structure_targets(graphs, cfg)
+    return tensors[0], tensors[1], meta
+
+
+def _structure_auxiliary_loss(
+    model: nn.Module,
+    outputs: Mapping[str, torch.Tensor],
+    graphlet_target: torch.Tensor,
+    graphlet_mass_target: torch.Tensor,
+    clustering_target: torch.Tensor | None,
+    orbit_histogram_target: torch.Tensor | None,
+    orbit_log_total_target: torch.Tensor | None,
+    *,
+    structure_cfg: Mapping[str, Any],
+) -> tuple[torch.Tensor, dict[str, float]]:
+    if not hasattr(model, "graphlet_slices"):
+        raise TypeError("joint structural model is missing graphlet_slices")
+    graphlet_cfg = dict(structure_cfg.get("graphlet", {}) or {})
+    clustering_cfg = dict(structure_cfg.get("clustering", {}) or {})
+    orbit_cfg = dict(structure_cfg.get("orbit", {}) or {})
+
+    logits = outputs["graphlet_logits"]
+    losses = []
+    mean_abs = []
+    for start, stop in model.graphlet_slices:
+        block_target = graphlet_target[:, start:stop]
+        valid = block_target.sum(dim=-1) > 0.0
+        if bool(valid.any()):
+            logp = torch.log_softmax(logits[valid, start:stop], dim=-1)
+            losses.append(-(block_target[valid] * logp).sum(dim=-1).mean())
+            pred = torch.softmax(logits[valid, start:stop], dim=-1)
+            mean_abs.append((pred - block_target[valid]).abs().mean())
+    graphlet_hist_loss = torch.stack(losses).mean() if losses else logits.sum() * 0.0
+    graphlet_mass_loss = F.binary_cross_entropy_with_logits(
+        outputs["graphlet_mass_logits"], graphlet_mass_target
+    )
+    total = (
+        float(graphlet_cfg.get("histogram_weight", 1.0)) * graphlet_hist_loss
+        + float(graphlet_cfg.get("mass_weight", 0.25)) * graphlet_mass_loss
+    )
+    graphlet_hist_mae = (
+        torch.stack(mean_abs).mean() if mean_abs else graphlet_hist_loss.detach() * 0.0
+    )
+    metrics: dict[str, float] = {
+        "graphlet_histogram_loss": float(graphlet_hist_loss.detach().item()),
+        "graphlet_mass_loss": float(graphlet_mass_loss.detach().item()),
+        "graphlet_histogram_mae": float(graphlet_hist_mae.detach().item()),
+    }
+
+    if bool(clustering_cfg.get("enabled", False)):
+        if clustering_target is None or "clustering_logits" not in outputs:
+            raise RuntimeError("Clustering summary enabled but target/head is unavailable")
+        logp = torch.log_softmax(outputs["clustering_logits"], dim=-1)
+        clustering_ce = -(clustering_target * logp).sum(dim=-1).mean()
+        clustering_pred = torch.softmax(outputs["clustering_logits"], dim=-1)
+        # CDF discrepancy is the equal-bin 1-D Wasserstein distance up to a
+        # constant factor and aligns the auxiliary target with clustering MMD.
+        clustering_cdf = torch.abs(
+            torch.cumsum(clustering_pred - clustering_target, dim=-1)[..., :-1]
+        ).mean()
+        clustering_loss = clustering_ce + float(clustering_cfg.get("cdf_weight", 1.0)) * clustering_cdf
+        total = total + float(clustering_cfg.get("histogram_weight", 0.25)) * clustering_loss
+        metrics.update(
+            {
+                "clustering_histogram_loss": float(clustering_ce.detach().item()),
+                "clustering_cdf_mae": float(clustering_cdf.detach().item()),
+                "clustering_histogram_mae": float(
+                    (clustering_pred - clustering_target).abs().mean().detach().item()
+                ),
+            }
+        )
+
+    if bool(orbit_cfg.get("enabled", False)):
+        if (
+            orbit_histogram_target is None
+            or orbit_log_total_target is None
+            or "orbit_histogram_logits" not in outputs
+            or "orbit_log_total_raw" not in outputs
+        ):
+            raise RuntimeError("Orbit summary enabled but target/head is unavailable")
+        valid = orbit_histogram_target.sum(dim=-1) > 0.0
+        if bool(valid.any()):
+            orbit_logp = torch.log_softmax(outputs["orbit_histogram_logits"][valid], dim=-1)
+            orbit_hist_loss = -(
+                orbit_histogram_target[valid] * orbit_logp
+            ).sum(dim=-1).mean()
+            orbit_pred = torch.softmax(outputs["orbit_histogram_logits"], dim=-1)
+            orbit_hist_mae = (
+                orbit_pred[valid] - orbit_histogram_target[valid]
+            ).abs().mean()
+        else:
+            orbit_hist_loss = outputs["orbit_histogram_logits"].sum() * 0.0
+            orbit_hist_mae = orbit_hist_loss.detach() * 0.0
+        orbit_log_total_pred = F.softplus(outputs["orbit_log_total_raw"])
+        orbit_total_loss = F.mse_loss(orbit_log_total_pred, orbit_log_total_target)
+        total = (
+            total
+            + float(orbit_cfg.get("histogram_weight", 0.25)) * orbit_hist_loss
+            + float(orbit_cfg.get("log_total_weight", 0.10)) * orbit_total_loss
+        )
+        metrics.update(
+            {
+                "orbit_histogram_loss": float(orbit_hist_loss.detach().item()),
+                "orbit_histogram_mae": float(orbit_hist_mae.detach().item()),
+                "orbit_log_total_rmse": float(
+                    torch.sqrt(orbit_total_loss.detach().clamp_min(0.0)).item()
+                ),
+            }
+        )
+    return total, metrics
 
 
 def _graphlet_auxiliary_loss(
@@ -1609,30 +1972,25 @@ def _graphlet_auxiliary_loss(
     histogram_weight: float,
     mass_weight: float,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    if not hasattr(model, "graphlet_slices"):
-        raise TypeError("graphlet auxiliary model is missing graphlet_slices")
-    logits = outputs["graphlet_logits"]
-    losses = []
-    mean_abs = []
-    for start, stop in model.graphlet_slices:
-        block_target = target[:, start:stop]
-        # Connected graphlet histograms sum to one when connected subsets exist;
-        # all-zero blocks are ignored and their presence is represented by mass.
-        valid = block_target.sum(dim=-1) > 0.0
-        if bool(valid.any()):
-            logp = torch.log_softmax(logits[valid, start:stop], dim=-1)
-            losses.append(-(block_target[valid] * logp).sum(dim=-1).mean())
-            pred = torch.softmax(logits[valid, start:stop], dim=-1)
-            mean_abs.append((pred - block_target[valid]).abs().mean())
-    hist_loss = torch.stack(losses).mean() if losses else logits.sum() * 0.0
-    mass_loss = F.binary_cross_entropy_with_logits(outputs["graphlet_mass_logits"], mass_target)
-    total = float(histogram_weight) * hist_loss + float(mass_weight) * mass_loss
-    hist_mae = torch.stack(mean_abs).mean() if mean_abs else hist_loss.detach() * 0.0
-    return total, {
-        "graphlet_histogram_loss": float(hist_loss.detach().item()),
-        "graphlet_mass_loss": float(mass_loss.detach().item()),
-        "graphlet_histogram_mae": float(hist_mae.detach().item()),
-    }
+    """Legacy wrapper around the generalized structural-summary objective."""
+    return _structure_auxiliary_loss(
+        model,
+        outputs,
+        target,
+        mass_target,
+        None,
+        None,
+        None,
+        structure_cfg={
+            "graphlet": {
+                "enabled": True,
+                "histogram_weight": float(histogram_weight),
+                "mass_weight": float(mass_weight),
+            },
+            "clustering": {"enabled": False},
+            "orbit": {"enabled": False},
+        },
+    )
 
 
 def _loss_batch(
@@ -1771,9 +2129,20 @@ def _loss_batch_loggap_graphlet(
     graphlet_cfg: Mapping[str, Any],
     generator: torch.Generator | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, float]]:
-    if len(batch) != 8:
-        raise ValueError("joint log-gap graphlet training expects 8 tensors per batch")
-    x0, _adj0, flags, _sizes, u, lam0, graphlet_target, graphlet_mass = batch
+    if len(batch) == 8:
+        # Backwards compatibility for graphlet-only checkpoints/tests.
+        x0, _adj0, flags, _sizes, u, lam0, graphlet_target, graphlet_mass = batch
+        clustering_target = orbit_histogram_target = orbit_log_total_target = None
+    elif len(batch) == 11:
+        (
+            x0, _adj0, flags, _sizes, u, lam0,
+            graphlet_target, graphlet_mass, clustering_target,
+            orbit_histogram_target, orbit_log_total_target,
+        ) = batch
+    else:
+        raise ValueError(
+            "joint log-gap structural training expects 8 legacy or 11 structural tensors per batch"
+        )
     b = x0.size(0)
     state0 = _operator_eigenvalues_to_spectral_state(
         lam0,
@@ -1813,13 +2182,15 @@ def _loss_batch_loggap_graphlet(
     pred_state = outputs["spectrum"]
     loss_x = 0.5 * (pred_x - z_x).square().reshape(b, -1).sum(dim=-1).mean()
     loss_state = 0.5 * (((pred_state - z_state) * e_mask).square().reshape(b, -1).sum(dim=-1)).mean()
-    loss_graphlet, metrics = _graphlet_auxiliary_loss(
+    loss_graphlet, metrics = _structure_auxiliary_loss(
         model_lam,
         outputs,
         graphlet_target,
         graphlet_mass,
-        histogram_weight=float(graphlet_cfg.get("histogram_weight", 1.0)),
-        mass_weight=float(graphlet_cfg.get("mass_weight", 0.25)),
+        clustering_target,
+        orbit_histogram_target,
+        orbit_log_total_target,
+        structure_cfg=graphlet_cfg,
     )
     return loss_x, loss_state, loss_graphlet, metrics
 
@@ -1870,6 +2241,7 @@ def _build_models(
     device: torch.device,
     *,
     graphlet_slices: tuple[tuple[int, int], ...] | None = None,
+    summary_meta: Mapping[str, Any] | None = None,
 ) -> tuple[nn.Module, nn.Module]:
     legacy_backbone = str(cfg.get("backbone", "dense_gcn")).lower()
     node_backbone = str(cfg.get("node_backbone", legacy_backbone)).lower()
@@ -1906,11 +2278,23 @@ def _build_models(
         "depth": int(cfg["depth"]),
     }
     if graphlet_slices:
+        summary_meta = dict(summary_meta or {})
+        summary_head_kwargs = {
+            "clustering_bins": (
+                int(summary_meta.get("clustering_bins", 0))
+                if bool(summary_meta.get("clustering_enabled", False)) else 0
+            ),
+            "orbit_width": (
+                int(summary_meta.get("orbit_width", 0))
+                if bool(summary_meta.get("orbit_enabled", False)) else 0
+            ),
+        }
         if spectrum_backbone == "ppgn":
             ml = GSDMSpectrumGraphletPPGNScore(
                 **spectrum_kwargs,
                 graphlet_slices=graphlet_slices,
                 structural_features=structural_features,
+                **summary_head_kwargs,
                 **ppgn_kwargs,
             ).to(device)
         elif spectrum_backbone == "dense_gcn":
@@ -1918,6 +2302,7 @@ def _build_models(
                 **spectrum_kwargs,
                 graphlet_slices=graphlet_slices,
                 structural_features=structural_features,
+                **summary_head_kwargs,
             ).to(device)
         else:
             raise ValueError(f"Unsupported spectrum_backbone={spectrum_backbone!r}")
@@ -2191,7 +2576,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
     )
     graphlet_meta: dict[str, Any] | None = None
     spectral_transform: dict[str, Any] = {"kind": "direct_eigenvalues"}
-    joint_graphlet_cfg = dict(options.get("graphlet_summary", {}) or {})
+    joint_graphlet_cfg = _resolved_structure_summary_config(options)
     if variant in LAPLACIAN_LOGGAP_ALL_VARIANTS:
         sde_cfg = dict(options.get("sde", {}) or {})
         stats = _fit_laplacian_log_gap_stats(
@@ -2209,12 +2594,19 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
             "count": stats["count"],
         }
     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
-        train_graphlet, train_mass, graphlet_meta = _joint_graphlet_targets(train_graphs)
-        val_graphlet, val_mass, val_meta = _joint_graphlet_targets(val_graphs)
+        train_targets, graphlet_meta = _joint_structure_targets(
+            train_graphs, joint_graphlet_cfg
+        )
+        val_targets, val_meta = _joint_structure_targets(
+            val_graphs, joint_graphlet_cfg
+        )
         if val_meta["graphlet_slices"] != graphlet_meta["graphlet_slices"]:
             raise AssertionError("Train/validation graphlet bases differ")
-        train_data = (*train_data, train_graphlet, train_mass)
-        val_data = (*val_data, val_graphlet, val_mass)
+        for key in ("clustering_bins", "clustering_enabled", "orbit_width", "orbit_enabled"):
+            if val_meta.get(key) != graphlet_meta.get(key):
+                raise AssertionError(f"Train/validation structural-summary metadata differs for {key}")
+        train_data = (*train_data, *train_targets)
+        val_data = (*val_data, *val_targets)
     train_loader = DataLoader(
         TensorDataset(*train_data),
         batch_size=int(options["train"]["batch_size"]),
@@ -2229,7 +2621,12 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
         tuple(tuple(int(v) for v in pair) for pair in graphlet_meta["graphlet_slices"])
         if graphlet_meta is not None else None
     )
-    model_x, model_lam = _build_models(model_cfg, device, graphlet_slices=graphlet_slices)
+    model_x, model_lam = _build_models(
+        model_cfg,
+        device,
+        graphlet_slices=graphlet_slices,
+        summary_meta=graphlet_meta,
+    )
     sde_x, sde_lam = _make_sdes(options, device)
     degree_bundle = None
     degree_fork_devices = (
@@ -2358,6 +2755,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                 }
                 if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                     record["train_graphlet_summary_loss"] = total_g / max(total_n, 1)
+                    record["train_structure_summary_loss"] = record["train_graphlet_summary_loss"]
                     if train_graphlet_metrics:
                         for key in sorted(train_graphlet_metrics[0]):
                             record[f"train_{key}"] = float(np.mean([row[key] for row in train_graphlet_metrics]))
@@ -2424,6 +2822,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     record["val_spectrum_loss"] = vl / max(vn, 1)
                     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                         record["val_graphlet_summary_loss"] = vg / max(vn, 1)
+                        record["val_structure_summary_loss"] = record["val_graphlet_summary_loss"]
                         if val_graphlet_metrics:
                             for key in sorted(val_graphlet_metrics[0]):
                                 record[f"val_{key}"] = float(np.mean([row[key] for row in val_graphlet_metrics]))
@@ -2484,6 +2883,16 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
             "variant": variant,
             "spectral_operator": spectral_operator,
             "spectral_transform": _jsonable(spectral_transform),
+            "structure_summary": (
+                {
+                    "enabled": True,
+                    "training_config": copy.deepcopy(joint_graphlet_cfg),
+                    **(graphlet_meta or {}),
+                }
+                if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS
+                else {"enabled": False}
+            ),
+            # Backwards-compatible alias consumed by older graphlet-only tools.
             "graphlet_summary": (
                 {
                     "enabled": True,
@@ -2582,6 +2991,22 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     else "uniform_training_adjacency_eigenbasis_joint_with_node_count"
                 ),
                 "reverse_sampler": "Euler_Maruyama_plus_optional_Langevin_corrector",
+                "structure_summary_training": (
+                    {
+                        "graphlet": "connected_induced_k3_k4_k5_histograms_plus_connected_subset_mass",
+                        "clustering": (
+                            "node_clustering_coefficient_histogram"
+                            if bool(joint_graphlet_cfg.get("clustering", {}).get("enabled", False))
+                            else "disabled"
+                        ),
+                        "orbit": (
+                            "ORCA_0_14_orbit_type_histogram_plus_log1p_total_count"
+                            if bool(joint_graphlet_cfg.get("orbit", {}).get("enabled", False))
+                            else "disabled"
+                        ),
+                    }
+                    if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS else "none"
+                ),
                 "graphlet_summary_training": (
                     "joint_auxiliary_head_shared_with_spectrum_denoiser_predicting_clean_k3_k4_k5_graphlet_histograms_and_connected_subset_mass"
                     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS else "none"
@@ -2893,14 +3318,22 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     device = _resolve_device(options.get("runtime", {}))
     _seed_everything(request.generation_seed)
     model_cfg = state["model_config"]
-    graphlet_summary_payload = state.get("graphlet_summary", {}) or {}
+    structure_summary_payload = state.get("structure_summary", {}) or {}
+    if not bool(structure_summary_payload.get("enabled", False)):
+        structure_summary_payload = state.get("graphlet_summary", {}) or {}
+    graphlet_summary_payload = structure_summary_payload  # backwards-compatible local alias
     graphlet_slices = None
-    if bool(graphlet_summary_payload.get("enabled", False)):
+    if bool(structure_summary_payload.get("enabled", False)):
         graphlet_slices = tuple(
             tuple(int(v) for v in pair)
-            for pair in graphlet_summary_payload.get("graphlet_slices", [])
+            for pair in structure_summary_payload.get("graphlet_slices", [])
         )
-    model_x, model_lam = _build_models(model_cfg, device, graphlet_slices=graphlet_slices)
+    model_x, model_lam = _build_models(
+        model_cfg,
+        device,
+        graphlet_slices=graphlet_slices,
+        summary_meta=structure_summary_payload,
+    )
     if bool(options.get("sample", {}).get("use_ema", False)):
         model_x.load_state_dict(state["ema_x_state"])
         model_lam.load_state_dict(state["ema_spectrum_state"])
@@ -2939,6 +3372,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     spectra: list[np.ndarray] = []
     basis_indices: list[int] = []
     joint_graphlet_predictions: list[dict[str, Any]] = []
+    joint_structure_predictions: list[dict[str, Any]] = []
     start = time.monotonic()
     with torch.no_grad():
         while len(graphs) < request.num_graphs:
@@ -2959,8 +3393,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             )
             soft = 0.5 * (soft + soft.transpose(-1, -2))
             operator_batch = reconstruct_adjacency(sampled_u, lam)
-            batch_graphlet_hist = None
-            batch_graphlet_mass = None
+            batch_structure_summary = None
             if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                 if not _is_joint_graphlet_score(model_lam):
                     raise AssertionError("log-gap graphlet generation requires joint summary head")
@@ -2978,7 +3411,14 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 summary_outputs = model_lam.forward_all(
                     sample_x, soft, flags, sampled_u, state_for_summary
                 )
-                batch_graphlet_hist, batch_graphlet_mass = model_lam.graphlet_means_from_outputs(summary_outputs)
+                if hasattr(model_lam, "structure_means_from_outputs"):
+                    batch_structure_summary = model_lam.structure_means_from_outputs(summary_outputs)
+                else:
+                    gh, gm = model_lam.graphlet_means_from_outputs(summary_outputs)
+                    batch_structure_summary = {
+                        "graphlet_histogram": gh,
+                        "graphlet_mass": gm,
+                    }
             for row, idx in enumerate(indices.tolist()):
                 n = int(donor_n[row].item())
                 matrix = soft[row, :n, :n].detach().cpu().numpy().astype(np.float64)
@@ -2997,12 +3437,16 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     continuous_laplacians.append(lap)
                 spectra.append(lam[row, :].detach().cpu().numpy().astype(np.float64))
                 basis_indices.append(int(idx))
-                if batch_graphlet_hist is not None and batch_graphlet_mass is not None:
+                if batch_structure_summary is not None:
+                    structure_row: dict[str, Any] = {"graph_index": len(graphs) - 1}
+                    for key, value in batch_structure_summary.items():
+                        structure_row[key] = value[row].detach().cpu().numpy().astype(np.float64)
+                    joint_structure_predictions.append(structure_row)
                     joint_graphlet_predictions.append(
                         {
-                            "graph_index": len(graphs) - 1,
-                            "graphlet_histogram": batch_graphlet_hist[row].detach().cpu().numpy().astype(np.float64),
-                            "graphlet_mass": batch_graphlet_mass[row].detach().cpu().numpy().astype(np.float64),
+                            "graph_index": structure_row["graph_index"],
+                            "graphlet_histogram": structure_row["graphlet_histogram"],
+                            "graphlet_mass": structure_row["graphlet_mass"],
                         }
                     )
             label = "Vanilla-Laplacian-GSDM" if spectral_operator == "combinatorial_laplacian" else "Vanilla-GSDM"
@@ -3151,10 +3595,15 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
         with index_path.open("wb") as handle:
             pickle.dump(basis_indices, handle, protocol=pickle.HIGHEST_PROTOCOL)
         joint_graphlet_prediction_path = None
+        joint_structure_prediction_path = None
         if joint_graphlet_predictions:
             joint_graphlet_prediction_path = staging / "predicted_graphlet_summaries.pkl"
             with joint_graphlet_prediction_path.open("wb") as handle:
                 pickle.dump(joint_graphlet_predictions, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        if joint_structure_predictions:
+            joint_structure_prediction_path = staging / "predicted_structure_summaries.pkl"
+            with joint_structure_prediction_path.open("wb") as handle:
+                pickle.dump(joint_structure_predictions, handle, protocol=pickle.HIGHEST_PROTOCOL)
         degree_sequence_path = None
         degree_summary_path = None
         if degree_sequences:
@@ -3277,6 +3726,15 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 {"path": "predicted_graphlet_summaries.pkl", "sha256": _sha256(joint_graphlet_prediction_path)}
                 if joint_graphlet_prediction_path is not None else None
             ),
+            "predicted_structure_summaries": (
+                {
+                    "path": "predicted_structure_summaries.pkl",
+                    "sha256": _sha256(joint_structure_prediction_path),
+                    "clustering_enabled": bool(structure_summary_payload.get("clustering_enabled", False)),
+                    "orbit_enabled": bool(structure_summary_payload.get("orbit_enabled", False)),
+                }
+                if joint_structure_prediction_path is not None else None
+            ),
             "sampled_spectra": {"path": "sampled_spectra.pkl", "sha256": _sha256(spectrum_path)},
             "sampled_basis_indices": {
                 "path": "sampled_basis_indices.pkl", "sha256": _sha256(index_path),
@@ -3299,6 +3757,8 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             "sampling": {
                 "node_count": "jointly_sampled_with_training_eigenbasis",
                 "score_backbone": str(model_cfg.get("backbone", "dense_gcn")),
+                "node_backbone": str(model_cfg.get("node_backbone", model_cfg.get("backbone", "dense_gcn"))),
+                "spectrum_structure_backbone": str(model_cfg.get("spectrum_backbone", model_cfg.get("backbone", "dense_gcn"))),
                 "structural_features": _jsonable(model_cfg.get("structural_features", {})),
                 "spectral_operator": spectral_operator,
                 "spectral_parameterization": str(spectral_transform.get("kind", "direct_eigenvalues")),
