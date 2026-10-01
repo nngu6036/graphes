@@ -74,11 +74,13 @@ gdsm_simple:
   generation_batch_size: 128
   runtime:
     device: auto
+  # This variant is implemented by graphlet_summary + graphlet_refinement below.
+  # Keep legacy GraphES extension switches disabled; vanilla_gsdm validation rejects them.
   extensions:
     degree_conditioning: false
     hh_initialization: false
-    degree_preserving_rewiring: true
-    structural_summary: joint_graphlet_auxiliary_k345
+    degree_preserving_rewiring: false
+    structural_summary: none
   graphlet_refinement:
     enabled: true
     target_source: joint_auxiliary_head
