@@ -1,0 +1,109 @@
+comparison:
+  model: gdsm_simple
+  dataset: community_small
+  common_config: common_community_small.yaml
+  status: vanilla_laplacian_loggap_graphlet_refine_seed_44
+  budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  comparison_targets:
+    adjacency_stage0: vanilla_gsdm
+    laplacian_stage2a: vanilla_laplacian_gsdm
+  fairness_note: Laplacian log-gap diffusion with the same joint k=3,4,5 graphlet
+    auxiliary head as Stage 2b. After final thresholding, the generated graph degree
+    vector is frozen. The final joint auxiliary-head prediction is held fixed as a
+    graphlet target and guides connectivity-preserving double-edge swaps. No separate
+    post-GSDM graphlet predictor is trained.
+gdsm_simple:
+  variant: vanilla_laplacian_loggap_graphlet_refine
+  train:
+    epochs: 10000
+    batch_size: 128
+    lr: 0.01
+    weight_decay: 0.0001
+    grad_norm: 1.0
+    lr_schedule: true
+    lr_decay: 0.9999799901935271
+    ema: 0.999
+    validation_every: 1
+    log_every: 10
+  model:
+    max_nodes: 20
+    max_feat_num: 20
+    hidden_dim: 32
+    depth: 3
+  sde:
+    x:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    spectrum:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    eps: 1.0e-05
+    eigen_mask: laplacian_nonzero_prefix
+    spectral_parameterization: laplacian_log_gap
+    log_gap_epsilon: 1.0e-06
+    log_gap_min_std: 0.001
+    log_gap_exp_clip: 20.0
+  graphlet_summary:
+    enabled: true
+    orders:
+    - 3
+    - 4
+    - 5
+    loss_weight: 0.1
+    histogram_weight: 1.0
+    mass_weight: 0.25
+  sample:
+    predictor: euler
+    corrector: langevin
+    snr: 0.05
+    scale_eps: 0.7
+    n_steps: 1
+    noise_removal: true
+    probability_flow: false
+    eps: 0.0001
+    threshold: 0.5
+    use_ema: false
+  generation_batch_size: 128
+  runtime:
+    device: auto
+  extensions:
+    degree_conditioning: false
+    hh_initialization: false
+    degree_preserving_rewiring: true
+    structural_summary: joint_graphlet_auxiliary_k345
+  graphlet_refinement:
+    enabled: true
+    target_source: joint_auxiliary_head
+    graphlet_k_min: 3
+    graphlet_k_max: 5
+    graphlet_connected_only: true
+    graphlet_topology_filter: all
+    refiner:
+      steps: 8
+      proposal_budget: 256
+      valid_candidate_budget: 128
+      preserve_connectivity: true
+      selection: greedy
+      temperature: 0.1
+      graphlet_weight: 1.0
+      graphlet_mass_weight: 0.1
+      clustering_weight: 0.0
+      orbit_weight: 0.0
+      accept_only_improving: true
+      min_improvement: 1.0e-08
+      min_relative_improvement: 0.0
+      relative_improvement_epsilon: 1.0e-12
+      sample_graphlet: false
+      refresh_prediction_every: 8
+      refresh_on_plateau: false
+      reject_revisited_states: true
+    disconnected_source_policy: skip
+    save_prediction_trace: true

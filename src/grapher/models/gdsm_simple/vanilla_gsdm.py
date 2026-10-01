@@ -21,13 +21,14 @@ operator: it diffuses the nonzero eigenvalue coordinates of the combinatorial
 Laplacian ``L=D-A`` in a fixed training-graph Laplacian eigenbasis while the
 trivial zero mode remains fixed.
 
-The ``vanilla_laplacian_loggap_graphlet`` Stage-2b ablation instead diffuses
-training-standardized logarithms of successive nontrivial Laplacian eigenvalue
-gaps.  Decoding by exponentiation plus cumulative summation guarantees a zero
-first eigenvalue and nonnegative nondecreasing spectrum.  A k=3,4,5 connected
-graphlet-summary head shares the spectral denoiser encoder and is trained
-jointly as an auxiliary objective; it does not rewire or otherwise postprocess
-the generated graph.
+The ``vanilla_laplacian_loggap`` ablation diffuses training-standardized
+logarithms of successive nontrivial Laplacian eigenvalue gaps without any
+structural auxiliary head.  The ``vanilla_laplacian_loggap_graphlet`` Stage-2b
+variant adds a k=3,4,5 connected graphlet-summary head that shares the spectral
+denoiser encoder and is trained jointly as an auxiliary objective.  Finally,
+``vanilla_laplacian_loggap_graphlet_refine`` keeps that joint training objective
+and uses the final auxiliary graphlet prediction as a fixed post-generation
+target for degree-preserving double-edge-swap refinement.
 
 None of these variants uses Havel-Hakimi construction, degree projection,
 categorical edge prediction, graphlet guidance, rewiring, or post-hoc repair.
@@ -85,11 +86,28 @@ LAPLACIAN_VARIANTS = {
     "laplacian_gsdm",
     "gsdm_laplacian",
 }
+LAPLACIAN_LOGGAP_VARIANTS = {
+    "vanilla_laplacian_loggap",
+    "laplacian_loggap",
+    "gsdm_laplacian_loggap",
+}
 LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS = {
     "vanilla_laplacian_loggap_graphlet",
     "laplacian_loggap_graphlet",
     "gsdm_laplacian_loggap_graphlet",
 }
+LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS = {
+    "vanilla_laplacian_loggap_graphlet_refine",
+    "laplacian_loggap_graphlet_refine",
+    "gsdm_laplacian_loggap_graphlet_refine",
+}
+LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS = (
+    LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS
+    | LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS
+)
+LAPLACIAN_LOGGAP_ALL_VARIANTS = (
+    LAPLACIAN_LOGGAP_VARIANTS | LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS
+)
 GRAPHLET_REFINEMENT_VARIANTS = {
     "vanilla_gsdm_graphlet_refine",
     "vanilla_gsdm_graphlet",
@@ -99,7 +117,7 @@ GRAPHLET_REFINEMENT_VARIANTS = {
 
 def spectral_operator_for_variant(variant: str) -> str:
     value = str(variant).lower()
-    if value in LAPLACIAN_VARIANTS | LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS:
+    if value in LAPLACIAN_VARIANTS | LAPLACIAN_LOGGAP_ALL_VARIANTS:
         return "combinatorial_laplacian"
     if value in ADJACENCY_VARIANTS | DHVAE_VARIANTS | GRAPHLET_REFINEMENT_VARIANTS:
         return "adjacency"
@@ -276,7 +294,13 @@ def validate_options(options: Mapping[str, Any]) -> None:
     if unknown:
         raise ValueError(f"Unknown vanilla GSDM options: {unknown}")
     variant = str(options.get("variant", "")).lower()
-    allowed_variants = ADJACENCY_VARIANTS | DHVAE_VARIANTS | LAPLACIAN_VARIANTS | LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS | GRAPHLET_REFINEMENT_VARIANTS
+    allowed_variants = (
+        ADJACENCY_VARIANTS
+        | DHVAE_VARIANTS
+        | LAPLACIAN_VARIANTS
+        | LAPLACIAN_LOGGAP_ALL_VARIANTS
+        | GRAPHLET_REFINEMENT_VARIANTS
+    )
     if variant not in allowed_variants:
         raise ValueError(
             "vanilla GSDM pipeline requires vanilla_gsdm, vanilla_gsdm_dhvae, "
@@ -288,22 +312,22 @@ def validate_options(options: Mapping[str, Any]) -> None:
         raise ValueError("vanilla_gsdm_dhvae requires degree_prior.enabled=true")
     if variant in ADJACENCY_VARIANTS and prior_enabled:
         raise ValueError("Use variant: vanilla_gsdm_dhvae when degree_prior.enabled=true")
-    if variant in (LAPLACIAN_VARIANTS | LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS) and prior_enabled:
+    if variant in (LAPLACIAN_VARIANTS | LAPLACIAN_LOGGAP_ALL_VARIANTS) and prior_enabled:
         raise ValueError(
             "Stage-2 vanilla_laplacian_gsdm is a clean spectral-operator ablation and "
             "does not enable the auxiliary DH-VAE"
         )
     graphlet_summary_cfg = options.get("graphlet_summary", {}) or {}
     graphlet_summary_enabled = bool(graphlet_summary_cfg.get("enabled", False))
-    if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS:
+    if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
         if not graphlet_summary_enabled:
-            raise ValueError("vanilla_laplacian_loggap_graphlet requires graphlet_summary.enabled=true")
+            raise ValueError("Laplacian log-gap graphlet variants require graphlet_summary.enabled=true")
         if list(graphlet_summary_cfg.get("orders", [3, 4, 5])) != [3, 4, 5]:
             raise ValueError("log-gap graphlet ablation is fixed to graphlet orders 3,4,5")
         if float(graphlet_summary_cfg.get("loss_weight", 0.0)) < 0.0:
             raise ValueError("graphlet_summary.loss_weight must be nonnegative")
     elif graphlet_summary_enabled:
-        raise ValueError("graphlet_summary.enabled=true requires variant: vanilla_laplacian_loggap_graphlet")
+        raise ValueError("graphlet_summary.enabled=true requires a Laplacian log-gap graphlet variant")
 
     graphlet_cfg = options.get("graphlet_refinement", {}) or {}
     graphlet_enabled = bool(graphlet_cfg.get("enabled", False))
@@ -314,8 +338,17 @@ def validate_options(options: Mapping[str, Any]) -> None:
             raise ValueError("vanilla_gsdm_graphlet_refine requires graphlet_refinement.enabled=true")
         from grapher.models.gdsm_simple.graphlet_stage3 import validate_graphlet_refinement_options
         validate_graphlet_refinement_options(graphlet_cfg)
+    elif variant in LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS:
+        if not graphlet_enabled:
+            raise ValueError(
+                "vanilla_laplacian_loggap_graphlet_refine requires graphlet_refinement.enabled=true"
+            )
+        from grapher.models.gdsm_simple.graphlet_stage3 import (
+            validate_fixed_target_graphlet_refinement_options,
+        )
+        validate_fixed_target_graphlet_refinement_options(graphlet_cfg)
     elif graphlet_enabled:
-        raise ValueError("graphlet_refinement.enabled=true requires variant: vanilla_gsdm_graphlet_refine")
+        raise ValueError("graphlet_refinement.enabled=true requires a graphlet-refinement variant")
     if prior_enabled:
         if int(degree_prior.get("batch_size", 0)) <= 0:
             raise ValueError("degree_prior.batch_size must be positive")
@@ -355,9 +388,11 @@ def validate_options(options: Mapping[str, Any]) -> None:
                 "Laplacian GSDM variants require sde.eigen_mask=laplacian_nonzero_prefix"
             )
         parameterization = str(sde.get("spectral_parameterization", "direct_eigenvalues")).lower()
-        if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS:
+        if variant in LAPLACIAN_LOGGAP_ALL_VARIANTS:
             if parameterization != "laplacian_log_gap":
-                raise ValueError("vanilla_laplacian_loggap_graphlet requires sde.spectral_parameterization=laplacian_log_gap")
+                raise ValueError(
+                    "Laplacian log-gap variants require sde.spectral_parameterization=laplacian_log_gap"
+                )
             if float(sde.get("log_gap_epsilon", 0.0)) <= 0.0:
                 raise ValueError("sde.log_gap_epsilon must be positive")
             if float(sde.get("log_gap_min_std", 0.0)) <= 0.0:
@@ -1020,6 +1055,79 @@ def _loss_batch(
     return loss_x, loss_lam
 
 
+def _loss_batch_loggap(
+    model_x: GSDMNodeScore,
+    model_lam: GSDMSpectrumScore,
+    batch: tuple[torch.Tensor, ...],
+    *,
+    sde_x: VPSDE,
+    sde_lam: VPSDE,
+    eps: float,
+    eigen_mask_mode: str,
+    spectral_transform: Mapping[str, Any],
+    generator: torch.Generator | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """VP epsilon-prediction loss in standardized Laplacian log-gap space.
+
+    This is the controlled no-auxiliary-head counterpart of
+    ``_loss_batch_loggap_graphlet``.  The GNN still sees the decoded continuous
+    Laplacian-derived adjacency state, but the spectrum network predicts noise
+    only for the standardized log-gap state.
+    """
+
+    if len(batch) != 6:
+        raise ValueError("log-gap-only training expects 6 tensors per batch")
+    x0, _adj0, flags, _sizes, u, lam0 = batch
+    b = x0.size(0)
+    state0 = _operator_eigenvalues_to_spectral_state(
+        lam0,
+        flags,
+        spectral_operator="combinatorial_laplacian",
+        spectral_transform=spectral_transform,
+    )
+    if generator is None:
+        t = torch.rand(b, device=x0.device) * (1.0 - eps) + eps
+        z_x = torch.randn_like(x0)
+        z_state = torch.randn_like(state0)
+    else:
+        t = torch.rand((b,), device=x0.device, generator=generator) * (1.0 - eps) + eps
+        z_x = torch.randn(x0.shape, dtype=x0.dtype, device=x0.device, generator=generator)
+        z_state = torch.randn(
+            state0.shape,
+            dtype=state0.dtype,
+            device=state0.device,
+            generator=generator,
+        )
+    z_x = mask_x(z_x, flags)
+    e_mask = eigen_mask_from_flags(flags, eigen_mask_mode)
+    z_state = z_state * e_mask
+
+    mean_x, std_x = sde_x.marginal_x(x0, t)
+    xt = mask_x(mean_x + std_x[:, None, None] * z_x, flags)
+    mean_state, std_state = sde_lam.marginal_spectrum(state0, t)
+    state_t = (mean_state * e_mask + std_state[:, None] * z_state) * e_mask
+    lam_t = _spectral_state_to_operator_eigenvalues(
+        state_t,
+        flags,
+        spectral_operator="combinatorial_laplacian",
+        spectral_transform=spectral_transform,
+    )
+    operator_t = reconstruct_adjacency(u, lam_t)
+    adj_t = _operator_to_adjacency_state(
+        operator_t,
+        flags,
+        "combinatorial_laplacian",
+    )
+
+    pred_x = model_x(xt, adj_t, flags, u, state_t)
+    pred_state = model_lam(xt, adj_t, flags, u, state_t)
+    loss_x = 0.5 * (pred_x - z_x).square().reshape(b, -1).sum(dim=-1).mean()
+    loss_state = 0.5 * (
+        (((pred_state - z_state) * e_mask).square().reshape(b, -1).sum(dim=-1))
+    ).mean()
+    return loss_x, loss_state
+
+
 def _loss_batch_loggap_graphlet(
     model_x: GSDMNodeScore,
     model_lam: GSDMSpectrumGraphletScore,
@@ -1403,13 +1511,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
     graphlet_meta: dict[str, Any] | None = None
     spectral_transform: dict[str, Any] = {"kind": "direct_eigenvalues"}
     joint_graphlet_cfg = dict(options.get("graphlet_summary", {}) or {})
-    if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS:
-        train_graphlet, train_mass, graphlet_meta = _joint_graphlet_targets(train_graphs)
-        val_graphlet, val_mass, val_meta = _joint_graphlet_targets(val_graphs)
-        if val_meta["graphlet_slices"] != graphlet_meta["graphlet_slices"]:
-            raise AssertionError("Train/validation graphlet bases differ")
-        train_data = (*train_data, train_graphlet, train_mass)
-        val_data = (*val_data, val_graphlet, val_mass)
+    if variant in LAPLACIAN_LOGGAP_ALL_VARIANTS:
         sde_cfg = dict(options.get("sde", {}) or {})
         stats = _fit_laplacian_log_gap_stats(
             train_data[5],
@@ -1425,6 +1527,13 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
             "std": stats["std"],
             "count": stats["count"],
         }
+    if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
+        train_graphlet, train_mass, graphlet_meta = _joint_graphlet_targets(train_graphs)
+        val_graphlet, val_mass, val_meta = _joint_graphlet_targets(val_graphs)
+        if val_meta["graphlet_slices"] != graphlet_meta["graphlet_slices"]:
+            raise AssertionError("Train/validation graphlet bases differ")
+        train_data = (*train_data, train_graphlet, train_mass)
+        val_data = (*val_data, val_graphlet, val_mass)
     train_loader = DataLoader(
         TensorDataset(*train_data),
         batch_size=int(options["train"]["batch_size"]),
@@ -1489,7 +1598,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     batch = tuple(v.to(device) for v in batch_cpu)
                     for opt in optimizers:
                         opt.zero_grad(set_to_none=True)
-                    if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS:
+                    if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                         if not isinstance(model_lam, GSDMSpectrumGraphletScore):
                             raise AssertionError("log-gap graphlet variant requires the joint spectrum/graphlet model")
                         lx, ll, lg, gmetrics = _loss_batch_loggap_graphlet(
@@ -1501,6 +1610,19 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                         )
                         loss = lx + ll + float(joint_graphlet_cfg.get("loss_weight", 0.10)) * lg
                         train_graphlet_metrics.append(gmetrics)
+                    elif variant in LAPLACIAN_LOGGAP_VARIANTS:
+                        lx, ll = _loss_batch_loggap(
+                            model_x,
+                            model_lam,
+                            batch,
+                            sde_x=sde_x,
+                            sde_lam=sde_lam,
+                            eps=eps,
+                            eigen_mask_mode=eigen_mask_mode,
+                            spectral_transform=spectral_transform,
+                        )
+                        lg = lx.detach() * 0.0
+                        loss = lx + ll
                     else:
                         lx, ll = _loss_batch(
                             model_x, model_lam, batch,
@@ -1541,7 +1663,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     "train_node_loss": total_x / max(total_n, 1),
                     "train_spectrum_loss": total_l / max(total_n, 1),
                 }
-                if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS:
+                if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                     record["train_graphlet_summary_loss"] = total_g / max(total_n, 1)
                     if train_graphlet_metrics:
                         for key in sorted(train_graphlet_metrics[0]):
@@ -1566,7 +1688,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     with torch.no_grad():
                         for batch_cpu in val_loader:
                             batch = tuple(v.to(device) for v in batch_cpu)
-                            if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS:
+                            if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                                 if not isinstance(model_lam, GSDMSpectrumGraphletScore):
                                     raise AssertionError("log-gap graphlet variant requires the joint spectrum/graphlet model")
                                 lx, ll, lg, gmetrics = _loss_batch_loggap_graphlet(
@@ -1578,6 +1700,19 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                                     generator=gen,
                                 )
                                 val_graphlet_metrics.append(gmetrics)
+                            elif variant in LAPLACIAN_LOGGAP_VARIANTS:
+                                lx, ll = _loss_batch_loggap(
+                                    model_x,
+                                    model_lam,
+                                    batch,
+                                    sde_x=sde_x,
+                                    sde_lam=sde_lam,
+                                    eps=eps,
+                                    eigen_mask_mode=eigen_mask_mode,
+                                    spectral_transform=spectral_transform,
+                                    generator=gen,
+                                )
+                                lg = lx.detach() * 0.0
                             else:
                                 lx, ll = _loss_batch(
                                     model_x, model_lam, batch,
@@ -1594,7 +1729,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                             vn += b
                     record["val_node_loss"] = vx / max(vn, 1)
                     record["val_spectrum_loss"] = vl / max(vn, 1)
-                    if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS:
+                    if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                         record["val_graphlet_summary_loss"] = vg / max(vn, 1)
                         if val_graphlet_metrics:
                             for key in sorted(val_graphlet_metrics[0]):
@@ -1662,7 +1797,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     "training_config": copy.deepcopy(joint_graphlet_cfg),
                     **(graphlet_meta or {}),
                 }
-                if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS
+                if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS
                 else {"enabled": False}
             ),
             "model_x_state": {k: v.detach().cpu() for k, v in model_x.state_dict().items()},
@@ -1714,7 +1849,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
             "reference_contract": {
                 "forward_state": (
                     "degree_features_and_normalized_log_successive_laplacian_eigenvalue_gaps"
-                    if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS
+                    if variant in LAPLACIAN_LOGGAP_ALL_VARIANTS
                     else (
                         "degree_features_and_combinatorial_laplacian_eigenvalues"
                         if spectral_operator == "combinatorial_laplacian"
@@ -1725,7 +1860,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                 "spectral_parameterization": str(spectral_transform.get("kind", "direct_eigenvalues")),
                 "spectral_corruption": (
                     "VP_SDE_on_standardized_log_successive_laplacian_eigenvalue_gaps"
-                    if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS
+                    if variant in LAPLACIAN_LOGGAP_ALL_VARIANTS
                     else (
                         "VP_SDE_on_laplacian_eigenvalues_in_fixed_training_graph_laplacian_eigenbasis"
                         if spectral_operator == "combinatorial_laplacian"
@@ -1745,7 +1880,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                 "reverse_sampler": "Euler_Maruyama_plus_optional_Langevin_corrector",
                 "graphlet_summary_training": (
                     "joint_auxiliary_head_shared_with_spectrum_denoiser_predicting_clean_k3_k4_k5_graphlet_histograms_and_connected_subset_mass"
-                    if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS else "none"
+                    if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS else "none"
                 ),
                 "discretization": (
                     "single_final_threshold_on_negative_laplacian_offdiagonal"
@@ -1759,19 +1894,29 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                 "degree_prior_used_for_graph_generation": False,
                 "degree_constraint": (
                     "freeze_final_vanilla_gsdm_indexed_degree_vector"
-                    if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                    if variant in (
+                        GRAPHLET_REFINEMENT_VARIANTS
+                        | LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS
+                    ) else False
                 ),
                 "rewiring": (
                     "post_gsdm_degree_preserving_double_edge_swaps"
-                    if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                    if variant in (
+                        GRAPHLET_REFINEMENT_VARIANTS
+                        | LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS
+                    ) else False
                 ),
                 "categorical_edge_head": False,
                 "structural_guidance": (
+                    "joint_auxiliary_graphlet_prediction_plus_post_generation_degree_preserving_rewiring"
+                    if variant in LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS
+                    else (
                     "post_generation_graphlet_guided_rewiring"
                     if variant in GRAPHLET_REFINEMENT_VARIANTS
                     else (
                         "joint_auxiliary_clean_graphlet_summary_prediction_during_log_gap_spectral_training"
-                        if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS else False
+                        if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS else False
+                    )
                     )
                 ),
                 "graphlet_predictor": graphlet_report,
@@ -2102,7 +2247,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             operator_batch = reconstruct_adjacency(sampled_u, lam)
             batch_graphlet_hist = None
             batch_graphlet_mass = None
-            if variant in LAPLACIAN_LOGGAP_GRAPHLET_VARIANTS:
+            if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                 if not isinstance(model_lam, GSDMSpectrumGraphletScore):
                     raise AssertionError("log-gap graphlet generation requires joint summary head")
                 nmax = soft.size(1)
@@ -2150,6 +2295,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             print(f"{label} generated {len(graphs)}/{request.num_graphs}", flush=True)
 
     vanilla_graphs: list[nx.Graph] = []
+    pre_refinement_graphs: list[nx.Graph] = []
     frozen_degree_sequences: list[list[int]] = []
     graphlet_refinement_diagnostics: list[dict[str, Any]] = []
     graphlet_prediction_traces: list[list[dict[str, Any]]] = []
@@ -2161,12 +2307,33 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             raise RuntimeError("Stage-3 checkpoint is missing its trained graphlet-summary predictor")
         from grapher.models.gdsm_simple.graphlet_stage3 import refine_generated_graphs
         vanilla_graphs = [graph.copy() for graph in graphs]
+        pre_refinement_graphs = [graph.copy() for graph in graphs]
         graphs, frozen_degree_sequences, graphlet_refinement_diagnostics, graphlet_prediction_traces = (
             refine_generated_graphs(
                 vanilla_graphs,
                 payload=payload,
                 config=dict(options.get("graphlet_refinement", {}) or {}),
                 device=device,
+                seed=request.generation_seed,
+            )
+        )
+    elif variant in LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS:
+        if spectral_operator != "combinatorial_laplacian":
+            raise RuntimeError("Log-gap joint-head refinement requires Laplacian spectral generation")
+        if len(joint_graphlet_predictions) != len(graphs):
+            raise RuntimeError(
+                "Log-gap joint-head refinement requires one auxiliary graphlet prediction per generated graph"
+            )
+        from grapher.models.gdsm_simple.graphlet_stage3 import (
+            refine_generated_graphs_with_fixed_predictions,
+        )
+        pre_refinement_graphs = [graph.copy() for graph in graphs]
+        graphs, frozen_degree_sequences, graphlet_refinement_diagnostics, graphlet_prediction_traces = (
+            refine_generated_graphs_with_fixed_predictions(
+                pre_refinement_graphs,
+                joint_graphlet_predictions,
+                graphlet_summary_payload=graphlet_summary_payload,
+                config=dict(options.get("graphlet_refinement", {}) or {}),
                 seed=request.generation_seed,
             )
         )
@@ -2234,6 +2401,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
         with graph_path.open("wb") as handle:
             pickle.dump(graphs, handle, protocol=pickle.HIGHEST_PROTOCOL)
         vanilla_graph_path = None
+        pre_refinement_graph_path = None
         frozen_degree_path = None
         graphlet_diagnostics_path = None
         graphlet_predictions_path = None
@@ -2241,6 +2409,10 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             vanilla_graph_path = staging / "vanilla_graphs.pkl"
             with vanilla_graph_path.open("wb") as handle:
                 pickle.dump(vanilla_graphs, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        if pre_refinement_graphs:
+            pre_refinement_graph_path = staging / "pre_refinement_graphs.pkl"
+            with pre_refinement_graph_path.open("wb") as handle:
+                pickle.dump(pre_refinement_graphs, handle, protocol=pickle.HIGHEST_PROTOCOL)
             frozen_degree_path = staging / "frozen_degree_sequences.pkl"
             with frozen_degree_path.open("wb") as handle:
                 pickle.dump(frozen_degree_sequences, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -2349,13 +2521,25 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             "num_requested": request.num_graphs,
             "num_generated": len(graphs),
             "duration_seconds": time.monotonic() - start,
-            "base_graphs": {"path": "base_graphs.pkl", "sha256": graph_hash, "role": "final_graphs_after_optional_stage3_refinement"},
+            "base_graphs": {"path": "base_graphs.pkl", "sha256": graph_hash, "role": "final_graphs_after_optional_graphlet_refinement"},
             "vanilla_graphs": (
                 {"path": "vanilla_graphs.pkl", "sha256": _sha256(vanilla_graph_path), "role": "unmodified_thresholded_vanilla_gsdm_sources"}
                 if vanilla_graph_path is not None else None
             ),
+            "pre_refinement_graphs": (
+                {
+                    "path": "pre_refinement_graphs.pkl",
+                    "sha256": _sha256(pre_refinement_graph_path),
+                    "role": (
+                        "unmodified_thresholded_laplacian_loggap_sources"
+                        if variant in LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS
+                        else "unmodified_thresholded_vanilla_gdsm_sources"
+                    ),
+                }
+                if pre_refinement_graph_path is not None else None
+            ),
             "frozen_degree_sequences": (
-                {"path": "frozen_degree_sequences.pkl", "sha256": _sha256(frozen_degree_path), "role": "indexed_degrees_extracted_from_each_vanilla_gsdm_source"}
+                {"path": "frozen_degree_sequences.pkl", "sha256": _sha256(frozen_degree_path), "role": "indexed_degrees_extracted_from_each_pre_refinement_source"}
                 if frozen_degree_path is not None else None
             ),
             "graphlet_refinement_diagnostics": (
@@ -2370,7 +2554,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 {"path": "rewiring_diagnostics.json", "sha256": _sha256(staging / "rewiring_diagnostics.json")}
                 if graphlet_refinement_diagnostics else None
             ),
-            "continuous_adjacencies": {"path": "continuous_adjacencies.pkl", "sha256": _sha256(soft_path), "role": "pre_refinement_vanilla_gsdm_continuous_adjacency"},
+            "continuous_adjacencies": {"path": "continuous_adjacencies.pkl", "sha256": _sha256(soft_path), "role": "pre_refinement_continuous_adjacency_scores"},
             "continuous_laplacians": (
                 {"path": "continuous_laplacians.pkl", "sha256": _sha256(laplacian_path)}
                 if laplacian_path is not None else None
@@ -2420,15 +2604,25 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "posthoc_repair": False,
                 "rewiring": (
                     "graphlet_guided_degree_preserving_double_edge_swaps"
-                    if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                    if variant in (
+                        GRAPHLET_REFINEMENT_VARIANTS
+                        | LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS
+                    ) else False
                 ),
                 "degree_constraint": (
-                    "indexed_degree_vector_frozen_from_final_vanilla_gsdm_graph"
-                    if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                    "indexed_degree_vector_frozen_from_final_pre_refinement_graph"
+                    if variant in (
+                        GRAPHLET_REFINEMENT_VARIANTS
+                        | LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS
+                    ) else False
                 ),
                 "structural_guidance": (
-                    "learned_connected_induced_graphlet_summary_k3_k4_k5"
-                    if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                    "fixed_joint_auxiliary_graphlet_summary_k3_k4_k5"
+                    if variant in LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS
+                    else (
+                        "learned_connected_induced_graphlet_summary_k3_k4_k5"
+                        if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                    )
                 ),
             },
             "diagnostics": {

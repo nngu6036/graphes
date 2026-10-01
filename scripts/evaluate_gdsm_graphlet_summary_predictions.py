@@ -23,11 +23,20 @@ def _load(path: Path):
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--generated-dir", type=Path, required=True)
+    parser.add_argument(
+        "--graphs",
+        type=Path,
+        default=None,
+        help="Graph pickle to compare against predictions (default: <generated-dir>/base_graphs.pkl).",
+    )
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
     root = args.generated_dir
-    graphs = _load(root / "base_graphs.pkl")
+    graph_path = args.graphs or (root / "base_graphs.pkl")
+    if not graph_path.is_absolute():
+        graph_path = root / graph_path
+    graphs = _load(graph_path)
     predictions = _load(root / "predicted_graphlet_summaries.pkl")
     if len(graphs) != len(predictions):
         raise RuntimeError(f"graph/prediction count mismatch: {len(graphs)} vs {len(predictions)}")
@@ -64,6 +73,7 @@ def main() -> int:
 
     result = {
         "num_graphs": len(graphs),
+        "graphs_path": str(graph_path),
         "graphlet_histogram_mae": {
             k: (float(np.mean(v)) if v else None) for k, v in hist_mae_by_order.items()
         },

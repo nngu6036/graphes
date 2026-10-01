@@ -37,6 +37,7 @@ from grapher.rewiring_mlp.generic.data import (
 from grapher.rewiring_mlp.generic.graphlets import extract_topology_graphlet_target
 from grapher.rewiring_mlp.generic.model import TopologyGraphletPredictor
 from grapher.rewiring_mlp.generic.refiner import (
+    TopologyPrediction,
     TopologyRefinerConfig,
     predict_topology_target,
     refine_graph_with_topology_predictions,
@@ -121,6 +122,47 @@ def default_graphlet_refinement_options() -> dict[str, Any]:
     }
 
 
+def default_fixed_target_graphlet_refinement_options() -> dict[str, Any]:
+    """Post-generation rewiring driven by one joint auxiliary-head prediction.
+
+    This option block is used by the Laplacian log-gap + joint graphlet model.
+    No separate topology predictor is trained: the fixed target comes from the
+    graphlet auxiliary head evaluated on the final diffusion state.
+    """
+
+    return {
+        "enabled": True,
+        "target_source": "joint_auxiliary_head",
+        "graphlet_k_min": 3,
+        "graphlet_k_max": 5,
+        "graphlet_connected_only": True,
+        "graphlet_topology_filter": "all",
+        "refiner": {
+            "steps": 8,
+            "proposal_budget": 256,
+            "valid_candidate_budget": 128,
+            "preserve_connectivity": True,
+            "selection": "greedy",
+            "temperature": 0.1,
+            "graphlet_weight": 1.0,
+            "graphlet_mass_weight": 0.10,
+            "clustering_weight": 0.0,
+            "orbit_weight": 0.0,
+            "accept_only_improving": True,
+            "min_improvement": 1.0e-8,
+            "min_relative_improvement": 0.0,
+            "relative_improvement_epsilon": 1.0e-12,
+            "sample_graphlet": False,
+            # The prediction is fixed for the whole refinement trajectory.
+            "refresh_prediction_every": 8,
+            "refresh_on_plateau": False,
+            "reject_revisited_states": True,
+        },
+        "disconnected_source_policy": "skip",
+        "save_prediction_trace": True,
+    }
+
+
 def _deep_update(base: dict[str, Any], update: Mapping[str, Any]) -> dict[str, Any]:
     out = copy.deepcopy(base)
     for key, value in update.items():
@@ -165,6 +207,22 @@ def validate_graphlet_refinement_options(cfg: Mapping[str, Any]) -> None:
         raise ValueError("Stage 3 currently requires disconnected_source_policy=skip")
     # Reuse the mature generic GraphER refiner validation.  It requires
     # connectivity-preserving moves; disconnected vanilla sources are skipped.
+    TopologyRefinerConfig.from_dict(dict(cfg.get("refiner", {}) or {}))
+
+
+def validate_fixed_target_graphlet_refinement_options(cfg: Mapping[str, Any]) -> None:
+    if not bool(cfg.get("enabled", False)):
+        raise ValueError("Fixed-target graphlet refinement requires enabled=true")
+    if str(cfg.get("target_source", "joint_auxiliary_head")).lower() != "joint_auxiliary_head":
+        raise ValueError("Fixed-target refinement requires target_source=joint_auxiliary_head")
+    if (int(cfg.get("graphlet_k_min", 3)), int(cfg.get("graphlet_k_max", 5))) != (3, 5):
+        raise ValueError("Fixed-target refinement is intentionally fixed to graphlet orders 3,4,5")
+    if not bool(cfg.get("graphlet_connected_only", True)):
+        raise ValueError("Fixed-target refinement uses connected induced graphlets only")
+    if str(cfg.get("graphlet_topology_filter", "all")).lower() != "all":
+        raise ValueError("Fixed-target refinement uses the complete connected graphlet basis")
+    if str(cfg.get("disconnected_source_policy", "skip")).lower() != "skip":
+        raise ValueError("Fixed-target refinement currently requires disconnected_source_policy=skip")
     TopologyRefinerConfig.from_dict(dict(cfg.get("refiner", {}) or {}))
 
 
@@ -594,5 +652,144 @@ def refine_generated_graphs(
         prediction_traces.append(predictions)
         if (index + 1) % max(1, min(128, len(graphs))) == 0 or index + 1 == len(graphs):
             print(f"Stage3 graphlet refinement {index + 1}/{len(graphs)}", flush=True)
+
+    return refined, frozen_degrees, diagnostics, prediction_traces
+
+
+def refine_generated_graphs_with_fixed_predictions(
+    graphs: Sequence[nx.Graph],
+    predictions: Sequence[Mapping[str, Any]],
+    *,
+    graphlet_summary_payload: Mapping[str, Any],
+    config: Mapping[str, Any],
+    seed: int,
+) -> tuple[list[nx.Graph], list[list[int]], list[dict[str, Any]], list[list[dict[str, Any]]]]:
+    """Refine generated graphs toward fixed joint auxiliary-head predictions.
+
+    The source graph's indexed degree vector is frozen.  Each prediction is
+    computed by the joint diffusion/graphlet model *before* rewiring and is held
+    fixed for the complete double-edge-swap trajectory.  No additional neural
+    network is trained or evaluated during refinement.
+    """
+
+    cfg = copy.deepcopy(dict(config or {}))
+    validate_fixed_target_graphlet_refinement_options(cfg)
+    if len(graphs) != len(predictions):
+        raise ValueError(
+            f"Expected one fixed graphlet prediction per graph, got {len(predictions)} for {len(graphs)} graphs"
+        )
+    if not bool(graphlet_summary_payload.get("enabled", False)):
+        raise RuntimeError("Checkpoint is missing the joint graphlet-summary head metadata")
+
+    basis = TopologyGraphletBasis.from_dict(dict(graphlet_summary_payload["graphlet_basis"]))
+    summary_cfg = SummaryConfig.from_dict(dict(graphlet_summary_payload["summary_config"]))
+    if tuple(int(k) for k in basis.sizes) != (3, 4, 5):
+        raise RuntimeError(f"Expected graphlet orders 3,4,5, found {basis.sizes}")
+    refiner_cfg = TopologyRefinerConfig.from_dict(dict(cfg.get("refiner", {}) or {}))
+    rng = np.random.default_rng(int(seed) + 510001)
+
+    refined: list[nx.Graph] = []
+    frozen_degrees: list[list[int]] = []
+    diagnostics: list[dict[str, Any]] = []
+    prediction_traces: list[list[dict[str, Any]]] = []
+
+    for index, (raw, pred_raw) in enumerate(zip(graphs, predictions)):
+        source = normalize_topology_graph(raw)
+        degree_vector = [int(source.degree(node)) for node in sorted(source.nodes())]
+        frozen_degrees.append(degree_vector)
+        source_connected = bool(source.number_of_nodes() <= 1 or nx.is_connected(source))
+
+        hist = np.asarray(pred_raw["graphlet_histogram"], dtype=np.float64).reshape(-1)
+        mass = np.asarray(pred_raw["graphlet_mass"], dtype=np.float64).reshape(-1)
+        if hist.size != basis.width:
+            raise ValueError(
+                f"Prediction {index} has graphlet width {hist.size}, expected {basis.width}"
+            )
+        if mass.size != len(basis.sizes):
+            raise ValueError(
+                f"Prediction {index} has mass width {mass.size}, expected {len(basis.sizes)}"
+            )
+        fixed_prediction = TopologyPrediction(
+            graphlet_target=hist,
+            graphlet_mass_target=mass,
+            graphlet_history=basis.unflatten_history(hist),
+            graphlet_connected_mass={
+                str(k): float(v) for k, v in zip(basis.sizes, mass)
+            },
+        )
+        prediction_record = {
+            "time": 0.0,
+            "source": "joint_auxiliary_head_final_diffusion_state",
+            "graphlet_target": hist.tolist(),
+            "graphlet_mass_target": mass.tolist(),
+        }
+
+        if not source_connected:
+            refined.append(source.copy())
+            diagnostics.append(
+                {
+                    "graph_index": index,
+                    "source_connected": False,
+                    "skipped": True,
+                    "skip_reason": "disconnected_generated_source",
+                    "accepted_steps": 0,
+                    "prediction_calls": 0,
+                    "changed": False,
+                    "degree_preserved": True,
+                    "target_source": "joint_auxiliary_head",
+                }
+            )
+            prediction_traces.append([prediction_record])
+            continue
+
+        calls = 0
+
+        def fixed_predict(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return fixed_prediction
+
+        # ``model`` is unused because ``prediction_fn`` supplies the complete
+        # frozen prediction.  The generic refiner still provides exact local
+        # graphlet-delta scoring and degree/connectivity-preserving swaps.
+        result, trace = refine_graph_with_topology_predictions(
+            source,
+            model=None,  # type: ignore[arg-type]
+            graphlet_basis=basis,
+            summary_config=summary_cfg,
+            refiner_config=refiner_cfg,
+            device="cpu",
+            rng=rng,
+            return_trace=True,
+            prediction_fn=fixed_predict,
+        )
+        final_degrees = [int(result.degree(node)) for node in sorted(result.nodes())]
+        if final_degrees != degree_vector:
+            raise AssertionError("Fixed-target graphlet refinement changed the frozen indexed degree vector")
+        if source_connected and result.number_of_nodes() > 1 and not nx.is_connected(result):
+            raise AssertionError("Fixed-target graphlet refinement disconnected a connected source")
+        accepted = sum(bool(row.get("accepted", False)) for row in trace)
+        changed = topology_state_key(source) != topology_state_key(result)
+        refined.append(result)
+        diagnostics.append(
+            {
+                "graph_index": index,
+                "source_connected": True,
+                "skipped": False,
+                "accepted_steps": int(accepted),
+                "prediction_calls": int(calls),
+                "changed": bool(changed),
+                "degree_preserved": True,
+                "final_connected": bool(result.number_of_nodes() <= 1 or nx.is_connected(result)),
+                "target_source": "joint_auxiliary_head",
+                "trace": trace,
+            }
+        )
+        prediction_traces.append([prediction_record])
+        if (index + 1) % max(1, min(128, len(graphs))) == 0 or index + 1 == len(graphs):
+            print(
+                f"Log-gap joint-head graphlet refinement {index + 1}/{len(graphs)}",
+                flush=True,
+            )
 
     return refined, frozen_degrees, diagnostics, prediction_traces
