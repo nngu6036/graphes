@@ -255,6 +255,7 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             "vanilla_gsdm", "vanilla", "gsdm",
             "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae",
             "vanilla_laplacian_gsdm", "laplacian_gsdm", "gsdm_laplacian",
+            "vanilla_gsdm_graphlet_refine", "vanilla_gsdm_graphlet", "gsdm_graphlet_refine",
         }:
             from grapher.models.gdsm_simple.vanilla_gsdm import (
                 default_vanilla_options,
@@ -266,6 +267,10 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                 options["variant"] = "vanilla_gsdm_dhvae"
             elif requested_variant in {"vanilla_laplacian_gsdm", "laplacian_gsdm", "gsdm_laplacian"}:
                 options["variant"] = "vanilla_laplacian_gsdm"
+            elif requested_variant in {"vanilla_gsdm_graphlet_refine", "vanilla_gsdm_graphlet", "gsdm_graphlet_refine"}:
+                from grapher.models.gdsm_simple.graphlet_stage3 import default_graphlet_refinement_options
+                options["variant"] = "vanilla_gsdm_graphlet_refine"
+                options["graphlet_refinement"] = default_graphlet_refinement_options()
             else:
                 options["variant"] = "vanilla_gsdm"
             options["extensions"] = {
@@ -327,6 +332,7 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             "vanilla_gsdm", "vanilla", "gsdm",
             "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae",
             "vanilla_laplacian_gsdm", "laplacian_gsdm", "gsdm_laplacian",
+            "vanilla_gsdm_graphlet_refine", "vanilla_gsdm_graphlet", "gsdm_graphlet_refine",
         }:
             from grapher.models.gdsm_simple.vanilla_gsdm import train
             return train(self, request, options)
@@ -535,7 +541,7 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         # rewiring, but never the trained denoiser architecture/diffusion.
         unknown = sorted(
             set(request.options)
-            - {"runtime", "generation_batch_size", "sample", "extensions"}
+            - {"runtime", "generation_batch_size", "sample", "extensions", "graphlet_refinement"}
         )
         if unknown:
             raise ValueError(f"Unsupported gdsm_simple generation overrides: {unknown}")
@@ -549,6 +555,7 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             "vanilla_gsdm", "vanilla", "gsdm",
             "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae",
             "vanilla_laplacian_gsdm", "laplacian_gsdm", "gsdm_laplacian",
+            "vanilla_gsdm_graphlet_refine", "vanilla_gsdm_graphlet", "gsdm_graphlet_refine",
         }:
             from grapher.models.gdsm_simple.vanilla_gsdm import generate
             return generate(self, request, state, manifest, options)

@@ -677,7 +677,7 @@ def _generation_options(
         selected = loaded.get("gdsm_simple", loaded)
         if not isinstance(selected, Mapping):
             raise TypeError("gdsm_simple config section must be a mapping")
-        for key in ("sample", "extensions", "generation_batch_size"):
+        for key in ("sample", "extensions", "graphlet_refinement", "generation_batch_size"):
             if key in selected:
                 value = selected[key]
                 result[key] = (

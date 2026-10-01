@@ -1,0 +1,128 @@
+comparison:
+  model: gdsm_simple
+  dataset: community_small
+  common_config: common_community_small.yaml
+  status: vanilla_gsdm_graphlet_refine_stage3
+  budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  native_reference:
+    paper_model: GSDM
+    released_profile: community_small.yaml
+    native_epochs: 200
+    native_batch_size: 128
+  fairness_note: Stage 3 preserves the validated adjacency-spectrum vanilla GSDM training/sampling
+    path. After final thresholding, each vanilla graph's indexed degree vector is
+    frozen and a separately trained graphlet-summary predictor guides degree-preserving
+    double-edge swaps. Only connected induced graphlets of orders 3,4,5 (plus connected-subset
+    mass) enter the refinement objective.
+gdsm_simple:
+  variant: vanilla_gsdm_graphlet_refine
+  train:
+    epochs: 10000
+    batch_size: 128
+    lr: 0.01
+    weight_decay: 0.0001
+    grad_norm: 1.0
+    lr_schedule: true
+    lr_decay: 0.9999799901935271
+    ema: 0.999
+    validation_every: 1
+    log_every: 10
+  model:
+    max_nodes: 20
+    max_feat_num: 20
+    hidden_dim: 32
+    depth: 3
+  sde:
+    x:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    spectrum:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    eps: 1.0e-05
+    eigen_mask: official_extremes
+  sample:
+    predictor: euler
+    corrector: langevin
+    snr: 0.05
+    scale_eps: 0.7
+    n_steps: 1
+    noise_removal: true
+    probability_flow: false
+    eps: 0.0001
+    threshold: 0.5
+    use_ema: false
+  generation_batch_size: 128
+  runtime:
+    device: auto
+  extensions:
+    degree_conditioning: false
+    hh_initialization: false
+    degree_preserving_rewiring: false
+    structural_summary: none
+  graphlet_refinement:
+    enabled: true
+    graphlet_k_min: 3
+    graphlet_k_max: 5
+    graphlet_connected_only: true
+    graphlet_topology_filter: all
+    predictor:
+      epochs: 500
+      batch_size: 64
+      learning_rate: 0.0003
+      weight_decay: 1.0e-05
+      grad_norm: 1.0
+      hidden_dim: 128
+      edge_dim: 64
+      graph_dim: 128
+      num_layers: 4
+      dropout: 0.0
+      min_concentration: 0.05
+      max_concentration: 50.0
+      target_epsilon: 1.0e-05
+      validation_every: 10
+      early_stopping_patience: 100
+      loss_weights:
+        graphlet_mean: 1.0
+        graphlet_distribution: 0.1
+        graphlet_mass: 0.25
+        clustering_mean: 0.0
+        clustering_distribution: 0.0
+        orbit: 0.0
+      corruption:
+        trajectories_per_graph: 4
+        states_per_trajectory: 8
+        max_swaps: 24
+        proposal_budget: 64
+        valid_candidate_budget: 32
+        preserve_connectivity_if_source_connected: true
+      time_conditioning: constant_zero
+    refiner:
+      steps: 8
+      proposal_budget: 256
+      valid_candidate_budget: 128
+      preserve_connectivity: true
+      selection: greedy
+      temperature: 0.1
+      graphlet_weight: 1.0
+      graphlet_mass_weight: 0.1
+      clustering_weight: 0.0
+      orbit_weight: 0.0
+      accept_only_improving: true
+      min_improvement: 1.0e-08
+      min_relative_improvement: 0.0
+      relative_improvement_epsilon: 1.0e-12
+      sample_graphlet: false
+      refresh_prediction_every: 1
+      refresh_on_plateau: false
+      reject_revisited_states: true
+    disconnected_source_policy: skip
+    save_prediction_trace: true

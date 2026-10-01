@@ -80,13 +80,18 @@ LAPLACIAN_VARIANTS = {
     "laplacian_gsdm",
     "gsdm_laplacian",
 }
+GRAPHLET_REFINEMENT_VARIANTS = {
+    "vanilla_gsdm_graphlet_refine",
+    "vanilla_gsdm_graphlet",
+    "gsdm_graphlet_refine",
+}
 
 
 def spectral_operator_for_variant(variant: str) -> str:
     value = str(variant).lower()
     if value in LAPLACIAN_VARIANTS:
         return "combinatorial_laplacian"
-    if value in ADJACENCY_VARIANTS | DHVAE_VARIANTS:
+    if value in ADJACENCY_VARIANTS | DHVAE_VARIANTS | GRAPHLET_REFINEMENT_VARIANTS:
         return "adjacency"
     raise ValueError(f"Unknown vanilla GSDM variant: {variant!r}")
 
@@ -203,6 +208,7 @@ def default_vanilla_options() -> dict[str, Any]:
             "threshold": 0.5,
             "use_ema": False,
         },
+        "graphlet_refinement": {"enabled": False},
         "degree_prior": {
             "enabled": False,
             "batch_size": 64,
@@ -248,18 +254,18 @@ def default_vanilla_options() -> dict[str, Any]:
 
 def validate_options(options: Mapping[str, Any]) -> None:
     allowed = {
-        "variant", "train", "model", "sde", "sample", "degree_prior", "generation_batch_size",
+        "variant", "train", "model", "sde", "sample", "degree_prior", "graphlet_refinement", "generation_batch_size",
         "runtime", "extensions", "comparison_reference", "training_estimates", "diffusion",
     }
     unknown = sorted(set(options) - allowed)
     if unknown:
         raise ValueError(f"Unknown vanilla GSDM options: {unknown}")
     variant = str(options.get("variant", "")).lower()
-    allowed_variants = ADJACENCY_VARIANTS | DHVAE_VARIANTS | LAPLACIAN_VARIANTS
+    allowed_variants = ADJACENCY_VARIANTS | DHVAE_VARIANTS | LAPLACIAN_VARIANTS | GRAPHLET_REFINEMENT_VARIANTS
     if variant not in allowed_variants:
         raise ValueError(
             "vanilla GSDM pipeline requires vanilla_gsdm, vanilla_gsdm_dhvae, "
-            "or vanilla_laplacian_gsdm"
+            "vanilla_laplacian_gsdm, or vanilla_gsdm_graphlet_refine"
         )
     degree_prior = options.get("degree_prior", {}) or {}
     prior_enabled = bool(degree_prior.get("enabled", False))
@@ -272,6 +278,17 @@ def validate_options(options: Mapping[str, Any]) -> None:
             "Stage-2 vanilla_laplacian_gsdm is a clean spectral-operator ablation and "
             "does not enable the auxiliary DH-VAE"
         )
+    graphlet_cfg = options.get("graphlet_refinement", {}) or {}
+    graphlet_enabled = bool(graphlet_cfg.get("enabled", False))
+    if variant in GRAPHLET_REFINEMENT_VARIANTS:
+        if prior_enabled:
+            raise ValueError("Stage-3 graphlet refinement does not use the DH-VAE degree prior")
+        if not graphlet_enabled:
+            raise ValueError("vanilla_gsdm_graphlet_refine requires graphlet_refinement.enabled=true")
+        from grapher.models.gdsm_simple.graphlet_stage3 import validate_graphlet_refinement_options
+        validate_graphlet_refinement_options(graphlet_cfg)
+    elif graphlet_enabled:
+        raise ValueError("graphlet_refinement.enabled=true requires variant: vanilla_gsdm_graphlet_refine")
     if prior_enabled:
         if int(degree_prior.get("batch_size", 0)) <= 0:
             raise ValueError("degree_prior.batch_size must be positive")
@@ -1120,6 +1137,32 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     print(line, flush=True)
                     log.write(line + "\n"); log.flush()
 
+        graphlet_payload: dict[str, Any] = {"enabled": False}
+        graphlet_report: dict[str, Any] | None = None
+        if variant in GRAPHLET_REFINEMENT_VARIANTS:
+            from grapher.models.gdsm_simple.graphlet_stage3 import train_graphlet_predictor
+            graphlet_cfg = dict(options.get("graphlet_refinement", {}) or {})
+            with torch.random.fork_rng(devices=degree_fork_devices, enabled=True):
+                predictor_seed = request.run.train_seed + 800001
+                torch.manual_seed(predictor_seed)
+                if device.type == "cuda":
+                    torch.cuda.manual_seed_all(predictor_seed)
+                graphlet_payload, graphlet_report = train_graphlet_predictor(
+                    train_graphs,
+                    val_graphs,
+                    config=graphlet_cfg,
+                    device=device,
+                    seed=request.run.train_seed,
+                )
+            with log_path.open("a", encoding="utf-8") as log:
+                log.write(
+                    "Stage3 graphlet predictor "
+                    f"best_epoch={graphlet_report['best_epoch']} "
+                    f"best_val_loss={graphlet_report['best_val_loss']:.6f} "
+                    f"train_examples={graphlet_report['num_train_examples']} "
+                    f"val_examples={graphlet_report['num_val_examples']}\n"
+                )
+
         checkpoint_dir = staging / "checkpoints"
         checkpoint_dir.mkdir(parents=True)
         checkpoint_path = checkpoint_dir / "gdsm_simple.pt"
@@ -1146,6 +1189,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                 if degree_bundle is not None
                 else {"enabled": False, "used_for_gsdm_generation": False}
             ),
+            "graphlet_refinement": graphlet_payload,
         }
         torch.save(checkpoint, checkpoint_path)
         resolved = copy.deepcopy(dict(options))
@@ -1205,10 +1249,20 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     if degree_prior_enabled else "none"
                 ),
                 "degree_prior_used_for_graph_generation": False,
-                "degree_constraint": False,
-                "rewiring": False,
+                "degree_constraint": (
+                    "freeze_final_vanilla_gsdm_indexed_degree_vector"
+                    if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                ),
+                "rewiring": (
+                    "post_gsdm_degree_preserving_double_edge_swaps"
+                    if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                ),
                 "categorical_edge_head": False,
-                "structural_guidance": False,
+                "structural_guidance": (
+                    "learned_connected_induced_graphlet_summary_k3_k4_k5"
+                    if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                ),
+                "graphlet_predictor": graphlet_report,
                 "posthoc_repair": False,
             },
             "test_used_for_training": False,
@@ -1519,6 +1573,28 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             label = "Vanilla-Laplacian-GSDM" if spectral_operator == "combinatorial_laplacian" else "Vanilla-GSDM"
             print(f"{label} generated {len(graphs)}/{request.num_graphs}", flush=True)
 
+    vanilla_graphs: list[nx.Graph] = []
+    frozen_degree_sequences: list[list[int]] = []
+    graphlet_refinement_diagnostics: list[dict[str, Any]] = []
+    graphlet_prediction_traces: list[list[dict[str, Any]]] = []
+    if variant in GRAPHLET_REFINEMENT_VARIANTS:
+        if spectral_operator != "adjacency":
+            raise RuntimeError("Stage-3 graphlet refinement must use adjacency-spectrum vanilla GSDM")
+        payload = state.get("graphlet_refinement", {})
+        if not isinstance(payload, Mapping) or not bool(payload.get("enabled", False)):
+            raise RuntimeError("Stage-3 checkpoint is missing its trained graphlet-summary predictor")
+        from grapher.models.gdsm_simple.graphlet_stage3 import refine_generated_graphs
+        vanilla_graphs = [graph.copy() for graph in graphs]
+        graphs, frozen_degree_sequences, graphlet_refinement_diagnostics, graphlet_prediction_traces = (
+            refine_generated_graphs(
+                vanilla_graphs,
+                payload=payload,
+                config=dict(options.get("graphlet_refinement", {}) or {}),
+                device=device,
+                seed=request.generation_seed,
+            )
+        )
+
     degree_sequences: list[list[int]] = []
     degree_summaries: list[dict[str, Any]] = []
     if degree_prior_enabled:
@@ -1581,6 +1657,23 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
         graph_path = staging / "base_graphs.pkl"
         with graph_path.open("wb") as handle:
             pickle.dump(graphs, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        vanilla_graph_path = None
+        frozen_degree_path = None
+        graphlet_diagnostics_path = None
+        graphlet_predictions_path = None
+        if vanilla_graphs:
+            vanilla_graph_path = staging / "vanilla_graphs.pkl"
+            with vanilla_graph_path.open("wb") as handle:
+                pickle.dump(vanilla_graphs, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            frozen_degree_path = staging / "frozen_degree_sequences.pkl"
+            with frozen_degree_path.open("wb") as handle:
+                pickle.dump(frozen_degree_sequences, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            graphlet_diagnostics_path = staging / "graphlet_refinement_diagnostics.pkl"
+            with graphlet_diagnostics_path.open("wb") as handle:
+                pickle.dump(graphlet_refinement_diagnostics, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            graphlet_predictions_path = staging / "graphlet_prediction_traces.pkl"
+            with graphlet_predictions_path.open("wb") as handle:
+                pickle.dump(graphlet_prediction_traces, handle, protocol=pickle.HIGHEST_PROTOCOL)
         soft_path = staging / "continuous_adjacencies.pkl"
         with soft_path.open("wb") as handle:
             pickle.dump(continuous, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -1630,6 +1723,30 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 ),
                 "valid_laplacian_projection_applied": False,
             }
+        graphlet_aggregate: dict[str, Any] = {}
+        if graphlet_refinement_diagnostics:
+            accepted = [int(row.get("accepted_steps", 0)) for row in graphlet_refinement_diagnostics]
+            calls = [int(row.get("prediction_calls", 0)) for row in graphlet_refinement_diagnostics]
+            changed = [bool(row.get("changed", False)) for row in graphlet_refinement_diagnostics]
+            preserved = [bool(row.get("degree_preserved", False)) for row in graphlet_refinement_diagnostics]
+            skipped = [bool(row.get("skipped", False)) for row in graphlet_refinement_diagnostics]
+            graphlet_aggregate = {
+                "hard_degree_constraint": True,
+                "degree_preservation_rate": float(np.mean(preserved)),
+                "changed_rate": float(np.mean(changed)),
+                "mean_accepted_steps": float(np.mean(accepted)),
+                "mean_prediction_calls": float(np.mean(calls)),
+                "disconnected_source_skip_rate": float(np.mean(skipped)),
+                "graphlet_orders": [3, 4, 5],
+            }
+            _write_json(
+                staging / "rewiring_diagnostics.json",
+                {
+                    "aggregate": graphlet_aggregate,
+                    "per_graph": graphlet_refinement_diagnostics,
+                },
+            )
+
         _write_json(staging / "manifest.json", {
             "format": GENERATION_FORMAT,
             "model_id": wrapper.model_id,
@@ -1640,8 +1757,28 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             "num_requested": request.num_graphs,
             "num_generated": len(graphs),
             "duration_seconds": time.monotonic() - start,
-            "base_graphs": {"path": "base_graphs.pkl", "sha256": graph_hash},
-            "continuous_adjacencies": {"path": "continuous_adjacencies.pkl", "sha256": _sha256(soft_path)},
+            "base_graphs": {"path": "base_graphs.pkl", "sha256": graph_hash, "role": "final_graphs_after_optional_stage3_refinement"},
+            "vanilla_graphs": (
+                {"path": "vanilla_graphs.pkl", "sha256": _sha256(vanilla_graph_path), "role": "unmodified_thresholded_vanilla_gsdm_sources"}
+                if vanilla_graph_path is not None else None
+            ),
+            "frozen_degree_sequences": (
+                {"path": "frozen_degree_sequences.pkl", "sha256": _sha256(frozen_degree_path), "role": "indexed_degrees_extracted_from_each_vanilla_gsdm_source"}
+                if frozen_degree_path is not None else None
+            ),
+            "graphlet_refinement_diagnostics": (
+                {"path": "graphlet_refinement_diagnostics.pkl", "sha256": _sha256(graphlet_diagnostics_path)}
+                if graphlet_diagnostics_path is not None else None
+            ),
+            "graphlet_prediction_traces": (
+                {"path": "graphlet_prediction_traces.pkl", "sha256": _sha256(graphlet_predictions_path)}
+                if graphlet_predictions_path is not None else None
+            ),
+            "rewiring_diagnostics": (
+                {"path": "rewiring_diagnostics.json", "sha256": _sha256(staging / "rewiring_diagnostics.json")}
+                if graphlet_refinement_diagnostics else None
+            ),
+            "continuous_adjacencies": {"path": "continuous_adjacencies.pkl", "sha256": _sha256(soft_path), "role": "pre_refinement_vanilla_gsdm_continuous_adjacency"},
             "continuous_laplacians": (
                 {"path": "continuous_laplacians.pkl", "sha256": _sha256(laplacian_path)}
                 if laplacian_path is not None else None
@@ -1684,14 +1821,24 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "degree_sequences_sampled": len(degree_sequences),
                 "degree_sequences_used_for_graph_generation": False,
                 "posthoc_repair": False,
-                "rewiring": False,
-                "degree_constraint": False,
-                "structural_guidance": False,
+                "rewiring": (
+                    "graphlet_guided_degree_preserving_double_edge_swaps"
+                    if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                ),
+                "degree_constraint": (
+                    "indexed_degree_vector_frozen_from_final_vanilla_gsdm_graph"
+                    if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                ),
+                "structural_guidance": (
+                    "learned_connected_induced_graphlet_summary_k3_k4_k5"
+                    if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                ),
             },
             "diagnostics": {
                 "connectedness_rate": float(np.mean(connected)),
                 "mean_degree_sum": float(np.mean(degree_sums)),
                 **laplacian_diagnostics,
+                **graphlet_aggregate,
             },
             "posthoc_repair": False,
             "largest_component_filter": False,
