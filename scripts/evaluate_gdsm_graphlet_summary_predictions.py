@@ -33,9 +33,15 @@ def main() -> int:
     args = parser.parse_args()
 
     root = args.generated_dir
-    graph_path = args.graphs or (root / "base_graphs.pkl")
-    if not graph_path.is_absolute():
-        graph_path = root / graph_path
+    if args.graphs is None:
+        graph_path = root / "base_graphs.pkl"
+    else:
+        graph_path = args.graphs
+        # A caller may pass either a path relative to the current working
+        # directory (for example $GEN/base_graphs.pkl) or a filename relative
+        # to --generated-dir.  Do not prepend root twice.
+        if not graph_path.is_absolute() and not graph_path.exists():
+            graph_path = root / graph_path
     graphs = _load(graph_path)
     predictions = _load(root / "predicted_graphlet_summaries.pkl")
     if len(graphs) != len(predictions):
@@ -65,6 +71,10 @@ def main() -> int:
         )
         ph = np.asarray(pred["graphlet_histogram"], dtype=np.float64)
         pm = np.asarray(pred["graphlet_mass"], dtype=np.float64)
+        if not np.isfinite(ph).all() or not np.isfinite(pm).all():
+            raise FloatingPointError(
+                f"Non-finite saved graphlet prediction at graph index {pred.get('graph_index', '?')}"
+            )
         for order, (start, stop) in zip((3, 4, 5), basis.slices):
             block = target[start:stop]
             if float(block.sum()) > 0.0:

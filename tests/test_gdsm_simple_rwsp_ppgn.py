@@ -51,9 +51,14 @@ def _options(backbone: str) -> dict:
             "max_feat_num": 6,
             "hidden_dim": 8,
             "depth": 2,
-            "backbone": backbone,
+            "backbone": "dense_gcn",
+            "node_backbone": "dense_gcn",
+            "spectrum_backbone": backbone,
             "ppgn_hidden_dim": 12,
             "ppgn_depth": 2,
+            "ppgn_residual_scale": 0.1,
+            "ppgn_norm_eps": 1.0e-5,
+            "ppgn_input_clip": 10.0,
         },
         "structural_features": {
             "enabled": True,
@@ -133,7 +138,8 @@ def _train_and_generate(tmp_path, backbone: str):
     artifacts = wrapper.train(TrainRequest(run, dataset, options=_options(backbone)))
     state = torch.load(artifacts.checkpoint_path, map_location="cpu", weights_only=False)
     assert state["variant"] == "vanilla_laplacian_loggap_graphlet"
-    assert state["model_config"]["backbone"] == backbone
+    assert state["model_config"]["node_backbone"] == "dense_gcn"
+    assert state["model_config"]["spectrum_backbone"] == backbone
     assert state["model_config"]["structural_features"]["enabled"] is True
     assert state["model_config"]["structural_features"]["random_walk"]["steps"] == 3
     assert state["model_config"]["structural_features"]["shortest_path"]["max_distance"] == 4
@@ -155,7 +161,8 @@ def test_densegcn_rwsp_joint_graphlet_variant(tmp_path):
 def test_ppgn_rwsp_joint_graphlet_variant(tmp_path):
     state = _train_and_generate(tmp_path, "ppgn")
     assert any("ppgn_layers" in key for key in state["model_spectrum_state"])
-    assert any("ppgn_layers" in key for key in state["model_x_state"])
+    assert not any("ppgn_layers" in key for key in state["model_x_state"])
+    assert any("norm.weight" in key for key in state["model_spectrum_state"])
 
 
 def test_shipped_rwsp_configs_select_backbone_and_keep_rewiring_off(tmp_path):
@@ -176,7 +183,12 @@ def test_shipped_rwsp_configs_select_backbone_and_keep_rewiring_off(tmp_path):
         )
         options = wrapper._options(request)
         assert options["variant"] == "vanilla_laplacian_loggap_graphlet"
-        assert options["model"]["backbone"] == backbone
+        if backbone == "ppgn":
+            assert options["model"]["node_backbone"] == "dense_gcn"
+            assert options["model"]["spectrum_backbone"] == "ppgn"
+            assert float(options["train"]["spectrum_lr"]) == 1.0e-3
+        else:
+            assert options["model"].get("spectrum_backbone", options["model"]["backbone"]) == "dense_gcn"
         assert options["structural_features"]["enabled"] is True
         assert options["structural_features"]["random_walk"]["enabled"] is True
         assert options["structural_features"]["shortest_path"]["enabled"] is True
@@ -184,10 +196,7 @@ def test_shipped_rwsp_configs_select_backbone_and_keep_rewiring_off(tmp_path):
 
 
 def test_ppgn_score_is_permutation_consistent():
-    from grapher.models.gdsm_simple.vanilla_gsdm import (
-        GSDMNodePPGNScore,
-        GSDMSpectrumGraphletPPGNScore,
-    )
+    from grapher.models.gdsm_simple.vanilla_gsdm import GSDMSpectrumGraphletPPGNScore
 
     torch.manual_seed(7)
     b, n, f = 1, 5, 5
@@ -205,13 +214,6 @@ def test_ppgn_score_is_permutation_consistent():
         "random_walk": {"enabled": True, "steps": 3},
         "shortest_path": {"enabled": True, "max_distance": 3},
     }
-    node = GSDMNodePPGNScore(
-        max_feat_num=f,
-        max_nodes=n,
-        structural_features=sf,
-        ppgn_hidden_dim=12,
-        ppgn_depth=2,
-    )
     spec = GSDMSpectrumGraphletPPGNScore(
         max_feat_num=f,
         max_nodes=n,
@@ -228,11 +230,85 @@ def test_ppgn_score_is_permutation_consistent():
     flags_p = flags[:, perm]
     u_p = u[:, perm][:, :, perm]
 
-    node_out = node(x, adj, flags, u, z)
-    node_out_p = node(x_p, adj_p, flags_p, u_p, z)
-    assert torch.allclose(node_out_p, node_out[:, perm], atol=1.0e-5, rtol=1.0e-5)
-
     out = spec.forward_all(x, adj, flags, u, z)
     out_p = spec.forward_all(x_p, adj_p, flags_p, u_p, z)
     for key in ("spectrum", "graphlet_logits", "graphlet_mass_logits"):
         assert torch.allclose(out_p[key], out[key], atol=1.0e-5, rtol=1.0e-5)
+
+def test_ppgn_padding_cannot_leak_through_linear_biases():
+    from grapher.models.gdsm_simple.vanilla_gsdm import GSDMSpectrumGraphletPPGNScore
+
+    torch.manual_seed(13)
+    nmax, active, f = 6, 4, 6
+    flags = torch.tensor([[1, 1, 1, 1, 0, 0]], dtype=torch.float32)
+    x = torch.randn((1, nmax, f))
+    raw = torch.rand((1, nmax, nmax))
+    adj = 0.5 * (raw + raw.transpose(-1, -2))
+    idx = torch.arange(nmax)
+    adj[:, idx, idx] = 0.0
+    # Put absurd values into padded rows/columns. A correctly masked PPGN must
+    # give exactly the same active-graph output.
+    x_bad = x.clone()
+    x_bad[:, active:] = 1.0e6
+    adj_bad = adj.clone()
+    adj_bad[:, active:, :] = 1.0e6
+    adj_bad[:, :, active:] = -1.0e6
+    u = torch.eye(nmax).unsqueeze(0)
+    z = torch.randn((1, nmax))
+    sf = {
+        "enabled": True,
+        "binarize_threshold": 0.5,
+        "random_walk": {"enabled": True, "steps": 2},
+        "shortest_path": {"enabled": True, "max_distance": 3},
+    }
+    model = GSDMSpectrumGraphletPPGNScore(
+        max_feat_num=f,
+        max_nodes=nmax,
+        hidden_dim=8,
+        depth=2,
+        graphlet_slices=((0, 2), (2, 8), (8, 29)),
+        structural_features=sf,
+        ppgn_hidden_dim=12,
+        ppgn_depth=3,
+        ppgn_residual_scale=0.1,
+    )
+    a = model.forward_all(x, adj, flags, u, z)
+    b = model.forward_all(x_bad, adj_bad, flags, u, z)
+    for key in a:
+        assert torch.isfinite(a[key]).all()
+        assert torch.allclose(a[key], b[key], atol=1.0e-5, rtol=1.0e-5)
+
+
+def test_ppgn_graphlet_outputs_are_finite_on_large_continuous_adjacency():
+    from grapher.models.gdsm_simple.vanilla_gsdm import GSDMSpectrumGraphletPPGNScore
+
+    torch.manual_seed(17)
+    n, f = 6, 6
+    model = GSDMSpectrumGraphletPPGNScore(
+        max_feat_num=f,
+        max_nodes=n,
+        hidden_dim=8,
+        depth=2,
+        graphlet_slices=((0, 2), (2, 8), (8, 29)),
+        structural_features={
+            "enabled": True,
+            "binarize_threshold": 0.5,
+            "random_walk": {"enabled": True, "steps": 3},
+            "shortest_path": {"enabled": True, "max_distance": 4},
+        },
+        ppgn_hidden_dim=16,
+        ppgn_depth=4,
+        ppgn_residual_scale=0.1,
+        ppgn_input_clip=10.0,
+    )
+    x = torch.randn((2, n, f)) * 5.0
+    adj = torch.randn((2, n, n)) * 1.0e4
+    adj = 0.5 * (adj + adj.transpose(-1, -2))
+    flags = torch.ones((2, n))
+    u = torch.eye(n).unsqueeze(0).repeat(2, 1, 1)
+    z = torch.randn((2, n))
+    outputs = model.forward_all(x, adj, flags, u, z)
+    hist, mass = model.graphlet_means_from_outputs(outputs)
+    assert all(torch.isfinite(v).all() for v in outputs.values())
+    assert torch.isfinite(hist).all()
+    assert torch.isfinite(mass).all()

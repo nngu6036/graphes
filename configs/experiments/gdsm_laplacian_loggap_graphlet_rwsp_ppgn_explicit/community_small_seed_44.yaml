@@ -12,11 +12,11 @@ comparison:
     adjacency_stage0: vanilla_gsdm
     laplacian_stage2a: vanilla_laplacian_gsdm
   fairness_note: Controlled Option-B-without-rewiring backbone/feature ablation. Uses
-    Laplacian log-gap diffusion with the joint k=3,4,5 graphlet auxiliary head. The
-    current continuous graph state is binarized only to derive random-walk arrival
-    node features and truncated shortest-path pair features. No degree constraint,
-    rewiring, categorical edge head, or post-hoc graph repair is used. The model.backbone
-    field selects ppgn for both the node and joint spectrum/graphlet score branches.
+    Laplacian log-gap diffusion with the joint k=3,4,5 graphlet auxiliary head and
+    RW/SP features. The node-feature score remains the validated DenseGCN. Only the
+    joint spectrum/graphlet encoder uses the stabilized masked PPGN with per-layer
+    normalization and a lower spectrum learning rate. No degree constraint, rewiring,
+    categorical edge head, or post-hoc repair is used.
 gdsm_simple:
   variant: vanilla_laplacian_loggap_graphlet
   train:
@@ -30,14 +30,21 @@ gdsm_simple:
     ema: 0.999
     validation_every: 1
     log_every: 10
+    node_lr: 0.01
+    spectrum_lr: 0.001
   model:
     max_nodes: 20
     max_feat_num: 20
     hidden_dim: 32
     depth: 3
-    backbone: ppgn
+    backbone: dense_gcn
     ppgn_hidden_dim: 64
     ppgn_depth: 4
+    node_backbone: dense_gcn
+    spectrum_backbone: ppgn
+    ppgn_residual_scale: 0.1
+    ppgn_norm_eps: 1.0e-05
+    ppgn_input_clip: 10.0
   sde:
     x:
       type: vp

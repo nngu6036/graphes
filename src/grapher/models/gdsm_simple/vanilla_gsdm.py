@@ -227,6 +227,9 @@ def default_vanilla_options() -> dict[str, Any]:
             "backbone": "dense_gcn",
             "ppgn_hidden_dim": 64,
             "ppgn_depth": 4,
+            "ppgn_residual_scale": 0.1,
+            "ppgn_norm_eps": 1.0e-5,
+            "ppgn_input_clip": 10.0,
         },
         "structural_features": {
             "enabled": False,
@@ -352,20 +355,30 @@ def validate_options(options: Mapping[str, Any]) -> None:
         raise ValueError("graphlet_summary.enabled=true requires a Laplacian log-gap graphlet variant")
 
     model_cfg = options.get("model", {}) or {}
-    backbone = str(
-        model_cfg.get("backbone", model_cfg.get("spectrum_backbone", "dense_gcn"))
-    ).lower()
-    if backbone not in {"dense_gcn", "ppgn"}:
-        raise ValueError("model.backbone must be dense_gcn or ppgn")
-    if backbone == "ppgn" and variant not in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
+    legacy_backbone = str(model_cfg.get("backbone", "dense_gcn")).lower()
+    node_backbone = str(model_cfg.get("node_backbone", legacy_backbone)).lower()
+    spectrum_backbone = str(model_cfg.get("spectrum_backbone", legacy_backbone)).lower()
+    for key, backbone in (("node_backbone", node_backbone), ("spectrum_backbone", spectrum_backbone)):
+        if backbone not in {"dense_gcn", "ppgn"}:
+            raise ValueError(f"model.{key} must be dense_gcn or ppgn")
+    if (node_backbone == "ppgn" or spectrum_backbone == "ppgn") and variant not in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
         raise ValueError(
-            "model.backbone=ppgn is currently implemented for the joint "
+            "PPGN backbones are currently implemented for the joint "
             "Laplacian log-gap graphlet variants only"
         )
     if int(model_cfg.get("ppgn_hidden_dim", 64)) <= 0:
         raise ValueError("model.ppgn_hidden_dim must be positive")
     if int(model_cfg.get("ppgn_depth", 4)) <= 0:
         raise ValueError("model.ppgn_depth must be positive")
+    residual_scale = float(model_cfg.get("ppgn_residual_scale", 0.1))
+    if not math.isfinite(residual_scale) or residual_scale < 0.0 or residual_scale > 1.0:
+        raise ValueError("model.ppgn_residual_scale must be finite and in [0,1]")
+    norm_eps = float(model_cfg.get("ppgn_norm_eps", 1.0e-5))
+    if not math.isfinite(norm_eps) or norm_eps <= 0.0:
+        raise ValueError("model.ppgn_norm_eps must be positive and finite")
+    input_clip = float(model_cfg.get("ppgn_input_clip", 10.0))
+    if not math.isfinite(input_clip) or input_clip <= 0.0:
+        raise ValueError("model.ppgn_input_clip must be positive and finite")
 
     structural_cfg = options.get("structural_features", {}) or {}
     structural_enabled = bool(structural_cfg.get("enabled", False))
@@ -705,15 +718,50 @@ class DenseStructuralGCNConv(DenseGCNConv):
         return out
 
 
-class PPGNLayer(nn.Module):
-    """Compact dense PPGN block following the matrix-product construction."""
+class MaskedPairInstanceNorm(nn.Module):
+    """Channel-wise instance normalization over active pair positions only."""
 
-    def __init__(self, hidden_dim: int) -> None:
+    def __init__(self, hidden_dim: int, eps: float = 1.0e-5) -> None:
+        super().__init__()
+        self.eps = float(eps)
+        self.weight = nn.Parameter(torch.ones(hidden_dim))
+        self.bias = nn.Parameter(torch.zeros(hidden_dim))
+
+    def forward(self, h: torch.Tensor, pair_mask: torch.Tensor) -> torch.Tensor:
+        mask = pair_mask.unsqueeze(-1).to(h.dtype)
+        count = mask.sum(dim=(1, 2), keepdim=True).clamp_min(1.0)
+        mean = (h * mask).sum(dim=(1, 2), keepdim=True) / count
+        centered = (h - mean) * mask
+        var = centered.square().sum(dim=(1, 2), keepdim=True) / count
+        out = centered / torch.sqrt(var + self.eps)
+        out = out * self.weight.view(1, 1, 1, -1) + self.bias.view(1, 1, 1, -1)
+        return out * mask
+
+
+class PPGNLayer(nn.Module):
+    """Numerically stable masked PPGN block.
+
+    Linear-layer biases are explicitly re-masked before the matrix product so
+    padded pairs cannot leak into active nodes.  A masked instance normalization
+    follows the residual update, mirroring the normalization used by SPECTRE's
+    PPGN implementation and preventing repeated pair-matrix products from
+    growing without bound.
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        *,
+        residual_scale: float = 0.1,
+        norm_eps: float = 1.0e-5,
+    ) -> None:
         super().__init__()
         self.left = nn.Linear(hidden_dim, hidden_dim)
         self.right = nn.Linear(hidden_dim, hidden_dim)
         self.skip = nn.Linear(hidden_dim, hidden_dim)
         self.out = nn.Linear(2 * hidden_dim, hidden_dim)
+        self.norm = MaskedPairInstanceNorm(hidden_dim, eps=norm_eps)
+        self.residual_scale = float(residual_scale)
 
     def forward(
         self,
@@ -721,15 +769,20 @@ class PPGNLayer(nn.Module):
         pair_mask: torch.Tensor,
         flags: torch.Tensor,
     ) -> torch.Tensor:
-        left = F.elu(self.left(h))
-        right = F.elu(self.right(h))
+        mask = pair_mask.unsqueeze(-1).to(h.dtype)
+        h = h * mask
+        left = F.elu(self.left(h)) * mask
+        right = F.elu(self.right(h)) * mask
         product = torch.einsum("bikc,bkjc->bijc", left, right)
         scale = flags.sum(dim=-1).clamp_min(1.0).sqrt().view(-1, 1, 1, 1)
-        product = product / scale
-        skip = F.elu(self.skip(h))
-        updated = F.elu(self.out(torch.cat((skip, product), dim=-1)))
-        updated = updated + h
-        return updated * pair_mask.unsqueeze(-1).to(updated.dtype)
+        product = (product / scale) * mask
+        skip = F.elu(self.skip(h)) * mask
+        updated = F.elu(self.out(torch.cat((skip, product), dim=-1))) * mask
+        updated = updated + self.residual_scale * h
+        updated = self.norm(updated, pair_mask)
+        if not torch.isfinite(updated).all():
+            raise FloatingPointError("Non-finite activation in PPGNLayer")
+        return updated
 
 
 class GSDMSpectrumGraphletPPGNScore(nn.Module):
@@ -746,6 +799,9 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         structural_features: Mapping[str, Any] | None = None,
         ppgn_hidden_dim: int = 64,
         ppgn_depth: int = 4,
+        ppgn_residual_scale: float = 0.1,
+        ppgn_norm_eps: float = 1.0e-5,
+        ppgn_input_clip: float = 10.0,
     ) -> None:
         super().__init__()
         del hidden_dim, depth  # DenseGCN-only width/depth; retained in model config for parity.
@@ -769,7 +825,16 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         pair_input_dim = 2 + self.sp_dim + node_dim
         hdim = int(ppgn_hidden_dim)
         self.pair_input = nn.Linear(pair_input_dim, hdim)
-        self.ppgn_layers = nn.ModuleList(PPGNLayer(hdim) for _ in range(int(ppgn_depth)))
+        self.pair_input_norm = nn.LayerNorm(hdim)
+        self.ppgn_input_clip = float(ppgn_input_clip)
+        self.ppgn_layers = nn.ModuleList(
+            PPGNLayer(
+                hdim,
+                residual_scale=float(ppgn_residual_scale),
+                norm_eps=float(ppgn_norm_eps),
+            )
+            for _ in range(int(ppgn_depth))
+        )
         shared_dim = 2 * hdim + self.max_nodes
         self.spectrum_final = MLP(shared_dim, 2 * max(self.max_nodes, hdim), self.max_nodes, 2)
         width = self.graphlet_slices[-1][1]
@@ -789,13 +854,17 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         diag_node = x.new_zeros((b, n, n, node.size(-1)))
         idx = torch.arange(n, device=x.device)
         diag_node[:, idx, idx, :] = node
-        parts = [adj.unsqueeze(-1), binary.unsqueeze(-1)]
+        bounded_adj = torch.tanh(torch.nan_to_num(
+            adj, nan=0.0, posinf=self.ppgn_input_clip, neginf=-self.ppgn_input_clip
+        ).clamp(-self.ppgn_input_clip, self.ppgn_input_clip))
+        parts = [bounded_adj.unsqueeze(-1), binary.unsqueeze(-1)]
         if sp.size(-1):
             parts.append(sp)
         parts.append(diag_node)
         pair = torch.cat(parts, dim=-1)
         pair_mask = flags.to(pair.dtype).unsqueeze(-1) * flags.to(pair.dtype).unsqueeze(-2)
-        h = F.elu(self.pair_input(pair)) * pair_mask.unsqueeze(-1)
+        h = self.pair_input_norm(self.pair_input(pair))
+        h = F.elu(h) * pair_mask.unsqueeze(-1)
         for layer in self.ppgn_layers:
             h = layer(h, pair_mask, flags)
         diag = h[:, idx, idx, :]
@@ -817,11 +886,15 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
     ) -> dict[str, torch.Tensor]:
         del eigenvectors
         shared = self._encode(x, adj, flags, eigenvalues)
-        return {
+        outputs = {
             "spectrum": self.spectrum_final(shared),
             "graphlet_logits": self.graphlet_logits(shared),
             "graphlet_mass_logits": self.graphlet_mass_logits(shared),
         }
+        for name, value in outputs.items():
+            if not torch.isfinite(value).all():
+                raise FloatingPointError(f"Non-finite {name} from PPGN spectrum/graphlet score")
+        return outputs
 
     def forward(
         self,
@@ -842,6 +915,8 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         for start, stop in self.graphlet_slices:
             hist[:, start:stop] = torch.softmax(logits[:, start:stop], dim=-1)
         mass = torch.sigmoid(outputs["graphlet_mass_logits"])
+        if not torch.isfinite(hist).all() or not torch.isfinite(mass).all():
+            raise FloatingPointError("Non-finite graphlet summary from PPGN auxiliary head")
         return hist, mass
 
 
@@ -931,6 +1006,9 @@ class GSDMNodePPGNScore(nn.Module):
         structural_features: Mapping[str, Any] | None = None,
         ppgn_hidden_dim: int = 64,
         ppgn_depth: int = 4,
+        ppgn_residual_scale: float = 0.1,
+        ppgn_norm_eps: float = 1.0e-5,
+        ppgn_input_clip: float = 10.0,
     ) -> None:
         super().__init__()
         self.max_feat_num = int(max_feat_num)
@@ -948,7 +1026,16 @@ class GSDMNodePPGNScore(nn.Module):
         pair_input_dim = 2 + self.sp_dim + node_dim
         hdim = int(ppgn_hidden_dim)
         self.pair_input = nn.Linear(pair_input_dim, hdim)
-        self.ppgn_layers = nn.ModuleList(PPGNLayer(hdim) for _ in range(int(ppgn_depth)))
+        self.pair_input_norm = nn.LayerNorm(hdim)
+        self.ppgn_input_clip = float(ppgn_input_clip)
+        self.ppgn_layers = nn.ModuleList(
+            PPGNLayer(
+                hdim,
+                residual_scale=float(ppgn_residual_scale),
+                norm_eps=float(ppgn_norm_eps),
+            )
+            for _ in range(int(ppgn_depth))
+        )
         self.node_readout = MLP(hdim, 2 * hdim, self.max_feat_num, 2)
 
     def forward(
@@ -966,13 +1053,17 @@ class GSDMNodePPGNScore(nn.Module):
         diag_node = x.new_zeros((b, n, n, node.size(-1)))
         idx = torch.arange(n, device=x.device)
         diag_node[:, idx, idx, :] = node
-        parts = [adj.unsqueeze(-1), binary.unsqueeze(-1)]
+        bounded_adj = torch.tanh(torch.nan_to_num(
+            adj, nan=0.0, posinf=self.ppgn_input_clip, neginf=-self.ppgn_input_clip
+        ).clamp(-self.ppgn_input_clip, self.ppgn_input_clip))
+        parts = [bounded_adj.unsqueeze(-1), binary.unsqueeze(-1)]
         if sp.size(-1):
             parts.append(sp)
         parts.append(diag_node)
         pair = torch.cat(parts, dim=-1)
         pair_mask = flags.to(pair.dtype).unsqueeze(-1) * flags.to(pair.dtype).unsqueeze(-2)
-        h = F.elu(self.pair_input(pair)) * pair_mask.unsqueeze(-1)
+        h = self.pair_input_norm(self.pair_input(pair))
+        h = F.elu(h) * pair_mask.unsqueeze(-1)
         for layer in self.ppgn_layers:
             h = layer(h, pair_mask, flags)
         diag = h[:, idx, idx, :]
@@ -1753,14 +1844,23 @@ def _model_config(options: Mapping[str, Any], max_nodes: int) -> dict[str, Any]:
     max_feat_num = raw.get("max_feat_num")
     if max_feat_num is None:
         max_feat_num = max_nodes
+    legacy_backbone = str(raw.get("backbone", "dense_gcn")).lower()
+    node_backbone = str(raw.get("node_backbone", legacy_backbone)).lower()
+    spectrum_backbone = str(raw.get("spectrum_backbone", legacy_backbone)).lower()
     return {
         "max_nodes": int(max_nodes),
         "max_feat_num": int(max_feat_num),
         "hidden_dim": int(raw.get("hidden_dim", 32)),
         "depth": int(raw.get("depth", 3)),
-        "backbone": str(raw.get("backbone", raw.get("spectrum_backbone", "dense_gcn"))).lower(),
+        # Retain `backbone` in checkpoints for backwards compatibility.
+        "backbone": legacy_backbone,
+        "node_backbone": node_backbone,
+        "spectrum_backbone": spectrum_backbone,
         "ppgn_hidden_dim": int(raw.get("ppgn_hidden_dim", 64)),
         "ppgn_depth": int(raw.get("ppgn_depth", 4)),
+        "ppgn_residual_scale": float(raw.get("ppgn_residual_scale", 0.1)),
+        "ppgn_norm_eps": float(raw.get("ppgn_norm_eps", 1.0e-5)),
+        "ppgn_input_clip": float(raw.get("ppgn_input_clip", 10.0)),
         "structural_features": copy.deepcopy(dict(options.get("structural_features", {}) or {})),
     }
 
@@ -1770,18 +1870,26 @@ def _build_models(
     device: torch.device,
     *,
     graphlet_slices: tuple[tuple[int, int], ...] | None = None,
-) -> tuple[GSDMNodeScore, nn.Module]:
-    backbone = str(cfg.get("backbone", cfg.get("spectrum_backbone", "dense_gcn"))).lower()
+) -> tuple[nn.Module, nn.Module]:
+    legacy_backbone = str(cfg.get("backbone", "dense_gcn")).lower()
+    node_backbone = str(cfg.get("node_backbone", legacy_backbone)).lower()
+    spectrum_backbone = str(cfg.get("spectrum_backbone", legacy_backbone)).lower()
     structural_features = copy.deepcopy(dict(cfg.get("structural_features", {}) or {}))
-    if backbone == "ppgn":
+    ppgn_kwargs = {
+        "ppgn_hidden_dim": int(cfg.get("ppgn_hidden_dim", 64)),
+        "ppgn_depth": int(cfg.get("ppgn_depth", 4)),
+        "ppgn_residual_scale": float(cfg.get("ppgn_residual_scale", 0.1)),
+        "ppgn_norm_eps": float(cfg.get("ppgn_norm_eps", 1.0e-5)),
+        "ppgn_input_clip": float(cfg.get("ppgn_input_clip", 10.0)),
+    }
+    if node_backbone == "ppgn":
         mx = GSDMNodePPGNScore(
             max_feat_num=int(cfg["max_feat_num"]),
             max_nodes=int(cfg["max_nodes"]),
             structural_features=structural_features,
-            ppgn_hidden_dim=int(cfg.get("ppgn_hidden_dim", 64)),
-            ppgn_depth=int(cfg.get("ppgn_depth", 4)),
+            **ppgn_kwargs,
         ).to(device)
-    elif backbone == "dense_gcn":
+    elif node_backbone == "dense_gcn":
         mx = GSDMNodeScore(
             max_feat_num=int(cfg["max_feat_num"]),
             hidden_dim=int(cfg["hidden_dim"]),
@@ -1789,7 +1897,8 @@ def _build_models(
             structural_features=structural_features,
         ).to(device)
     else:
-        raise ValueError(f"Unsupported backbone={backbone!r}")
+        raise ValueError(f"Unsupported node_backbone={node_backbone!r}")
+
     spectrum_kwargs = {
         "max_feat_num": int(cfg["max_feat_num"]),
         "max_nodes": int(cfg["max_nodes"]),
@@ -1797,23 +1906,24 @@ def _build_models(
         "depth": int(cfg["depth"]),
     }
     if graphlet_slices:
-        if backbone == "ppgn":
+        if spectrum_backbone == "ppgn":
             ml = GSDMSpectrumGraphletPPGNScore(
                 **spectrum_kwargs,
                 graphlet_slices=graphlet_slices,
                 structural_features=structural_features,
-                ppgn_hidden_dim=int(cfg.get("ppgn_hidden_dim", 64)),
-                ppgn_depth=int(cfg.get("ppgn_depth", 4)),
+                **ppgn_kwargs,
             ).to(device)
-        elif backbone == "dense_gcn":
+        elif spectrum_backbone == "dense_gcn":
             ml = GSDMSpectrumGraphletScore(
                 **spectrum_kwargs,
                 graphlet_slices=graphlet_slices,
                 structural_features=structural_features,
             ).to(device)
         else:
-            raise ValueError(f"Unsupported spectrum_backbone={backbone!r}")
+            raise ValueError(f"Unsupported spectrum_backbone={spectrum_backbone!r}")
     else:
+        if spectrum_backbone != "dense_gcn":
+            raise ValueError("PPGN spectrum backbone currently requires the joint graphlet head")
         ml = GSDMSpectrumScore(**spectrum_kwargs).to(device)
     return mx, ml
 
@@ -2137,9 +2247,11 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                 torch.cuda.manual_seed_all(request.run.train_seed + 700001)
             degree_bundle = _build_degree_prior_training(train_graphs, degree_cfg, device)
     train_cfg = options["train"]
+    node_lr = float(train_cfg.get("node_lr", train_cfg["lr"]))
+    spectrum_lr = float(train_cfg.get("spectrum_lr", train_cfg["lr"]))
     optimizers = [
-        torch.optim.Adam(model_x.parameters(), lr=float(train_cfg["lr"]), weight_decay=float(train_cfg.get("weight_decay", 0.0))),
-        torch.optim.Adam(model_lam.parameters(), lr=float(train_cfg["lr"]), weight_decay=float(train_cfg.get("weight_decay", 0.0))),
+        torch.optim.Adam(model_x.parameters(), lr=node_lr, weight_decay=float(train_cfg.get("weight_decay", 0.0))),
+        torch.optim.Adam(model_lam.parameters(), lr=spectrum_lr, weight_decay=float(train_cfg.get("weight_decay", 0.0))),
     ]
     schedulers = [
         torch.optim.lr_scheduler.ExponentialLR(opt, gamma=float(train_cfg.get("lr_decay", 1.0)))
@@ -2206,10 +2318,18 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     if not torch.isfinite(loss):
                         raise FloatingPointError("Non-finite vanilla GSDM training loss")
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model_x.parameters(), float(train_cfg.get("grad_norm", 1.0)))
-                    torch.nn.utils.clip_grad_norm_(model_lam.parameters(), float(train_cfg.get("grad_norm", 1.0)))
+                    grad_x = torch.nn.utils.clip_grad_norm_(model_x.parameters(), float(train_cfg.get("grad_norm", 1.0)))
+                    grad_lam = torch.nn.utils.clip_grad_norm_(model_lam.parameters(), float(train_cfg.get("grad_norm", 1.0)))
+                    if not torch.isfinite(torch.as_tensor(grad_x)):
+                        raise FloatingPointError("Non-finite node-score gradient norm")
+                    if not torch.isfinite(torch.as_tensor(grad_lam)):
+                        raise FloatingPointError("Non-finite spectrum-score gradient norm")
                     for opt in optimizers:
                         opt.step()
+                    for name, module in (("node", model_x), ("spectrum", model_lam)):
+                        for parameter in module.parameters():
+                            if parameter.dtype.is_floating_point and not torch.isfinite(parameter).all():
+                                raise FloatingPointError(f"Non-finite parameter after optimizer step in {name} model")
                     ema_x.update(model_x); ema_lam.update(model_lam)
                     b = batch[0].size(0)
                     total_x += float(lx.item()) * b
@@ -2233,6 +2353,8 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     "epoch": epoch,
                     "train_node_loss": total_x / max(total_n, 1),
                     "train_spectrum_loss": total_l / max(total_n, 1),
+                    "node_lr": float(optimizers[0].param_groups[0]["lr"]),
+                    "spectrum_lr": float(optimizers[1].param_groups[0]["lr"]),
                 }
                 if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                     record["train_graphlet_summary_loss"] = total_g / max(total_n, 1)
@@ -2529,8 +2651,13 @@ def _score_x(
     t: torch.Tensor, u: torch.Tensor, lam: torch.Tensor, sde: VPSDE,
 ) -> torch.Tensor:
     raw = model(x, adj, flags, u, lam)
+    if not torch.isfinite(raw).all():
+        raise FloatingPointError("Non-finite node score during sampling")
     _, std = sde.marginal_coeff(t)
-    return -raw / std[:, None, None].clamp_min(1.0e-12)
+    score = -raw / std[:, None, None].clamp_min(1.0e-12)
+    if not torch.isfinite(score).all():
+        raise FloatingPointError("Non-finite scaled node score during sampling")
+    return score
 
 
 def _score_lam(
@@ -2538,8 +2665,13 @@ def _score_lam(
     t: torch.Tensor, u: torch.Tensor, lam: torch.Tensor, sde: VPSDE,
 ) -> torch.Tensor:
     raw = model(x, adj, flags, u, lam)
+    if not torch.isfinite(raw).all():
+        raise FloatingPointError("Non-finite spectrum score during sampling")
     _, std = sde.marginal_coeff(t)
-    return -raw / std[:, None].clamp_min(1.0e-12)
+    score = -raw / std[:, None].clamp_min(1.0e-12)
+    if not torch.isfinite(score).all():
+        raise FloatingPointError("Non-finite scaled spectrum score during sampling")
+    return score
 
 
 def _langevin_x(
