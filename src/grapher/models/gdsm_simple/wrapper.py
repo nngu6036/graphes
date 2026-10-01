@@ -255,6 +255,7 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             "vanilla_gsdm", "vanilla", "gsdm",
             "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae",
             "vanilla_laplacian_gsdm", "laplacian_gsdm", "gsdm_laplacian",
+            "vanilla_laplacian_loggap_graphlet", "laplacian_loggap_graphlet", "gsdm_laplacian_loggap_graphlet",
             "vanilla_gsdm_graphlet_refine", "vanilla_gsdm_graphlet", "gsdm_graphlet_refine",
         }:
             from grapher.models.gdsm_simple.vanilla_gsdm import (
@@ -267,6 +268,20 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                 options["variant"] = "vanilla_gsdm_dhvae"
             elif requested_variant in {"vanilla_laplacian_gsdm", "laplacian_gsdm", "gsdm_laplacian"}:
                 options["variant"] = "vanilla_laplacian_gsdm"
+            elif requested_variant in {"vanilla_laplacian_loggap_graphlet", "laplacian_loggap_graphlet", "gsdm_laplacian_loggap_graphlet"}:
+                options["variant"] = "vanilla_laplacian_loggap_graphlet"
+                options["graphlet_summary"] = {
+                    "enabled": True,
+                    "orders": [3, 4, 5],
+                    "loss_weight": 0.10,
+                    "histogram_weight": 1.0,
+                    "mass_weight": 0.25,
+                }
+                options["sde"]["eigen_mask"] = "laplacian_nonzero_prefix"
+                options["sde"]["spectral_parameterization"] = "laplacian_log_gap"
+                options["sde"]["log_gap_epsilon"] = 1.0e-6
+                options["sde"]["log_gap_min_std"] = 1.0e-3
+                options["sde"]["log_gap_exp_clip"] = 20.0
             elif requested_variant in {"vanilla_gsdm_graphlet_refine", "vanilla_gsdm_graphlet", "gsdm_graphlet_refine"}:
                 from grapher.models.gdsm_simple.graphlet_stage3 import default_graphlet_refinement_options
                 options["variant"] = "vanilla_gsdm_graphlet_refine"
@@ -332,6 +347,7 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             "vanilla_gsdm", "vanilla", "gsdm",
             "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae",
             "vanilla_laplacian_gsdm", "laplacian_gsdm", "gsdm_laplacian",
+            "vanilla_laplacian_loggap_graphlet", "laplacian_loggap_graphlet", "gsdm_laplacian_loggap_graphlet",
             "vanilla_gsdm_graphlet_refine", "vanilla_gsdm_graphlet", "gsdm_graphlet_refine",
         }:
             from grapher.models.gdsm_simple.vanilla_gsdm import train
@@ -555,6 +571,7 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             "vanilla_gsdm", "vanilla", "gsdm",
             "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae",
             "vanilla_laplacian_gsdm", "laplacian_gsdm", "gsdm_laplacian",
+            "vanilla_laplacian_loggap_graphlet", "laplacian_loggap_graphlet", "gsdm_laplacian_loggap_graphlet",
             "vanilla_gsdm_graphlet_refine", "vanilla_gsdm_graphlet", "gsdm_graphlet_refine",
         }:
             from grapher.models.gdsm_simple.vanilla_gsdm import generate
