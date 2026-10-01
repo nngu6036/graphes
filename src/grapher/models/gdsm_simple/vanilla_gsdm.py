@@ -15,8 +15,17 @@ The base ``vanilla_gsdm`` variant has no degree prior.  The controlled
 ``vanilla_gsdm_dhvae`` ablation co-trains an auxiliary DH-VAE on the same
 training split and samples one degree sequence per generated graph, but those
 sequences are *not* used by the spectral sampler or the thresholded topology.
-Neither variant uses Havel-Hakimi construction, degree projection, categorical
-edge prediction, graphlet guidance, rewiring, or post-hoc repair.
+
+The ``vanilla_laplacian_gsdm`` Stage-2 ablation changes only the spectral
+operator: it diffuses the nonzero eigenvalue coordinates of the combinatorial
+Laplacian ``L=D-A`` in a fixed training-graph Laplacian eigenbasis while the
+trivial zero mode remains fixed.  The reconstructed continuous graph state is
+obtained from the off-diagonal identity ``A_ij=-L_ij`` and is thresholded once
+at the end.  There is no degree constraint or structural guidance in this
+variant either.
+
+None of these variants uses Havel-Hakimi construction, degree projection,
+categorical edge prediction, graphlet guidance, rewiring, or post-hoc repair.
 """
 from __future__ import annotations
 
@@ -57,10 +66,29 @@ from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 
 
 CHECKPOINT_FORMAT_V1 = "gdsm_simple_vanilla_gsdm_checkpoint_v1"
-CHECKPOINT_FORMAT = "gdsm_simple_vanilla_gsdm_checkpoint_v2"
-SUPPORTED_CHECKPOINT_FORMATS = {CHECKPOINT_FORMAT_V1, CHECKPOINT_FORMAT}
+CHECKPOINT_FORMAT_V2 = "gdsm_simple_vanilla_gsdm_checkpoint_v2"
+CHECKPOINT_FORMAT = "gdsm_simple_vanilla_gsdm_checkpoint_v3"
+SUPPORTED_CHECKPOINT_FORMATS = {CHECKPOINT_FORMAT_V1, CHECKPOINT_FORMAT_V2, CHECKPOINT_FORMAT}
 TRAINING_FORMAT = "grapher_gdsm_simple_vanilla_gsdm_training_v1"
 GENERATION_FORMAT = "grapher_gdsm_simple_vanilla_gsdm_generation_v1"
+
+
+ADJACENCY_VARIANTS = {"vanilla_gsdm", "vanilla", "gsdm"}
+DHVAE_VARIANTS = {"vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae"}
+LAPLACIAN_VARIANTS = {
+    "vanilla_laplacian_gsdm",
+    "laplacian_gsdm",
+    "gsdm_laplacian",
+}
+
+
+def spectral_operator_for_variant(variant: str) -> str:
+    value = str(variant).lower()
+    if value in LAPLACIAN_VARIANTS:
+        return "combinatorial_laplacian"
+    if value in ADJACENCY_VARIANTS | DHVAE_VARIANTS:
+        return "adjacency"
+    raise ValueError(f"Unknown vanilla GSDM variant: {variant!r}")
 
 
 def _sha256(path: Path) -> str:
@@ -227,14 +255,23 @@ def validate_options(options: Mapping[str, Any]) -> None:
     if unknown:
         raise ValueError(f"Unknown vanilla GSDM options: {unknown}")
     variant = str(options.get("variant", "")).lower()
-    if variant not in {"vanilla_gsdm", "vanilla", "gsdm", "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae"}:
-        raise ValueError("vanilla GSDM pipeline requires variant vanilla_gsdm or vanilla_gsdm_dhvae")
+    allowed_variants = ADJACENCY_VARIANTS | DHVAE_VARIANTS | LAPLACIAN_VARIANTS
+    if variant not in allowed_variants:
+        raise ValueError(
+            "vanilla GSDM pipeline requires vanilla_gsdm, vanilla_gsdm_dhvae, "
+            "or vanilla_laplacian_gsdm"
+        )
     degree_prior = options.get("degree_prior", {}) or {}
     prior_enabled = bool(degree_prior.get("enabled", False))
-    if variant in {"vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae"} and not prior_enabled:
+    if variant in DHVAE_VARIANTS and not prior_enabled:
         raise ValueError("vanilla_gsdm_dhvae requires degree_prior.enabled=true")
-    if variant in {"vanilla_gsdm", "vanilla", "gsdm"} and prior_enabled:
+    if variant in ADJACENCY_VARIANTS and prior_enabled:
         raise ValueError("Use variant: vanilla_gsdm_dhvae when degree_prior.enabled=true")
+    if variant in LAPLACIAN_VARIANTS and prior_enabled:
+        raise ValueError(
+            "Stage-2 vanilla_laplacian_gsdm is a clean spectral-operator ablation and "
+            "does not enable the auxiliary DH-VAE"
+        )
     if prior_enabled:
         if int(degree_prior.get("batch_size", 0)) <= 0:
             raise ValueError("degree_prior.batch_size must be positive")
@@ -266,6 +303,19 @@ def validate_options(options: Mapping[str, Any]) -> None:
         b0, b1 = float(cfg.get("beta_min", 0.0)), float(cfg.get("beta_max", 0.0))
         if not (0.0 < b0 <= b1):
             raise ValueError("expected 0 < beta_min <= beta_max")
+    eigen_mask = str(sde.get("eigen_mask", "official_extremes")).lower()
+    operator = spectral_operator_for_variant(variant)
+    if operator == "combinatorial_laplacian":
+        if eigen_mask not in {"laplacian_nonzero_prefix"}:
+            raise ValueError(
+                "vanilla_laplacian_gsdm requires "
+                "sde.eigen_mask=laplacian_nonzero_prefix"
+            )
+    elif eigen_mask not in {"official_extremes", "all_padded_eigenvalues"}:
+        raise ValueError(
+            "adjacency vanilla GSDM requires sde.eigen_mask=official_extremes "
+            "(or all_padded_eigenvalues for debugging)"
+        )
     if int(options.get("generation_batch_size", 0)) <= 0:
         raise ValueError("generation_batch_size must be positive")
     sample = options.get("sample", {})
@@ -433,6 +483,73 @@ def reconstruct_adjacency(eigenvectors: torch.Tensor, eigenvalues: torch.Tensor)
     return eigenvectors @ torch.diag_embed(eigenvalues) @ eigenvectors.transpose(-1, -2)
 
 
+def combinatorial_laplacian(adj: torch.Tensor, flags: torch.Tensor | None = None) -> torch.Tensor:
+    """Return ``L=D-A`` for a dense batched adjacency tensor."""
+    if adj.ndim != 3:
+        raise ValueError("combinatorial_laplacian expects [B,N,N]")
+    degrees = adj.sum(dim=-1)
+    lap = torch.diag_embed(degrees) - adj
+    if flags is not None:
+        lap = mask_adj(lap, flags)
+    return lap
+
+
+def laplacian_to_adjacency_scores(lap: torch.Tensor, flags: torch.Tensor) -> torch.Tensor:
+    """Map a reconstructed combinatorial-Laplacian state to edge scores.
+
+    For a clean simple graph, ``L_ij=-A_ij`` for ``i != j``.  The diagonal is
+    therefore discarded before the graph state is presented to the GNN or
+    thresholded at generation time.
+    """
+    if lap.ndim != 3:
+        raise ValueError("laplacian_to_adjacency_scores expects [B,N,N]")
+    scores = -0.5 * (lap + lap.transpose(-1, -2))
+    idx = torch.arange(scores.size(-1), device=scores.device)
+    scores[:, idx, idx] = 0.0
+    return mask_adj(scores, flags)
+
+
+def _laplacian_eigh_padded(
+    adj: torch.Tensor, sizes: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Eigendecompose active Laplacians without mixing padding zero modes.
+
+    The real ``n`` Laplacian eigenvalues are stored in the prefix ``[:n]``;
+    padded coordinates occupy ``[n:]``.  The corresponding full eigenbasis is
+    block diagonal with the active Laplacian eigenvectors in the leading block
+    and identity vectors for padding coordinates.  This convention avoids the
+    ambiguous zero-eigenspace mixing that occurs when ``torch.linalg.eigh`` is
+    applied directly to a zero-padded Laplacian.
+    """
+    if adj.ndim != 3 or sizes.ndim != 1 or adj.size(0) != sizes.numel():
+        raise ValueError("invalid padded Laplacian eigendecomposition inputs")
+    b, nmax, _ = adj.shape
+    values = torch.zeros((b, nmax), dtype=adj.dtype, device=adj.device)
+    vectors = torch.eye(nmax, dtype=adj.dtype, device=adj.device).unsqueeze(0).repeat(b, 1, 1)
+    for row, n_raw in enumerate(sizes.tolist()):
+        n = int(n_raw)
+        if n <= 0 or n > nmax:
+            raise ValueError(f"invalid active graph size {n} for nmax={nmax}")
+        active = adj[row, :n, :n]
+        lap = torch.diag(active.sum(dim=-1)) - active
+        lam, u = torch.linalg.eigh(lap)
+        values[row, :n] = lam
+        vectors[row, :n, :n] = u
+    return values, vectors
+
+
+def _operator_to_adjacency_state(
+    operator_matrix: torch.Tensor,
+    flags: torch.Tensor,
+    spectral_operator: str,
+) -> torch.Tensor:
+    if spectral_operator == "adjacency":
+        return mask_adj(operator_matrix, flags)
+    if spectral_operator == "combinatorial_laplacian":
+        return laplacian_to_adjacency_scores(operator_matrix, flags)
+    raise ValueError(f"Unknown spectral operator {spectral_operator!r}")
+
+
 def eigen_mask_from_flags(flags: torch.Tensor, mode: str = "official_extremes") -> torch.Tensor:
     mode = str(mode).lower()
     b, nmax = flags.shape
@@ -449,6 +566,16 @@ def eigen_mask_from_flags(flags: torch.Tensor, mode: str = "official_extremes") 
         return mask
     if mode == "all_padded_eigenvalues":
         return torch.ones_like(mask)
+    if mode == "active_prefix":
+        for i, n in enumerate(flags.sum(dim=1).tolist()):
+            mask[i, : int(n)] = 1.0
+        return mask
+    if mode == "laplacian_nonzero_prefix":
+        for i, n in enumerate(flags.sum(dim=1).tolist()):
+            n = int(n)
+            if n > 1:
+                mask[i, 1:n] = 1.0
+        return mask
     raise ValueError(f"Unknown vanilla GSDM eigen_mask mode: {mode}")
 
 
@@ -468,7 +595,8 @@ def degree_features(adj: torch.Tensor, flags: torch.Tensor, max_feat_num: int) -
 
 
 def _padded_dataset(
-    graphs: list[nx.Graph], *, max_nodes: int, max_feat_num: int
+    graphs: list[nx.Graph], *, max_nodes: int, max_feat_num: int,
+    spectral_operator: str = "adjacency",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     adjacencies = []
     flags = []
@@ -488,7 +616,12 @@ def _padded_dataset(
     flg = torch.tensor(np.stack(flags), dtype=torch.float32)
     size = torch.tensor(sizes, dtype=torch.long)
     x = degree_features(adj, flg, max_feat_num)
-    lam, u = torch.linalg.eigh(adj)
+    if spectral_operator == "adjacency":
+        lam, u = torch.linalg.eigh(adj)
+    elif spectral_operator == "combinatorial_laplacian":
+        lam, u = _laplacian_eigh_padded(adj, size)
+    else:
+        raise ValueError(f"Unknown spectral operator {spectral_operator!r}")
     return x, adj, flg, size, u, lam
 
 
@@ -501,6 +634,7 @@ def _loss_batch(
     sde_lam: VPSDE,
     eps: float,
     eigen_mask_mode: str,
+    spectral_operator: str = "adjacency",
     generator: torch.Generator | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     x0, adj0, flags, _, u, lam0 = batch
@@ -520,7 +654,8 @@ def _loss_batch(
     xt = mask_x(mean_x + std_x[:, None, None] * z_x, flags)
     mean_lam, std_lam = sde_lam.marginal_spectrum(lam0, t)
     lam_t = (mean_lam * e_mask + std_lam[:, None] * z_lam) * e_mask
-    adj_t = mask_adj(reconstruct_adjacency(u, lam_t), flags)
+    operator_t = reconstruct_adjacency(u, lam_t)
+    adj_t = _operator_to_adjacency_state(operator_t, flags, spectral_operator)
 
     pred_x = model_x(xt, adj_t, flags, u, lam_t)
     pred_lam = model_lam(xt, adj_t, flags, u, lam_t)
@@ -528,7 +663,15 @@ def _loss_batch(
     # The released score wrapper converts raw network output to score=-eps/std,
     # making its DSM objective exactly an epsilon-prediction objective.
     loss_x = 0.5 * (pred_x - z_x).square().reshape(b, -1).sum(dim=-1).mean()
-    loss_lam = 0.5 * (pred_lam - z_lam).square().reshape(b, -1).sum(dim=-1).mean()
+    if spectral_operator == "combinatorial_laplacian":
+        # Laplacian spectra use an explicit active-prefix padding convention.
+        # Padded coordinates are not stochastic variables and therefore must
+        # not contribute irreducible noise-prediction loss.
+        spectral_error = (pred_lam - z_lam) * e_mask
+    else:
+        # Preserve the released adjacency-GSDM training objective bit-for-bit.
+        spectral_error = pred_lam - z_lam
+    loss_lam = 0.5 * spectral_error.square().reshape(b, -1).sum(dim=-1).mean()
     return loss_x, loss_lam
 
 
@@ -801,17 +944,41 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
     _seed_everything(request.run.train_seed)
     device = _resolve_device(options.get("runtime", {}))
     variant = str(options.get("variant", "vanilla_gsdm")).lower()
+    spectral_operator = spectral_operator_for_variant(variant)
     degree_cfg = dict(options.get("degree_prior", {}) or {})
     degree_prior_enabled = bool(degree_cfg.get("enabled", False))
     train_graphs = _graphs(request.dataset.split_paths["train"])
     val_graphs = _graphs(request.dataset.split_paths["val"])
+    if spectral_operator == "combinatorial_laplacian":
+        disconnected = [
+            (split, index)
+            for split, graphs in (("train", train_graphs), ("val", val_graphs))
+            for index, graph in enumerate(graphs)
+            if not nx.is_connected(graph)
+        ]
+        if disconnected:
+            split, index = disconnected[0]
+            raise ValueError(
+                "vanilla_laplacian_gsdm Stage-2 currently requires connected "
+                f"graphs so the fixed zero Laplacian mode is unique; found disconnected {split}[{index}]"
+            )
     configured_max = options["model"].get("max_nodes")
     max_nodes = int(configured_max or max(g.number_of_nodes() for g in train_graphs))
     if max(g.number_of_nodes() for g in val_graphs) > max_nodes:
         raise ValueError("Validation graph exceeds model.max_nodes")
     model_cfg = _model_config(options, max_nodes)
-    train_data = _padded_dataset(train_graphs, max_nodes=max_nodes, max_feat_num=model_cfg["max_feat_num"])
-    val_data = _padded_dataset(val_graphs, max_nodes=max_nodes, max_feat_num=model_cfg["max_feat_num"])
+    train_data = _padded_dataset(
+        train_graphs,
+        max_nodes=max_nodes,
+        max_feat_num=model_cfg["max_feat_num"],
+        spectral_operator=spectral_operator,
+    )
+    val_data = _padded_dataset(
+        val_graphs,
+        max_nodes=max_nodes,
+        max_feat_num=model_cfg["max_feat_num"],
+        spectral_operator=spectral_operator,
+    )
     train_loader = DataLoader(
         TensorDataset(*train_data),
         batch_size=int(options["train"]["batch_size"]),
@@ -875,6 +1042,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                         model_x, model_lam, batch,
                         sde_x=sde_x, sde_lam=sde_lam, eps=eps,
                         eigen_mask_mode=eigen_mask_mode,
+                        spectral_operator=spectral_operator,
                     )
                     loss = lx + ll
                     if not torch.isfinite(loss):
@@ -924,7 +1092,9 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                             lx, ll = _loss_batch(
                                 model_x, model_lam, batch,
                                 sde_x=sde_x, sde_lam=sde_lam, eps=eps,
-                                eigen_mask_mode=eigen_mask_mode, generator=gen,
+                                eigen_mask_mode=eigen_mask_mode,
+                                spectral_operator=spectral_operator,
+                                generator=gen,
                             )
                             b = batch[0].size(0)
                             vx += float(lx.item()) * b
@@ -956,6 +1126,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
         checkpoint = {
             "format": CHECKPOINT_FORMAT,
             "variant": variant,
+            "spectral_operator": spectral_operator,
             "model_x_state": {k: v.detach().cpu() for k, v in model_x.state_dict().items()},
             "model_spectrum_state": {k: v.detach().cpu() for k, v in model_lam.state_dict().items()},
             "ema_x_state": ema_x.shadow,
@@ -1002,12 +1173,33 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
             "checkpoint": {"path": "checkpoints/gdsm_simple.pt", "sha256": _sha256(checkpoint_path)},
             "checkpoint_selection": {"kind": "final_configured_epoch", "epoch": epochs},
             "reference_contract": {
-                "forward_state": "degree_features_and_adjacency_eigenvalues",
-                "spectral_corruption": "VP_SDE_on_eigenvalues_in_fixed_training_graph_eigenbasis",
-                "denoiser_conditioning": "continuous_U_diag_lambda_t_Ut_plus_noisy_degree_features",
-                "generation_basis": "uniform_training_adjacency_eigenbasis_joint_with_node_count",
+                "forward_state": (
+                    "degree_features_and_combinatorial_laplacian_eigenvalues"
+                    if spectral_operator == "combinatorial_laplacian"
+                    else "degree_features_and_adjacency_eigenvalues"
+                ),
+                "spectral_operator": spectral_operator,
+                "spectral_corruption": (
+                    "VP_SDE_on_laplacian_eigenvalues_in_fixed_training_graph_laplacian_eigenbasis"
+                    if spectral_operator == "combinatorial_laplacian"
+                    else "VP_SDE_on_eigenvalues_in_fixed_training_graph_eigenbasis"
+                ),
+                "denoiser_conditioning": (
+                    "offdiagonal_minus_U_diag_lambda_t_Ut_plus_noisy_degree_features"
+                    if spectral_operator == "combinatorial_laplacian"
+                    else "continuous_U_diag_lambda_t_Ut_plus_noisy_degree_features"
+                ),
+                "generation_basis": (
+                    "uniform_training_laplacian_eigenbasis_joint_with_node_count"
+                    if spectral_operator == "combinatorial_laplacian"
+                    else "uniform_training_adjacency_eigenbasis_joint_with_node_count"
+                ),
                 "reverse_sampler": "Euler_Maruyama_plus_optional_Langevin_corrector",
-                "discretization": "single_final_threshold",
+                "discretization": (
+                    "single_final_threshold_on_negative_laplacian_offdiagonal"
+                    if spectral_operator == "combinatorial_laplacian"
+                    else "single_final_threshold"
+                ),
                 "auxiliary_degree_prior": (
                     "jointly_trained_DH-VAE_independent_of_GSDM"
                     if degree_prior_enabled else "none"
@@ -1082,6 +1274,7 @@ def _langevin_lambda(
     t: torch.Tensor, u: torch.Tensor, lam: torch.Tensor, sde: VPSDE,
     *, snr: float, scale_eps: float, n_steps: int, eigen_mask: torch.Tensor,
     generator: torch.Generator,
+    spectral_operator: str = "adjacency",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     lam_mean = lam
     timestep = (t * (sde.N - 1) / sde.T).long()
@@ -1094,13 +1287,21 @@ def _langevin_lambda(
         # The released GSDM sampler draws full eigenvalue noise.  The persistent
         # reverse-state mean is masked *after* each corrector/predictor update.
         noise = torch.randn(lam.shape, device=lam.device, dtype=lam.dtype, generator=generator)
+        if spectral_operator == "combinatorial_laplacian":
+            grad = grad * eigen_mask
+            noise = noise * eigen_mask
         grad_norm = torch.norm(grad.reshape(grad.shape[0], -1), dim=-1).mean().clamp_min(1.0e-12)
         noise_norm = torch.norm(noise.reshape(noise.shape[0], -1), dim=-1).mean().clamp_min(1.0e-12)
         step = (float(snr) * noise_norm / grad_norm).square() * 2.0 * alpha
         lam_mean = lam + step[:, None] * grad
         lam_sample = lam_mean + torch.sqrt(2.0 * step)[:, None] * noise * float(scale_eps)
-        adj_sample = mask_adj(u @ torch.diag_embed(lam_sample) @ u_t, flags)
-        adj_mean = mask_adj(u @ torch.diag_embed(lam_mean) @ u_t, flags)
+        if spectral_operator == "combinatorial_laplacian":
+            lam_mean = lam_mean * eigen_mask
+            lam_sample = lam_sample * eigen_mask
+        operator_sample = u @ torch.diag_embed(lam_sample) @ u_t
+        operator_mean = u @ torch.diag_embed(lam_mean) @ u_t
+        adj_sample = _operator_to_adjacency_state(operator_sample, flags, spectral_operator)
+        adj_mean = _operator_to_adjacency_state(operator_mean, flags, spectral_operator)
     return adj_sample, adj_mean, lam_sample, lam_mean
 
 
@@ -1123,17 +1324,27 @@ def _euler_lambda(
     model: GSDMSpectrumScore, x: torch.Tensor, adj: torch.Tensor, flags: torch.Tensor,
     t: torch.Tensor, u: torch.Tensor, lam: torch.Tensor, sde: VPSDE,
     *, eigen_mask: torch.Tensor, generator: torch.Generator,
+    spectral_operator: str = "adjacency",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     beta = sde.beta(t)
     score = _score_lam(model, x, adj, flags, t, u, lam, sde)
+    if spectral_operator == "combinatorial_laplacian":
+        score = score * eigen_mask
     drift = -0.5 * beta[:, None] * lam - beta[:, None] * score
     dt = -1.0 / float(sde.N)
     lam_mean = lam + drift * dt
     noise = torch.randn(lam.shape, device=lam.device, dtype=lam.dtype, generator=generator)
+    if spectral_operator == "combinatorial_laplacian":
+        noise = noise * eigen_mask
     lam_sample = lam_mean + torch.sqrt(beta * (-dt))[:, None] * noise
+    if spectral_operator == "combinatorial_laplacian":
+        lam_mean = lam_mean * eigen_mask
+        lam_sample = lam_sample * eigen_mask
     u_t = u.transpose(-1, -2)
-    adj_sample = mask_adj(u @ torch.diag_embed(lam_sample) @ u_t, flags)
-    adj_mean = mask_adj(u @ torch.diag_embed(lam_mean) @ u_t, flags)
+    operator_sample = u @ torch.diag_embed(lam_sample) @ u_t
+    operator_mean = u @ torch.diag_embed(lam_mean) @ u_t
+    adj_sample = _operator_to_adjacency_state(operator_sample, flags, spectral_operator)
+    adj_mean = _operator_to_adjacency_state(operator_mean, flags, spectral_operator)
     return adj_sample, adj_mean, lam_sample, lam_mean
 
 
@@ -1147,6 +1358,7 @@ def sample_batch(
     sde_lam: VPSDE,
     sample_cfg: Mapping[str, Any],
     eigen_mask_mode: str,
+    spectral_operator: str,
     device: torch.device,
     generator: torch.Generator,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -1157,7 +1369,12 @@ def sample_batch(
         torch.arange(nmax, device=device).unsqueeze(0)
         < donor_sizes.unsqueeze(1)
     ).to(torch.float32)
-    _, u = torch.linalg.eigh(donor_adjacencies)
+    if spectral_operator == "adjacency":
+        _, u = torch.linalg.eigh(donor_adjacencies)
+    elif spectral_operator == "combinatorial_laplacian":
+        _, u = _laplacian_eigh_padded(donor_adjacencies, donor_sizes)
+    else:
+        raise ValueError(f"Unknown spectral operator {spectral_operator!r}")
     e_mask = eigen_mask_from_flags(flags, eigen_mask_mode)
     max_feat_num = model_x.max_feat_num
     x = mask_x(
@@ -1166,7 +1383,10 @@ def sample_batch(
     # Upstream prior_sampling_sym3 is an unmasked standard-normal vector.
     # The eigen-mask is applied to the carried mean after each reverse update.
     lam = torch.randn((b, nmax), device=device, generator=generator)
-    adj = mask_adj(reconstruct_adjacency(u, lam), flags)
+    if spectral_operator == "combinatorial_laplacian":
+        lam = lam * e_mask
+    operator = reconstruct_adjacency(u, lam)
+    adj = _operator_to_adjacency_state(operator, flags, spectral_operator)
     timesteps = torch.linspace(
         sde_lam.T, float(sample_cfg.get("eps", 1.0e-4)), sde_lam.N, device=device
     )
@@ -1193,6 +1413,7 @@ def sample_batch(
                 snr=float(sample_cfg.get("snr", 0.05)),
                 scale_eps=float(sample_cfg.get("scale_eps", 0.7)),
                 n_steps=n_steps, eigen_mask=e_mask, generator=generator,
+                spectral_operator=spectral_operator,
             )
             final_lam_sample = corr_sample
             final_lam_mean = corr_mean
@@ -1202,6 +1423,7 @@ def sample_batch(
         adj, adj_mean, pred_sample, pred_mean = _euler_lambda(
             model_lam, old_x, adj, flags, t, u, lam, sde_lam,
             eigen_mask=e_mask, generator=generator,
+            spectral_operator=spectral_operator,
         )
         final_lam_sample = pred_sample
         final_lam_mean = pred_mean
@@ -1243,6 +1465,9 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     eigen_mask_mode = str(state["sde"].get("eigen_mask", "official_extremes"))
     threshold = float(sample_cfg.get("threshold", 0.5))
     variant = str(state.get("variant", options.get("variant", "vanilla_gsdm"))).lower()
+    spectral_operator = str(
+        state.get("spectral_operator", spectral_operator_for_variant(variant))
+    )
     degree_payload = state.get("degree_prior", {})
     degree_prior_enabled = bool(
         isinstance(degree_payload, Mapping) and degree_payload.get("enabled", False)
@@ -1251,6 +1476,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
         raise RuntimeError("vanilla_gsdm_dhvae generation requires an embedded jointly trained DH-VAE")
     graphs: list[nx.Graph] = []
     continuous: list[np.ndarray] = []
+    continuous_laplacians: list[np.ndarray] = []
     spectra: list[np.ndarray] = []
     basis_indices: list[int] = []
     start = time.monotonic()
@@ -1260,16 +1486,18 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             indices = rng.integers(0, len(basis_adj), size=b)
             donor_adj = basis_adj[indices]
             donor_n = basis_n[indices]
-            _, soft, lam, _ = sample_batch(
+            _, soft, lam, sampled_u = sample_batch(
                 model_x, model_lam,
                 donor_adjacencies=donor_adj,
                 donor_sizes=donor_n,
                 sde_x=sde_x, sde_lam=sde_lam,
                 sample_cfg=sample_cfg,
                 eigen_mask_mode=eigen_mask_mode,
+                spectral_operator=spectral_operator,
                 device=device, generator=generator,
             )
             soft = 0.5 * (soft + soft.transpose(-1, -2))
+            operator_batch = reconstruct_adjacency(sampled_u, lam)
             for row, idx in enumerate(indices.tolist()):
                 n = int(donor_n[row].item())
                 matrix = soft[row, :n, :n].detach().cpu().numpy().astype(np.float64)
@@ -1279,9 +1507,17 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 graph = nx.from_numpy_array(discrete.astype(np.int8), create_using=nx.Graph)
                 graphs.append(graph)
                 continuous.append(matrix)
+                if spectral_operator == "combinatorial_laplacian":
+                    lap = (
+                        operator_batch[row, :n, :n]
+                        .detach().cpu().numpy().astype(np.float64)
+                    )
+                    lap = 0.5 * (lap + lap.T)
+                    continuous_laplacians.append(lap)
                 spectra.append(lam[row, :].detach().cpu().numpy().astype(np.float64))
                 basis_indices.append(int(idx))
-            print(f"Vanilla-GSDM generated {len(graphs)}/{request.num_graphs}", flush=True)
+            label = "Vanilla-Laplacian-GSDM" if spectral_operator == "combinatorial_laplacian" else "Vanilla-GSDM"
+            print(f"{label} generated {len(graphs)}/{request.num_graphs}", flush=True)
 
     degree_sequences: list[list[int]] = []
     degree_summaries: list[dict[str, Any]] = []
@@ -1348,6 +1584,11 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
         soft_path = staging / "continuous_adjacencies.pkl"
         with soft_path.open("wb") as handle:
             pickle.dump(continuous, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        laplacian_path = None
+        if continuous_laplacians:
+            laplacian_path = staging / "continuous_laplacians.pkl"
+            with laplacian_path.open("wb") as handle:
+                pickle.dump(continuous_laplacians, handle, protocol=pickle.HIGHEST_PROTOCOL)
         spectrum_path = staging / "sampled_spectra.pkl"
         with spectrum_path.open("wb") as handle:
             pickle.dump(spectra, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -1366,6 +1607,29 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
         graph_hash = _sha256(graph_path)
         connected = [g.number_of_nodes() <= 1 or nx.is_connected(g) for g in graphs]
         degree_sums = [sum(dict(g.degree()).values()) for g in graphs]
+        laplacian_diagnostics: dict[str, Any] = {}
+        if spectral_operator == "combinatorial_laplacian":
+            active_spectra = [
+                np.asarray(spectra[i], dtype=np.float64)[: graphs[i].number_of_nodes()]
+                for i in range(len(graphs))
+            ]
+            total_active = sum(values.size for values in active_spectra)
+            negative = sum(int(np.count_nonzero(values < -1.0e-6)) for values in active_spectra)
+            first_abs = [abs(float(values[0])) for values in active_spectra if values.size]
+            row_sum_rmse = [
+                float(np.sqrt(np.mean(np.square(lap.sum(axis=1)))))
+                for lap in continuous_laplacians
+            ]
+            laplacian_diagnostics = {
+                "active_negative_eigenvalue_fraction": (
+                    float(negative / total_active) if total_active else 0.0
+                ),
+                "first_eigenvalue_abs_mean": float(np.mean(first_abs)) if first_abs else 0.0,
+                "reconstructed_laplacian_row_sum_rmse_mean": (
+                    float(np.mean(row_sum_rmse)) if row_sum_rmse else 0.0
+                ),
+                "valid_laplacian_projection_applied": False,
+            }
         _write_json(staging / "manifest.json", {
             "format": GENERATION_FORMAT,
             "model_id": wrapper.model_id,
@@ -1378,6 +1642,10 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             "duration_seconds": time.monotonic() - start,
             "base_graphs": {"path": "base_graphs.pkl", "sha256": graph_hash},
             "continuous_adjacencies": {"path": "continuous_adjacencies.pkl", "sha256": _sha256(soft_path)},
+            "continuous_laplacians": (
+                {"path": "continuous_laplacians.pkl", "sha256": _sha256(laplacian_path)}
+                if laplacian_path is not None else None
+            ),
             "sampled_spectra": {"path": "sampled_spectra.pkl", "sha256": _sha256(spectrum_path)},
             "sampled_basis_indices": {
                 "path": "sampled_basis_indices.pkl", "sha256": _sha256(index_path),
@@ -1399,9 +1667,19 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             "checkpoint": {"path": str(request.checkpoint_path.resolve()), "sha256": _sha256(request.checkpoint_path)},
             "sampling": {
                 "node_count": "jointly_sampled_with_training_eigenbasis",
-                "eigenvectors": "training_split_empirical",
+                "spectral_operator": spectral_operator,
+                "eigenvectors": (
+                    "training_split_empirical_laplacian_eigenbasis"
+                    if spectral_operator == "combinatorial_laplacian"
+                    else "training_split_empirical"
+                ),
                 "reverse_process": "coupled_VP_spectral_predictor_corrector",
                 "threshold": threshold,
+                "threshold_semantics": (
+                    "edge iff -L_ij > threshold for i!=j"
+                    if spectral_operator == "combinatorial_laplacian"
+                    else "edge iff reconstructed_A_ij > threshold"
+                ),
                 "auxiliary_degree_prior": "DH-VAE" if degree_prior_enabled else "none",
                 "degree_sequences_sampled": len(degree_sequences),
                 "degree_sequences_used_for_graph_generation": False,
@@ -1413,6 +1691,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             "diagnostics": {
                 "connectedness_rate": float(np.mean(connected)),
                 "mean_degree_sum": float(np.mean(degree_sums)),
+                **laplacian_diagnostics,
             },
             "posthoc_repair": False,
             "largest_component_filter": False,

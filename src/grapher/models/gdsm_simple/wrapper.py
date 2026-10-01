@@ -251,18 +251,23 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             )
         ).lower()
 
-        if requested_variant in {"vanilla_gsdm", "vanilla", "gsdm", "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae"}:
+        if requested_variant in {
+            "vanilla_gsdm", "vanilla", "gsdm",
+            "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae",
+            "vanilla_laplacian_gsdm", "laplacian_gsdm", "gsdm_laplacian",
+        }:
             from grapher.models.gdsm_simple.vanilla_gsdm import (
                 default_vanilla_options,
                 validate_options,
             )
 
             options = default_vanilla_options()
-            options["variant"] = (
-                "vanilla_gsdm_dhvae"
-                if requested_variant in {"vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae"}
-                else "vanilla_gsdm"
-            )
+            if requested_variant in {"vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae"}:
+                options["variant"] = "vanilla_gsdm_dhvae"
+            elif requested_variant in {"vanilla_laplacian_gsdm", "laplacian_gsdm", "gsdm_laplacian"}:
+                options["variant"] = "vanilla_laplacian_gsdm"
+            else:
+                options["variant"] = "vanilla_gsdm"
             options["extensions"] = {
                 "degree_conditioning": False,
                 "hh_initialization": False,
@@ -318,7 +323,11 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         if request.resume_from is not None:
             raise ValueError("gdsm_simple resume is not implemented")
         options = self._options(request)
-        if str(options.get("variant", "legacy_simple")).lower() in {"vanilla_gsdm", "vanilla", "gsdm", "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae"}:
+        if str(options.get("variant", "legacy_simple")).lower() in {
+            "vanilla_gsdm", "vanilla", "gsdm",
+            "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae",
+            "vanilla_laplacian_gsdm", "laplacian_gsdm", "gsdm_laplacian",
+        }:
             from grapher.models.gdsm_simple.vanilla_gsdm import train
             return train(self, request, options)
         if categorical_enabled(options.get("extensions", {})):
@@ -532,7 +541,15 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             raise ValueError(f"Unsupported gdsm_simple generation overrides: {unknown}")
         _deep_update(options, request.options)
         generation_extensions = options.get("extensions", {}) or {}
-        if state.get("format") in {"gdsm_simple_vanilla_gsdm_checkpoint_v1", "gdsm_simple_vanilla_gsdm_checkpoint_v2"} or str(options.get("variant", "legacy_simple")).lower() in {"vanilla_gsdm", "vanilla", "gsdm", "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae"}:
+        if state.get("format") in {
+            "gdsm_simple_vanilla_gsdm_checkpoint_v1",
+            "gdsm_simple_vanilla_gsdm_checkpoint_v2",
+            "gdsm_simple_vanilla_gsdm_checkpoint_v3",
+        } or str(options.get("variant", "legacy_simple")).lower() in {
+            "vanilla_gsdm", "vanilla", "gsdm",
+            "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae",
+            "vanilla_laplacian_gsdm", "laplacian_gsdm", "gsdm_laplacian",
+        }:
             from grapher.models.gdsm_simple.vanilla_gsdm import generate
             return generate(self, request, state, manifest, options)
         if state.get("format") in ("gdsm_spectral_categorical_checkpoint_v1", "gdsm_spectral_topology_bond_only_checkpoint_v2") or categorical_enabled(generation_extensions):
