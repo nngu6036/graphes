@@ -162,3 +162,24 @@ def test_joint_auxiliary_head_plus_rewiring_freezes_generated_degrees(tmp_path):
     assert manifest["diagnostics"]["degree_preservation_rate"] == 1.0
     assert (generated.generation_dir / "predicted_graphlet_summaries.pkl").is_file()
     assert (generated.generation_dir / "rewiring_diagnostics.json").is_file()
+
+
+def test_shipped_joint_refine_config_passes_vanilla_option_validation(tmp_path):
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    config = root / "configs/experiments/gdsm_laplacian_loggap_graphlet_refine_explicit/community_small_seed_42.yaml"
+    wrapper = GDSMSimpleWrapper()
+    request = TrainRequest(
+        RunSpec("gdsm_simple", "community_small", "config-validation", 42, tmp_path / "runs"),
+        DatasetReference("community_small", tmp_path / "datasets", "unused"),
+        config_path=config,
+    )
+    options = wrapper._options(request)
+    assert options["variant"] == "vanilla_laplacian_loggap_graphlet_refine"
+    assert options["graphlet_summary"]["enabled"] is True
+    assert options["graphlet_refinement"]["enabled"] is True
+    # The variant-specific graphlet_refinement block controls the post-generation
+    # degree-preserving rewiring. Legacy GraphES extension switches stay off.
+    assert options["extensions"]["degree_preserving_rewiring"] is False
+    assert options["extensions"]["structural_summary"] == "none"

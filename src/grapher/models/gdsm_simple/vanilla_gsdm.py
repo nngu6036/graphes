@@ -25,7 +25,11 @@ The ``vanilla_laplacian_loggap`` ablation diffuses training-standardized
 logarithms of successive nontrivial Laplacian eigenvalue gaps without any
 structural auxiliary head.  The ``vanilla_laplacian_loggap_graphlet`` Stage-2b
 variant adds a k=3,4,5 connected graphlet-summary head that shares the spectral
-denoiser encoder and is trained jointly as an auxiliary objective.  Finally,
+denoiser encoder and is trained jointly as an auxiliary objective.  That joint
+variant can optionally enrich the current noisy graph state with random-walk
+arrival node features and truncated shortest-path pair features, and can use
+either the released-style DenseGCN backbone or a dense PPGN pair-tensor
+backbone.  Finally,
 ``vanilla_laplacian_loggap_graphlet_refine`` keeps that joint training objective
 and uses the final auxiliary graphlet prediction as a fixed post-generation
 target for degree-preserving double-edge-swap refinement.
@@ -217,6 +221,24 @@ def default_vanilla_options() -> dict[str, Any]:
             "max_feat_num": None,
             "hidden_dim": 32,
             "depth": 3,
+            # The node-feature score keeps the released DenseGCN path.  The
+            # joint log-gap spectrum/graphlet score can independently choose
+            # a DenseGCN or a compact PPGN pair-tensor backbone.
+            "backbone": "dense_gcn",
+            "ppgn_hidden_dim": 64,
+            "ppgn_depth": 4,
+        },
+        "structural_features": {
+            "enabled": False,
+            "binarize_threshold": 0.5,
+            "random_walk": {
+                "enabled": False,
+                "steps": 4,
+            },
+            "shortest_path": {
+                "enabled": False,
+                "max_distance": 5,
+            },
         },
         "sde": {
             "x": {"type": "vp", "beta_min": 0.1, "beta_max": 1.0, "num_scales": 1000},
@@ -287,7 +309,7 @@ def default_vanilla_options() -> dict[str, Any]:
 
 def validate_options(options: Mapping[str, Any]) -> None:
     allowed = {
-        "variant", "train", "model", "sde", "sample", "degree_prior", "graphlet_refinement", "graphlet_summary", "generation_batch_size",
+        "variant", "train", "model", "sde", "sample", "degree_prior", "graphlet_refinement", "graphlet_summary", "structural_features", "generation_batch_size",
         "runtime", "extensions", "comparison_reference", "training_estimates", "diffusion",
     }
     unknown = sorted(set(options) - allowed)
@@ -328,6 +350,40 @@ def validate_options(options: Mapping[str, Any]) -> None:
             raise ValueError("graphlet_summary.loss_weight must be nonnegative")
     elif graphlet_summary_enabled:
         raise ValueError("graphlet_summary.enabled=true requires a Laplacian log-gap graphlet variant")
+
+    model_cfg = options.get("model", {}) or {}
+    backbone = str(
+        model_cfg.get("backbone", model_cfg.get("spectrum_backbone", "dense_gcn"))
+    ).lower()
+    if backbone not in {"dense_gcn", "ppgn"}:
+        raise ValueError("model.backbone must be dense_gcn or ppgn")
+    if backbone == "ppgn" and variant not in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
+        raise ValueError(
+            "model.backbone=ppgn is currently implemented for the joint "
+            "Laplacian log-gap graphlet variants only"
+        )
+    if int(model_cfg.get("ppgn_hidden_dim", 64)) <= 0:
+        raise ValueError("model.ppgn_hidden_dim must be positive")
+    if int(model_cfg.get("ppgn_depth", 4)) <= 0:
+        raise ValueError("model.ppgn_depth must be positive")
+
+    structural_cfg = options.get("structural_features", {}) or {}
+    structural_enabled = bool(structural_cfg.get("enabled", False))
+    if structural_enabled and variant not in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
+        raise ValueError(
+            "structural_features.enabled=true is currently implemented for the joint "
+            "Laplacian log-gap graphlet variants only"
+        )
+    if structural_enabled:
+        threshold = float(structural_cfg.get("binarize_threshold", 0.5))
+        if not math.isfinite(threshold):
+            raise ValueError("structural_features.binarize_threshold must be finite")
+        rw_cfg = structural_cfg.get("random_walk", {}) or {}
+        if bool(rw_cfg.get("enabled", False)) and int(rw_cfg.get("steps", 0)) <= 0:
+            raise ValueError("structural_features.random_walk.steps must be positive")
+        sp_cfg = structural_cfg.get("shortest_path", {}) or {}
+        if bool(sp_cfg.get("enabled", False)) and int(sp_cfg.get("max_distance", 0)) <= 0:
+            raise ValueError("structural_features.shortest_path.max_distance must be positive")
 
     graphlet_cfg = options.get("graphlet_refinement", {}) or {}
     graphlet_enabled = bool(graphlet_cfg.get("enabled", False))
@@ -459,18 +515,383 @@ class MLP(nn.Module):
         return self.layers[-1](x)
 
 
+def _binarize_structural_graph(
+    adj: torch.Tensor,
+    flags: torch.Tensor,
+    *,
+    threshold: float,
+) -> torch.Tensor:
+    """Binarize a continuous graph state for structural feature extraction.
+
+    This branch is deliberately detached from the diffusion state.  The
+    random-walk / shortest-path descriptors are auxiliary conditioning
+    features, not a differentiable replacement for the carried continuous
+    Laplacian-derived adjacency state.
+    """
+    if adj.ndim != 3 or flags.ndim != 2:
+        raise ValueError("structural graph binarization expects adj=[B,N,N], flags=[B,N]")
+    binary = (adj.detach() > float(threshold))
+    binary = binary | binary.transpose(-1, -2)
+    n = binary.size(-1)
+    idx = torch.arange(n, device=binary.device)
+    binary[:, idx, idx] = False
+    pair_mask = flags.bool().unsqueeze(-1) & flags.bool().unsqueeze(-2)
+    return (binary & pair_mask).to(adj.dtype)
+
+
+def random_walk_landing_features(
+    binary_adj: torch.Tensor,
+    flags: torch.Tensor,
+    *,
+    steps: int,
+) -> torch.Tensor:
+    """Return per-node random-walk landing/return probabilities.
+
+    For the row-stochastic transition matrix ``P``, node ``i`` receives
+    ``[(P^1)_ii, ..., (P^steps)_ii]``.  These diagonal landing probabilities
+    are permutation-equivariant node descriptors and match the ``rw_landing``
+    feature naming used by the released HOG-Diff score network.
+    """
+    if steps <= 0:
+        return binary_adj.new_zeros((*flags.shape, 0))
+    _b, n, _ = binary_adj.shape
+    active = flags > 0
+    degree = binary_adj.sum(dim=-1)
+    transition = binary_adj / degree.clamp_min(1.0).unsqueeze(-1)
+    # Keep an isolated active node at itself so each active row remains a valid
+    # stochastic row.  This matters for very noisy intermediate states.
+    isolated = active & (degree <= 0)
+    if bool(isolated.any()):
+        idx = torch.arange(n, device=binary_adj.device)
+        transition[:, idx, idx] = torch.where(
+            isolated,
+            torch.ones_like(degree),
+            transition[:, idx, idx],
+        )
+    values: list[torch.Tensor] = []
+    power = transition
+    for _ in range(int(steps)):
+        landing = torch.diagonal(power, dim1=-2, dim2=-1)
+        values.append(landing * flags.to(landing.dtype))
+        power = torch.bmm(power, transition)
+    return torch.stack(values, dim=-1)
+
+
+def random_walk_arrival_features(
+    binary_adj: torch.Tensor,
+    flags: torch.Tensor,
+    *,
+    steps: int,
+) -> torch.Tensor:
+    """Backward-compatible alias for the HOG-Diff-style landing features."""
+    return random_walk_landing_features(binary_adj, flags, steps=steps)
+
+
+def truncated_shortest_path_features(
+    binary_adj: torch.Tensor,
+    flags: torch.Tensor,
+    *,
+    max_distance: int,
+) -> torch.Tensor:
+    """One-hot truncated shortest-path pair features.
+
+    Buckets are ``0,1,...,max_distance`` plus a final bucket for distances
+    larger than ``max_distance`` or disconnected active node pairs.  Padding
+    pairs are masked to all-zero vectors.
+    """
+    if max_distance <= 0:
+        raise ValueError("max_distance must be positive")
+    b, n, _ = binary_adj.shape
+    dtype = binary_adj.dtype
+    device = binary_adj.device
+    active = flags.bool()
+    pair_mask = active.unsqueeze(-1) & active.unsqueeze(-2)
+    overflow = int(max_distance) + 1
+    bucket = torch.full((b, n, n), overflow, dtype=torch.long, device=device)
+    idx = torch.arange(n, device=device)
+    bucket[:, idx, idx] = torch.where(
+        active,
+        torch.zeros_like(flags, dtype=torch.long),
+        torch.full_like(flags, overflow, dtype=torch.long),
+    )
+    assigned = torch.eye(n, dtype=torch.bool, device=device).unsqueeze(0) & pair_mask
+    # We only need distances up to max_distance, so repeated adjacency powers
+    # are cheaper than a full Floyd-Warshall pass and map well to batched GPU
+    # matrix multiplication.  A^d_ij>0 iff a length-d walk exists.
+    power = torch.eye(n, dtype=dtype, device=device).unsqueeze(0).repeat(b, 1, 1)
+    for distance in range(1, int(max_distance) + 1):
+        power = torch.bmm(power, binary_adj)
+        reachable = (power > 0) & pair_mask
+        newly = reachable & ~assigned
+        bucket = torch.where(newly, torch.full_like(bucket, distance), bucket)
+        assigned = assigned | reachable
+    features = F.one_hot(bucket, num_classes=overflow + 1).to(dtype)
+    return features * pair_mask.unsqueeze(-1).to(dtype)
+
+
+def _structural_features_from_state(
+    adj: torch.Tensor,
+    flags: torch.Tensor,
+    cfg: Mapping[str, Any] | None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return ``(binary_adj, random_walk_node, shortest_path_edge)``."""
+    cfg = dict(cfg or {})
+    threshold = float(cfg.get("binarize_threshold", 0.5))
+    binary = _binarize_structural_graph(adj, flags, threshold=threshold)
+    rw_cfg = dict(cfg.get("random_walk", {}) or {})
+    sp_cfg = dict(cfg.get("shortest_path", {}) or {})
+    if bool(cfg.get("enabled", False)) and bool(rw_cfg.get("enabled", False)):
+        rw = random_walk_landing_features(
+            binary,
+            flags,
+            steps=int(rw_cfg.get("steps", 4)),
+        )
+    else:
+        rw = adj.new_zeros((*flags.shape, 0))
+    if bool(cfg.get("enabled", False)) and bool(sp_cfg.get("enabled", False)):
+        sp = truncated_shortest_path_features(
+            binary,
+            flags,
+            max_distance=int(sp_cfg.get("max_distance", 5)),
+        )
+    else:
+        sp = adj.new_zeros((*adj.shape, 0))
+    return binary, rw, sp
+
+
+class DenseStructuralGCNConv(DenseGCNConv):
+    """Dense GCN with an additive shortest-path relation context.
+
+    The normal GCN message remains unchanged.  When pair features are present,
+    a learned relation embedding is mean-aggregated over active destination
+    nodes and added to the local GCN update.  This lets the DenseGCN ablation
+    consume true pair/edge features without turning it into a PPGN.
+    """
+
+    def __init__(self, in_channels: int, out_channels: int, edge_dim: int = 0) -> None:
+        super().__init__(in_channels, out_channels)
+        self.edge_dim = int(edge_dim)
+        self.edge_message = (
+            nn.Linear(self.edge_dim, out_channels, bias=False)
+            if self.edge_dim > 0 else None
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        adj: torch.Tensor,
+        flags: torch.Tensor | None = None,
+        edge_features: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        out = super().forward(x, adj, flags)
+        if self.edge_message is None or edge_features is None or edge_features.size(-1) == 0:
+            return out
+        if flags is None:
+            pair_mask = torch.ones_like(adj)
+            denom = torch.full(
+                (adj.size(0), adj.size(1), 1),
+                float(adj.size(1)),
+                dtype=adj.dtype,
+                device=adj.device,
+            )
+        else:
+            pair_mask = flags.to(adj.dtype).unsqueeze(-1) * flags.to(adj.dtype).unsqueeze(-2)
+            denom = pair_mask.sum(dim=-1, keepdim=True).clamp_min(1.0)
+        relation = self.edge_message(edge_features)
+        relation = (relation * pair_mask.unsqueeze(-1)).sum(dim=2) / denom
+        out = out + relation
+        if flags is not None:
+            out = out * flags.unsqueeze(-1).to(out.dtype)
+        return out
+
+
+class PPGNLayer(nn.Module):
+    """Compact dense PPGN block following the matrix-product construction."""
+
+    def __init__(self, hidden_dim: int) -> None:
+        super().__init__()
+        self.left = nn.Linear(hidden_dim, hidden_dim)
+        self.right = nn.Linear(hidden_dim, hidden_dim)
+        self.skip = nn.Linear(hidden_dim, hidden_dim)
+        self.out = nn.Linear(2 * hidden_dim, hidden_dim)
+
+    def forward(
+        self,
+        h: torch.Tensor,
+        pair_mask: torch.Tensor,
+        flags: torch.Tensor,
+    ) -> torch.Tensor:
+        left = F.elu(self.left(h))
+        right = F.elu(self.right(h))
+        product = torch.einsum("bikc,bkjc->bijc", left, right)
+        scale = flags.sum(dim=-1).clamp_min(1.0).sqrt().view(-1, 1, 1, 1)
+        product = product / scale
+        skip = F.elu(self.skip(h))
+        updated = F.elu(self.out(torch.cat((skip, product), dim=-1)))
+        updated = updated + h
+        return updated * pair_mask.unsqueeze(-1).to(updated.dtype)
+
+
+class GSDMSpectrumGraphletPPGNScore(nn.Module):
+    """PPGN alternative for the joint log-gap spectrum/graphlet score model."""
+
+    def __init__(
+        self,
+        *,
+        max_feat_num: int,
+        max_nodes: int,
+        hidden_dim: int,
+        depth: int,
+        graphlet_slices: tuple[tuple[int, int], ...],
+        structural_features: Mapping[str, Any] | None = None,
+        ppgn_hidden_dim: int = 64,
+        ppgn_depth: int = 4,
+    ) -> None:
+        super().__init__()
+        del hidden_dim, depth  # DenseGCN-only width/depth; retained in model config for parity.
+        self.max_feat_num = int(max_feat_num)
+        self.max_nodes = int(max_nodes)
+        self.graphlet_slices = tuple((int(a), int(b)) for a, b in graphlet_slices)
+        if not self.graphlet_slices:
+            raise ValueError("graphlet_slices must be non-empty")
+        self.structural_features = copy.deepcopy(dict(structural_features or {}))
+        rw_cfg = dict(self.structural_features.get("random_walk", {}) or {})
+        sp_cfg = dict(self.structural_features.get("shortest_path", {}) or {})
+        active = bool(self.structural_features.get("enabled", False))
+        self.rw_steps = int(rw_cfg.get("steps", 4)) if active and bool(rw_cfg.get("enabled", False)) else 0
+        self.sp_dim = (
+            int(sp_cfg.get("max_distance", 5)) + 2
+            if active and bool(sp_cfg.get("enabled", False)) else 0
+        )
+        node_dim = self.max_feat_num + self.rw_steps
+        # Continuous adjacency score, binarized adjacency, optional shortest
+        # path one-hot relation, and node features placed on the diagonal.
+        pair_input_dim = 2 + self.sp_dim + node_dim
+        hdim = int(ppgn_hidden_dim)
+        self.pair_input = nn.Linear(pair_input_dim, hdim)
+        self.ppgn_layers = nn.ModuleList(PPGNLayer(hdim) for _ in range(int(ppgn_depth)))
+        shared_dim = 2 * hdim + self.max_nodes
+        self.spectrum_final = MLP(shared_dim, 2 * max(self.max_nodes, hdim), self.max_nodes, 2)
+        width = self.graphlet_slices[-1][1]
+        self.graphlet_logits = MLP(shared_dim, 2 * shared_dim, width, 2)
+        self.graphlet_mass_logits = MLP(shared_dim, 2 * shared_dim, len(self.graphlet_slices), 2)
+
+    def _encode(
+        self,
+        x: torch.Tensor,
+        adj: torch.Tensor,
+        flags: torch.Tensor,
+        eigenvalues: torch.Tensor,
+    ) -> torch.Tensor:
+        binary, rw, sp = _structural_features_from_state(adj, flags, self.structural_features)
+        node = torch.cat((x, rw), dim=-1) if rw.size(-1) else x
+        b, n, _ = x.shape
+        diag_node = x.new_zeros((b, n, n, node.size(-1)))
+        idx = torch.arange(n, device=x.device)
+        diag_node[:, idx, idx, :] = node
+        parts = [adj.unsqueeze(-1), binary.unsqueeze(-1)]
+        if sp.size(-1):
+            parts.append(sp)
+        parts.append(diag_node)
+        pair = torch.cat(parts, dim=-1)
+        pair_mask = flags.to(pair.dtype).unsqueeze(-1) * flags.to(pair.dtype).unsqueeze(-2)
+        h = F.elu(self.pair_input(pair)) * pair_mask.unsqueeze(-1)
+        for layer in self.ppgn_layers:
+            h = layer(h, pair_mask, flags)
+        diag = h[:, idx, idx, :]
+        count = flags.sum(dim=-1, keepdim=True).clamp_min(1.0).to(h.dtype)
+        diag_pool = (diag * flags.unsqueeze(-1).to(h.dtype)).sum(dim=1) / count
+        diag_mask = torch.eye(n, dtype=h.dtype, device=h.device).unsqueeze(0)
+        off_mask = pair_mask * (1.0 - diag_mask)
+        off_count = off_mask.sum(dim=(1, 2), keepdim=False).unsqueeze(-1).clamp_min(1.0)
+        off_pool = (h * off_mask.unsqueeze(-1)).sum(dim=(1, 2)) / off_count
+        return torch.cat((diag_pool, off_pool, eigenvalues), dim=-1)
+
+    def forward_all(
+        self,
+        x: torch.Tensor,
+        adj: torch.Tensor,
+        flags: torch.Tensor,
+        eigenvectors: torch.Tensor,
+        eigenvalues: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        del eigenvectors
+        shared = self._encode(x, adj, flags, eigenvalues)
+        return {
+            "spectrum": self.spectrum_final(shared),
+            "graphlet_logits": self.graphlet_logits(shared),
+            "graphlet_mass_logits": self.graphlet_mass_logits(shared),
+        }
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        adj: torch.Tensor,
+        flags: torch.Tensor,
+        eigenvectors: torch.Tensor,
+        eigenvalues: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.forward_all(x, adj, flags, eigenvectors, eigenvalues)["spectrum"]
+
+    def graphlet_means_from_outputs(
+        self,
+        outputs: Mapping[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        logits = outputs["graphlet_logits"]
+        hist = torch.zeros_like(logits)
+        for start, stop in self.graphlet_slices:
+            hist[:, start:stop] = torch.softmax(logits[:, start:stop], dim=-1)
+        mass = torch.sigmoid(outputs["graphlet_mass_logits"])
+        return hist, mass
+
+
+def _is_joint_graphlet_score(model: nn.Module) -> bool:
+    return (
+        hasattr(model, "forward_all")
+        and hasattr(model, "graphlet_means_from_outputs")
+        and hasattr(model, "graphlet_slices")
+    )
+
+
 class GSDMNodeScore(nn.Module):
     """Noise predictor for the auxiliary degree-feature diffusion."""
 
-    def __init__(self, *, max_feat_num: int, hidden_dim: int, depth: int) -> None:
+    def __init__(
+        self,
+        *,
+        max_feat_num: int,
+        hidden_dim: int,
+        depth: int,
+        structural_features: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__()
         self.max_feat_num = int(max_feat_num)
         self.depth = int(depth)
+        self.structural_features = copy.deepcopy(dict(structural_features or {}))
+        rw_cfg = dict(self.structural_features.get("random_walk", {}) or {})
+        sp_cfg = dict(self.structural_features.get("shortest_path", {}) or {})
+        active = bool(self.structural_features.get("enabled", False))
+        self.rw_steps = int(rw_cfg.get("steps", 4)) if active and bool(rw_cfg.get("enabled", False)) else 0
+        self.sp_dim = (
+            int(sp_cfg.get("max_distance", 5)) + 2
+            if active and bool(sp_cfg.get("enabled", False)) else 0
+        )
+        node_input_dim = self.max_feat_num + self.rw_steps
         layers = []
         for i in range(depth):
-            layers.append(DenseGCNConv(max_feat_num if i == 0 else hidden_dim, hidden_dim))
+            layer_cls = DenseStructuralGCNConv if (self.rw_steps or self.sp_dim) else DenseGCNConv
+            if layer_cls is DenseStructuralGCNConv:
+                layers.append(
+                    DenseStructuralGCNConv(
+                        node_input_dim if i == 0 else hidden_dim,
+                        hidden_dim,
+                        edge_dim=self.sp_dim,
+                    )
+                )
+            else:
+                layers.append(DenseGCNConv(max_feat_num if i == 0 else hidden_dim, hidden_dim))
         self.layers = nn.ModuleList(layers)
-        fdim = max_feat_num + depth * hidden_dim
+        fdim = node_input_dim + depth * hidden_dim
         self.final = MLP(fdim, 2 * fdim, max_feat_num, 3)
 
     def forward(
@@ -482,12 +903,80 @@ class GSDMNodeScore(nn.Module):
         eigenvalues: torch.Tensor,
     ) -> torch.Tensor:
         del eigenvectors, eigenvalues
-        values = [x]
-        h = x
+        if self.rw_steps or self.sp_dim:
+            _, rw, sp = _structural_features_from_state(adj, flags, self.structural_features)
+            h = torch.cat((x, rw), dim=-1) if rw.size(-1) else x
+        else:
+            sp = x.new_zeros((*adj.shape, 0))
+            h = x
+        values = [h]
         for layer in self.layers:
-            h = torch.tanh(layer(h, adj))
+            if isinstance(layer, DenseStructuralGCNConv):
+                h = torch.tanh(layer(h, adj, flags, sp if sp.size(-1) else None))
+            else:
+                h = torch.tanh(layer(h, adj))
             values.append(h)
         out = self.final(torch.cat(values, dim=-1))
+        return out * flags.unsqueeze(-1).to(out.dtype)
+
+
+class GSDMNodePPGNScore(nn.Module):
+    """PPGN node-noise predictor for the optional all-PPGN backbone."""
+
+    def __init__(
+        self,
+        *,
+        max_feat_num: int,
+        max_nodes: int,
+        structural_features: Mapping[str, Any] | None = None,
+        ppgn_hidden_dim: int = 64,
+        ppgn_depth: int = 4,
+    ) -> None:
+        super().__init__()
+        self.max_feat_num = int(max_feat_num)
+        self.max_nodes = int(max_nodes)
+        self.structural_features = copy.deepcopy(dict(structural_features or {}))
+        rw_cfg = dict(self.structural_features.get("random_walk", {}) or {})
+        sp_cfg = dict(self.structural_features.get("shortest_path", {}) or {})
+        active = bool(self.structural_features.get("enabled", False))
+        self.rw_steps = int(rw_cfg.get("steps", 4)) if active and bool(rw_cfg.get("enabled", False)) else 0
+        self.sp_dim = (
+            int(sp_cfg.get("max_distance", 5)) + 2
+            if active and bool(sp_cfg.get("enabled", False)) else 0
+        )
+        node_dim = self.max_feat_num + self.rw_steps
+        pair_input_dim = 2 + self.sp_dim + node_dim
+        hdim = int(ppgn_hidden_dim)
+        self.pair_input = nn.Linear(pair_input_dim, hdim)
+        self.ppgn_layers = nn.ModuleList(PPGNLayer(hdim) for _ in range(int(ppgn_depth)))
+        self.node_readout = MLP(hdim, 2 * hdim, self.max_feat_num, 2)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        adj: torch.Tensor,
+        flags: torch.Tensor,
+        eigenvectors: torch.Tensor,
+        eigenvalues: torch.Tensor,
+    ) -> torch.Tensor:
+        del eigenvectors, eigenvalues
+        binary, rw, sp = _structural_features_from_state(adj, flags, self.structural_features)
+        node = torch.cat((x, rw), dim=-1) if rw.size(-1) else x
+        b, n, _ = x.shape
+        diag_node = x.new_zeros((b, n, n, node.size(-1)))
+        idx = torch.arange(n, device=x.device)
+        diag_node[:, idx, idx, :] = node
+        parts = [adj.unsqueeze(-1), binary.unsqueeze(-1)]
+        if sp.size(-1):
+            parts.append(sp)
+        parts.append(diag_node)
+        pair = torch.cat(parts, dim=-1)
+        pair_mask = flags.to(pair.dtype).unsqueeze(-1) * flags.to(pair.dtype).unsqueeze(-2)
+        h = F.elu(self.pair_input(pair)) * pair_mask.unsqueeze(-1)
+        for layer in self.ppgn_layers:
+            h = layer(h, pair_mask, flags)
+        diag = h[:, idx, idx, :]
+        out = self.node_readout(diag)
         return out * flags.unsqueeze(-1).to(out.dtype)
 
 
@@ -553,6 +1042,7 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
         hidden_dim: int,
         depth: int,
         graphlet_slices: tuple[tuple[int, int], ...],
+        structural_features: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(
             max_feat_num=max_feat_num,
@@ -560,6 +1050,29 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
             hidden_dim=hidden_dim,
             depth=depth,
         )
+        self.structural_features = copy.deepcopy(dict(structural_features or {}))
+        rw_cfg = dict(self.structural_features.get("random_walk", {}) or {})
+        sp_cfg = dict(self.structural_features.get("shortest_path", {}) or {})
+        active = bool(self.structural_features.get("enabled", False))
+        self.rw_steps = int(rw_cfg.get("steps", 4)) if active and bool(rw_cfg.get("enabled", False)) else 0
+        self.sp_dim = (
+            int(sp_cfg.get("max_distance", 5)) + 2
+            if active and bool(sp_cfg.get("enabled", False)) else 0
+        )
+        if self.rw_steps or self.sp_dim:
+            node_input_dim = int(max_feat_num) + self.rw_steps
+            layers: list[nn.Module] = []
+            for i in range(int(depth)):
+                layers.append(
+                    DenseStructuralGCNConv(
+                        node_input_dim if i == 0 else int(hidden_dim),
+                        int(hidden_dim),
+                        edge_dim=self.sp_dim,
+                    )
+                )
+            self.layers = nn.ModuleList(layers)
+            fdim = node_input_dim + int(depth) * int(hidden_dim)
+            self.node_final = MLP(fdim, 2 * fdim, int(max_feat_num), 3)
         self.graphlet_slices = tuple((int(a), int(b)) for a, b in graphlet_slices)
         if not self.graphlet_slices:
             raise ValueError("graphlet_slices must be non-empty")
@@ -572,6 +1085,30 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
             len(self.graphlet_slices),
             2,
         )
+
+    def _encode(
+        self,
+        x: torch.Tensor,
+        adj: torch.Tensor,
+        flags: torch.Tensor,
+        eigenvalues: torch.Tensor,
+    ) -> torch.Tensor:
+        if not (self.rw_steps or self.sp_dim):
+            return super()._encode(x, adj, flags, eigenvalues)
+        _, rw, sp = _structural_features_from_state(adj, flags, self.structural_features)
+        h = torch.cat((x, rw), dim=-1) if rw.size(-1) else x
+        values = [h]
+        for layer in self.layers:
+            if isinstance(layer, DenseStructuralGCNConv):
+                h = torch.tanh(layer(h, adj, flags, sp if sp.size(-1) else None))
+            else:  # defensive fallback for old serialized structures
+                h = torch.tanh(layer(h, adj))
+            values.append(h)
+        h = self.node_final(torch.cat(values, dim=-1))
+        h = h * flags.unsqueeze(-1).to(h.dtype)
+        count = flags.sum(dim=1, keepdim=True).clamp_min(1).to(h.dtype)
+        pooled = h.sum(dim=1) / count
+        return torch.cat((pooled, eigenvalues), dim=-1)
 
     def forward_all(
         self,
@@ -973,7 +1510,7 @@ def _joint_graphlet_targets(
 
 
 def _graphlet_auxiliary_loss(
-    model: GSDMSpectrumGraphletScore,
+    model: nn.Module,
     outputs: Mapping[str, torch.Tensor],
     target: torch.Tensor,
     mass_target: torch.Tensor,
@@ -981,6 +1518,8 @@ def _graphlet_auxiliary_loss(
     histogram_weight: float,
     mass_weight: float,
 ) -> tuple[torch.Tensor, dict[str, float]]:
+    if not hasattr(model, "graphlet_slices"):
+        raise TypeError("graphlet auxiliary model is missing graphlet_slices")
     logits = outputs["graphlet_logits"]
     losses = []
     mean_abs = []
@@ -1130,7 +1669,7 @@ def _loss_batch_loggap(
 
 def _loss_batch_loggap_graphlet(
     model_x: GSDMNodeScore,
-    model_lam: GSDMSpectrumGraphletScore,
+    model_lam: nn.Module,
     batch: tuple[torch.Tensor, ...],
     *,
     sde_x: VPSDE,
@@ -1177,6 +1716,8 @@ def _loss_batch_loggap_graphlet(
     adj_t = _operator_to_adjacency_state(operator_t, flags, "combinatorial_laplacian")
 
     pred_x = model_x(xt, adj_t, flags, u, state_t)
+    if not _is_joint_graphlet_score(model_lam):
+        raise TypeError("joint log-gap graphlet training requires a graphlet-capable spectrum model")
     outputs = model_lam.forward_all(xt, adj_t, flags, u, state_t)
     pred_state = outputs["spectrum"]
     loss_x = 0.5 * (pred_x - z_x).square().reshape(b, -1).sum(dim=-1).mean()
@@ -1217,6 +1758,10 @@ def _model_config(options: Mapping[str, Any], max_nodes: int) -> dict[str, Any]:
         "max_feat_num": int(max_feat_num),
         "hidden_dim": int(raw.get("hidden_dim", 32)),
         "depth": int(raw.get("depth", 3)),
+        "backbone": str(raw.get("backbone", raw.get("spectrum_backbone", "dense_gcn"))).lower(),
+        "ppgn_hidden_dim": int(raw.get("ppgn_hidden_dim", 64)),
+        "ppgn_depth": int(raw.get("ppgn_depth", 4)),
+        "structural_features": copy.deepcopy(dict(options.get("structural_features", {}) or {})),
     }
 
 
@@ -1225,12 +1770,26 @@ def _build_models(
     device: torch.device,
     *,
     graphlet_slices: tuple[tuple[int, int], ...] | None = None,
-) -> tuple[GSDMNodeScore, GSDMSpectrumScore]:
-    mx = GSDMNodeScore(
-        max_feat_num=int(cfg["max_feat_num"]),
-        hidden_dim=int(cfg["hidden_dim"]),
-        depth=int(cfg["depth"]),
-    ).to(device)
+) -> tuple[GSDMNodeScore, nn.Module]:
+    backbone = str(cfg.get("backbone", cfg.get("spectrum_backbone", "dense_gcn"))).lower()
+    structural_features = copy.deepcopy(dict(cfg.get("structural_features", {}) or {}))
+    if backbone == "ppgn":
+        mx = GSDMNodePPGNScore(
+            max_feat_num=int(cfg["max_feat_num"]),
+            max_nodes=int(cfg["max_nodes"]),
+            structural_features=structural_features,
+            ppgn_hidden_dim=int(cfg.get("ppgn_hidden_dim", 64)),
+            ppgn_depth=int(cfg.get("ppgn_depth", 4)),
+        ).to(device)
+    elif backbone == "dense_gcn":
+        mx = GSDMNodeScore(
+            max_feat_num=int(cfg["max_feat_num"]),
+            hidden_dim=int(cfg["hidden_dim"]),
+            depth=int(cfg["depth"]),
+            structural_features=structural_features,
+        ).to(device)
+    else:
+        raise ValueError(f"Unsupported backbone={backbone!r}")
     spectrum_kwargs = {
         "max_feat_num": int(cfg["max_feat_num"]),
         "max_nodes": int(cfg["max_nodes"]),
@@ -1238,10 +1797,22 @@ def _build_models(
         "depth": int(cfg["depth"]),
     }
     if graphlet_slices:
-        ml = GSDMSpectrumGraphletScore(
-            **spectrum_kwargs,
-            graphlet_slices=graphlet_slices,
-        ).to(device)
+        if backbone == "ppgn":
+            ml = GSDMSpectrumGraphletPPGNScore(
+                **spectrum_kwargs,
+                graphlet_slices=graphlet_slices,
+                structural_features=structural_features,
+                ppgn_hidden_dim=int(cfg.get("ppgn_hidden_dim", 64)),
+                ppgn_depth=int(cfg.get("ppgn_depth", 4)),
+            ).to(device)
+        elif backbone == "dense_gcn":
+            ml = GSDMSpectrumGraphletScore(
+                **spectrum_kwargs,
+                graphlet_slices=graphlet_slices,
+                structural_features=structural_features,
+            ).to(device)
+        else:
+            raise ValueError(f"Unsupported spectrum_backbone={backbone!r}")
     else:
         ml = GSDMSpectrumScore(**spectrum_kwargs).to(device)
     return mx, ml
@@ -1599,7 +2170,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     for opt in optimizers:
                         opt.zero_grad(set_to_none=True)
                     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
-                        if not isinstance(model_lam, GSDMSpectrumGraphletScore):
+                        if not _is_joint_graphlet_score(model_lam):
                             raise AssertionError("log-gap graphlet variant requires the joint spectrum/graphlet model")
                         lx, ll, lg, gmetrics = _loss_batch_loggap_graphlet(
                             model_x, model_lam, batch,
@@ -1689,7 +2260,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                         for batch_cpu in val_loader:
                             batch = tuple(v.to(device) for v in batch_cpu)
                             if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
-                                if not isinstance(model_lam, GSDMSpectrumGraphletScore):
+                                if not _is_joint_graphlet_score(model_lam):
                                     raise AssertionError("log-gap graphlet variant requires the joint spectrum/graphlet model")
                                 lx, ll, lg, gmetrics = _loss_batch_loggap_graphlet(
                                     model_x, model_lam, batch,
@@ -1811,7 +2382,18 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
             "basis_adjacencies": train_data[1].numpy(),
             "basis_num_nodes": train_data[3].numpy().astype(np.int64),
             "basis_source": "training_split_only",
-            "node_feature_init": "degree_one_hot",
+            "node_feature_init": (
+                "diffused_degree_one_hot_plus_random_walk_arrival_conditioning"
+                if bool(model_cfg.get("structural_features", {}).get("enabled", False))
+                and bool(model_cfg.get("structural_features", {}).get("random_walk", {}).get("enabled", False))
+                else "degree_one_hot"
+            ),
+            "edge_feature_init": (
+                "truncated_shortest_path_one_hot_from_binarized_current_state"
+                if bool(model_cfg.get("structural_features", {}).get("enabled", False))
+                and bool(model_cfg.get("structural_features", {}).get("shortest_path", {}).get("enabled", False))
+                else "none"
+            ),
             "history": history,
             "train_seed": request.run.train_seed,
             "degree_prior": (
@@ -2248,7 +2830,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             batch_graphlet_hist = None
             batch_graphlet_mass = None
             if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
-                if not isinstance(model_lam, GSDMSpectrumGraphletScore):
+                if not _is_joint_graphlet_score(model_lam):
                     raise AssertionError("log-gap graphlet generation requires joint summary head")
                 nmax = soft.size(1)
                 flags = (
@@ -2584,6 +3166,8 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             "checkpoint": {"path": str(request.checkpoint_path.resolve()), "sha256": _sha256(request.checkpoint_path)},
             "sampling": {
                 "node_count": "jointly_sampled_with_training_eigenbasis",
+                "score_backbone": str(model_cfg.get("backbone", "dense_gcn")),
+                "structural_features": _jsonable(model_cfg.get("structural_features", {})),
                 "spectral_operator": spectral_operator,
                 "spectral_parameterization": str(spectral_transform.get("kind", "direct_eigenvalues")),
                 "eigenvectors": (
