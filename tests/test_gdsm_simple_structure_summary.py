@@ -152,3 +152,59 @@ def test_shipped_structure_ppgn_config(tmp_path):
     assert resolved["orbit"]["width"] == 15
     assert options["model"]["spectrum_backbone"] == "ppgn"
     assert options["graphlet_refinement"]["enabled"] is False
+
+
+def test_joint_structure_score_head_train_generate_smoke(tmp_path):
+    torch.set_num_threads(1)
+    dataset = _write_dataset(tmp_path)
+    wrapper = GDSMSimpleWrapper()
+    options = _options()
+    options["structure_score"] = {
+        "enabled": True,
+        "loss_weight": 0.05,
+        "teacher_clip_norm": 5.0,
+        "orbit_log_total_sigma": 0.25,
+        "guidance": {
+            "enabled": True,
+            "scale": 0.05,
+            "start_time": 0.5,
+            "schedule": "late_linear",
+            "target_source": "denoised_summary",
+            "score_clip_norm": 5.0,
+        },
+    }
+    run = RunSpec("gdsm_simple", "community_small", "structure-score", 42, tmp_path / "runs")
+    artifacts = wrapper.train(TrainRequest(run, dataset, options=options))
+    state = torch.load(artifacts.checkpoint_path, map_location="cpu", weights_only=False)
+    assert state["structure_score"]["enabled"] is True
+    assert state["model_config"]["structure_score"]["enabled"] is True
+    assert any("structure_score_head" in key for key in state["model_spectrum_state"])
+    assert "train_structure_score_loss" in state["history"][-1]
+    assert np.isfinite(state["history"][-1]["train_structure_score_loss"])
+    assert "train_structure_score_cosine" in state["history"][-1]
+
+    generated = wrapper.generate(
+        GenerateRequest(run, artifacts.checkpoint_path, 2, 99, generation_id="guided")
+    )
+    manifest = json.loads((generated.generation_dir / "manifest.json").read_text())
+    assert manifest["sampling"]["rewiring"] is False
+    assert manifest["sampling"]["structural_guidance"] == (
+        "learned_structural_log_score_guidance_in_standardized_log_gap_space"
+    )
+    assert manifest["sampling"]["structure_score"]["guidance"]["enabled"] is True
+
+
+def test_structure_score_shipped_config(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    wrapper = GDSMSimpleWrapper()
+    config = root / "configs/experiments/gdsm_laplacian_loggap_structure_score_rwsp_ppgn_explicit/community_small_seed_42.yaml"
+    request = TrainRequest(
+        RunSpec("gdsm_simple", "community_small", "score-cfg", 42, tmp_path / "runs"),
+        DatasetReference("community_small", tmp_path / "datasets", "unused"),
+        config_path=config,
+    )
+    options = wrapper._options(request)
+    assert options["model"]["spectrum_backbone"] == "ppgn"
+    assert options["graphlet_refinement"]["enabled"] is False
+    assert options["structure_score"]["enabled"] is True
+    assert options["structure_score"]["guidance"]["enabled"] is True

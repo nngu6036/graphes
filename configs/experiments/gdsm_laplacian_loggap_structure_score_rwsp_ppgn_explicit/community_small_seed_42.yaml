@@ -1,0 +1,129 @@
+comparison:
+  model: gdsm_simple
+  dataset: community_small
+  common_config: common_community_small.yaml
+  status: vanilla_laplacian_loggap_structure_score_rwsp_ppgn_seed_42
+  budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  comparison_targets:
+    adjacency_stage0: vanilla_gsdm
+    laplacian_stage2a: vanilla_laplacian_gsdm
+  fairness_note: Selected no-rewiring Laplacian log-gap model with DenseGCN node score,
+    stabilized PPGN spectrum/structure encoder, RW/SP features, graphlet+clustering+orbit
+    supervision, plus a second head distilled to predict grad_z log p(S_clean | X_t,z_t).
+    During sampling the learned structural score is injected only in the late reverse
+    trajectory and is conditioned on the time-dependent summary predicted from the
+    denoised log-gap estimate. No rewiring.
+gdsm_simple:
+  variant: vanilla_laplacian_loggap_graphlet
+  train:
+    epochs: 10000
+    batch_size: 128
+    lr: 0.01
+    weight_decay: 0.0001
+    grad_norm: 1.0
+    lr_schedule: true
+    lr_decay: 0.9999799901935271
+    ema: 0.999
+    validation_every: 1
+    log_every: 10
+    node_lr: 0.01
+    spectrum_lr: 0.001
+  model:
+    max_nodes: 20
+    max_feat_num: 20
+    hidden_dim: 32
+    depth: 3
+    backbone: dense_gcn
+    ppgn_hidden_dim: 64
+    ppgn_depth: 4
+    node_backbone: dense_gcn
+    spectrum_backbone: ppgn
+    ppgn_residual_scale: 0.1
+    ppgn_norm_eps: 1.0e-05
+    ppgn_input_clip: 10.0
+  sde:
+    x:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    spectrum:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    eps: 1.0e-05
+    eigen_mask: laplacian_nonzero_prefix
+    spectral_parameterization: laplacian_log_gap
+    log_gap_epsilon: 1.0e-06
+    log_gap_min_std: 0.001
+    log_gap_exp_clip: 20.0
+  graphlet_summary:
+    enabled: false
+  sample:
+    predictor: euler
+    corrector: langevin
+    snr: 0.05
+    scale_eps: 0.7
+    n_steps: 1
+    noise_removal: true
+    probability_flow: false
+    eps: 0.0001
+    threshold: 0.5
+    use_ema: false
+  generation_batch_size: 128
+  runtime:
+    device: auto
+  extensions:
+    degree_conditioning: false
+    hh_initialization: false
+    degree_preserving_rewiring: false
+    structural_summary: none
+  structural_features:
+    enabled: true
+    binarize_threshold: 0.5
+    random_walk:
+      enabled: true
+      steps: 4
+    shortest_path:
+      enabled: true
+      max_distance: 5
+  graphlet_refinement:
+    enabled: false
+  structure_summary:
+    enabled: true
+    loss_weight: 0.1
+    graphlet:
+      enabled: true
+      orders:
+      - 3
+      - 4
+      - 5
+      histogram_weight: 1.0
+      mass_weight: 0.25
+    clustering:
+      enabled: true
+      bins: 100
+      histogram_weight: 0.25
+      cdf_weight: 1.0
+    orbit:
+      enabled: true
+      width: 15
+      histogram_weight: 0.25
+      log_total_weight: 0.1
+  structure_score:
+    enabled: true
+    loss_weight: 0.05
+    teacher_clip_norm: 5.0
+    orbit_log_total_sigma: 0.25
+    guidance:
+      enabled: true
+      scale: 0.05
+      start_time: 0.5
+      schedule: late_linear
+      target_source: denoised_summary
+      score_clip_norm: 5.0
