@@ -52,7 +52,6 @@ from .vanilla_gsdm import (
     GSDMNodeScore,
     _EMA,
     _fit_laplacian_log_gap_stats,
-    _graphs,
     _jsonable,
     _laplacian_eigh_padded,
     _make_sdes,
@@ -79,6 +78,39 @@ VARIANTS = {
     "laplacian_loggap_attributed_ppgn",
     "gsdm_laplacian_loggap_attributed_ppgn",
 }
+
+def _attributed_graphs(path: Path) -> list[nx.Graph]:
+    """Load attributed molecular graphs, including valid one-node molecules.
+
+    The generic/vanilla GSDM loader rejects graphs with fewer than two nodes
+    because its original topology-only pipeline assumes at least one possible
+    edge and infers support from adjacency.  Heavy-atom QM9 legitimately
+    contains singleton molecules (for example methane after hydrogens are
+    removed).  In the attributed Laplacian model a singleton is a well-defined
+    degenerate topology: its combinatorial Laplacian has only the fixed zero
+    eigenvalue, there are no log-gap coordinates or bond labels to predict, and
+    the categorical node head still predicts the atom type.
+
+    We therefore allow n >= 1 here and let the later connectedness check reject
+    disconnected multi-node inputs.
+    """
+    from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
+
+    value = load_trusted_networkx_pickle(path)
+    if not isinstance(value, (list, tuple)) or not value:
+        raise ValueError(f"Expected a non-empty graph list: {path}")
+    result: list[nx.Graph] = []
+    for index, graph in enumerate(value):
+        if not isinstance(graph, nx.Graph):
+            raise TypeError(f"Graph {index} in {path} is not networkx.Graph")
+        if graph.is_directed() or graph.is_multigraph():
+            raise ValueError("Attributed Laplacian GSDM supports simple undirected graphs only")
+        g = nx.convert_node_labels_to_integers(graph, ordering="sorted")
+        if g.number_of_nodes() < 1:
+            raise ValueError(f"Attributed Laplacian GSDM requires at least one node: {path}[{index}]")
+        result.append(g)
+    return result
+
 
 
 def default_options() -> dict[str, Any]:
@@ -708,7 +740,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str,Any]) -> Training
         raise ArtifactCollisionError('Existing attributed log-gap run differs; choose a new run-id or --overwrite')
     ArtifactLayout.require_available(layout.train_dir,overwrite=request.overwrite)
     _seed_everything(request.run.train_seed); device=_resolve_device(options.get('runtime',{})); started=time.monotonic()
-    train_graphs=_graphs(request.dataset.split_paths['train']); val_graphs=_graphs(request.dataset.split_paths['val'])
+    train_graphs=_attributed_graphs(request.dataset.split_paths['train']); val_graphs=_attributed_graphs(request.dataset.split_paths['val'])
     for split,graphs in [('train',train_graphs),('val',val_graphs)]:
         for i,g in enumerate(graphs):
             if not nx.is_connected(g): raise ValueError(f'Attributed Laplacian model requires connected graphs; found {split}[{i}]')

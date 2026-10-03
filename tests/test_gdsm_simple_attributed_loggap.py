@@ -42,8 +42,9 @@ def _graphs():
 def _write_dataset(root: Path):
     folder = root / "datasets" / "toy"
     folder.mkdir(parents=True)
-    train = _graphs()
-    val = [_graphs()[0], _graphs()[1]]
+    singleton = _mol_graph([], [6])
+    train = [singleton] + _graphs()
+    val = [singleton, _graphs()[0], _graphs()[1]]
     test = [_graphs()[2]]
     for split, graphs in (("train", train), ("val", val), ("test", test)):
         with (folder / f"{split}.pkl").open("wb") as handle:
@@ -190,10 +191,11 @@ def test_attributed_loggap_train_generate_smoke(tmp_path):
     assert any("node_category_head" in k for k in state["model_spectrum_state"])
     assert any("edge_category_head" in k for k in state["model_spectrum_state"])
 
-    generated = wrapper.generate(GenerateRequest(run, artifacts.checkpoint_path, 2, 99, generation_id="s"))
+    generated = wrapper.generate(GenerateRequest(run, artifacts.checkpoint_path, 20, 99, generation_id="s"))
     with generated.graphs_path.open("rb") as handle:
         rows = pickle.load(handle)
-    assert len(rows) == 2
+    assert len(rows) == 20
+    assert any(g.number_of_nodes() == 1 for g in rows)
     for g in rows:
         assert all("atomic_num" in d for _, d in g.nodes(data=True))
         assert all(d["atomic_num"] in {6,7,8,9} for _, d in g.nodes(data=True))
