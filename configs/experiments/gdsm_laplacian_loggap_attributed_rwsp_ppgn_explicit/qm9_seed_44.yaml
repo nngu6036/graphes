@@ -123,6 +123,14 @@ gdsm_simple:
   graphlet_refinement:
     enabled: false
 
+  preprocess:
+    # Exact typed k=3,4,5 targets are CPU preprocessing.  Use a few worker
+    # processes and cache the result so later seeds/reruns do not recompute it.
+    num_workers: 4
+    chunksize: 64
+    progress_every: 2000
+    cache_structure_targets: true
+
   generation_batch_size: 128
   runtime:
     device: auto

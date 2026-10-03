@@ -14,6 +14,7 @@ from grapher.models.gdsm_simple.attributed_loggap import (
     CHECKPOINT_FORMAT,
     _attributed_labels,
     _mask_categorical_inputs,
+    _sample_categorical_logits,
     _typed_structure_targets,
     default_options,
 )
@@ -99,6 +100,20 @@ def _options():
     o["runtime"] = {"device": "cpu"}
     return o
 
+
+
+
+def test_stochastic_categorical_sampling_is_seeded_and_temperature_controlled():
+    logits = torch.tensor([[0.0, 0.0, 0.0], [2.0, 0.0, -1.0]], dtype=torch.float32)
+    g1 = torch.Generator().manual_seed(123)
+    g2 = torch.Generator().manual_seed(123)
+    a = _sample_categorical_logits(logits, mode="sample", temperature=1.0, generator=g1)
+    b = _sample_categorical_logits(logits, mode="sample", temperature=1.0, generator=g2)
+    assert torch.equal(a, b)
+    assert a.shape == (2,)
+    # Argmax remains available for exact reproduction of the previous decoder.
+    c = _sample_categorical_logits(logits, mode="argmax", temperature=1.0, generator=torch.Generator())
+    assert torch.equal(c, torch.tensor([0, 0]))
 
 def test_attributed_ppgn_edge_head_excludes_no_edge_and_is_symmetric():
     torch.manual_seed(3)
@@ -206,6 +221,23 @@ def test_attributed_loggap_train_generate_smoke(tmp_path):
     assert manifest["sampling"]["categorical_flow_matching"] is False
     assert manifest["sampling"]["rewiring"] is False
 
+    stochastic = wrapper.generate(GenerateRequest(
+        run, artifacts.checkpoint_path, 12, 101, generation_id="stochastic",
+        options={"attributed": {"decode": {
+            "node_mode": "sample", "edge_mode": "sample",
+            "node_temperature": 1.0, "edge_temperature": 1.0, "two_pass": True,
+        }}},
+    ))
+    smanifest = json.loads((stochastic.generation_dir / "manifest.json").read_text())
+    assert smanifest["sampling"]["node_decode_mode"] == "sample"
+    assert smanifest["sampling"]["edge_decode_mode"] == "sample"
+    assert smanifest["sampling"]["node_temperature"] == 1.0
+    assert smanifest["sampling"]["edge_temperature"] == 1.0
+    with stochastic.graphs_path.open("rb") as handle:
+        srows = pickle.load(handle)
+    assert len(srows) == 12
+    assert all(d["bond_type"] in {1,2,3} for g in srows for _,_,d in g.edges(data=True))
+
 
 def test_shipped_qm9_attributed_config_resolves(tmp_path):
     root = Path(__file__).resolve().parents[1]
@@ -223,3 +255,15 @@ def test_shipped_qm9_attributed_config_resolves(tmp_path):
     assert options["attributed"]["edge_categories"] == [1,2,3]
     assert options["structure_summary"]["graphlet"]["attributed"] is True
     assert options["graphlet_refinement"]["enabled"] is False
+
+    stochastic_config = root / "configs/experiments/gdsm_laplacian_loggap_attributed_rwsp_ppgn_stochastic_explicit/qm9_seed_42.yaml"
+    stochastic_request = TrainRequest(
+        RunSpec("gdsm_simple", "qm9", "cfg-stochastic", 42, tmp_path / "runs"),
+        DatasetReference("qm9", tmp_path / "datasets", "unused"),
+        config_path=stochastic_config,
+    )
+    sopts = wrapper._options(stochastic_request)
+    assert sopts["attributed"]["decode"]["node_mode"] == "sample"
+    assert sopts["attributed"]["decode"]["edge_mode"] == "sample"
+    assert sopts["attributed"]["decode"]["node_temperature"] == 1.0
+    assert sopts["attributed"]["decode"]["edge_temperature"] == 1.0

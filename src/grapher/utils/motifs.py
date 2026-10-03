@@ -1352,6 +1352,7 @@ def _count_compiled_attributed_graphlets(
     *,
     num_samples: int | None,
     rng: np.random.Generator | None,
+    connected_only: bool = False,
 ) -> dict[str, int]:
     if k <= 0 or k > 7:
         raise ValueError("The Python attributed graphlet counter supports 1 <= k <= 7.")
@@ -1366,9 +1367,33 @@ def _count_compiled_attributed_graphlets(
         indices, k, num_samples=num_samples, rng=rng
     ):
         subset = tuple(int(index) for index in raw_subset)
+        selected_edges = _compiled_edge_tokens(edge_tokens, subset)
+        if connected_only:
+            # Connectivity is tested on the compact induced edge table before
+            # attributed canonicalization.  For molecular graphlets k <= 5,
+            # this tiny DFS is much cheaper than constructing a NetworkX
+            # subgraph for every subset.
+            kk = len(subset)
+            local_adj = [[] for _ in range(kk)]
+            for edge_token, (left, right) in zip(
+                selected_edges, itertools.combinations(range(kk), 2)
+            ):
+                if edge_token is not None:
+                    local_adj[left].append(right)
+                    local_adj[right].append(left)
+            seen = {0}
+            stack = [0]
+            while stack:
+                current = stack.pop()
+                for nxt in local_adj[current]:
+                    if nxt not in seen:
+                        seen.add(nxt)
+                        stack.append(nxt)
+            if len(seen) != kk:
+                continue
         key = _canonicalize_attributed_tokens(
             tuple(node_tokens[index] for index in subset),
-            _compiled_edge_tokens(edge_tokens, subset),
+            selected_edges,
         )
         counts[key] += 1
     return dict(counts)
@@ -1407,7 +1432,7 @@ def attributed_graphlet_count_dict_multi(
         selected_backend == "auto" and bool(nauty_exec)
     )
 
-    if not use_nauty and selected_filter == "all" and not connected_only:
+    if not use_nauty and selected_filter == "all":
         compiled = _compile_attributed_graph_python_all(
             graph,
             node_label_attr=node_label_attr,
@@ -1417,7 +1442,11 @@ def attributed_graphlet_count_dict_multi(
         if compiled is not None:
             return {
                 k: _count_compiled_attributed_graphlets(
-                    compiled, k, num_samples=num_samples, rng=rng
+                    compiled,
+                    k,
+                    num_samples=num_samples,
+                    rng=rng,
+                    connected_only=connected_only,
                 )
                 for k in orders
             }
@@ -1587,7 +1616,7 @@ def attributed_graphlet_count_dict(
             "Attributed graphlet backend 'nauty' requires NAUTY_EXEC or labelg."
         )
 
-    if not use_nauty and selected_filter == "all" and not connected_only:
+    if not use_nauty and selected_filter == "all":
         fast_counts = _attributed_graphlet_count_dict_python_all(
             graph,
             int(k),

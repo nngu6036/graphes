@@ -1,11 +1,9 @@
-# QM9 attributed extension of the selected Laplacian log-gap GSDM.
-# Topology: Laplacian log-gap VP diffusion + PPGN + RW/SP.
-# Attributes: masked categorical denoising heads (no categorical flow matching).
-# Edge existence is determined only by topology; the edge head predicts real
-# bond type on present edges and has no no-edge class.
+# QM9 attributed Laplacian log-gap GSDM with stochastic categorical decoding.
+# Training is identical to the argmax config; decode settings are generation-only.
+# This config can therefore reuse an existing checkpoint trained with the matching
+# gdsm_laplacian_loggap_attributed_rwsp_ppgn_explicit config.
 gdsm_simple:
   variant: vanilla_laplacian_loggap_attributed_ppgn
-
   train:
     epochs: 200
     batch_size: 128
@@ -19,7 +17,6 @@ gdsm_simple:
     ema: 0.999
     validation_every: 1
     log_every: 10
-
   model:
     max_nodes: 9
     max_feat_num: 9
@@ -30,9 +27,8 @@ gdsm_simple:
     ppgn_hidden_dim: 64
     ppgn_depth: 4
     ppgn_residual_scale: 0.1
-    ppgn_norm_eps: 1.0e-5
+    ppgn_norm_eps: 1.0e-05
     ppgn_input_clip: 10.0
-
   structural_features:
     enabled: true
     binarize_threshold: 0.5
@@ -42,7 +38,6 @@ gdsm_simple:
     shortest_path:
       enabled: true
       max_distance: 5
-
   sde:
     x:
       type: vp
@@ -54,13 +49,12 @@ gdsm_simple:
       beta_min: 0.1
       beta_max: 1.0
       num_scales: 1000
-    eps: 1.0e-5
+    eps: 1.0e-05
     eigen_mask: laplacian_nonzero_prefix
     spectral_parameterization: laplacian_log_gap
-    log_gap_epsilon: 1.0e-6
-    log_gap_min_std: 1.0e-3
+    log_gap_epsilon: 1.0e-06
+    log_gap_min_std: 0.001
     log_gap_exp_clip: 20.0
-
   sample:
     predictor: euler
     corrector: langevin
@@ -69,19 +63,18 @@ gdsm_simple:
     n_steps: 1
     noise_removal: true
     probability_flow: false
-    eps: 1.0e-4
+    eps: 0.0001
     threshold: 0.5
     use_ema: false
-
-  # Joint structural supervision.  Typed graphlets use the training-set
-  # attributed vocabulary plus an overflow bin, so validation/test classes do
-  # not leak into training.
   structure_summary:
     enabled: true
-    loss_weight: 0.10
+    loss_weight: 0.1
     graphlet:
       enabled: true
-      orders: [3, 4, 5]
+      orders:
+      - 3
+      - 4
+      - 5
       histogram_weight: 1.0
       mass_weight: 0.25
       connected_only: true
@@ -97,44 +90,41 @@ gdsm_simple:
       enabled: true
       width: 15
       histogram_weight: 0.25
-      log_total_weight: 0.10
-
+      log_total_weight: 0.1
   attributed:
     node_attribute: atomic_num
-    node_categories: [6, 7, 8, 9]
+    node_categories:
+    - 6
+    - 7
+    - 8
+    - 9
     edge_attribute: bond_type
-    edge_categories: [1, 2, 3]
+    edge_categories:
+    - 1
+    - 2
+    - 3
     node_loss_weight: 1.0
     edge_loss_weight: 1.0
     corruption:
-      # Training receives partially masked categorical states; a fraction of
-      # batches are fully masked to match unconditional attribute decoding.
       mask_probability_min: 0.15
       mask_probability_max: 0.95
       full_mask_probability: 0.25
     decode:
-      node_mode: argmax
-      edge_mode: argmax
-      # Pass 1 predicts atoms with all categories masked.  Pass 2 conditions
-      # bond-type prediction on the predicted atoms and generated topology.
+      node_mode: sample
+      edge_mode: sample
       two_pass: true
-
-  # This experiment intentionally excludes post-generation rewiring.
+      node_temperature: 1.0
+      edge_temperature: 1.0
   graphlet_refinement:
     enabled: false
-
   preprocess:
-    # Exact typed k=3,4,5 targets are CPU preprocessing.  Use a few worker
-    # processes and cache the result so later seeds/reruns do not recompute it.
     num_workers: 4
     chunksize: 64
     progress_every: 2000
     cache_structure_targets: true
-
   generation_batch_size: 128
   runtime:
     device: auto
-
   extensions:
     degree_conditioning: false
     hh_initialization: false

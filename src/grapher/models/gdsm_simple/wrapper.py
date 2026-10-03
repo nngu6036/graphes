@@ -603,10 +603,20 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         # rewiring, but never the trained denoiser architecture/diffusion.
         unknown = sorted(
             set(request.options)
-            - {"runtime", "generation_batch_size", "sample", "extensions", "graphlet_refinement"}
+            - {"runtime", "generation_batch_size", "sample", "extensions", "graphlet_refinement", "attributed"}
         )
         if unknown:
             raise ValueError(f"Unsupported gdsm_simple generation overrides: {unknown}")
+        if "attributed" in request.options:
+            attr_override = request.options.get("attributed", {}) or {}
+            if not isinstance(attr_override, Mapping):
+                raise TypeError("gdsm_simple attributed generation override must be a mapping")
+            bad_attr = sorted(set(attr_override) - {"decode"})
+            if bad_attr:
+                raise ValueError(
+                    "Only attributed.decode may be overridden during generation; "
+                    f"found training-time attributed keys: {bad_attr}"
+                )
         _deep_update(options, request.options)
         generation_extensions = options.get("extensions", {}) or {}
         from grapher.models.gdsm_simple.attributed_loggap import (

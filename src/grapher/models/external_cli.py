@@ -683,6 +683,15 @@ def _generation_options(
                 result[key] = (
                     dict(value) if isinstance(value, Mapping) else value
                 )
+        # Attribute decoding is generation-only.  Expose only the safe decode
+        # sub-block so a trained attributed checkpoint can be compared under
+        # argmax versus stochastic categorical sampling without retraining.
+        attributed = selected.get("attributed", {}) or {}
+        if isinstance(attributed, Mapping) and "decode" in attributed:
+            decode = attributed.get("decode", {}) or {}
+            if not isinstance(decode, Mapping):
+                raise TypeError("gdsm_simple attributed.decode must be a mapping")
+            result["attributed"] = {"decode": dict(decode)}
 
     # Explicit CLI runtime / throughput controls remain highest priority.
     result["runtime"] = runtime

@@ -17,8 +17,10 @@ Design contract
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
+import multiprocessing as mp
 import pickle
 import random
 import shutil
@@ -212,11 +214,19 @@ def default_options() -> dict[str, Any]:
             "decode": {
                 "node_mode": "argmax",
                 "edge_mode": "argmax",
+                "node_temperature": 1.0,
+                "edge_temperature": 1.0,
                 "two_pass": True,
             },
         },
         "generation_batch_size": 128,
         "runtime": {"device": "auto"},
+        "preprocess": {
+            "num_workers": 0,
+            "chunksize": 64,
+            "progress_every": 2000,
+            "cache_structure_targets": True,
+        },
         "graphlet_refinement": {"enabled": False},
         "extensions": {
             "degree_conditioning": False,
@@ -268,6 +278,15 @@ def validate_options(options: Mapping[str, Any]) -> None:
         raise ValueError("attributed.node_categories must be non-empty")
     if not list(attr.get("edge_categories", [])):
         raise ValueError("attributed.edge_categories must be non-empty")
+    decode = dict(attr.get("decode", {}) or {})
+    for key in ("node_mode", "edge_mode"):
+        mode = str(decode.get(key, "argmax")).lower()
+        if mode not in {"argmax", "sample", "categorical", "stochastic"}:
+            raise ValueError(f"attributed.decode.{key} must be argmax or sample, found {mode!r}")
+    for key in ("node_temperature", "edge_temperature"):
+        value = float(decode.get(key, 1.0))
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"attributed.decode.{key} must be finite and > 0")
     corruption = dict(attr.get("corruption", {}) or {})
     p0 = float(corruption.get("mask_probability_min", 0.15))
     p1 = float(corruption.get("mask_probability_max", 0.95))
@@ -491,6 +510,86 @@ def _summary_config(options: Mapping[str, Any]) -> dict[str, Any]:
     return copy.deepcopy(dict(options.get("structure_summary", {}) or {}))
 
 
+
+_ATTR_TARGET_WORKER_STATE: dict[str, Any] = {}
+
+
+def _init_attr_target_worker(
+    basis: GraphletBasis,
+    scfg: SummaryConfig,
+    bins: int,
+    width: int,
+    clustering_enabled: bool,
+    orbit_enabled: bool,
+    seed: int,
+) -> None:
+    global _ATTR_TARGET_WORKER_STATE
+    _ATTR_TARGET_WORKER_STATE = {
+        "basis": basis,
+        "scfg": scfg,
+        "bins": int(bins),
+        "width": int(width),
+        "clustering_enabled": bool(clustering_enabled),
+        "orbit_enabled": bool(orbit_enabled),
+        "seed": int(seed),
+    }
+
+
+def _attr_target_worker(item: tuple[int, nx.Graph]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    index, graph = item
+    state = _ATTR_TARGET_WORKER_STATE
+    basis: GraphletBasis = state["basis"]
+    scfg: SummaryConfig = state["scfg"]
+    rng = np.random.default_rng(int(state["seed"]) + 333 + int(index))
+    history, mass = basis.statistics_for_graph(graph, scfg, rng=rng)
+    hist = basis.flatten_history(history).astype(np.float32)
+    mass_vec = basis.flatten_mass(mass).astype(np.float32)
+    bins = int(state["bins"])
+    width = int(state["width"])
+    if bool(state["clustering_enabled"]):
+        clustering = clustering_histogram(graph, bins=bins).astype(np.float32)
+    else:
+        clustering = np.zeros(bins, np.float32)
+    if bool(state["orbit_enabled"]):
+        counts = np.maximum(np.asarray(python_orbit_count_vector(graph), dtype=np.float64).reshape(-1), 0.0)
+        if counts.size != width:
+            raise ValueError(f"Expected orbit width {width}, got {counts.size}")
+        total = float(counts.sum())
+        orbit_hist = (counts / total if total > 0 else np.zeros_like(counts)).astype(np.float32)
+        orbit_total = np.asarray([np.log1p(total)], np.float32)
+    else:
+        orbit_hist = np.zeros(width, np.float32)
+        orbit_total = np.zeros(1, np.float32)
+    return hist, mass_vec, clustering, orbit_hist, orbit_total
+
+
+def _structure_cache_path(
+    layout: ArtifactLayout,
+    fingerprint: Any,
+    options: Mapping[str, Any],
+    vocab: GraphCategoryVocabulary,
+    max_nodes: int,
+) -> Path:
+    payload = {
+        "format": "gdsm_attr_structure_cache_v2",
+        "dataset_fingerprint": _jsonable(fingerprint),
+        "structure_summary": _jsonable(_summary_config(options)),
+        "attributed": _jsonable(dict(options.get("attributed", {}) or {})),
+        "vocabulary": _jsonable(vocab.to_dict()),
+        "max_nodes": int(max_nodes),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    key = hashlib.sha256(encoded).hexdigest()[:24]
+    return layout.run_dir.parent / "_preprocess_cache" / f"attributed_structure_{key}.pt"
+
+
+def _torch_load_unrestricted(path: Path) -> Any:
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
+
+
 def _typed_structure_targets(
     graphs: Sequence[nx.Graph],
     options: Mapping[str, Any],
@@ -521,41 +620,95 @@ def _typed_structure_targets(
         "attributed_backend": str(gcfg.get("attributed_backend", "python")),
     }
     scfg = SummaryConfig.from_dict(scfg_dict)
+    pcfg = dict(options.get("preprocess", {}) or {})
+    progress_every = max(int(pcfg.get("progress_every", 2000)), 1)
     if basis is None:
         max_basis = gcfg.get("max_basis_graphs", None)
         basis_graphs = list(graphs) if max_basis is None else list(graphs)[: int(max_basis)]
+        last_reported: dict[int, int] = {}
+        def _basis_progress(k: int, done: int, total: int, bins_seen: int) -> None:
+            if done == total or done % progress_every == 0:
+                marker = (int(k), int(done))
+                if last_reported.get(int(k)) != int(done):
+                    print(
+                        f"[attributed-preprocess] typed graphlet vocabulary k={k}: "
+                        f"{done}/{total} graphs, bins={bins_seen}",
+                        flush=True,
+                    )
+                    last_reported[int(k)] = int(done)
         basis = GraphletBasis.fit_from_graphs(
             basis_graphs,
             scfg_dict,
             vocabulary=vocab,
             attributed=True,
             seed=seed,
+            progress_callback=_basis_progress,
+        )
+        print(
+            f"[attributed-preprocess] typed graphlet vocabulary complete: "
+            f"basis_graphs={len(basis_graphs)}, width={basis.width}",
+            flush=True,
         )
     histograms: list[np.ndarray] = []
     masses: list[np.ndarray] = []
     clusterings: list[np.ndarray] = []
     orbit_hist: list[np.ndarray] = []
     orbit_total: list[np.ndarray] = []
-    rng = np.random.default_rng(seed + 333)
     bins = int(ccfg.get("bins", 100))
     width = int(ocfg.get("width", 15))
-    for graph in graphs:
-        history, mass = basis.statistics_for_graph(graph, scfg, rng=rng)
-        histograms.append(basis.flatten_history(history).astype(np.float32))
-        masses.append(basis.flatten_mass(mass).astype(np.float32))
-        if bool(ccfg.get("enabled", False)):
-            clusterings.append(clustering_histogram(graph, bins=bins).astype(np.float32))
-        else:
-            clusterings.append(np.zeros(bins, np.float32))
-        if bool(ocfg.get("enabled", False)):
-            counts = np.maximum(np.asarray(python_orbit_count_vector(graph), dtype=np.float64).reshape(-1), 0.0)
-            if counts.size != width:
-                raise ValueError(f"Expected orbit width {width}, got {counts.size}")
-            total = float(counts.sum())
-            orbit_hist.append((counts / total if total > 0 else np.zeros_like(counts)).astype(np.float32))
-            orbit_total.append(np.asarray([np.log1p(total)], np.float32))
-        else:
-            orbit_hist.append(np.zeros(width, np.float32)); orbit_total.append(np.zeros(1, np.float32))
+    workers = max(int(pcfg.get("num_workers", 0)), 0)
+    chunksize = max(int(pcfg.get("chunksize", 64)), 1)
+    total_graphs = len(graphs)
+    started_targets = time.monotonic()
+    print(
+        f"[attributed-preprocess] extracting typed structure targets: "
+        f"graphs={total_graphs}, workers={workers}",
+        flush=True,
+    )
+    results: Any
+    if workers > 1 and total_graphs > 1:
+        available_methods = mp.get_all_start_methods()
+        ctx = mp.get_context("fork" if "fork" in available_methods else available_methods[0])
+        with ctx.Pool(
+            processes=workers,
+            initializer=_init_attr_target_worker,
+            initargs=(
+                basis, scfg, bins, width,
+                bool(ccfg.get("enabled", False)),
+                bool(ocfg.get("enabled", False)),
+                int(seed),
+            ),
+        ) as pool:
+            results = pool.imap(_attr_target_worker, enumerate(graphs), chunksize=chunksize)
+            for done, result in enumerate(results, start=1):
+                hist, mass_vec, clustering, oh, ot = result
+                histograms.append(hist); masses.append(mass_vec); clusterings.append(clustering); orbit_hist.append(oh); orbit_total.append(ot)
+                if done == total_graphs or done % progress_every == 0:
+                    elapsed = time.monotonic() - started_targets
+                    rate = done / max(elapsed, 1.0e-9)
+                    print(
+                        f"[attributed-preprocess] structure targets: {done}/{total_graphs} "
+                        f"({rate:.1f} graphs/s)",
+                        flush=True,
+                    )
+    else:
+        _init_attr_target_worker(
+            basis, scfg, bins, width,
+            bool(ccfg.get("enabled", False)),
+            bool(ocfg.get("enabled", False)),
+            int(seed),
+        )
+        for done, item in enumerate(enumerate(graphs), start=1):
+            hist, mass_vec, clustering, oh, ot = _attr_target_worker(item)
+            histograms.append(hist); masses.append(mass_vec); clusterings.append(clustering); orbit_hist.append(oh); orbit_total.append(ot)
+            if done == total_graphs or done % progress_every == 0:
+                elapsed = time.monotonic() - started_targets
+                rate = done / max(elapsed, 1.0e-9)
+                print(
+                    f"[attributed-preprocess] structure targets: {done}/{total_graphs} "
+                    f"({rate:.1f} graphs/s)",
+                    flush=True,
+                )
     meta = {
         "graphlet_slices": [list(x) for x in basis.slices],
         "graphlet_basis": basis.to_dict(),
@@ -740,7 +893,10 @@ def train(wrapper, request: TrainRequest, options: Mapping[str,Any]) -> Training
         raise ArtifactCollisionError('Existing attributed log-gap run differs; choose a new run-id or --overwrite')
     ArtifactLayout.require_available(layout.train_dir,overwrite=request.overwrite)
     _seed_everything(request.run.train_seed); device=_resolve_device(options.get('runtime',{})); started=time.monotonic()
+    prep_started=time.monotonic()
+    print('[attributed-preprocess] loading train/validation molecular graphs...',flush=True)
     train_graphs=_attributed_graphs(request.dataset.split_paths['train']); val_graphs=_attributed_graphs(request.dataset.split_paths['val'])
+    print(f'[attributed-preprocess] loaded train={len(train_graphs)} val={len(val_graphs)} graphs',flush=True)
     for split,graphs in [('train',train_graphs),('val',val_graphs)]:
         for i,g in enumerate(graphs):
             if not nx.is_connected(g): raise ValueError(f'Attributed Laplacian model requires connected graphs; found {split}[{i}]')
@@ -749,12 +905,35 @@ def train(wrapper, request: TrainRequest, options: Mapping[str,Any]) -> Training
     max_nodes=int(options['model'].get('max_nodes') or max(g.number_of_nodes() for g in train_graphs))
     if max(g.number_of_nodes() for g in val_graphs)>max_nodes: raise ValueError('Validation graph exceeds model.max_nodes')
     mc=_model_config(options,max_nodes,vocab)
+    print('[attributed-preprocess] building padded Laplacian/eigenbasis tensors...',flush=True)
+    stage=time.monotonic()
     train_base=_padded_dataset(train_graphs,max_nodes=max_nodes,max_feat_num=mc['max_feat_num'],spectral_operator='combinatorial_laplacian')
     val_base=_padded_dataset(val_graphs,max_nodes=max_nodes,max_feat_num=mc['max_feat_num'],spectral_operator='combinatorial_laplacian')
+    print(f'[attributed-preprocess] spectral tensors complete in {time.monotonic()-stage:.1f}s',flush=True)
     train_labels=_attributed_labels(train_graphs,vocab,max_nodes); val_labels=_attributed_labels(val_graphs,vocab,max_nodes)
-    train_targets,basis,meta=_typed_structure_targets(train_graphs,options,vocab,seed=request.run.train_seed)
-    val_targets,_,val_meta=_typed_structure_targets(val_graphs,options,vocab,basis=basis,seed=request.run.train_seed+1)
+    pcfg=dict(options.get('preprocess',{}) or {})
+    cache_enabled=bool(pcfg.get('cache_structure_targets',True))
+    cache_path=_structure_cache_path(layout,fingerprint,options,vocab,max_nodes)
+    loaded_cache=False
+    if cache_enabled and cache_path.is_file():
+        try:
+            cached=_torch_load_unrestricted(cache_path)
+            if cached.get('format')=='gdsm_attr_structure_cache_v2':
+                train_targets=tuple(cached['train_targets']); val_targets=tuple(cached['val_targets']); basis=cached['basis']; meta=dict(cached['meta']); val_meta=dict(cached['val_meta']); loaded_cache=True
+                print(f'[attributed-preprocess] loaded cached typed structure targets: {cache_path}',flush=True)
+        except Exception as exc:
+            print(f'[attributed-preprocess] ignoring unreadable cache {cache_path}: {type(exc).__name__}: {exc}',flush=True)
+    if not loaded_cache:
+        train_targets,basis,meta=_typed_structure_targets(train_graphs,options,vocab,seed=request.run.train_seed)
+        val_targets,_,val_meta=_typed_structure_targets(val_graphs,options,vocab,basis=basis,seed=request.run.train_seed+1)
+        if cache_enabled:
+            cache_path.parent.mkdir(parents=True,exist_ok=True)
+            tmp=cache_path.with_suffix(cache_path.suffix+'.tmp')
+            torch.save({'format':'gdsm_attr_structure_cache_v2','train_targets':tuple(t.cpu() for t in train_targets),'val_targets':tuple(t.cpu() for t in val_targets),'basis':basis,'meta':meta,'val_meta':val_meta},tmp)
+            tmp.replace(cache_path)
+            print(f'[attributed-preprocess] cached typed structure targets: {cache_path}',flush=True)
     if val_meta['graphlet_slices']!=meta['graphlet_slices']: raise AssertionError('Typed graphlet basis mismatch')
+    print(f'[attributed-preprocess] all preprocessing complete in {time.monotonic()-prep_started:.1f}s; starting optimization',flush=True)
     stats=_fit_laplacian_log_gap_stats(train_base[5],train_base[2],epsilon=float(options['sde'].get('log_gap_epsilon',1e-6)),min_std=float(options['sde'].get('log_gap_min_std',1e-3)))
     transform={'kind':'laplacian_log_gap','epsilon':float(options['sde'].get('log_gap_epsilon',1e-6)),'exp_clip':float(options['sde'].get('log_gap_exp_clip',20)),'mean':stats['mean'],'std':stats['std'],'count':stats['count']}
     train_data=(*train_base,*train_labels,*train_targets); val_data=(*val_base,*val_labels,*val_targets)
@@ -809,6 +988,28 @@ def train(wrapper, request: TrainRequest, options: Mapping[str,Any]) -> Training
         shutil.rmtree(staging,ignore_errors=True); raise
 
 
+def _sample_categorical_logits(
+    logits: torch.Tensor,
+    *,
+    mode: str,
+    temperature: float,
+    generator: torch.Generator,
+) -> torch.Tensor:
+    """Decode categorical logits with deterministic argmax or seeded sampling."""
+    mode = str(mode).lower()
+    if mode == "argmax":
+        return logits.argmax(dim=-1)
+    if mode in {"sample", "categorical", "stochastic"}:
+        temperature = float(temperature)
+        if not math.isfinite(temperature) or temperature <= 0:
+            raise ValueError("categorical sampling temperature must be finite and > 0")
+        probs = torch.softmax(logits / temperature, dim=-1)
+        flat = probs.reshape(-1, probs.shape[-1])
+        sampled = torch.multinomial(flat, 1, replacement=True, generator=generator)
+        return sampled.reshape(logits.shape[:-1])
+    raise ValueError(f"Unsupported categorical decode mode {mode!r}")
+
+
 def _decode_attributes(
     model: AttributedSpectrumPPGNScore,
     sample_x: torch.Tensor,
@@ -819,16 +1020,52 @@ def _decode_attributes(
     discrete: torch.Tensor,
     vocab: GraphCategoryVocabulary,
     cfg: Mapping[str,Any],
+    *,
+    generator: torch.Generator,
 ) -> tuple[torch.Tensor,torch.Tensor,dict[str,torch.Tensor]]:
-    b,n=flags.shape; node_mask=torch.zeros((b,n,model.node_input_classes),device=soft.device); node_mask[...,-1]=flags
-    edge_mask=torch.zeros((b,n,n,model.edge_input_classes),device=soft.device); edge_mask[...,-1]=discrete.float()
+    b,n=flags.shape
+    decode=dict(cfg.get('decode',{}) or {})
+    node_mode=str(decode.get('node_mode','argmax')).lower()
+    edge_mode=str(decode.get('edge_mode','argmax')).lower()
+    node_temperature=float(decode.get('node_temperature',1.0))
+    edge_temperature=float(decode.get('edge_temperature',1.0))
+
+    node_mask=torch.zeros((b,n,model.node_input_classes),device=soft.device)
+    node_mask[...,-1]=flags
+    edge_mask=torch.zeros((b,n,n,model.edge_input_classes),device=soft.device)
+    edge_mask[...,-1]=discrete.float()
+
+    # Pass 1: infer atom categories with every categorical state masked.
     out1=model.forward_all(sample_x,soft,flags,u,state,node_attr=node_mask,edge_attr=edge_mask)
-    node_idx=out1['node_logits'].argmax(-1)
-    if bool(dict(cfg.get('decode',{}) or {}).get('two_pass',True)):
-        node_known=torch.zeros_like(node_mask); node_known[...,:model.node_classes]=F.one_hot(node_idx,model.node_classes).float()*flags.unsqueeze(-1)
+    node_idx=_sample_categorical_logits(
+        out1['node_logits'], mode=node_mode, temperature=node_temperature, generator=generator
+    )
+
+    # Pass 2: condition bond logits on the decoded atom categories.  Bond
+    # existence remains entirely determined by the spectral topology branch.
+    if bool(decode.get('two_pass',True)):
+        node_known=torch.zeros_like(node_mask)
+        node_known[...,:model.node_classes]=F.one_hot(node_idx,model.node_classes).float()*flags.unsqueeze(-1)
         out=model.forward_all(sample_x,soft,flags,u,state,node_attr=node_known,edge_attr=edge_mask)
-    else: out=out1
-    edge_idx=out['edge_logits'].argmax(-1)
+    else:
+        out=out1
+
+    if edge_mode == 'argmax':
+        edge_idx=out['edge_logits'].argmax(-1)
+    else:
+        # An undirected bond category must be sampled exactly once per present
+        # upper-triangular edge and mirrored.  Sampling every [i,j] entry
+        # independently would produce inconsistent bond labels for i-j/j-i.
+        edge_idx=torch.zeros(discrete.shape,dtype=torch.long,device=soft.device)
+        upper=torch.triu(discrete.bool(),diagonal=1)
+        pos=upper.nonzero(as_tuple=False)
+        if pos.numel():
+            logits=out['edge_logits'][pos[:,0],pos[:,1],pos[:,2],:]
+            sampled=_sample_categorical_logits(
+                logits, mode=edge_mode, temperature=edge_temperature, generator=generator
+            )
+            edge_idx[pos[:,0],pos[:,1],pos[:,2]]=sampled
+            edge_idx[pos[:,0],pos[:,2],pos[:,1]]=sampled
     return node_idx,edge_idx,out
 
 
@@ -839,7 +1076,13 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str,Any], manifes
     if bool(options.get('sample',{}).get('use_ema',False)): mx.load_state_dict(state['ema_x_state']); ml.load_state_dict(state['ema_spectrum_state'])
     else: mx.load_state_dict(state['model_x_state']); ml.load_state_dict(state['model_spectrum_state'])
     mx.eval(); ml.eval(); sx,sl=_make_sdes({'sde':state['sde']},device); sample_cfg=copy.deepcopy(dict(state['sample'])); sample_cfg.update(dict(options.get('sample',{}))); basis_adj=torch.tensor(np.asarray(state['basis_adjacencies']),dtype=torch.float32); basis_n=torch.tensor(np.asarray(state['basis_num_nodes']),dtype=torch.long)
-    rng=np.random.default_rng(request.generation_seed); generator=torch.Generator(device=device).manual_seed(request.generation_seed); batch_size=int(options.get('generation_batch_size',128)); transform=dict(state['spectral_transform']); threshold=float(sample_cfg.get('threshold',.5)); attr_cfg=dict(state['attributed_config'])
+    rng=np.random.default_rng(request.generation_seed); generator=torch.Generator(device=device).manual_seed(request.generation_seed); batch_size=int(options.get('generation_batch_size',128)); transform=dict(state['spectral_transform']); threshold=float(sample_cfg.get('threshold',.5)); attr_cfg=copy.deepcopy(dict(state['attributed_config']))
+    # Attribute decoding is generation-only: allow the YAML used for generation
+    # to override only decode controls (argmax/sample, temperature, two-pass)
+    # without changing the trained vocabulary or heads.
+    runtime_attr=dict(options.get('attributed',{}) or {})
+    if 'decode' in runtime_attr:
+        attr_cfg['decode']=_deep_update(dict(attr_cfg.get('decode',{}) or {}),dict(runtime_attr.get('decode',{}) or {}))
     graphs=[]; continuous=[]; spectra=[]; basis_indices=[]; predictions=[]; attr_conf=[]; started=time.monotonic()
     with torch.no_grad():
         while len(graphs)<request.num_graphs:
@@ -847,7 +1090,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str,Any], manifes
             sample_x,soft,lam,u=sample_batch(mx,ml,donor_adjacencies=donor_adj,donor_sizes=donor_n,sde_x=sx,sde_lam=sl,sample_cfg=sample_cfg,eigen_mask_mode='laplacian_nonzero_prefix',spectral_operator='combinatorial_laplacian',spectral_transform=transform,device=device,generator=generator)
             soft=0.5*(soft+soft.transpose(-1,-2)); nmax=soft.size(1); flags=(torch.arange(nmax,device=device).unsqueeze(0)<donor_n.to(device).unsqueeze(1)).float(); st=_operator_eigenvalues_to_spectral_state(lam,flags,spectral_operator='combinatorial_laplacian',spectral_transform=transform)
             discrete=(soft>threshold); eye=torch.eye(nmax,device=device,dtype=torch.bool).unsqueeze(0); discrete=discrete & ~eye & flags.bool().unsqueeze(1)&flags.bool().unsqueeze(2); discrete=discrete|discrete.transpose(1,2)
-            node_idx,edge_idx,out=_decode_attributes(ml,sample_x,soft,flags,u,st,discrete,vocab,attr_cfg); summaries=ml.structure_means_from_outputs(out); node_prob=torch.softmax(out['node_logits'],-1).max(-1).values; edge_prob=torch.softmax(out['edge_logits'],-1).max(-1).values
+            node_idx,edge_idx,out=_decode_attributes(ml,sample_x,soft,flags,u,st,discrete,vocab,attr_cfg,generator=generator); summaries=ml.structure_means_from_outputs(out); node_prob=torch.softmax(out['node_logits'],-1).max(-1).values; edge_prob=torch.softmax(out['edge_logits'],-1).max(-1).values
             for r,idx in enumerate(indices.tolist()):
                 n=int(donor_n[r]); g=nx.Graph()
                 for i in range(n): g.add_node(i,**{str(vocab.node_attribute):vocab.node_value(int(node_idx[r,i]))})
@@ -859,8 +1102,9 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str,Any], manifes
     try:
         gp=staging/'base_graphs.pkl'; pickle.dump(graphs,gp.open('wb'),protocol=pickle.HIGHEST_PROTOCOL); cp=staging/'continuous_adjacencies.pkl'; pickle.dump(continuous,cp.open('wb'),protocol=pickle.HIGHEST_PROTOCOL); sp=staging/'sampled_spectra.pkl'; pickle.dump(spectra,sp.open('wb'),protocol=pickle.HIGHEST_PROTOCOL); bp=staging/'sampled_basis_indices.pkl'; pickle.dump(basis_indices,bp.open('wb'),protocol=pickle.HIGHEST_PROTOCOL); pp=staging/'predicted_structure_summaries.pkl'; pickle.dump(predictions,pp.open('wb'),protocol=pickle.HIGHEST_PROTOCOL); ap=staging/'attribute_prediction_diagnostics.json'
         finite_edge_conf=[x['edge_confidence_mean'] for x in attr_conf if np.isfinite(x['edge_confidence_mean'])]
-        _write_json(ap,{'per_graph':attr_conf,'aggregate':{'node_confidence_mean':float(np.mean([x['node_confidence_mean'] for x in attr_conf])),'edge_confidence_mean':float(np.mean(finite_edge_conf)) if finite_edge_conf else None}})
-        _write_json(staging/'manifest.json',{'format':GENERATION_FORMAT,'model_id':wrapper.model_id,'variant':state['variant'],'run_id':request.run.run_id,'generation_id':request.resolved_generation_id,'generation_seed':request.generation_seed,'num_requested':request.num_graphs,'num_generated':len(graphs),'duration_seconds':time.monotonic()-started,'base_graphs':{'path':'base_graphs.pkl','sha256':_sha256(gp),'role':'final_attributed_graphs'},'continuous_adjacencies':{'path':'continuous_adjacencies.pkl','sha256':_sha256(cp)},'sampled_spectra':{'path':'sampled_spectra.pkl','sha256':_sha256(sp)},'predicted_structure_summaries':{'path':'predicted_structure_summaries.pkl','sha256':_sha256(pp),'typed_graphlets':True},'attribute_prediction_diagnostics':{'path':'attribute_prediction_diagnostics.json','sha256':_sha256(ap)},'checkpoint':{'path':str(request.checkpoint_path.resolve()),'sha256':_sha256(request.checkpoint_path)},'sampling':{'topology':'Laplacian_log_gap_reverse_diffusion','node_attributes':'two_pass_masked_categorical_denoising' if bool(dict(attr_cfg.get('decode',{}) or {}).get('two_pass',True)) else 'one_shot_masked_categorical_denoising','edge_attributes':'real_bond_type_head_on_generated_edges_only','edge_head_includes_no_edge':False,'categorical_flow_matching':False,'typed_graphlet_supervision':True,'rewiring':False,'posthoc_repair':False}})
+        decode_cfg=dict(attr_cfg.get('decode',{}) or {})
+        _write_json(ap,{'per_graph':attr_conf,'aggregate':{'node_confidence_mean':float(np.mean([x['node_confidence_mean'] for x in attr_conf])),'edge_confidence_mean':float(np.mean(finite_edge_conf)) if finite_edge_conf else None,'node_mode':str(decode_cfg.get('node_mode','argmax')),'edge_mode':str(decode_cfg.get('edge_mode','argmax')),'node_temperature':float(decode_cfg.get('node_temperature',1.0)),'edge_temperature':float(decode_cfg.get('edge_temperature',1.0))}})
+        _write_json(staging/'manifest.json',{'format':GENERATION_FORMAT,'model_id':wrapper.model_id,'variant':state['variant'],'run_id':request.run.run_id,'generation_id':request.resolved_generation_id,'generation_seed':request.generation_seed,'num_requested':request.num_graphs,'num_generated':len(graphs),'duration_seconds':time.monotonic()-started,'base_graphs':{'path':'base_graphs.pkl','sha256':_sha256(gp),'role':'final_attributed_graphs'},'continuous_adjacencies':{'path':'continuous_adjacencies.pkl','sha256':_sha256(cp)},'sampled_spectra':{'path':'sampled_spectra.pkl','sha256':_sha256(sp)},'predicted_structure_summaries':{'path':'predicted_structure_summaries.pkl','sha256':_sha256(pp),'typed_graphlets':True},'attribute_prediction_diagnostics':{'path':'attribute_prediction_diagnostics.json','sha256':_sha256(ap)},'checkpoint':{'path':str(request.checkpoint_path.resolve()),'sha256':_sha256(request.checkpoint_path)},'sampling':{'topology':'Laplacian_log_gap_reverse_diffusion','node_attributes':'two_pass_masked_categorical_denoising' if bool(dict(attr_cfg.get('decode',{}) or {}).get('two_pass',True)) else 'one_shot_masked_categorical_denoising','edge_attributes':'real_bond_type_head_on_generated_edges_only','edge_head_includes_no_edge':False,'categorical_flow_matching':False,'typed_graphlet_supervision':True,'node_decode_mode':str(dict(attr_cfg.get('decode',{}) or {}).get('node_mode','argmax')),'edge_decode_mode':str(dict(attr_cfg.get('decode',{}) or {}).get('edge_mode','argmax')),'node_temperature':float(dict(attr_cfg.get('decode',{}) or {}).get('node_temperature',1.0)),'edge_temperature':float(dict(attr_cfg.get('decode',{}) or {}).get('edge_temperature',1.0)),'rewiring':False,'posthoc_repair':False}})
         if target.exists(): shutil.rmtree(target)
         staging.replace(target)
     except BaseException:

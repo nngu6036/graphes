@@ -277,7 +277,6 @@ class GraphletBasis:
         use_multik_exact = bool(
             attributed
             and attributed_backend == "python"
-            and not cfg.graphlet_connected_only
             and normalize_graphlet_topology_filter(cfg.graphlet_topology_filter) == "all"
             and (cfg.graphlet_num_samples is None or int(cfg.graphlet_num_samples) <= 0)
         )
@@ -289,7 +288,7 @@ class GraphletBasis:
                     orders,
                     node_label_attr=str(node_attribute),
                     edge_label_attr=str(edge_attribute),
-                    connected_only=False,
+                    connected_only=cfg.graphlet_connected_only,
                     topology_filter="all",
                     num_samples=None,
                     rng=rng,
@@ -426,20 +425,40 @@ class GraphletBasis:
         connected_mass: dict[str, float] = {}
         generator = rng if rng is not None else np.random.default_rng(0)
         n = graph.number_of_nodes()
+        attributed_counts: dict[int, dict[str, int]] | None = None
+        if (
+            self.attributed
+            and self.attributed_backend == "python"
+            and self.topology_filter == "all"
+        ):
+            attributed_counts = attributed_graphlet_count_dict_multi(
+                graph,
+                (int(key) for key in self.sizes),
+                node_label_attr=str(self.node_attribute),
+                edge_label_attr=str(self.edge_attribute),
+                connected_only=self.connected_only,
+                topology_filter=self.topology_filter,
+                num_samples=cfg.graphlet_num_samples,
+                rng=generator,
+                backend=self.attributed_backend,
+            )
         for key in self.sizes:
             k = int(key)
             if self.attributed:
-                counts = attributed_graphlet_count_dict(
-                    graph,
-                    k,
-                    node_label_attr=str(self.node_attribute),
-                    edge_label_attr=str(self.edge_attribute),
-                    connected_only=self.connected_only,
-                    topology_filter=self.topology_filter,
-                    num_samples=cfg.graphlet_num_samples,
-                    rng=generator,
-                    backend=self.attributed_backend,
-                )
+                if attributed_counts is not None:
+                    counts = attributed_counts.get(k, {})
+                else:
+                    counts = attributed_graphlet_count_dict(
+                        graph,
+                        k,
+                        node_label_attr=str(self.node_attribute),
+                        edge_label_attr=str(self.edge_attribute),
+                        connected_only=self.connected_only,
+                        topology_filter=self.topology_filter,
+                        num_samples=cfg.graphlet_num_samples,
+                        rng=generator,
+                        backend=self.attributed_backend,
+                    )
             else:
                 counts = graphlet_count_dict(
                     graph,
