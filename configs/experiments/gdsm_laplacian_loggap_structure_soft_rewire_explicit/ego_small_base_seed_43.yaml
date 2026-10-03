@@ -1,0 +1,154 @@
+comparison:
+  budget:
+    basis: graphes_controlled_comparison
+    epochs: 10000
+    target_train_passes: 10000
+    unit: train_set_passes
+  common_config: common_ego_small.yaml
+  comparison_targets:
+    adjacency_stage0: vanilla_gsdm
+    laplacian_stage2a: vanilla_laplacian_gsdm
+  dataset: ego_small
+  fairness_note: Ego-small selected Laplacian log-gap + PPGN + RW/SP model with graphlet,
+    clustering, and orbit auxiliary supervision. No structural conditional score guidance
+    and no post-generation rewiring.
+  model: gdsm_simple
+  status: vanilla_laplacian_loggap_structure_rwsp_ppgn_ego_seed_43
+gdsm_simple:
+  extensions:
+    degree_conditioning: false
+    degree_preserving_rewiring: false
+    hh_initialization: false
+    structural_summary: none
+  generation_batch_size: 128
+  graphlet_refinement:
+    disconnected_source_policy: skip
+    enabled: false
+    graphlet_connected_only: true
+    graphlet_k_max: 5
+    graphlet_k_min: 3
+    graphlet_topology_filter: all
+    refiner:
+      accept_only_improving: false
+      clustering_weight: 0.25
+      graphlet_mass_weight: 0.1
+      graphlet_weight: 1.0
+      min_improvement: 1.0e-08
+      min_relative_improvement: 0.0
+      motif_guard:
+        enabled: true
+        max_destroyed_cycles:
+          '4': 4
+          '5': 6
+        max_destroyed_triangles: 2
+      orbit_weight: 0.25
+      preserve_connectivity: true
+      proposal_budget: 256
+      refresh_on_plateau: false
+      refresh_prediction_every: 4
+      reject_revisited_states: true
+      relative_improvement_epsilon: 1.0e-12
+      sample_graphlet: false
+      selection: softmax_safe
+      soft_selection:
+        max_relative_target_worsening: 0.1
+        max_target_worsening: 0.02
+        score_normalization: std
+        stop_action: true
+        temperature_end: 0.05
+        temperature_schedule: linear
+        temperature_start: 0.5
+      steps: 4
+      temperature: 0.5
+      valid_candidate_budget: 128
+    save_prediction_trace: true
+    target_source: joint_structure_summary_head
+  graphlet_summary:
+    enabled: false
+  model:
+    backbone: dense_gcn
+    depth: 3
+    hidden_dim: 32
+    max_feat_num: 18
+    max_nodes: 18
+    node_backbone: dense_gcn
+    ppgn_depth: 4
+    ppgn_hidden_dim: 64
+    ppgn_input_clip: 10.0
+    ppgn_norm_eps: 1.0e-05
+    ppgn_residual_scale: 0.1
+    spectrum_backbone: ppgn
+  runtime:
+    device: auto
+  sample:
+    corrector: langevin
+    eps: 0.0001
+    n_steps: 1
+    noise_removal: true
+    predictor: euler
+    probability_flow: false
+    scale_eps: 0.7
+    snr: 0.05
+    threshold: 0.5
+    use_ema: false
+  sde:
+    eigen_mask: laplacian_nonzero_prefix
+    eps: 1.0e-05
+    log_gap_epsilon: 1.0e-06
+    log_gap_exp_clip: 20.0
+    log_gap_min_std: 0.001
+    spectral_parameterization: laplacian_log_gap
+    spectrum:
+      beta_max: 1.0
+      beta_min: 0.1
+      num_scales: 1000
+      type: vp
+    x:
+      beta_max: 1.0
+      beta_min: 0.1
+      num_scales: 1000
+      type: vp
+  structural_features:
+    binarize_threshold: 0.5
+    enabled: true
+    random_walk:
+      enabled: true
+      steps: 4
+    shortest_path:
+      enabled: true
+      max_distance: 5
+  structure_summary:
+    clustering:
+      bins: 100
+      cdf_weight: 1.0
+      enabled: true
+      histogram_weight: 0.25
+    enabled: true
+    graphlet:
+      enabled: true
+      histogram_weight: 1.0
+      mass_weight: 0.25
+      orders:
+      - 3
+      - 4
+      - 5
+    loss_weight: 0.1
+    orbit:
+      enabled: true
+      histogram_weight: 0.25
+      log_total_weight: 0.1
+      width: 15
+  train:
+    batch_size: 128
+    ema: 0.999
+    epochs: 10000
+    grad_norm: 1.0
+    log_every: 10
+    lr: 0.01
+    lr_decay: 0.9999799901935271
+    lr_schedule: true
+    node_lr: 0.01
+    spectrum_lr: 0.001
+    validation_every: 1
+    weight_decay: 0.0001
+  variant: vanilla_laplacian_loggap_graphlet
