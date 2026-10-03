@@ -1,0 +1,156 @@
+comparison:
+  model: gdsm_simple
+  dataset: community_small
+  common_config: common_community_small.yaml
+  status: vanilla_laplacian_loggap_structure_rwsp_ppgn_soft_rewire_seed_43
+  budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  comparison_targets:
+    adjacency_stage0: vanilla_gsdm
+    laplacian_stage2a: vanilla_laplacian_gsdm
+  fairness_note: 'Selected Laplacian log-gap + PPGN + RW/SP model with graphlet, clustering,
+    and orbit auxiliary supervision. Structural conditional score guidance is removed.
+    Generation optionally applies conservative degree-preserving soft rewiring: valid
+    candidates pass connectivity and short-motif guards, then a STOP-inclusive softmax
+    samples from bounded target gains. No separate rewiring predictor is trained.'
+gdsm_simple:
+  variant: vanilla_laplacian_loggap_graphlet
+  train:
+    epochs: 10000
+    batch_size: 128
+    lr: 0.01
+    weight_decay: 0.0001
+    grad_norm: 1.0
+    lr_schedule: true
+    lr_decay: 0.9999799901935271
+    ema: 0.999
+    validation_every: 1
+    log_every: 10
+    node_lr: 0.01
+    spectrum_lr: 0.001
+  model:
+    max_nodes: 20
+    max_feat_num: 20
+    hidden_dim: 32
+    depth: 3
+    backbone: dense_gcn
+    ppgn_hidden_dim: 64
+    ppgn_depth: 4
+    node_backbone: dense_gcn
+    spectrum_backbone: ppgn
+    ppgn_residual_scale: 0.1
+    ppgn_norm_eps: 1.0e-05
+    ppgn_input_clip: 10.0
+  sde:
+    x:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    spectrum:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    eps: 1.0e-05
+    eigen_mask: laplacian_nonzero_prefix
+    spectral_parameterization: laplacian_log_gap
+    log_gap_epsilon: 1.0e-06
+    log_gap_min_std: 0.001
+    log_gap_exp_clip: 20.0
+  graphlet_summary:
+    enabled: false
+  sample:
+    predictor: euler
+    corrector: langevin
+    snr: 0.05
+    scale_eps: 0.7
+    n_steps: 1
+    noise_removal: true
+    probability_flow: false
+    eps: 0.0001
+    threshold: 0.5
+    use_ema: false
+  generation_batch_size: 128
+  runtime:
+    device: auto
+  extensions:
+    degree_conditioning: false
+    hh_initialization: false
+    degree_preserving_rewiring: false
+    structural_summary: none
+  structural_features:
+    enabled: true
+    binarize_threshold: 0.5
+    random_walk:
+      enabled: true
+      steps: 4
+    shortest_path:
+      enabled: true
+      max_distance: 5
+  graphlet_refinement:
+    enabled: true
+    target_source: joint_structure_summary_head
+    graphlet_k_min: 3
+    graphlet_k_max: 5
+    graphlet_connected_only: true
+    graphlet_topology_filter: all
+    refiner:
+      steps: 4
+      proposal_budget: 256
+      valid_candidate_budget: 128
+      preserve_connectivity: true
+      selection: softmax_safe
+      temperature: 0.5
+      soft_selection:
+        temperature_start: 0.5
+        temperature_end: 0.05
+        temperature_schedule: linear
+        score_normalization: std
+        stop_action: true
+        max_target_worsening: 0.02
+        max_relative_target_worsening: 0.1
+      graphlet_weight: 1.0
+      graphlet_mass_weight: 0.1
+      clustering_weight: 0.25
+      orbit_weight: 0.25
+      accept_only_improving: false
+      min_improvement: 1.0e-08
+      min_relative_improvement: 0.0
+      relative_improvement_epsilon: 1.0e-12
+      sample_graphlet: false
+      refresh_prediction_every: 4
+      refresh_on_plateau: false
+      reject_revisited_states: true
+      motif_guard:
+        enabled: true
+        max_destroyed_triangles: 0
+        max_destroyed_cycles:
+          '4': 1
+          '5': 2
+    disconnected_source_policy: skip
+    save_prediction_trace: true
+  structure_summary:
+    enabled: true
+    loss_weight: 0.1
+    graphlet:
+      enabled: true
+      orders:
+      - 3
+      - 4
+      - 5
+      histogram_weight: 1.0
+      mass_weight: 0.25
+    clustering:
+      enabled: true
+      bins: 100
+      histogram_weight: 0.25
+      cdf_weight: 1.0
+    orbit:
+      enabled: true
+      width: 15
+      histogram_weight: 0.25
+      log_total_weight: 0.1

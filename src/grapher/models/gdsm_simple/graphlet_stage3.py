@@ -213,8 +213,12 @@ def validate_graphlet_refinement_options(cfg: Mapping[str, Any]) -> None:
 def validate_fixed_target_graphlet_refinement_options(cfg: Mapping[str, Any]) -> None:
     if not bool(cfg.get("enabled", False)):
         raise ValueError("Fixed-target graphlet refinement requires enabled=true")
-    if str(cfg.get("target_source", "joint_auxiliary_head")).lower() != "joint_auxiliary_head":
-        raise ValueError("Fixed-target refinement requires target_source=joint_auxiliary_head")
+    target_source = str(cfg.get("target_source", "joint_auxiliary_head")).lower()
+    if target_source not in {"joint_auxiliary_head", "joint_structure_summary_head"}:
+        raise ValueError(
+            "Fixed-target refinement requires target_source=joint_auxiliary_head "
+            "or joint_structure_summary_head"
+        )
     if (int(cfg.get("graphlet_k_min", 3)), int(cfg.get("graphlet_k_max", 5))) != (3, 5):
         raise ValueError("Fixed-target refinement is intentionally fixed to graphlet orders 3,4,5")
     if not bool(cfg.get("graphlet_connected_only", True)):
@@ -701,6 +705,12 @@ def refine_generated_graphs_with_fixed_predictions(
 
         hist = np.asarray(pred_raw["graphlet_histogram"], dtype=np.float64).reshape(-1)
         mass = np.asarray(pred_raw["graphlet_mass"], dtype=np.float64).reshape(-1)
+        clustering = np.asarray(
+            pred_raw.get("clustering_histogram", []), dtype=np.float64
+        ).reshape(-1)
+        orbit = np.asarray(
+            pred_raw.get("orbit_mean_counts", []), dtype=np.float64
+        ).reshape(-1)
         if hist.size != basis.width:
             raise ValueError(
                 f"Prediction {index} has graphlet width {hist.size}, expected {basis.width}"
@@ -709,6 +719,19 @@ def refine_generated_graphs_with_fixed_predictions(
             raise ValueError(
                 f"Prediction {index} has mass width {mass.size}, expected {len(basis.sizes)}"
             )
+        expected_clustering = int(graphlet_summary_payload.get("clustering_bins", 0))
+        expected_orbit = int(graphlet_summary_payload.get("orbit_width", 0))
+        if refiner_cfg.clustering_weight > 0.0:
+            if expected_clustering <= 0 or clustering.size != expected_clustering:
+                raise ValueError(
+                    f"Prediction {index} has clustering width {clustering.size}, "
+                    f"expected {expected_clustering}"
+                )
+        if refiner_cfg.orbit_weight > 0.0:
+            if expected_orbit <= 0 or orbit.size != expected_orbit:
+                raise ValueError(
+                    f"Prediction {index} has orbit width {orbit.size}, expected {expected_orbit}"
+                )
         fixed_prediction = TopologyPrediction(
             graphlet_target=hist,
             graphlet_mass_target=mass,
@@ -716,12 +739,16 @@ def refine_generated_graphs_with_fixed_predictions(
             graphlet_connected_mass={
                 str(k): float(v) for k, v in zip(basis.sizes, mass)
             },
+            clustering_target=clustering,
+            orbit_target=orbit,
         )
         prediction_record = {
             "time": 0.0,
-            "source": "joint_auxiliary_head_final_diffusion_state",
+            "source": "joint_structure_summary_head_final_diffusion_state",
             "graphlet_target": hist.tolist(),
             "graphlet_mass_target": mass.tolist(),
+            "clustering_target": clustering.tolist(),
+            "orbit_target": orbit.tolist(),
         }
 
         if not source_connected:
@@ -736,7 +763,7 @@ def refine_generated_graphs_with_fixed_predictions(
                     "prediction_calls": 0,
                     "changed": False,
                     "degree_preserved": True,
-                    "target_source": "joint_auxiliary_head",
+                    "target_source": str(cfg.get("target_source", "joint_auxiliary_head")),
                 }
             )
             prediction_traces.append([prediction_record])
@@ -781,7 +808,7 @@ def refine_generated_graphs_with_fixed_predictions(
                 "changed": bool(changed),
                 "degree_preserved": True,
                 "final_connected": bool(result.number_of_nodes() <= 1 or nx.is_connected(result)),
-                "target_source": "joint_auxiliary_head",
+                "target_source": str(cfg.get("target_source", "joint_auxiliary_head")),
                 "trace": trace,
             }
         )

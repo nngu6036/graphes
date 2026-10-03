@@ -42,7 +42,6 @@ categorical edge prediction, graphlet guidance, rewiring, or post-hoc repair.
 from __future__ import annotations
 
 import copy
-from contextlib import nullcontext
 import hashlib
 import json
 import math
@@ -271,20 +270,6 @@ def default_vanilla_options() -> dict[str, Any]:
         "graphlet_refinement": {"enabled": False},
         "graphlet_summary": {"enabled": False},  # legacy graphlet-only alias
         "structure_summary": {"enabled": False},
-        "structure_score": {
-            "enabled": False,
-            "loss_weight": 0.05,
-            "teacher_clip_norm": 5.0,
-            "orbit_log_total_sigma": 0.25,
-            "guidance": {
-                "enabled": False,
-                "scale": 0.05,
-                "start_time": 0.50,
-                "schedule": "late_linear",
-                "target_source": "denoised_summary",
-                "score_clip_norm": 5.0,
-            },
-        },
         "degree_prior": {
             "enabled": False,
             "batch_size": 64,
@@ -399,96 +384,9 @@ def _resolved_structure_summary_config(options: Mapping[str, Any]) -> dict[str, 
     }
 
 
-def _resolved_structure_score_config(options: Mapping[str, Any]) -> dict[str, Any]:
-    """Canonical configuration for the learned structural log-score head.
-
-    The head approximates the conditional structural guidance score
-
-        grad_{z_t} log p(S_0 | X_t, z_t),
-
-    in standardized Laplacian log-gap coordinates.  It is supervised by an
-    autodifferentiated teacher score from the primary structural-summary
-    likelihood and can be injected into the reverse spectral score at sampling.
-    """
-    raw = dict(options.get("structure_score", {}) or {})
-    guidance = dict(raw.get("guidance", {}) or {})
-    return {
-        "enabled": bool(raw.get("enabled", False)),
-        "loss_weight": float(raw.get("loss_weight", 0.05)),
-        "teacher_clip_norm": float(raw.get("teacher_clip_norm", 5.0)),
-        "orbit_log_total_sigma": float(raw.get("orbit_log_total_sigma", 0.25)),
-        "guidance": {
-            "enabled": bool(guidance.get("enabled", False)),
-            "scale": float(guidance.get("scale", 0.05)),
-            "start_time": float(guidance.get("start_time", 0.50)),
-            "schedule": str(guidance.get("schedule", "late_linear")).lower(),
-            "target_source": str(guidance.get("target_source", "denoised_summary")).lower(),
-            "score_clip_norm": float(guidance.get("score_clip_norm", 5.0)),
-        },
-    }
-
-
-def _structure_summary_vector_dim(
-    graphlet_slices: tuple[tuple[int, int], ...],
-    *,
-    clustering_bins: int,
-    orbit_width: int,
-) -> int:
-    width = int(graphlet_slices[-1][1]) + len(graphlet_slices)
-    if int(clustering_bins) > 0:
-        width += int(clustering_bins)
-    if int(orbit_width) > 0:
-        width += int(orbit_width) + 1
-    return width
-
-
-def _pack_structure_summary_vector(
-    graphlet_histogram: torch.Tensor,
-    graphlet_mass: torch.Tensor,
-    clustering_histogram: torch.Tensor | None,
-    orbit_histogram: torch.Tensor | None,
-    orbit_log_total: torch.Tensor | None,
-) -> torch.Tensor:
-    parts = [graphlet_histogram, graphlet_mass]
-    if clustering_histogram is not None:
-        parts.append(clustering_histogram)
-    if orbit_histogram is not None:
-        parts.append(orbit_histogram)
-    if orbit_log_total is not None:
-        parts.append(orbit_log_total)
-    return torch.cat(parts, dim=-1)
-
-
-def _clip_vector_norm(value: torch.Tensor, max_norm: float) -> torch.Tensor:
-    if max_norm <= 0.0:
-        return value
-    flat = value.reshape(value.size(0), -1)
-    norm = flat.norm(dim=-1, keepdim=True).clamp_min(1.0e-12)
-    scale = torch.clamp(float(max_norm) / norm, max=1.0)
-    return value * scale.view(value.size(0), *([1] * (value.ndim - 1)))
-
-
-def _structure_guidance_scale(t: torch.Tensor, cfg: Mapping[str, Any]) -> torch.Tensor:
-    guidance = dict(cfg.get("guidance", {}) or {})
-    if not bool(cfg.get("enabled", False)) or not bool(guidance.get("enabled", False)):
-        return torch.zeros_like(t)
-    scale = float(guidance.get("scale", 0.05))
-    start = float(guidance.get("start_time", 0.50))
-    schedule = str(guidance.get("schedule", "late_linear")).lower()
-    if start <= 0.0:
-        return torch.zeros_like(t)
-    active = (t <= start).to(t.dtype)
-    if schedule == "constant":
-        return active * scale
-    if schedule == "late_linear":
-        ramp = (1.0 - t / start).clamp(0.0, 1.0)
-        return ramp * scale
-    raise ValueError(f"Unknown structure-score guidance schedule: {schedule!r}")
-
-
 def validate_options(options: Mapping[str, Any]) -> None:
     allowed = {
-        "variant", "train", "model", "sde", "sample", "degree_prior", "graphlet_refinement", "graphlet_summary", "structure_summary", "structure_score", "structural_features", "generation_batch_size",
+        "variant", "train", "model", "sde", "sample", "degree_prior", "graphlet_refinement", "graphlet_summary", "structure_summary", "structural_features", "generation_batch_size",
         "runtime", "extensions", "comparison_reference", "training_estimates", "diffusion",
     }
     unknown = sorted(set(options) - allowed)
@@ -557,31 +455,6 @@ def validate_options(options: Mapping[str, Any]) -> None:
             "log-gap joint structural variant"
         )
 
-    score_cfg = _resolved_structure_score_config(options)
-    if bool(score_cfg.get("enabled", False)):
-        if variant not in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
-            raise ValueError("structure_score requires a joint Laplacian log-gap structural variant")
-        if not summary_enabled:
-            raise ValueError("structure_score requires structure_summary.enabled=true")
-        if float(score_cfg.get("loss_weight", 0.0)) < 0.0:
-            raise ValueError("structure_score.loss_weight must be nonnegative")
-        if float(score_cfg.get("teacher_clip_norm", 0.0)) <= 0.0:
-            raise ValueError("structure_score.teacher_clip_norm must be positive")
-        if float(score_cfg.get("orbit_log_total_sigma", 0.0)) <= 0.0:
-            raise ValueError("structure_score.orbit_log_total_sigma must be positive")
-        guidance = dict(score_cfg.get("guidance", {}) or {})
-        if float(guidance.get("scale", 0.0)) < 0.0:
-            raise ValueError("structure_score.guidance.scale must be nonnegative")
-        start_time = float(guidance.get("start_time", 0.5))
-        if not (0.0 < start_time <= 1.0):
-            raise ValueError("structure_score.guidance.start_time must be in (0,1]")
-        if str(guidance.get("schedule", "late_linear")) not in {"late_linear", "constant"}:
-            raise ValueError("structure_score.guidance.schedule must be late_linear or constant")
-        if str(guidance.get("target_source", "denoised_summary")) != "denoised_summary":
-            raise ValueError("Only structure_score.guidance.target_source=denoised_summary is supported")
-        if float(guidance.get("score_clip_norm", 0.0)) <= 0.0:
-            raise ValueError("structure_score.guidance.score_clip_norm must be positive")
-
     model_cfg = options.get("model", {}) or {}
     legacy_backbone = str(model_cfg.get("backbone", "dense_gcn")).lower()
     node_backbone = str(model_cfg.get("node_backbone", legacy_backbone)).lower()
@@ -589,8 +462,6 @@ def validate_options(options: Mapping[str, Any]) -> None:
     for key, backbone in (("node_backbone", node_backbone), ("spectrum_backbone", spectrum_backbone)):
         if backbone not in {"dense_gcn", "ppgn"}:
             raise ValueError(f"model.{key} must be dense_gcn or ppgn")
-    if bool(score_cfg.get("enabled", False)) and spectrum_backbone != "ppgn":
-        raise ValueError("structure_score currently requires model.spectrum_backbone=ppgn")
     if (node_backbone == "ppgn" or spectrum_backbone == "ppgn") and variant not in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
         raise ValueError(
             "PPGN backbones are currently implemented for the joint "
@@ -646,8 +517,19 @@ def validate_options(options: Mapping[str, Any]) -> None:
             validate_fixed_target_graphlet_refinement_options,
         )
         validate_fixed_target_graphlet_refinement_options(graphlet_cfg)
+    elif graphlet_enabled and variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
+        # Generation-time structural refinement can be enabled on the selected
+        # no-rewiring checkpoint without retraining: it uses only the existing
+        # joint structural-summary head and degree-preserving swaps.
+        from grapher.models.gdsm_simple.graphlet_stage3 import (
+            validate_fixed_target_graphlet_refinement_options,
+        )
+        validate_fixed_target_graphlet_refinement_options(graphlet_cfg)
     elif graphlet_enabled:
-        raise ValueError("graphlet_refinement.enabled=true requires a graphlet-refinement variant")
+        raise ValueError(
+            "graphlet_refinement.enabled=true requires a graphlet-summary Laplacian "
+            "variant or a graphlet-refinement variant"
+        )
     if prior_enabled:
         if int(degree_prior.get("batch_size", 0)) <= 0:
             raise ValueError("degree_prior.batch_size must be positive")
@@ -1029,7 +911,6 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         structural_features: Mapping[str, Any] | None = None,
         clustering_bins: int = 0,
         orbit_width: int = 0,
-        structure_score_config: Mapping[str, Any] | None = None,
         ppgn_hidden_dim: int = 64,
         ppgn_depth: int = 4,
         ppgn_residual_scale: float = 0.1,
@@ -1087,22 +968,6 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
             MLP(shared_dim, 2 * shared_dim, 1, 2)
             if self.orbit_width > 0 else None
         )
-        self.structure_score_config = copy.deepcopy(dict(structure_score_config or {}))
-        self.structure_score_enabled = bool(self.structure_score_config.get("enabled", False))
-        self.structure_target_dim = _structure_summary_vector_dim(
-            self.graphlet_slices,
-            clustering_bins=self.clustering_bins,
-            orbit_width=self.orbit_width,
-        )
-        self.structure_score_head = (
-            MLP(
-                shared_dim + self.structure_target_dim + 1,
-                2 * shared_dim,
-                self.max_nodes,
-                2,
-            )
-            if self.structure_score_enabled else None
-        )
 
     def _encode(
         self,
@@ -1139,7 +1004,16 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         off_pool = (h * off_mask.unsqueeze(-1)).sum(dim=(1, 2)) / off_count
         return torch.cat((diag_pool, off_pool, eigenvalues), dim=-1)
 
-    def _heads_from_shared(self, shared: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward_all(
+        self,
+        x: torch.Tensor,
+        adj: torch.Tensor,
+        flags: torch.Tensor,
+        eigenvectors: torch.Tensor,
+        eigenvalues: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        del eigenvectors
+        shared = self._encode(x, adj, flags, eigenvalues)
         outputs = {
             "spectrum": self.spectrum_final(shared),
             "graphlet_logits": self.graphlet_logits(shared),
@@ -1150,62 +1024,6 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         if self.orbit_histogram_logits is not None and self.orbit_log_total_raw is not None:
             outputs["orbit_histogram_logits"] = self.orbit_histogram_logits(shared)
             outputs["orbit_log_total_raw"] = self.orbit_log_total_raw(shared)
-        return outputs
-
-    def structure_vector_from_outputs(
-        self, outputs: Mapping[str, torch.Tensor],
-    ) -> torch.Tensor:
-        means = self.structure_means_from_outputs(outputs)
-        return _pack_structure_summary_vector(
-            means["graphlet_histogram"],
-            means["graphlet_mass"],
-            means.get("clustering_histogram"),
-            means.get("orbit_histogram"),
-            means.get("orbit_log_total"),
-        )
-
-    def structure_score_from_shared(
-        self,
-        shared: torch.Tensor,
-        target_summary: torch.Tensor,
-        time: torch.Tensor,
-    ) -> torch.Tensor:
-        if self.structure_score_head is None:
-            raise RuntimeError("Structural score head is disabled")
-        if target_summary.ndim != 2 or target_summary.size(1) != self.structure_target_dim:
-            raise ValueError(
-                f"Expected structural target width {self.structure_target_dim}, "
-                f"got {tuple(target_summary.shape)}"
-            )
-        if time.ndim != 1 or time.size(0) != shared.size(0):
-            raise ValueError("Structural score time must be a batch vector")
-        value = self.structure_score_head(
-            torch.cat((shared, target_summary, time.unsqueeze(-1)), dim=-1)
-        )
-        if not torch.isfinite(value).all():
-            raise FloatingPointError("Non-finite prediction from structural score head")
-        return value
-
-    def forward_all(
-        self,
-        x: torch.Tensor,
-        adj: torch.Tensor,
-        flags: torch.Tensor,
-        eigenvectors: torch.Tensor,
-        eigenvalues: torch.Tensor,
-        *,
-        time: torch.Tensor | None = None,
-        structure_target: torch.Tensor | None = None,
-    ) -> dict[str, torch.Tensor]:
-        del eigenvectors
-        shared = self._encode(x, adj, flags, eigenvalues)
-        outputs = self._heads_from_shared(shared)
-        if structure_target is not None:
-            if time is None:
-                raise ValueError("time is required when requesting a structural score prediction")
-            outputs["structure_score"] = self.structure_score_from_shared(
-                shared, structure_target, time
-            )
         for name, value in outputs.items():
             if not torch.isfinite(value).all():
                 raise FloatingPointError(f"Non-finite {name} from PPGN spectrum/graphlet score")
@@ -2156,105 +1974,6 @@ def _structure_auxiliary_loss(
     return total, metrics
 
 
-def _structure_log_likelihood_per_graph(
-    model: nn.Module,
-    outputs: Mapping[str, torch.Tensor],
-    graphlet_target: torch.Tensor,
-    graphlet_mass_target: torch.Tensor,
-    clustering_target: torch.Tensor | None,
-    orbit_histogram_target: torch.Tensor | None,
-    orbit_log_total_target: torch.Tensor | None,
-    *,
-    structure_cfg: Mapping[str, Any],
-    orbit_log_total_sigma: float,
-) -> torch.Tensor:
-    """Proper log-likelihood terms used to define structural classifier guidance.
-
-    CDF/Wasserstein-style auxiliary penalties are intentionally excluded because
-    they are not log densities.  The resulting scalar per graph defines the
-    teacher score ``grad_z log p(S_0 | X_t, z_t)`` used to supervise the second
-    structural-score head.
-    """
-    graphlet_cfg = dict(structure_cfg.get("graphlet", {}) or {})
-    clustering_cfg = dict(structure_cfg.get("clustering", {}) or {})
-    orbit_cfg = dict(structure_cfg.get("orbit", {}) or {})
-    b = graphlet_target.size(0)
-    total = graphlet_target.new_zeros((b,))
-
-    hist_terms = []
-    for start, stop in model.graphlet_slices:
-        block_target = graphlet_target[:, start:stop]
-        valid = block_target.sum(dim=-1) > 0.0
-        block = graphlet_target.new_zeros((b,))
-        if bool(valid.any()):
-            logp = torch.log_softmax(outputs["graphlet_logits"][:, start:stop], dim=-1)
-            block[valid] = (block_target[valid] * logp[valid]).sum(dim=-1)
-        hist_terms.append(block)
-    if hist_terms:
-        hist_ll = torch.stack(hist_terms, dim=-1).mean(dim=-1)
-        total = total + float(graphlet_cfg.get("histogram_weight", 1.0)) * hist_ll
-
-    mass_ll = -F.binary_cross_entropy_with_logits(
-        outputs["graphlet_mass_logits"],
-        graphlet_mass_target,
-        reduction="none",
-    ).mean(dim=-1)
-    total = total + float(graphlet_cfg.get("mass_weight", 0.25)) * mass_ll
-
-    if bool(clustering_cfg.get("enabled", False)):
-        if clustering_target is None or "clustering_logits" not in outputs:
-            raise RuntimeError("Clustering likelihood requested without target/head")
-        cluster_ll = (
-            clustering_target * torch.log_softmax(outputs["clustering_logits"], dim=-1)
-        ).sum(dim=-1)
-        total = total + float(clustering_cfg.get("histogram_weight", 0.25)) * cluster_ll
-
-    if bool(orbit_cfg.get("enabled", False)):
-        if (
-            orbit_histogram_target is None
-            or orbit_log_total_target is None
-            or "orbit_histogram_logits" not in outputs
-            or "orbit_log_total_raw" not in outputs
-        ):
-            raise RuntimeError("Orbit likelihood requested without target/head")
-        valid = orbit_histogram_target.sum(dim=-1) > 0.0
-        orbit_hist_ll = orbit_histogram_target.new_zeros((b,))
-        if bool(valid.any()):
-            orbit_logp = torch.log_softmax(outputs["orbit_histogram_logits"], dim=-1)
-            orbit_hist_ll[valid] = (
-                orbit_histogram_target[valid] * orbit_logp[valid]
-            ).sum(dim=-1)
-        total = total + float(orbit_cfg.get("histogram_weight", 0.25)) * orbit_hist_ll
-
-        sigma = max(float(orbit_log_total_sigma), 1.0e-6)
-        orbit_total_pred = F.softplus(outputs["orbit_log_total_raw"])
-        residual = (orbit_total_pred - orbit_log_total_target) / sigma
-        orbit_total_ll = -0.5 * residual.square().mean(dim=-1)
-        total = total + float(orbit_cfg.get("log_total_weight", 0.10)) * orbit_total_ll
-
-    return total
-
-
-def _clean_structure_target_vector(
-    graphlet_target: torch.Tensor,
-    graphlet_mass_target: torch.Tensor,
-    clustering_target: torch.Tensor | None,
-    orbit_histogram_target: torch.Tensor | None,
-    orbit_log_total_target: torch.Tensor | None,
-    *,
-    structure_cfg: Mapping[str, Any],
-) -> torch.Tensor:
-    clustering_cfg = dict(structure_cfg.get("clustering", {}) or {})
-    orbit_cfg = dict(structure_cfg.get("orbit", {}) or {})
-    return _pack_structure_summary_vector(
-        graphlet_target,
-        graphlet_mass_target,
-        clustering_target if bool(clustering_cfg.get("enabled", False)) else None,
-        orbit_histogram_target if bool(orbit_cfg.get("enabled", False)) else None,
-        orbit_log_total_target if bool(orbit_cfg.get("enabled", False)) else None,
-    )
-
-
 def _graphlet_auxiliary_loss(
     model: nn.Module,
     outputs: Mapping[str, torch.Tensor],
@@ -2419,9 +2138,8 @@ def _loss_batch_loggap_graphlet(
     eigen_mask_mode: str,
     spectral_transform: Mapping[str, Any],
     graphlet_cfg: Mapping[str, Any],
-    structure_score_cfg: Mapping[str, Any] | None = None,
     generator: torch.Generator | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, float]]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, float]]:
     if len(batch) == 8:
         # Backwards compatibility for graphlet-only checkpoints/tests.
         x0, _adj0, flags, _sizes, u, lam0, graphlet_target, graphlet_mass = batch
@@ -2436,140 +2154,56 @@ def _loss_batch_loggap_graphlet(
         raise ValueError(
             "joint log-gap structural training expects 8 legacy or 11 structural tensors per batch"
         )
+    b = x0.size(0)
+    state0 = _operator_eigenvalues_to_spectral_state(
+        lam0,
+        flags,
+        spectral_operator="combinatorial_laplacian",
+        spectral_transform=spectral_transform,
+    )
+    if generator is None:
+        t = torch.rand(b, device=x0.device) * (1.0 - eps) + eps
+        z_x = torch.randn_like(x0)
+        z_state = torch.randn_like(state0)
+    else:
+        t = torch.rand((b,), device=x0.device, generator=generator) * (1.0 - eps) + eps
+        z_x = torch.randn(x0.shape, dtype=x0.dtype, device=x0.device, generator=generator)
+        z_state = torch.randn(state0.shape, dtype=state0.dtype, device=state0.device, generator=generator)
+    z_x = mask_x(z_x, flags)
+    e_mask = eigen_mask_from_flags(flags, eigen_mask_mode)
+    z_state = z_state * e_mask
 
-    score_cfg = dict(structure_score_cfg or {})
-    score_enabled = bool(score_cfg.get("enabled", False))
-    # Validation is normally wrapped in torch.no_grad().  The structural-score
-    # teacher itself is a derivative with respect to the noisy log-gap state,
-    # so locally re-enable autograd when the second head is active.
-    context = torch.enable_grad() if score_enabled else nullcontext()
-    with context:
-        b = x0.size(0)
-        state0 = _operator_eigenvalues_to_spectral_state(
-            lam0,
-            flags,
-            spectral_operator="combinatorial_laplacian",
-            spectral_transform=spectral_transform,
-        )
-        if generator is None:
-            t = torch.rand(b, device=x0.device) * (1.0 - eps) + eps
-            z_x = torch.randn_like(x0)
-            z_state = torch.randn_like(state0)
-        else:
-            t = torch.rand((b,), device=x0.device, generator=generator) * (1.0 - eps) + eps
-            z_x = torch.randn(x0.shape, dtype=x0.dtype, device=x0.device, generator=generator)
-            z_state = torch.randn(
-                state0.shape,
-                dtype=state0.dtype,
-                device=state0.device,
-                generator=generator,
-            )
-        z_x = mask_x(z_x, flags)
-        e_mask = eigen_mask_from_flags(flags, eigen_mask_mode)
-        z_state = z_state * e_mask
+    mean_x, std_x = sde_x.marginal_x(x0, t)
+    xt = mask_x(mean_x + std_x[:, None, None] * z_x, flags)
+    mean_state, std_state = sde_lam.marginal_spectrum(state0, t)
+    state_t = (mean_state * e_mask + std_state[:, None] * z_state) * e_mask
+    lam_t = _spectral_state_to_operator_eigenvalues(
+        state_t,
+        flags,
+        spectral_operator="combinatorial_laplacian",
+        spectral_transform=spectral_transform,
+    )
+    operator_t = reconstruct_adjacency(u, lam_t)
+    adj_t = _operator_to_adjacency_state(operator_t, flags, "combinatorial_laplacian")
 
-        mean_x, std_x = sde_x.marginal_x(x0, t)
-        xt = mask_x(mean_x + std_x[:, None, None] * z_x, flags)
-        mean_state, std_state = sde_lam.marginal_spectrum(state0, t)
-        state_t = (mean_state * e_mask + std_state[:, None] * z_state) * e_mask
-        if score_enabled:
-            state_t = state_t.detach().requires_grad_(True)
-        lam_t = _spectral_state_to_operator_eigenvalues(
-            state_t,
-            flags,
-            spectral_operator="combinatorial_laplacian",
-            spectral_transform=spectral_transform,
-        )
-        operator_t = reconstruct_adjacency(u, lam_t)
-        adj_t = _operator_to_adjacency_state(operator_t, flags, "combinatorial_laplacian")
-
-        pred_x = model_x(xt, adj_t, flags, u, state_t)
-        if not _is_joint_graphlet_score(model_lam):
-            raise TypeError("joint log-gap graphlet training requires a graphlet-capable spectrum model")
-
-        clean_target_vector = _clean_structure_target_vector(
-            graphlet_target,
-            graphlet_mass,
-            clustering_target,
-            orbit_histogram_target,
-            orbit_log_total_target,
-            structure_cfg=graphlet_cfg,
-        )
-        if score_enabled:
-            outputs = model_lam.forward_all(
-                xt,
-                adj_t,
-                flags,
-                u,
-                state_t,
-                time=t,
-                structure_target=clean_target_vector,
-            )
-        else:
-            outputs = model_lam.forward_all(xt, adj_t, flags, u, state_t)
-        pred_state = outputs["spectrum"]
-        loss_x = 0.5 * (pred_x - z_x).square().reshape(b, -1).sum(dim=-1).mean()
-        loss_state = 0.5 * (
-            (((pred_state - z_state) * e_mask).square().reshape(b, -1).sum(dim=-1))
-        ).mean()
-        loss_graphlet, metrics = _structure_auxiliary_loss(
-            model_lam,
-            outputs,
-            graphlet_target,
-            graphlet_mass,
-            clustering_target,
-            orbit_histogram_target,
-            orbit_log_total_target,
-            structure_cfg=graphlet_cfg,
-        )
-
-        loss_structure_score = loss_state.detach() * 0.0
-        if score_enabled:
-            if "structure_score" not in outputs:
-                raise RuntimeError("Structural score is enabled but the model did not return structure_score")
-            structural_logp = _structure_log_likelihood_per_graph(
-                model_lam,
-                outputs,
-                graphlet_target,
-                graphlet_mass,
-                clustering_target,
-                orbit_histogram_target,
-                orbit_log_total_target,
-                structure_cfg=graphlet_cfg,
-                orbit_log_total_sigma=float(score_cfg.get("orbit_log_total_sigma", 0.25)),
-            )
-            teacher_score = torch.autograd.grad(
-                structural_logp.sum(),
-                state_t,
-                retain_graph=True,
-                create_graph=False,
-                allow_unused=False,
-            )[0].detach()
-            teacher_score = teacher_score * e_mask
-            teacher_score = _clip_vector_norm(
-                teacher_score,
-                float(score_cfg.get("teacher_clip_norm", 5.0)),
-            )
-            pred_structure_score = outputs["structure_score"] * e_mask
-            loss_structure_score = 0.5 * (
-                (pred_structure_score - teacher_score).square().reshape(b, -1).sum(dim=-1)
-            ).mean()
-            with torch.no_grad():
-                teacher_norm = teacher_score.reshape(b, -1).norm(dim=-1)
-                pred_norm = pred_structure_score.reshape(b, -1).norm(dim=-1)
-                dot = (teacher_score * pred_structure_score).reshape(b, -1).sum(dim=-1)
-                cosine = dot / (teacher_norm * pred_norm).clamp_min(1.0e-12)
-                metrics.update(
-                    {
-                        "structure_score_loss": float(loss_structure_score.detach().item()),
-                        "structure_score_teacher_norm": float(teacher_norm.mean().item()),
-                        "structure_score_pred_norm": float(pred_norm.mean().item()),
-                        "structure_score_cosine": float(cosine.mean().item()),
-                        "structure_log_likelihood": float(structural_logp.detach().mean().item()),
-                    }
-                )
-
-    return loss_x, loss_state, loss_graphlet, loss_structure_score, metrics
+    pred_x = model_x(xt, adj_t, flags, u, state_t)
+    if not _is_joint_graphlet_score(model_lam):
+        raise TypeError("joint log-gap graphlet training requires a graphlet-capable spectrum model")
+    outputs = model_lam.forward_all(xt, adj_t, flags, u, state_t)
+    pred_state = outputs["spectrum"]
+    loss_x = 0.5 * (pred_x - z_x).square().reshape(b, -1).sum(dim=-1).mean()
+    loss_state = 0.5 * (((pred_state - z_state) * e_mask).square().reshape(b, -1).sum(dim=-1)).mean()
+    loss_graphlet, metrics = _structure_auxiliary_loss(
+        model_lam,
+        outputs,
+        graphlet_target,
+        graphlet_mass,
+        clustering_target,
+        orbit_histogram_target,
+        orbit_log_total_target,
+        structure_cfg=graphlet_cfg,
+    )
+    return loss_x, loss_state, loss_graphlet, metrics
 
 
 class _EMA:
@@ -2610,7 +2244,6 @@ def _model_config(options: Mapping[str, Any], max_nodes: int) -> dict[str, Any]:
         "ppgn_norm_eps": float(raw.get("ppgn_norm_eps", 1.0e-5)),
         "ppgn_input_clip": float(raw.get("ppgn_input_clip", 10.0)),
         "structural_features": copy.deepcopy(dict(options.get("structural_features", {}) or {})),
-        "structure_score": copy.deepcopy(_resolved_structure_score_config(options)),
     }
 
 
@@ -2625,7 +2258,6 @@ def _build_models(
     node_backbone = str(cfg.get("node_backbone", legacy_backbone)).lower()
     spectrum_backbone = str(cfg.get("spectrum_backbone", legacy_backbone)).lower()
     structural_features = copy.deepcopy(dict(cfg.get("structural_features", {}) or {}))
-    structure_score_config = copy.deepcopy(dict(cfg.get("structure_score", {}) or {}))
     ppgn_kwargs = {
         "ppgn_hidden_dim": int(cfg.get("ppgn_hidden_dim", 64)),
         "ppgn_depth": int(cfg.get("ppgn_depth", 4)),
@@ -2673,7 +2305,6 @@ def _build_models(
                 **spectrum_kwargs,
                 graphlet_slices=graphlet_slices,
                 structural_features=structural_features,
-                structure_score_config=structure_score_config,
                 **summary_head_kwargs,
                 **ppgn_kwargs,
             ).to(device)
@@ -2957,7 +2588,6 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
     graphlet_meta: dict[str, Any] | None = None
     spectral_transform: dict[str, Any] = {"kind": "direct_eigenvalues"}
     joint_graphlet_cfg = _resolved_structure_summary_config(options)
-    structure_score_cfg = _resolved_structure_score_config(options)
     if variant in LAPLACIAN_LOGGAP_ALL_VARIANTS:
         sde_cfg = dict(options.get("sde", {}) or {})
         stats = _fit_laplacian_log_gap_stats(
@@ -3053,7 +2683,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
         with log_path.open("w", encoding="utf-8") as log:
             for epoch in range(1, epochs + 1):
                 model_x.train(); model_lam.train()
-                total_x = total_l = total_g = total_ss = total_n = 0.0
+                total_x = total_l = total_g = total_n = 0.0
                 train_graphlet_metrics: list[dict[str, float]] = []
                 for batch_cpu in train_loader:
                     batch = tuple(v.to(device) for v in batch_cpu)
@@ -3062,19 +2692,14 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                         if not _is_joint_graphlet_score(model_lam):
                             raise AssertionError("log-gap graphlet variant requires the joint spectrum/graphlet model")
-                        lx, ll, lg, lss, gmetrics = _loss_batch_loggap_graphlet(
+                        lx, ll, lg, gmetrics = _loss_batch_loggap_graphlet(
                             model_x, model_lam, batch,
                             sde_x=sde_x, sde_lam=sde_lam, eps=eps,
                             eigen_mask_mode=eigen_mask_mode,
                             spectral_transform=spectral_transform,
                             graphlet_cfg=joint_graphlet_cfg,
-                            structure_score_cfg=structure_score_cfg,
                         )
-                        loss = (
-                            lx + ll
-                            + float(joint_graphlet_cfg.get("loss_weight", 0.10)) * lg
-                            + float(structure_score_cfg.get("loss_weight", 0.05)) * lss
-                        )
+                        loss = lx + ll + float(joint_graphlet_cfg.get("loss_weight", 0.10)) * lg
                         train_graphlet_metrics.append(gmetrics)
                     elif variant in LAPLACIAN_LOGGAP_VARIANTS:
                         lx, ll = _loss_batch_loggap(
@@ -3088,7 +2713,6 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                             spectral_transform=spectral_transform,
                         )
                         lg = lx.detach() * 0.0
-                        lss = lx.detach() * 0.0
                         loss = lx + ll
                     else:
                         lx, ll = _loss_batch(
@@ -3098,7 +2722,6 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                             spectral_operator=spectral_operator,
                         )
                         lg = lx.detach() * 0.0
-                        lss = lx.detach() * 0.0
                         loss = lx + ll
                     if not torch.isfinite(loss):
                         raise FloatingPointError("Non-finite vanilla GSDM training loss")
@@ -3120,7 +2743,6 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     total_x += float(lx.item()) * b
                     total_l += float(ll.item()) * b
                     total_g += float(lg.item()) * b
-                    total_ss += float(lss.item()) * b
                     total_n += b
                 degree_metrics = None
                 if degree_bundle is not None:
@@ -3145,14 +2767,12 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                 if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                     record["train_graphlet_summary_loss"] = total_g / max(total_n, 1)
                     record["train_structure_summary_loss"] = record["train_graphlet_summary_loss"]
-                    record["train_structure_score_loss"] = total_ss / max(total_n, 1)
                     if train_graphlet_metrics:
                         for key in sorted(train_graphlet_metrics[0]):
                             record[f"train_{key}"] = float(np.mean([row[key] for row in train_graphlet_metrics]))
                     record["train_loss"] = (
                         record["train_node_loss"] + record["train_spectrum_loss"]
                         + float(joint_graphlet_cfg.get("loss_weight", 0.10)) * record["train_graphlet_summary_loss"]
-                        + float(structure_score_cfg.get("loss_weight", 0.05)) * record["train_structure_score_loss"]
                     )
                 else:
                     record["train_loss"] = record["train_node_loss"] + record["train_spectrum_loss"]
@@ -3164,7 +2784,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     record["train_joint_loss"] = record["train_loss"] + record["train_degree_prior_loss"]
                 if epoch == 1 or epoch % val_every == 0 or epoch == epochs:
                     model_x.eval(); model_lam.eval()
-                    vx = vl = vg = vss = vn = 0.0
+                    vx = vl = vg = vn = 0.0
                     val_graphlet_metrics: list[dict[str, float]] = []
                     gen = torch.Generator(device=device).manual_seed(request.run.train_seed + 100003 + epoch)
                     with torch.no_grad():
@@ -3173,13 +2793,12 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                             if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                                 if not _is_joint_graphlet_score(model_lam):
                                     raise AssertionError("log-gap graphlet variant requires the joint spectrum/graphlet model")
-                                lx, ll, lg, lss, gmetrics = _loss_batch_loggap_graphlet(
+                                lx, ll, lg, gmetrics = _loss_batch_loggap_graphlet(
                                     model_x, model_lam, batch,
                                     sde_x=sde_x, sde_lam=sde_lam, eps=eps,
                                     eigen_mask_mode=eigen_mask_mode,
                                     spectral_transform=spectral_transform,
                                     graphlet_cfg=joint_graphlet_cfg,
-                                    structure_score_cfg=structure_score_cfg,
                                     generator=gen,
                                 )
                                 val_graphlet_metrics.append(gmetrics)
@@ -3196,7 +2815,6 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                                     generator=gen,
                                 )
                                 lg = lx.detach() * 0.0
-                                lss = lx.detach() * 0.0
                             else:
                                 lx, ll = _loss_batch(
                                     model_x, model_lam, batch,
@@ -3206,26 +2824,22 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                                     generator=gen,
                                 )
                                 lg = lx.detach() * 0.0
-                                lss = lx.detach() * 0.0
                             b = batch[0].size(0)
                             vx += float(lx.item()) * b
                             vl += float(ll.item()) * b
                             vg += float(lg.item()) * b
-                            vss += float(lss.item()) * b
                             vn += b
                     record["val_node_loss"] = vx / max(vn, 1)
                     record["val_spectrum_loss"] = vl / max(vn, 1)
                     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                         record["val_graphlet_summary_loss"] = vg / max(vn, 1)
                         record["val_structure_summary_loss"] = record["val_graphlet_summary_loss"]
-                        record["val_structure_score_loss"] = vss / max(vn, 1)
                         if val_graphlet_metrics:
                             for key in sorted(val_graphlet_metrics[0]):
                                 record[f"val_{key}"] = float(np.mean([row[key] for row in val_graphlet_metrics]))
                         record["val_loss"] = (
                             record["val_node_loss"] + record["val_spectrum_loss"]
                             + float(joint_graphlet_cfg.get("loss_weight", 0.10)) * record["val_graphlet_summary_loss"]
-                            + float(structure_score_cfg.get("loss_weight", 0.05)) * record["val_structure_score_loss"]
                         )
                     else:
                         record["val_loss"] = record["val_node_loss"] + record["val_spectrum_loss"]
@@ -3280,7 +2894,6 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
             "variant": variant,
             "spectral_operator": spectral_operator,
             "spectral_transform": _jsonable(spectral_transform),
-            "structure_score": copy.deepcopy(structure_score_cfg),
             "structure_summary": (
                 {
                     "enabled": True,
@@ -3409,16 +3022,6 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     "joint_auxiliary_head_shared_with_spectrum_denoiser_predicting_clean_k3_k4_k5_graphlet_histograms_and_connected_subset_mass"
                     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS else "none"
                 ),
-                "structure_score_training": (
-                    "distilled_grad_log_p_clean_structure_summary_given_noisy_log_gap_state"
-                    if bool(structure_score_cfg.get("enabled", False)) else "none"
-                ),
-                "structure_score_sampling": (
-                    "late_reverse_score_guidance_conditioned_on_denoised_predicted_structure_summary"
-                    if bool(structure_score_cfg.get("enabled", False))
-                    and bool(structure_score_cfg.get("guidance", {}).get("enabled", False))
-                    else "none"
-                ),
                 "discretization": (
                     "single_final_threshold_on_negative_laplacian_offdiagonal"
                     if spectral_operator == "combinatorial_laplacian"
@@ -3494,80 +3097,14 @@ def _score_x(
 
 
 def _score_lam(
-    model: GSDMSpectrumScore,
-    x: torch.Tensor,
-    adj: torch.Tensor,
-    flags: torch.Tensor,
-    t: torch.Tensor,
-    u: torch.Tensor,
-    lam: torch.Tensor,
-    sde: VPSDE,
-    *,
-    spectral_operator: str = "adjacency",
-    spectral_transform: Mapping[str, Any] | None = None,
-    structure_score_cfg: Mapping[str, Any] | None = None,
+    model: GSDMSpectrumScore, x: torch.Tensor, adj: torch.Tensor, flags: torch.Tensor,
+    t: torch.Tensor, u: torch.Tensor, lam: torch.Tensor, sde: VPSDE,
 ) -> torch.Tensor:
-    score_cfg = dict(structure_score_cfg or {})
-    guidance_scale = _structure_guidance_scale(t, score_cfg)
-    guided = bool((guidance_scale > 0).any())
-
-    current_shared = None
-    if guided:
-        if not isinstance(model, GSDMSpectrumGraphletPPGNScore):
-            raise TypeError("Structural-score guidance currently requires the PPGN spectrum model")
-        if model.structure_score_head is None:
-            raise RuntimeError("Structural-score guidance requested but checkpoint has no score head")
-        current_shared = model._encode(x, adj, flags, lam)
-        current_outputs = model._heads_from_shared(current_shared)
-        raw = current_outputs["spectrum"]
-    else:
-        raw = model(x, adj, flags, u, lam)
-
+    raw = model(x, adj, flags, u, lam)
     if not torch.isfinite(raw).all():
         raise FloatingPointError("Non-finite spectrum score during sampling")
-    mean_coeff, std = sde.marginal_coeff(t)
+    _, std = sde.marginal_coeff(t)
     score = -raw / std[:, None].clamp_min(1.0e-12)
-
-    if guided:
-        if spectral_operator != "combinatorial_laplacian":
-            raise RuntimeError("Structural-score guidance is defined for Laplacian log-gap diffusion")
-        guidance = dict(score_cfg.get("guidance", {}) or {})
-        if str(guidance.get("target_source", "denoised_summary")) != "denoised_summary":
-            raise ValueError("Only denoised_summary structural guidance is implemented")
-
-        e_mask = eigen_mask_from_flags(flags, "laplacian_nonzero_prefix")
-        # Epsilon prediction gives the usual x0 estimate in standardized
-        # log-gap coordinates.  Its structural summary is the time-dependent
-        # clean target presented to the second score head.
-        state0_hat = (
-            lam - std[:, None] * raw
-        ) / mean_coeff[:, None].clamp_min(1.0e-6)
-        state0_hat = state0_hat * e_mask
-        eig0_hat = _spectral_state_to_operator_eigenvalues(
-            state0_hat,
-            flags,
-            spectral_operator="combinatorial_laplacian",
-            spectral_transform=spectral_transform,
-        )
-        op0_hat = reconstruct_adjacency(u, eig0_hat)
-        adj0_hat = _operator_to_adjacency_state(
-            op0_hat, flags, "combinatorial_laplacian"
-        )
-        target_shared = model._encode(x, adj0_hat, flags, state0_hat)
-        target_outputs = model._heads_from_shared(target_shared)
-        target_summary = model.structure_vector_from_outputs(target_outputs).detach()
-        structural_score = model.structure_score_from_shared(
-            current_shared,
-            target_summary,
-            t,
-        )
-        structural_score = structural_score * e_mask
-        structural_score = _clip_vector_norm(
-            structural_score,
-            float(guidance.get("score_clip_norm", 5.0)),
-        )
-        score = score + guidance_scale[:, None] * structural_score
-
     if not torch.isfinite(score).all():
         raise FloatingPointError("Non-finite scaled spectrum score during sampling")
     return score
@@ -3600,7 +3137,6 @@ def _langevin_lambda(
     generator: torch.Generator,
     spectral_operator: str = "adjacency",
     spectral_transform: Mapping[str, Any] | None = None,
-    structure_score_cfg: Mapping[str, Any] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     lam_mean = lam
     timestep = (t * (sde.N - 1) / sde.T).long()
@@ -3609,12 +3145,7 @@ def _langevin_lambda(
     adj_sample = adj
     adj_mean = adj
     for _ in range(n_steps):
-        grad = _score_lam(
-            model, x, adj_sample, flags, t, u, lam, sde,
-            spectral_operator=spectral_operator,
-            spectral_transform=spectral_transform,
-            structure_score_cfg=structure_score_cfg,
-        )
+        grad = _score_lam(model, x, adj_sample, flags, t, u, lam, sde)
         # The released GSDM sampler draws full eigenvalue noise.  The persistent
         # reverse-state mean is masked *after* each corrector/predictor update.
         noise = torch.randn(lam.shape, device=lam.device, dtype=lam.dtype, generator=generator)
@@ -3663,15 +3194,9 @@ def _euler_lambda(
     *, eigen_mask: torch.Tensor, generator: torch.Generator,
     spectral_operator: str = "adjacency",
     spectral_transform: Mapping[str, Any] | None = None,
-    structure_score_cfg: Mapping[str, Any] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     beta = sde.beta(t)
-    score = _score_lam(
-        model, x, adj, flags, t, u, lam, sde,
-        spectral_operator=spectral_operator,
-        spectral_transform=spectral_transform,
-        structure_score_cfg=structure_score_cfg,
-    )
+    score = _score_lam(model, x, adj, flags, t, u, lam, sde)
     if spectral_operator == "combinatorial_laplacian":
         score = score * eigen_mask
     drift = -0.5 * beta[:, None] * lam - beta[:, None] * score
@@ -3710,7 +3235,6 @@ def sample_batch(
     eigen_mask_mode: str,
     spectral_operator: str,
     spectral_transform: Mapping[str, Any] | None = None,
-    structure_score_cfg: Mapping[str, Any] | None = None,
     device: torch.device,
     generator: torch.Generator,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -3770,7 +3294,6 @@ def sample_batch(
                 n_steps=n_steps, eigen_mask=e_mask, generator=generator,
                 spectral_operator=spectral_operator,
                 spectral_transform=spectral_transform,
-                structure_score_cfg=structure_score_cfg,
             )
             final_lam_sample = corr_sample
             final_lam_mean = corr_mean
@@ -3782,7 +3305,6 @@ def sample_batch(
             eigen_mask=e_mask, generator=generator,
             spectral_operator=spectral_operator,
             spectral_transform=spectral_transform,
-            structure_score_cfg=structure_score_cfg,
         )
         final_lam_sample = pred_sample
         final_lam_mean = pred_mean
@@ -3807,18 +3329,6 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     device = _resolve_device(options.get("runtime", {}))
     _seed_everything(request.generation_seed)
     model_cfg = state["model_config"]
-    checkpoint_structure_score = copy.deepcopy(
-        dict(state.get("structure_score", model_cfg.get("structure_score", {})) or {})
-    )
-    option_structure_score = _resolved_structure_score_config(options)
-    structure_score_cfg = checkpoint_structure_score
-    if bool(checkpoint_structure_score.get("enabled", False)):
-        # Guidance strength/schedule can be changed at generation time without
-        # changing the trained head architecture.
-        structure_score_cfg["guidance"] = copy.deepcopy(
-            dict(option_structure_score.get("guidance", checkpoint_structure_score.get("guidance", {})) or {})
-        )
-        structure_score_cfg["enabled"] = True
     structure_summary_payload = state.get("structure_summary", {}) or {}
     if not bool(structure_summary_payload.get("enabled", False)):
         structure_summary_payload = state.get("graphlet_summary", {}) or {}
@@ -3890,7 +3400,6 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 eigen_mask_mode=eigen_mask_mode,
                 spectral_operator=spectral_operator,
                 spectral_transform=spectral_transform,
-                structure_score_cfg=structure_score_cfg,
                 device=device, generator=generator,
             )
             soft = 0.5 * (soft + soft.transpose(-1, -2))
@@ -3954,6 +3463,19 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             label = "Vanilla-Laplacian-GSDM" if spectral_operator == "combinatorial_laplacian" else "Vanilla-GSDM"
             print(f"{label} generated {len(graphs)}/{request.num_graphs}", flush=True)
 
+    refinement_options = dict(options.get("graphlet_refinement", {}) or {})
+    fixed_structure_refinement_enabled = bool(
+        refinement_options.get("enabled", False)
+        and variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS
+    )
+    refinement_selector = dict(refinement_options.get("refiner", {}) or {})
+    soft_structure_refinement_enabled = bool(
+        fixed_structure_refinement_enabled
+        and not bool(refinement_selector.get("accept_only_improving", True))
+        and str(refinement_selector.get("selection", "greedy")).lower()
+        in {"softmax", "sample", "softmax_safe"}
+    )
+
     vanilla_graphs: list[nx.Graph] = []
     pre_refinement_graphs: list[nx.Graph] = []
     frozen_degree_sequences: list[list[int]] = []
@@ -3977,12 +3499,12 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 seed=request.generation_seed,
             )
         )
-    elif variant in LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS:
+    elif fixed_structure_refinement_enabled:
         if spectral_operator != "combinatorial_laplacian":
             raise RuntimeError("Log-gap joint-head refinement requires Laplacian spectral generation")
-        if len(joint_graphlet_predictions) != len(graphs):
+        if len(joint_structure_predictions) != len(graphs):
             raise RuntimeError(
-                "Log-gap joint-head refinement requires one auxiliary graphlet prediction per generated graph"
+                "Log-gap structural refinement requires one auxiliary structure prediction per generated graph"
             )
         from grapher.models.gdsm_simple.graphlet_stage3 import (
             refine_generated_graphs_with_fixed_predictions,
@@ -3991,9 +3513,9 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
         graphs, frozen_degree_sequences, graphlet_refinement_diagnostics, graphlet_prediction_traces = (
             refine_generated_graphs_with_fixed_predictions(
                 pre_refinement_graphs,
-                joint_graphlet_predictions,
+                joint_structure_predictions,
                 graphlet_summary_payload=graphlet_summary_payload,
-                config=dict(options.get("graphlet_refinement", {}) or {}),
+                config=refinement_options,
                 seed=request.generation_seed,
             )
         )
@@ -4159,6 +3681,25 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             changed = [bool(row.get("changed", False)) for row in graphlet_refinement_diagnostics]
             preserved = [bool(row.get("degree_preserved", False)) for row in graphlet_refinement_diagnostics]
             skipped = [bool(row.get("skipped", False)) for row in graphlet_refinement_diagnostics]
+            accepted_trace_rows = [
+                step
+                for row in graphlet_refinement_diagnostics
+                for step in row.get("trace", [])
+                if bool(step.get("accepted", False))
+            ]
+            all_trace_rows = [
+                step
+                for row in graphlet_refinement_diagnostics
+                for step in row.get("trace", [])
+            ]
+            negative_accepted = [
+                step for step in accepted_trace_rows
+                if float(step.get("energy_improvement", 0.0)) < 0.0
+            ]
+            motif_rejections = [
+                int(step.get("num_motif_guard_rejections", 0))
+                for step in all_trace_rows
+            ]
             graphlet_aggregate = {
                 "hard_degree_constraint": True,
                 "degree_preservation_rate": float(np.mean(preserved)),
@@ -4167,6 +3708,22 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "mean_prediction_calls": float(np.mean(calls)),
                 "disconnected_source_skip_rate": float(np.mean(skipped)),
                 "graphlet_orders": [3, 4, 5],
+                "accepted_worsening_fraction": (
+                    float(len(negative_accepted) / len(accepted_trace_rows))
+                    if accepted_trace_rows else 0.0
+                ),
+                "mean_motif_guard_rejections_per_decision": (
+                    float(np.mean(motif_rejections)) if motif_rejections else 0.0
+                ),
+                "destroyed_triangles_total": int(sum(
+                    int(step.get("destroyed_triangles", 0)) for step in accepted_trace_rows
+                )),
+                "destroyed_cycles_4_total": int(sum(
+                    int(step.get("destroyed_cycles_4", 0)) for step in accepted_trace_rows
+                )),
+                "destroyed_cycles_5_total": int(sum(
+                    int(step.get("destroyed_cycles_5", 0)) for step in accepted_trace_rows
+                )),
             }
             _write_json(
                 staging / "rewiring_diagnostics.json",
@@ -4197,7 +3754,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     "sha256": _sha256(pre_refinement_graph_path),
                     "role": (
                         "unmodified_thresholded_laplacian_loggap_sources"
-                        if variant in LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS
+                        if fixed_structure_refinement_enabled
                         else "unmodified_thresholded_vanilla_gdsm_sources"
                     ),
                 }
@@ -4281,33 +3838,35 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "degree_sequences_used_for_graph_generation": False,
                 "posthoc_repair": False,
                 "rewiring": (
-                    "graphlet_guided_degree_preserving_double_edge_swaps"
-                    if variant in (
-                        GRAPHLET_REFINEMENT_VARIANTS
-                        | LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS
-                    ) else False
+                    "soft_structural_summary_guided_degree_preserving_double_edge_swaps"
+                    if soft_structure_refinement_enabled
+                    else (
+                        "graphlet_guided_degree_preserving_double_edge_swaps"
+                        if fixed_structure_refinement_enabled or variant in GRAPHLET_REFINEMENT_VARIANTS
+                        else False
+                    )
                 ),
                 "degree_constraint": (
                     "indexed_degree_vector_frozen_from_final_pre_refinement_graph"
-                    if variant in (
-                        GRAPHLET_REFINEMENT_VARIANTS
-                        | LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS
-                    ) else False
+                    if fixed_structure_refinement_enabled or variant in GRAPHLET_REFINEMENT_VARIANTS
+                    else False
                 ),
                 "structural_guidance": (
-                    "learned_structural_log_score_guidance_in_standardized_log_gap_space"
-                    if bool(structure_score_cfg.get("enabled", False))
-                    and bool(structure_score_cfg.get("guidance", {}).get("enabled", False))
+                    "fixed_joint_graphlet_clustering_orbit_summary_with_softmax_safe_rewiring"
+                    if soft_structure_refinement_enabled
                     else (
                         "fixed_joint_auxiliary_graphlet_summary_k3_k4_k5"
-                        if variant in LAPLACIAN_LOGGAP_GRAPHLET_REFINEMENT_VARIANTS
+                        if fixed_structure_refinement_enabled
                         else (
                             "learned_connected_induced_graphlet_summary_k3_k4_k5"
                             if variant in GRAPHLET_REFINEMENT_VARIANTS else False
                         )
                     )
                 ),
-                "structure_score": _jsonable(structure_score_cfg),
+                "soft_rewiring": (
+                    _jsonable(refinement_options.get("refiner", {}))
+                    if soft_structure_refinement_enabled else None
+                ),
             },
             "diagnostics": {
                 "connectedness_rate": float(np.mean(connected)),
