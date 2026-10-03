@@ -251,6 +251,19 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             )
         ).lower()
 
+        from grapher.models.gdsm_simple.attributed_loggap import (
+            VARIANTS as ATTRIBUTED_LOGGAP_VARIANTS,
+            default_options as default_attributed_loggap_options,
+            validate_options as validate_attributed_loggap_options,
+        )
+        if requested_variant in ATTRIBUTED_LOGGAP_VARIANTS:
+            options = default_attributed_loggap_options()
+            options = _deep_update(options, comparison_defaults)
+            options = _deep_update(options, selected)
+            options = _deep_update(options, request_options)
+            validate_attributed_loggap_options(options)
+            return options
+
         if requested_variant in {
             "vanilla_gsdm", "vanilla", "gsdm",
             "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae",
@@ -370,6 +383,10 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         if request.resume_from is not None:
             raise ValueError("gdsm_simple resume is not implemented")
         options = self._options(request)
+        from grapher.models.gdsm_simple.attributed_loggap import VARIANTS as ATTRIBUTED_LOGGAP_VARIANTS
+        if str(options.get("variant", "legacy_simple")).lower() in ATTRIBUTED_LOGGAP_VARIANTS:
+            from grapher.models.gdsm_simple.attributed_loggap import train as train_attributed_loggap
+            return train_attributed_loggap(self, request, options)
         if str(options.get("variant", "legacy_simple")).lower() in {
             "vanilla_gsdm", "vanilla", "gsdm",
             "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae",
@@ -592,6 +609,16 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             raise ValueError(f"Unsupported gdsm_simple generation overrides: {unknown}")
         _deep_update(options, request.options)
         generation_extensions = options.get("extensions", {}) or {}
+        from grapher.models.gdsm_simple.attributed_loggap import (
+            CHECKPOINT_FORMAT as ATTRIBUTED_LOGGAP_CHECKPOINT_FORMAT,
+            VARIANTS as ATTRIBUTED_LOGGAP_VARIANTS,
+        )
+        if (
+            state.get("format") == ATTRIBUTED_LOGGAP_CHECKPOINT_FORMAT
+            or str(options.get("variant", "legacy_simple")).lower() in ATTRIBUTED_LOGGAP_VARIANTS
+        ):
+            from grapher.models.gdsm_simple.attributed_loggap import generate as generate_attributed_loggap
+            return generate_attributed_loggap(self, request, state, manifest, options)
         if state.get("format") in {
             "gdsm_simple_vanilla_gsdm_checkpoint_v1",
             "gdsm_simple_vanilla_gsdm_checkpoint_v2",
