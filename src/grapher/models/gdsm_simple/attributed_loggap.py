@@ -26,6 +26,7 @@ import random
 import shutil
 import tempfile
 import time
+import warnings
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
@@ -71,6 +72,13 @@ from .vanilla_gsdm import (
     reconstruct_adjacency,
     sample_batch,
 )
+
+from .attribute_decoding import (
+    sample_categorical_logits as _sample_categorical_logits,
+    validate_decode_config, sample_atoms, sample_bonds, decoding_diagnostics,
+)
+
+CATEGORICAL_TRAINING_CONTRACT = "undirected_mask_no_visible_target_fallback_v2"
 
 CHECKPOINT_FORMAT = "gdsm_simple_laplacian_loggap_attributed_ppgn_v1"
 TRAINING_FORMAT = "grapher_gdsm_simple_laplacian_loggap_attributed_training_v1"
@@ -172,6 +180,7 @@ def default_options() -> dict[str, Any]:
             "eps": 1.0e-4,
             "threshold": 0.5,
             "use_ema": False,
+            "separate_attribute_rng": True,
         },
         "structure_summary": {
             "enabled": True,
@@ -217,6 +226,9 @@ def default_options() -> dict[str, Any]:
                 "node_temperature": 1.0,
                 "edge_temperature": 1.0,
                 "two_pass": True,
+                "constraint_mode": "none",
+                "edge_order": "random",
+                "infeasible_policy": "retain",
             },
         },
         "generation_batch_size": 128,
@@ -287,6 +299,10 @@ def validate_options(options: Mapping[str, Any]) -> None:
         value = float(decode.get(key, 1.0))
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"attributed.decode.{key} must be finite and > 0")
+    validate_decode_config(
+        decode, attr.get("node_categories", []), attr.get("edge_categories", []),
+        node_attribute=attr.get("node_attribute"), edge_attribute=attr.get("edge_attribute"),
+    )
     corruption = dict(attr.get("corruption", {}) or {})
     p0 = float(corruption.get("mask_probability_min", 0.15))
     p1 = float(corruption.get("mask_probability_max", 0.95))
@@ -758,21 +774,52 @@ def _mask_categorical_inputs(
     node_in[..., -1] = node_mask.float()
 
     clean_edge = edge_labels >= 0
-    active_pair = current_binary.bool() & (~torch.eye(n, device=flags.device, dtype=torch.bool).unsqueeze(0))
+    active_pair = (current_binary.bool()
+                   & flags.bool().unsqueeze(1) & flags.bool().unsqueeze(2)
+                   & ~torch.eye(n, device=flags.device, dtype=torch.bool).unsqueeze(0))
     # Categorical edge information is attached only to the *current* topology.
     # Current false-positive edges receive MASK, never a no-edge category.
     known_current = active_pair & clean_edge
-    edge_mask = (torch.rand((b,n,n), device=flags.device, generator=generator) < p[:,None,None]) | full[:,None,None]
+    # One Bernoulli draw per unordered edge, mirrored BEFORE encoding.
+    # Averaging independently masked categorical vectors leaks half a label.
+    i, j = torch.triu_indices(n, n, offset=1, device=flags.device)
+    draws = (torch.rand((b, i.numel()), device=flags.device, generator=generator)
+             < p[:, None]) | full[:, None]
+    edge_mask = torch.zeros((b, n, n), dtype=torch.bool, device=flags.device)
+    edge_mask[:, i, j] = draws
+    edge_mask[:, j, i] = draws
     edge_mask = (edge_mask & known_current) | (active_pair & ~clean_edge)
     edge_in = torch.zeros((b,n,n,model.edge_input_classes), device=flags.device)
     safe_edges = edge_labels.clamp_min(0)
     edge_in[..., :model.edge_classes] = F.one_hot(safe_edges, model.edge_classes).float() * known_current.unsqueeze(-1)
     edge_in[edge_mask] = 0.0
     edge_in[..., -1] = edge_mask.float()
-    # Symmetric corruption/input.
-    edge_in = 0.5 * (edge_in + edge_in.transpose(1,2))
-    edge_mask = edge_mask | edge_mask.transpose(1,2)
     return node_in, edge_in, node_mask, edge_mask
+
+
+def _categorical_denoising_loss(
+    out, node_labels, edge_labels, flags, binary, node_mask, edge_mask,
+):
+    """Supervise only unknown labels. Empty selections give differentiable zero."""
+    node_supervised = node_mask & flags.bool() & (node_labels >= 0)
+    pairs = flags.bool().unsqueeze(1) & flags.bool().unsqueeze(2)
+    upper = torch.triu(torch.ones_like(edge_labels, dtype=torch.bool), diagonal=1)
+    # Missing clean edges have zero attribute input and are also legitimate targets.
+    edge_supervised = ((edge_labels >= 0) & pairs & upper
+                       & (edge_mask | ~binary.bool()))
+    def selected_loss(logits, labels, selected):
+        if selected.any():
+            loss = F.cross_entropy(logits[selected], labels[selected])
+            accuracy = (logits[selected].argmax(-1) == labels[selected]).float().mean()
+            return loss, float(accuracy.detach())
+        return logits.sum() * 0.0, 0.0
+    node_ce, node_accuracy = selected_loss(out['node_logits'], node_labels, node_supervised)
+    edge_ce, edge_accuracy = selected_loss(out['edge_logits'], edge_labels, edge_supervised)
+    return node_ce, edge_ce, {
+        'node_accuracy': node_accuracy, 'edge_accuracy': edge_accuracy,
+        'node_supervised_count': float(node_supervised.sum()),
+        'edge_supervised_count': float(edge_supervised.sum()),
+    }
 
 
 def _structure_loss(
@@ -844,24 +891,12 @@ def _loss_batch(
     out=model_lam.forward_all(xt,adjt,flags,u,st,node_attr=node_in,edge_attr=edge_in)
     lx=0.5*(predx-zx).square().reshape(b,-1).sum(-1).mean(); ls=0.5*(((out_topology['spectrum']-zs)*em).square().reshape(b,-1).sum(-1)).mean()
     struct,metrics=_structure_loss(model_lam,out,gh,gm,ch,oh,ot,structure_cfg)
-    node_valid=flags.bool()&(node_labels>=0); node_supervised=node_mask & node_valid
-    if not node_supervised.any(): node_supervised=node_valid
-    node_ce=F.cross_entropy(out['node_logits'][node_supervised],node_labels[node_supervised])
-    clean_edge=(edge_labels>=0)
-    upper=torch.triu(torch.ones_like(clean_edge[0],dtype=torch.bool),diagonal=1).unsqueeze(0)
-    # Never supervise the edge head on a pair whose clean bond category is
-    # visible verbatim in the PPGN input.  Clean edges that are absent from
-    # the noisy/current topology are still supervised: their attribute input
-    # is zero (unknown because the topology branch currently says no edge),
-    # so there is no label leakage.
-    edge_supervised=clean_edge & upper & (edge_mask | ~binary.bool())
-    if not edge_supervised.any():
-        edge_supervised=clean_edge & upper
-    edge_ce=F.cross_entropy(out['edge_logits'][edge_supervised],edge_labels[edge_supervised]) if edge_supervised.any() else out['edge_logits'].sum()*0
-    node_acc=(out['node_logits'][node_supervised].argmax(-1)==node_labels[node_supervised]).float().mean()
-    edge_acc=(out['edge_logits'][edge_supervised].argmax(-1)==edge_labels[edge_supervised]).float().mean() if edge_supervised.any() else edge_ce.detach()*0
+    node_ce, edge_ce, categorical_metrics = _categorical_denoising_loss(
+        out, node_labels, edge_labels, flags, binary, node_mask, edge_mask
+    )
+    metrics.update(categorical_metrics)
     total=lx+ls+float(structure_cfg.get('loss_weight',.1))*struct+float(attr_cfg.get('node_loss_weight',1))*node_ce+float(attr_cfg.get('edge_loss_weight',1))*edge_ce
-    metrics.update({'loss_x':float(lx.detach()),'loss_spectrum':float(ls.detach()),'structure_loss':float(struct.detach()),'node_ce':float(node_ce.detach()),'edge_ce':float(edge_ce.detach()),'node_accuracy':float(node_acc.detach()),'edge_accuracy':float(edge_acc.detach())})
+    metrics.update({'loss_x':float(lx.detach()),'loss_spectrum':float(ls.detach()),'structure_loss':float(struct.detach()),'node_ce':float(node_ce.detach()),'edge_ce':float(edge_ce.detach())})
     return total,metrics
 
 
@@ -889,7 +924,10 @@ def train(wrapper, request: TrainRequest, options: Mapping[str,Any]) -> Training
     layout=request.run.layout; artifacts=_artifacts(wrapper,request); fingerprint=request.dataset.fingerprint()
     if layout.training_manifest_path.is_file() and not request.overwrite:
         old=json.loads(layout.training_manifest_path.read_text())
-        if old.get('dataset',{}).get('fingerprint')==fingerprint and old.get('options')==_jsonable(options) and artifacts.checkpoint_path.is_file(): return artifacts
+        if (old.get('categorical_training_contract') == CATEGORICAL_TRAINING_CONTRACT
+                and old.get('dataset',{}).get('fingerprint')==fingerprint
+                and old.get('options')==_jsonable(options)
+                and artifacts.checkpoint_path.is_file()): return artifacts
         raise ArtifactCollisionError('Existing attributed log-gap run differs; choose a new run-id or --overwrite')
     ArtifactLayout.require_available(layout.train_dir,overwrite=request.overwrite)
     _seed_everything(request.run.train_seed); device=_resolve_device(options.get('runtime',{})); started=time.monotonic()
@@ -974,40 +1012,19 @@ def train(wrapper, request: TrainRequest, options: Mapping[str,Any]) -> Training
                     print(line,flush=True); log.write(line+'\n'); log.flush()
         checkpoint_path=staging/'checkpoints/gdsm_simple.pt'
         state={
+            'categorical_training_contract':CATEGORICAL_TRAINING_CONTRACT,
             'format':CHECKPOINT_FORMAT,'variant':str(options['variant']),'model_x_state':{k:v.detach().cpu() for k,v in mx.state_dict().items()},'model_spectrum_state':{k:v.detach().cpu() for k,v in ml.state_dict().items()},'ema_x_state':ex.shadow,'ema_spectrum_state':el.shadow,
             'model_config':mc,'sde':copy.deepcopy(dict(options['sde'])),'sample':copy.deepcopy(dict(options['sample'])),'spectral_operator':'combinatorial_laplacian','spectral_transform':_jsonable(transform),'max_nodes':max_nodes,'basis_adjacencies':train_base[1].numpy(),'basis_num_nodes':train_base[3].numpy().astype(np.int64),'basis_source':'training_split_only','vocabulary':vocab.to_dict(),'structure_summary':{'enabled':True,'training_config':_summary_config(options),**meta},'attributed_config':copy.deepcopy(attr_cfg),'history':history,'train_seed':request.run.train_seed,
         }
         torch.save(state,checkpoint_path)
         resolved=copy.deepcopy(dict(options)); resolved['model']=dict(resolved['model']); resolved['model']['max_nodes']=max_nodes; resolved['model']['max_feat_num']=mc['max_feat_num']; (staging/'resolved_config.yaml').write_text(yaml.safe_dump({wrapper.model_id:resolved},sort_keys=False))
-        manifest={'format':TRAINING_FORMAT,'model_id':wrapper.model_id,'variant':str(options['variant']),'run_id':request.run.run_id,'train_seed':request.run.train_seed,'created_at':datetime.now(timezone.utc).isoformat(),'duration_seconds':time.monotonic()-started,'dataset':{'benchmark_id':request.dataset.benchmark_id,'serialized_id':request.dataset.serialized_id,'fingerprint':fingerprint,'split_sha256':{k:_sha256(v) for k,v in request.dataset.split_paths.items()}},'options':_jsonable(options),'checkpoint':{'path':'checkpoints/gdsm_simple.pt','sha256':_sha256(checkpoint_path)},'checkpoint_selection':{'kind':'final_configured_epoch','epoch':epochs},'reference_contract':{'topology':'combinatorial_laplacian_log_gap_VP_diffusion','topology_edge_existence':'spectral_decoder_only','node_categories':'masked_categorical_denoising_head_no_flow_matching','edge_categories':'masked_categorical_denoising_head_real_edge_types_only_no_no-edge_class','categorical_flow_matching':False,'categorical_input':'masked_one_hot_node_and_edge_categories_in_PPGN','typed_graphlets':'connected_induced_attributed_k3_k4_k5_training_vocabulary_plus_overflow','rewiring':False,'posthoc_repair':False},'test_used_for_training':False}
+        manifest={'categorical_training_contract':CATEGORICAL_TRAINING_CONTRACT,'format':TRAINING_FORMAT,'model_id':wrapper.model_id,'variant':str(options['variant']),'run_id':request.run.run_id,'train_seed':request.run.train_seed,'created_at':datetime.now(timezone.utc).isoformat(),'duration_seconds':time.monotonic()-started,'dataset':{'benchmark_id':request.dataset.benchmark_id,'serialized_id':request.dataset.serialized_id,'fingerprint':fingerprint,'split_sha256':{k:_sha256(v) for k,v in request.dataset.split_paths.items()}},'options':_jsonable(options),'checkpoint':{'path':'checkpoints/gdsm_simple.pt','sha256':_sha256(checkpoint_path)},'checkpoint_selection':{'kind':'final_configured_epoch','epoch':epochs},'reference_contract':{'topology':'combinatorial_laplacian_log_gap_VP_diffusion','topology_edge_existence':'spectral_decoder_only','node_categories':'masked_categorical_denoising_head_no_flow_matching','edge_categories':'masked_categorical_denoising_head_real_edge_types_only_no_no-edge_class','categorical_flow_matching':False,'categorical_input':'masked_one_hot_node_and_edge_categories_in_PPGN','typed_graphlets':'connected_induced_attributed_k3_k4_k5_training_vocabulary_plus_overflow','rewiring':False,'posthoc_repair':False},'test_used_for_training':False}
         _write_json(staging/'manifest.json',manifest)
         if layout.train_dir.exists(): shutil.rmtree(layout.train_dir)
         staging.replace(layout.train_dir); _write_json(layout.run_manifest_path,{'format':'grapher_baseline_run_v1','model_id':wrapper.model_id,'dataset_id':request.run.dataset_id,'run_id':request.run.run_id,'train_seed':request.run.train_seed})
         return _artifacts(wrapper,request)
     except BaseException:
         shutil.rmtree(staging,ignore_errors=True); raise
-
-
-def _sample_categorical_logits(
-    logits: torch.Tensor,
-    *,
-    mode: str,
-    temperature: float,
-    generator: torch.Generator,
-) -> torch.Tensor:
-    """Decode categorical logits with deterministic argmax or seeded sampling."""
-    mode = str(mode).lower()
-    if mode == "argmax":
-        return logits.argmax(dim=-1)
-    if mode in {"sample", "categorical", "stochastic"}:
-        temperature = float(temperature)
-        if not math.isfinite(temperature) or temperature <= 0:
-            raise ValueError("categorical sampling temperature must be finite and > 0")
-        probs = torch.softmax(logits / temperature, dim=-1)
-        flat = probs.reshape(-1, probs.shape[-1])
-        sampled = torch.multinomial(flat, 1, replacement=True, generator=generator)
-        return sampled.reshape(logits.shape[:-1])
-    raise ValueError(f"Unsupported categorical decode mode {mode!r}")
 
 
 def _decode_attributes(
@@ -1022,9 +1039,12 @@ def _decode_attributes(
     cfg: Mapping[str,Any],
     *,
     generator: torch.Generator,
+    diagnostics: list[dict[str, Any]] | None = None,
 ) -> tuple[torch.Tensor,torch.Tensor,dict[str,torch.Tensor]]:
     b,n=flags.shape
     decode=dict(cfg.get('decode',{}) or {})
+    validate_decode_config(decode, vocab.node_values, vocab.edge_values,
+                           node_attribute=vocab.node_attribute, edge_attribute=vocab.edge_attribute)
     node_mode=str(decode.get('node_mode','argmax')).lower()
     edge_mode=str(decode.get('edge_mode','argmax')).lower()
     node_temperature=float(decode.get('node_temperature',1.0))
@@ -1037,8 +1057,8 @@ def _decode_attributes(
 
     # Pass 1: infer atom categories with every categorical state masked.
     out1=model.forward_all(sample_x,soft,flags,u,state,node_attr=node_mask,edge_attr=edge_mask)
-    node_idx=_sample_categorical_logits(
-        out1['node_logits'], mode=node_mode, temperature=node_temperature, generator=generator
+    node_idx, atom_masks = sample_atoms(
+        out1['node_logits'], discrete, flags, vocab.node_values, decode, generator
     )
 
     # Pass 2: condition bond logits on the decoded atom categories.  Bond
@@ -1050,63 +1070,252 @@ def _decode_attributes(
     else:
         out=out1
 
-    if edge_mode == 'argmax':
-        edge_idx=out['edge_logits'].argmax(-1)
-    else:
-        # An undirected bond category must be sampled exactly once per present
-        # upper-triangular edge and mirrored.  Sampling every [i,j] entry
-        # independently would produce inconsistent bond labels for i-j/j-i.
-        edge_idx=torch.zeros(discrete.shape,dtype=torch.long,device=soft.device)
-        upper=torch.triu(discrete.bool(),diagonal=1)
-        pos=upper.nonzero(as_tuple=False)
-        if pos.numel():
-            logits=out['edge_logits'][pos[:,0],pos[:,1],pos[:,2],:]
-            sampled=_sample_categorical_logits(
-                logits, mode=edge_mode, temperature=edge_temperature, generator=generator
-            )
-            edge_idx[pos[:,0],pos[:,1],pos[:,2]]=sampled
-            edge_idx[pos[:,0],pos[:,2],pos[:,1]]=sampled
+    edge_idx, rows = sample_bonds(
+        out['edge_logits'], discrete, flags, node_idx, vocab.node_values,
+        vocab.edge_values, decode, generator,
+    )
+    if diagnostics is not None:
+        diagnostics.extend(decoding_diagnostics(
+            discrete, flags, node_idx, edge_idx, vocab.node_values, vocab.edge_values,
+            atom_masks, rows,
+        ))
     return node_idx,edge_idx,out
 
 
-def generate(wrapper, request: GenerateRequest, state: Mapping[str,Any], manifest: Mapping[str,Any], options: Mapping[str,Any]) -> GenerationArtifacts:
+def _tensor_state_digest(*tensors: torch.Tensor) -> str:
+    """Hash complete per-sample decoder inputs, not merely a graph degree sequence."""
+    digest = hashlib.sha256()
+    for tensor in tensors:
+        array = tensor.detach().cpu().contiguous().numpy()
+        digest.update(str(array.dtype).encode())
+        digest.update(str(array.shape).encode())
+        digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+def _generation_rngs(seed: int, device: torch.device, separate: bool = True):
+    """Attribute random draws must not advance the topology diffusion stream."""
+    topology = torch.Generator(device=device).manual_seed(int(seed))
+    attribute_seed = (int(seed) + 104729) % (2**63 - 1)
+    attributes = (torch.Generator(device=device).manual_seed(attribute_seed)
+                  if separate else topology)
+    return np.random.default_rng(seed), topology, attributes, attribute_seed if separate else int(seed)
+
+
+def generate(
+    wrapper, request: GenerateRequest, state: Mapping[str, Any],
+    manifest: Mapping[str, Any], options: Mapping[str, Any],
+) -> GenerationArtifacts:
     validate_options(options)
-    if state.get('format')!=CHECKPOINT_FORMAT: raise RuntimeError(f"Expected {CHECKPOINT_FORMAT}, found {state.get('format')!r}")
-    device=_resolve_device(options.get('runtime',{})); _seed_everything(request.generation_seed); vocab=GraphCategoryVocabulary.from_dict(dict(state['vocabulary'])); meta=dict(state['structure_summary']); mc=dict(state['model_config']); mx,ml=_build_models(mc,meta,device)
-    if bool(options.get('sample',{}).get('use_ema',False)): mx.load_state_dict(state['ema_x_state']); ml.load_state_dict(state['ema_spectrum_state'])
-    else: mx.load_state_dict(state['model_x_state']); ml.load_state_dict(state['model_spectrum_state'])
-    mx.eval(); ml.eval(); sx,sl=_make_sdes({'sde':state['sde']},device); sample_cfg=copy.deepcopy(dict(state['sample'])); sample_cfg.update(dict(options.get('sample',{}))); basis_adj=torch.tensor(np.asarray(state['basis_adjacencies']),dtype=torch.float32); basis_n=torch.tensor(np.asarray(state['basis_num_nodes']),dtype=torch.long)
-    rng=np.random.default_rng(request.generation_seed); generator=torch.Generator(device=device).manual_seed(request.generation_seed); batch_size=int(options.get('generation_batch_size',128)); transform=dict(state['spectral_transform']); threshold=float(sample_cfg.get('threshold',.5)); attr_cfg=copy.deepcopy(dict(state['attributed_config']))
-    # Attribute decoding is generation-only: allow the YAML used for generation
-    # to override only decode controls (argmax/sample, temperature, two-pass)
-    # without changing the trained vocabulary or heads.
-    runtime_attr=dict(options.get('attributed',{}) or {})
+    if state.get('format') != CHECKPOINT_FORMAT:
+        raise RuntimeError(f"Expected {CHECKPOINT_FORMAT}, found {state.get('format')!r}")
+    if state.get('categorical_training_contract') != CATEGORICAL_TRAINING_CONTRACT:
+        warnings.warn(
+            "This checkpoint predates the leakage-free undirected masking contract. "
+            "Decoding remains available for exploratory comparisons; final results "
+            "require fresh training with the corrected code and a new run-id.",
+            RuntimeWarning, stacklevel=2,
+        )
+    layout = request.run.layout
+    target = layout.generation_dir(request.resolved_generation_id)
+    ArtifactLayout.require_available(target, overwrite=request.overwrite)
+    if request.num_graphs < 1:
+        raise ValueError('num_graphs must be positive')
+    batch_size = int(options.get('generation_batch_size', 128))
+    if batch_size < 1:
+        raise ValueError('generation_batch_size must be positive')
+    device = _resolve_device(options.get('runtime', {}))
+    _seed_everything(request.generation_seed)
+    vocab = GraphCategoryVocabulary.from_dict(dict(state['vocabulary']))
+    mx, ml = _build_models(dict(state['model_config']), dict(state['structure_summary']), device)
+    use_ema = bool(options.get('sample', {}).get('use_ema', False))
+    mx.load_state_dict(state['ema_x_state' if use_ema else 'model_x_state'])
+    ml.load_state_dict(state['ema_spectrum_state' if use_ema else 'model_spectrum_state'])
+    mx.eval(); ml.eval()
+    sx, sl = _make_sdes({'sde': state['sde']}, device)
+    sample_cfg = copy.deepcopy(dict(state['sample']))
+    sample_cfg.update(dict(options.get('sample', {})))
+    separate_rng = bool(sample_cfg.get('separate_attribute_rng', True))
+    rng, topology_generator, attribute_generator, attribute_seed = _generation_rngs(
+        request.generation_seed, device, separate_rng
+    )
+    basis_adj = torch.tensor(np.asarray(state['basis_adjacencies']), dtype=torch.float32)
+    basis_n = torch.tensor(np.asarray(state['basis_num_nodes']), dtype=torch.long)
+    transform = dict(state['spectral_transform'])
+    threshold = float(sample_cfg.get('threshold', .5))
+    attr_cfg = copy.deepcopy(dict(state['attributed_config']))
+    runtime_attr = dict(options.get('attributed', {}) or {})
     if 'decode' in runtime_attr:
-        attr_cfg['decode']=_deep_update(dict(attr_cfg.get('decode',{}) or {}),dict(runtime_attr.get('decode',{}) or {}))
-    graphs=[]; continuous=[]; spectra=[]; basis_indices=[]; predictions=[]; attr_conf=[]; started=time.monotonic()
+        attr_cfg['decode'] = _deep_update(
+            dict(attr_cfg.get('decode', {}) or {}), dict(runtime_attr.get('decode', {}) or {})
+        )
+    decode_cfg = dict(attr_cfg.get('decode', {}) or {})
+    validate_decode_config(decode_cfg, vocab.node_values, vocab.edge_values,
+                           node_attribute=vocab.node_attribute, edge_attribute=vocab.edge_attribute)
+    graphs = []; continuous = []; spectra = []; basis_indices = []
+    predictions = []; attr_conf = []; topology_hashes = []
+    started = time.monotonic()
     with torch.no_grad():
-        while len(graphs)<request.num_graphs:
-            b=min(batch_size,request.num_graphs-len(graphs)); indices=rng.integers(0,len(basis_adj),size=b); donor_adj=basis_adj[indices]; donor_n=basis_n[indices]
-            sample_x,soft,lam,u=sample_batch(mx,ml,donor_adjacencies=donor_adj,donor_sizes=donor_n,sde_x=sx,sde_lam=sl,sample_cfg=sample_cfg,eigen_mask_mode='laplacian_nonzero_prefix',spectral_operator='combinatorial_laplacian',spectral_transform=transform,device=device,generator=generator)
-            soft=0.5*(soft+soft.transpose(-1,-2)); nmax=soft.size(1); flags=(torch.arange(nmax,device=device).unsqueeze(0)<donor_n.to(device).unsqueeze(1)).float(); st=_operator_eigenvalues_to_spectral_state(lam,flags,spectral_operator='combinatorial_laplacian',spectral_transform=transform)
-            discrete=(soft>threshold); eye=torch.eye(nmax,device=device,dtype=torch.bool).unsqueeze(0); discrete=discrete & ~eye & flags.bool().unsqueeze(1)&flags.bool().unsqueeze(2); discrete=discrete|discrete.transpose(1,2)
-            node_idx,edge_idx,out=_decode_attributes(ml,sample_x,soft,flags,u,st,discrete,vocab,attr_cfg,generator=generator); summaries=ml.structure_means_from_outputs(out); node_prob=torch.softmax(out['node_logits'],-1).max(-1).values; edge_prob=torch.softmax(out['edge_logits'],-1).max(-1).values
-            for r,idx in enumerate(indices.tolist()):
-                n=int(donor_n[r]); g=nx.Graph()
-                for i in range(n): g.add_node(i,**{str(vocab.node_attribute):vocab.node_value(int(node_idx[r,i]))})
-                d=discrete[r,:n,:n].cpu().numpy(); ei=edge_idx[r,:n,:n].cpu().numpy()
-                for i,j in zip(*np.nonzero(np.triu(d,1))): g.add_edge(int(i),int(j),**{str(vocab.edge_attribute):vocab.edge_value(int(ei[i,j])+1)})
-                graphs.append(g); matrix=soft[r,:n,:n].cpu().numpy().astype(np.float64); np.fill_diagonal(matrix,0); continuous.append(matrix); spectra.append(lam[r].cpu().numpy().astype(np.float64)); basis_indices.append(int(idx)); predictions.append({'graph_index':len(graphs)-1,**{k:v[r].cpu().numpy().astype(np.float64) for k,v in summaries.items()}}); ep=edge_prob[r,:n,:n][discrete[r,:n,:n]].mean().item() if discrete[r,:n,:n].any() else float('nan'); attr_conf.append({'node_confidence_mean':float(node_prob[r,:n].mean()),'edge_confidence_mean':float(ep)})
-            print(f"Attributed-Laplacian-loggap generated {len(graphs)}/{request.num_graphs}",flush=True)
-    layout=request.run.layout; target=layout.generation_dir(request.resolved_generation_id); ArtifactLayout.require_available(target,overwrite=request.overwrite); target.parent.mkdir(parents=True,exist_ok=True); staging=Path(tempfile.mkdtemp(prefix='.gdsm_attr_loggap_generate_',dir=target.parent))
+        while len(graphs) < request.num_graphs:
+            b = min(batch_size, request.num_graphs - len(graphs))
+            indices = rng.integers(0, len(basis_adj), size=b)
+            donor_adj, donor_n = basis_adj[indices], basis_n[indices]
+            sample_x, soft, lam, u = sample_batch(
+                mx, ml, donor_adjacencies=donor_adj, donor_sizes=donor_n,
+                sde_x=sx, sde_lam=sl, sample_cfg=sample_cfg,
+                eigen_mask_mode='laplacian_nonzero_prefix',
+                spectral_operator='combinatorial_laplacian', spectral_transform=transform,
+                device=device, generator=topology_generator,
+            )
+            soft = 0.5 * (soft + soft.transpose(-1, -2))
+            nmax = soft.size(1)
+            flags = (torch.arange(nmax, device=device).unsqueeze(0)
+                     < donor_n.to(device).unsqueeze(1)).float()
+            st = _operator_eigenvalues_to_spectral_state(
+                lam, flags, spectral_operator='combinatorial_laplacian', spectral_transform=transform
+            )
+            eye = torch.eye(nmax, device=device, dtype=torch.bool).unsqueeze(0)
+            discrete = ((soft > threshold) & ~eye
+                        & flags.bool().unsqueeze(1) & flags.bool().unsqueeze(2))
+            discrete = discrete | discrete.transpose(1, 2)
+            # Hash BEFORE decoding and check again afterward to detect mutation.
+            state_hashes = [_tensor_state_digest(sample_x[r], soft[r], flags[r], u[r], st[r], lam[r], discrete[r])
+                            for r in range(b)]
+            decode_rows: list[dict[str, Any]] = []
+            node_idx, edge_idx, out = _decode_attributes(
+                ml, sample_x, soft, flags, u, st, discrete, vocab, attr_cfg,
+                generator=attribute_generator, diagnostics=decode_rows,
+            )
+            for r in range(b):
+                if state_hashes[r] != _tensor_state_digest(sample_x[r], soft[r], flags[r], u[r], st[r], lam[r], discrete[r]):
+                    raise AssertionError('Attribute decoding modified topology-generation inputs')
+            summaries = ml.structure_means_from_outputs(out)
+            node_prob = torch.softmax(out['node_logits'], -1).max(-1).values
+            edge_prob = torch.softmax(out['edge_logits'], -1).max(-1).values
+            for r, idx in enumerate(indices.tolist()):
+                n = int(donor_n[r]); g = nx.Graph()
+                for i in range(n):
+                    g.add_node(i, **{str(vocab.node_attribute): vocab.node_value(int(node_idx[r, i]))})
+                d = discrete[r, :n, :n].cpu().numpy()
+                ei = edge_idx[r, :n, :n].cpu().numpy()
+                for i, j in zip(*np.nonzero(np.triu(d, 1))):
+                    g.add_edge(int(i), int(j), **{str(vocab.edge_attribute): vocab.edge_value(int(ei[i, j]) + 1)})
+                if not np.array_equal(nx.to_numpy_array(g, weight=None).astype(bool), d):
+                    raise AssertionError('Serialized attributed graph differs from sampled topology')
+                row = decode_rows[r]
+                row.update({
+                    'graph_index': len(graphs), 'num_nodes': n, 'num_edges': g.number_of_edges(),
+                    'connected': bool(nx.is_connected(g)),
+                    'topology_state_sha256': state_hashes[r],
+                    'node_confidence_mean': float(node_prob[r, :n].mean()),
+                    'edge_confidence_mean': (float(edge_prob[r, :n, :n][discrete[r, :n, :n]].mean())
+                                             if discrete[r, :n, :n].any() else None),
+                })
+                g.graph['attribute_decoding'] = {
+                    'constraint_mode': str(decode_cfg.get('constraint_mode', 'none')),
+                    'topology_infeasible': row.get('topology_infeasible'),
+                    'capacity_constraints_satisfied': row.get('capacity_constraints_satisfied'),
+                    'topology_state_sha256': state_hashes[r],
+                    'posthoc_repair': False,
+                }
+                graphs.append(g)
+                matrix = soft[r, :n, :n].cpu().numpy().astype(np.float64)
+                np.fill_diagonal(matrix, 0)
+                continuous.append(matrix)
+                spectra.append(lam[r].cpu().numpy().astype(np.float64))
+                basis_indices.append(int(idx)); topology_hashes.append(state_hashes[r]); attr_conf.append(row)
+                predictions.append({'graph_index': len(graphs)-1,
+                                    **{k: v[r].cpu().numpy().astype(np.float64) for k, v in summaries.items()}})
+            print(f"Attributed-Laplacian-loggap generated {len(graphs)}/{request.num_graphs}", flush=True)
+
+    aggregate: dict[str, Any] = {
+        'num_requested': request.num_graphs, 'num_generated': len(graphs),
+        'num_filtered': 0, 'num_topology_resampled': 0,
+        'node_confidence_mean': float(np.mean([x['node_confidence_mean'] for x in attr_conf])),
+        # Confidence remains unmasked head confidence, not the constrained posterior.
+        'confidence_definition': 'untempered_unmasked_head_max_probability',
+        **{k: decode_cfg.get(k, v) for k, v in {
+            'constraint_mode': 'none', 'node_mode': 'argmax', 'edge_mode': 'argmax',
+            'node_temperature': 1.0, 'edge_temperature': 1.0,
+            'edge_order': 'random', 'infeasible_policy': 'retain',
+        }.items()},
+    }
+    finite_edge = [x['edge_confidence_mean'] for x in attr_conf if x['edge_confidence_mean'] is not None]
+    aggregate['edge_confidence_mean'] = float(np.mean(finite_edge)) if finite_edge else None
+    for key in ('topology_infeasible', 'atom_degree_incompatible', 'bond_valence_exceeded',
+                'capacity_constraints_satisfied', 'topology_preserved', 'connected'):
+        values = [bool(row[key]) for row in attr_conf if key in row]
+        aggregate[key + '_count'] = sum(values)
+        aggregate[key + '_denominator'] = len(values)
+        aggregate[key + '_rate'] = float(np.mean(values)) if values else None
+    for key in ('atom_constraint_activations', 'bond_constraint_activations'):
+        aggregate[key] = sum(row[key] for row in attr_conf)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix='.gdsm_attr_loggap_generate_', dir=target.parent))
     try:
-        gp=staging/'base_graphs.pkl'; pickle.dump(graphs,gp.open('wb'),protocol=pickle.HIGHEST_PROTOCOL); cp=staging/'continuous_adjacencies.pkl'; pickle.dump(continuous,cp.open('wb'),protocol=pickle.HIGHEST_PROTOCOL); sp=staging/'sampled_spectra.pkl'; pickle.dump(spectra,sp.open('wb'),protocol=pickle.HIGHEST_PROTOCOL); bp=staging/'sampled_basis_indices.pkl'; pickle.dump(basis_indices,bp.open('wb'),protocol=pickle.HIGHEST_PROTOCOL); pp=staging/'predicted_structure_summaries.pkl'; pickle.dump(predictions,pp.open('wb'),protocol=pickle.HIGHEST_PROTOCOL); ap=staging/'attribute_prediction_diagnostics.json'
-        finite_edge_conf=[x['edge_confidence_mean'] for x in attr_conf if np.isfinite(x['edge_confidence_mean'])]
-        decode_cfg=dict(attr_cfg.get('decode',{}) or {})
-        _write_json(ap,{'per_graph':attr_conf,'aggregate':{'node_confidence_mean':float(np.mean([x['node_confidence_mean'] for x in attr_conf])),'edge_confidence_mean':float(np.mean(finite_edge_conf)) if finite_edge_conf else None,'node_mode':str(decode_cfg.get('node_mode','argmax')),'edge_mode':str(decode_cfg.get('edge_mode','argmax')),'node_temperature':float(decode_cfg.get('node_temperature',1.0)),'edge_temperature':float(decode_cfg.get('edge_temperature',1.0))}})
-        _write_json(staging/'manifest.json',{'format':GENERATION_FORMAT,'model_id':wrapper.model_id,'variant':state['variant'],'run_id':request.run.run_id,'generation_id':request.resolved_generation_id,'generation_seed':request.generation_seed,'num_requested':request.num_graphs,'num_generated':len(graphs),'duration_seconds':time.monotonic()-started,'base_graphs':{'path':'base_graphs.pkl','sha256':_sha256(gp),'role':'final_attributed_graphs'},'continuous_adjacencies':{'path':'continuous_adjacencies.pkl','sha256':_sha256(cp)},'sampled_spectra':{'path':'sampled_spectra.pkl','sha256':_sha256(sp)},'predicted_structure_summaries':{'path':'predicted_structure_summaries.pkl','sha256':_sha256(pp),'typed_graphlets':True},'attribute_prediction_diagnostics':{'path':'attribute_prediction_diagnostics.json','sha256':_sha256(ap)},'checkpoint':{'path':str(request.checkpoint_path.resolve()),'sha256':_sha256(request.checkpoint_path)},'sampling':{'topology':'Laplacian_log_gap_reverse_diffusion','node_attributes':'two_pass_masked_categorical_denoising' if bool(dict(attr_cfg.get('decode',{}) or {}).get('two_pass',True)) else 'one_shot_masked_categorical_denoising','edge_attributes':'real_bond_type_head_on_generated_edges_only','edge_head_includes_no_edge':False,'categorical_flow_matching':False,'typed_graphlet_supervision':True,'node_decode_mode':str(dict(attr_cfg.get('decode',{}) or {}).get('node_mode','argmax')),'edge_decode_mode':str(dict(attr_cfg.get('decode',{}) or {}).get('edge_mode','argmax')),'node_temperature':float(dict(attr_cfg.get('decode',{}) or {}).get('node_temperature',1.0)),'edge_temperature':float(dict(attr_cfg.get('decode',{}) or {}).get('edge_temperature',1.0)),'rewiring':False,'posthoc_repair':False}})
-        if target.exists(): shutil.rmtree(target)
+        payloads = {'base_graphs': graphs, 'continuous_adjacencies': continuous,
+                    'sampled_spectra': spectra, 'sampled_basis_indices': basis_indices,
+                    'predicted_structure_summaries': predictions}
+        files = {}
+        for name, data in payloads.items():
+            path = staging / (name + '.pkl')
+            with path.open('wb') as handle:
+                pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            files[name] = {'path': path.name, 'sha256': _sha256(path)}
+        files['base_graphs']['role'] = 'final_attributed_graphs'
+        files['predicted_structure_summaries']['typed_graphlets'] = True
+        ap = staging / 'attribute_prediction_diagnostics.json'
+        _write_json(ap, {'per_graph': attr_conf, 'aggregate': aggregate})
+        hp = staging / 'topology_pairing.json'
+        _write_json(hp, {
+            'format': 'gdsm_attributed_topology_pairing_v1',
+            'hash_inputs': ['sample_x', 'soft_adjacency', 'flags', 'eigenbasis',
+                            'spectral_state', 'eigenvalues', 'binary_topology'],
+            'per_graph_sha256': topology_hashes,
+            'batch_size': batch_size, 'generation_seed': request.generation_seed,
+            'checkpoint_sha256': _sha256(request.checkpoint_path),
+        })
+        files['attribute_prediction_diagnostics'] = {'path': ap.name, 'sha256': _sha256(ap)}
+        files['topology_pairing'] = {'path': hp.name, 'sha256': _sha256(hp)}
+        _write_json(staging / 'manifest.json', {
+            'format': GENERATION_FORMAT, 'model_id': wrapper.model_id, 'variant': state['variant'],
+            'run_id': request.run.run_id, 'generation_id': request.resolved_generation_id,
+            'generation_seed': request.generation_seed, 'num_requested': request.num_graphs,
+            'num_generated': len(graphs), 'num_filtered': 0, 'num_topology_resampled': 0,
+            'duration_seconds': time.monotonic() - started, **files,
+            'categorical_training_contract': state.get('categorical_training_contract', 'legacy_unverified'),
+            'checkpoint': {'path': str(request.checkpoint_path.resolve()), 'sha256': _sha256(request.checkpoint_path)},
+            'sampling': {
+                'topology': 'Laplacian_log_gap_reverse_diffusion',
+                'node_attributes': ('two_pass_masked_categorical_denoising' if decode_cfg.get('two_pass', True)
+                                    else 'one_shot_masked_categorical_denoising'),
+                'edge_attributes': 'real_bond_type_head_on_generated_edges_only',
+                'edge_head_includes_no_edge': False, 'categorical_flow_matching': False,
+                'typed_graphlet_supervision': True,
+                'node_decode_mode': decode_cfg.get('node_mode', 'argmax'),
+                'edge_decode_mode': decode_cfg.get('edge_mode', 'argmax'),
+                'node_temperature': float(decode_cfg.get('node_temperature', 1.0)),
+                'edge_temperature': float(decode_cfg.get('edge_temperature', 1.0)),
+                'constraint_mode': decode_cfg.get('constraint_mode', 'none'),
+                'edge_order': decode_cfg.get('edge_order', 'random'),
+                'infeasible_policy': decode_cfg.get('infeasible_policy', 'retain'),
+                'separate_attribute_rng': separate_rng,
+                'topology_seed': request.generation_seed, 'attribute_seed': attribute_seed,
+                'generation_batch_size': batch_size,
+                'topology_preserved_by_attribute_decoder': True,
+                'degree_sequence_prescribed_during_diffusion': False,
+                'connectivity_guaranteed': False, 'full_chemical_validity_guaranteed': False,
+                'rewiring': False, 'posthoc_repair': False,
+            },
+        })
+        if target.exists():
+            shutil.rmtree(target)
         staging.replace(target)
     except BaseException:
-        shutil.rmtree(staging,ignore_errors=True); raise
-    return GenerationArtifacts(run_dir=layout.run_dir,generation_dir=target,graphs_path=target/'base_graphs.pkl',manifest_path=target/'manifest.json',num_requested=request.num_graphs,num_generated=len(graphs),graphs_sha256=_sha256(target/'base_graphs.pkl'))
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return GenerationArtifacts(
+        run_dir=layout.run_dir, generation_dir=target, graphs_path=target/'base_graphs.pkl',
+        manifest_path=target/'manifest.json', num_requested=request.num_graphs,
+        num_generated=len(graphs), graphs_sha256=_sha256(target/'base_graphs.pkl'),
+    )

@@ -1,0 +1,1503 @@
+........................................................................ [  9%]
+FF...................................................................... [ 19%]
+.....sss................................................................ [ 29%]
+...............................................................s........ [ 39%]
+.................................ssss................................... [ 49%]
+........................................................................ [ 58%]
+........................................................................ [ 68%]
+........................................................................ [ 78%]
+.........FFF...FEEEEEEEEEEEEEEEEEEFFFFFFFFFFFF.......................... [ 88%]
+........................................................................ [ 98%]
+..............                                                           [100%]
+==================================== ERRORS ====================================
+_ ERROR at setup of test_reuse_existing_bond_only_checkpoint_and_audit[generic] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[generic]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+---------------------------- Captured stdout setup -----------------------------
+[gdsm-categorical] epoch=1 train=2.33750 best_val=2.05605
+[gdsm-categorical] epoch=2 train=2.22722 best_val=2.01982
+_ ERROR at setup of test_fixed_generation_only_decomposes_final_graphs_and_is_reproducible[generic] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[generic]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_full_intermediate_graphs_match_saved_degree_vectors[generic] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[generic]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_old_v2_configs_without_new_default_keys_remain_compatible[generic] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[generic]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_audit_catches_semantic_corruption_after_checksums_are_updated[generic-degree] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[generic]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_audit_catches_semantic_corruption_after_checksums_are_updated[generic-proposal] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[generic]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_audit_catches_semantic_corruption_after_checksums_are_updated[generic-donor] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[generic]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_generate_from_old_v2_without_new_fields_or_bank_provenance[generic] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[generic]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_fresh_training_with_generation_profile_keeps_explicit_training_contract[generic] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[generic]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_reuse_existing_bond_only_checkpoint_and_audit[attributed] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[attributed]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond', 'node_attribute': 'atom'}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+---------------------------- Captured stdout setup -----------------------------
+[gdsm-categorical] epoch=1 train=4.12549 best_val=4.36811
+[gdsm-categorical] epoch=2 train=4.04373 best_val=4.27872
+_ ERROR at setup of test_fixed_generation_only_decomposes_final_graphs_and_is_reproducible[attributed] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[attributed]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond', 'node_attribute': 'atom'}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_full_intermediate_graphs_match_saved_degree_vectors[attributed] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[attributed]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond', 'node_attribute': 'atom'}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_old_v2_configs_without_new_default_keys_remain_compatible[attributed] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[attributed]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond', 'node_attribute': 'atom'}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_audit_catches_semantic_corruption_after_checksums_are_updated[attributed-degree] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[attributed]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond', 'node_attribute': 'atom'}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_audit_catches_semantic_corruption_after_checksums_are_updated[attributed-proposal] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[attributed]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond', 'node_attribute': 'atom'}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_audit_catches_semantic_corruption_after_checksums_are_updated[attributed-donor] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[attributed]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond', 'node_attribute': 'atom'}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_generate_from_old_v2_without_new_fields_or_bank_provenance[attributed] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[attributed]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond', 'node_attribute': 'atom'}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ ERROR at setup of test_fresh_training_with_generation_profile_keeps_explicit_training_contract[attributed] _
+
+request = <SubRequest 'managed' for <Function test_reuse_existing_bond_only_checkpoint_and_audit[attributed]>>
+tmp_path_factory = TempPathFactory(_given_basetemp=None, _trace=<pluggy._tracing.TagTracerSub object at 0x7fde29d6ad70>, _basetemp=PosixPath('/tmp/pytest-of-root/pytest-7'), _retention_count=3, _retention_policy='all')
+
+    @pytest.fixture(scope='module',params=[False,True],ids=['generic','attributed'])
+    def managed(request,tmp_path_factory):
+        attributed=request.param;root=tmp_path_factory.mktemp('fixed_training_basis')
+        folder=root/'data/toy';folder.mkdir(parents=True)
+        graphs=[labelled(nx.cycle_graph(6)),labelled(nx.path_graph(6)),labelled(nx.complete_graph(4)),labelled(nx.path_graph(3))]
+        for split,values in [('train',graphs),('val',[labelled(nx.wheel_graph(6)),labelled(nx.path_graph(4))]),('test',[labelled(nx.ladder_graph(3))])]:
+            with (folder/f'{split}.pkl').open('wb') as f:pickle.dump(values,f)
+        run=RunSpec('gdsm_simple','community_small','reuse_v2',42,root/'runs')
+        wrapper=GDSMSimpleWrapper()
+        req=TrainRequest(run,DatasetReference('community_small',root/'data','toy'),options=options(attributed))
+        artifacts=wrapper.train(req)
+>       result=wrapper.generate(GenerateRequest(run,artifacts.checkpoint_path,6,73,
+                               generation_id='fixed_basis',options=fixed_overrides()))
+
+tests/test_gdsm_training_basis.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/wrapper.py:649: in generate
+    return generate(self, request, state, manifest, options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/pyvenv/lib/python3.13/site-packages/torch/utils/_contextlib.py:124: in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:326: in generate
+    cfg=validate_generation(state,options)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/pipeline.py:297: in validate_generation
+    cfg=resolve(options)
+        ^^^^^^^^^^^^^^^^
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond', 'node_attribute': 'atom'}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+=================================== FAILURES ===================================
+________ test_effective_default_epoch_budgets[spectre-community_small] _________
+
+model = 'spectre', dataset = 'community_small'
+
+    @pytest.mark.parametrize("model,dataset", CASES)
+    def test_effective_default_epoch_budgets(model, dataset):
+        config = resolve_wrapper_config(model, dataset, None)
+        common = resolve_common_config(dataset, None)
+        request = TrainRequest(
+            run=RunSpec.for_seed(model_id=model, dataset_id=dataset, seed=42),
+            dataset=DatasetReference(dataset),
+            config_path=config,
+            options=comparison_request_options(model, common, model_config=config),
+        )
+        if model in {"digress", "defog", "gdss"}:
+            options = import_module(f"grapher.models.{model}.wrapper")._load_options(request)
+        else:
+            options = create_baseline(model)._options(request)
+        if model in {"digress", "defog"}:
+            epochs = options["n_epochs"]
+        else:
+            epochs = options["train"]["num_epochs" if model == "gdss" else "epochs"]
+>       assert epochs == TARGETS[dataset]
+E       assert 500 == 10000
+
+tests/test_baseline_exposure_budgets.py:45: AssertionError
+___________ test_effective_default_epoch_budgets[spectre-ego_small] ____________
+
+model = 'spectre', dataset = 'ego_small'
+
+    @pytest.mark.parametrize("model,dataset", CASES)
+    def test_effective_default_epoch_budgets(model, dataset):
+        config = resolve_wrapper_config(model, dataset, None)
+        common = resolve_common_config(dataset, None)
+        request = TrainRequest(
+            run=RunSpec.for_seed(model_id=model, dataset_id=dataset, seed=42),
+            dataset=DatasetReference(dataset),
+            config_path=config,
+            options=comparison_request_options(model, common, model_config=config),
+        )
+        if model in {"digress", "defog", "gdss"}:
+            options = import_module(f"grapher.models.{model}.wrapper")._load_options(request)
+        else:
+            options = create_baseline(model)._options(request)
+        if model in {"digress", "defog"}:
+            epochs = options["n_epochs"]
+        else:
+            epochs = options["train"]["num_epochs" if model == "gdss" else "epochs"]
+>       assert epochs == TARGETS[dataset]
+E       assert 270 == 10000
+
+tests/test_baseline_exposure_budgets.py:45: AssertionError
+____________ test_denoiser_uses_donor_not_current_eigenpairs[False] ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fddf8e100c0>
+attributed = False
+
+    @pytest.mark.parametrize('attributed',[False,True])
+    def test_denoiser_uses_donor_not_current_eigenpairs(monkeypatch,attributed):
+        from grapher.models.gdsm_simple.categorical import model as module
+        model,batch,cfg,_=small_model(attributed);model.eval()
+        b,n=batch['mask'].shape
+        u=torch.zeros(b,n,n)
+        for i,count in enumerate(batch['mask'].sum(1)):
+            count=int(count);u[i,:count,:count]=torch.linalg.qr(torch.randn(count,count)).Q
+        def forbidden(*args,**kwargs):
+            raise AssertionError('Current graph eigenpairs must not define the fixed proposal')
+        monkeypatch.setattr(module,'eigenpairs',forbidden)
+        args=(batch['x'],batch['e'],batch['z'],torch.tensor([5]*b),batch['anchor'],batch['mask'],10)
+>       pred=model(*args,edge_support=batch['e']>0,proposal_basis=u)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:117: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/pyvenv/lib/python3.13/site-packages/torch/nn/modules/module.py:1776: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = SpectralCategoricalDenoiser(
+  (time): Sequential(
+    (0): Linear(in_features=16, out_features=16, bias=True)
+    (1)... Linear(in_features=16, out_features=10, bias=True)
+  (orbit_head): Linear(in_features=16, out_features=4, bias=True)
+)
+args = (tensor([[0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0]]), tensor([[[0, 1, 0, 0, 0, 1],
+  ...  True],
+        [ True,  True,  True,  True, False, False],
+        [ True, False, False, False, False, False]]), ...)
+kwargs = {'edge_support': tensor([[[False,  True, False, False, False,  True],
+         [ True, False,  True, False, False, Fal...     0.0000e+00],
+         [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00,
+           0.0000e+00]]])}
+
+    def _call_impl(self, *args, **kwargs):
+        forward_call = (self._slow_forward if torch._C._get_tracing_state() else self.forward)
+        # If we don't have any hooks, we want to skip the rest of the logic in
+        # this function, and just call forward.
+        if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
+                or _global_backward_pre_hooks or _global_backward_hooks
+                or _global_forward_hooks or _global_forward_pre_hooks):
+>           return forward_call(*args, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: SpectralCategoricalDenoiser.forward() got an unexpected keyword argument 'proposal_basis'
+
+/opt/pyvenv/lib/python3.13/site-packages/torch/nn/modules/module.py:1787: TypeError
+____________ test_denoiser_uses_donor_not_current_eigenpairs[True] _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fddf0cf57f0>
+attributed = True
+
+    @pytest.mark.parametrize('attributed',[False,True])
+    def test_denoiser_uses_donor_not_current_eigenpairs(monkeypatch,attributed):
+        from grapher.models.gdsm_simple.categorical import model as module
+        model,batch,cfg,_=small_model(attributed);model.eval()
+        b,n=batch['mask'].shape
+        u=torch.zeros(b,n,n)
+        for i,count in enumerate(batch['mask'].sum(1)):
+            count=int(count);u[i,:count,:count]=torch.linalg.qr(torch.randn(count,count)).Q
+        def forbidden(*args,**kwargs):
+            raise AssertionError('Current graph eigenpairs must not define the fixed proposal')
+        monkeypatch.setattr(module,'eigenpairs',forbidden)
+        args=(batch['x'],batch['e'],batch['z'],torch.tensor([5]*b),batch['anchor'],batch['mask'],10)
+>       pred=model(*args,edge_support=batch['e']>0,proposal_basis=u)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:117: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/opt/pyvenv/lib/python3.13/site-packages/torch/nn/modules/module.py:1776: in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = SpectralCategoricalDenoiser(
+  (time): Sequential(
+    (0): Linear(in_features=16, out_features=16, bias=True)
+    (1)... Linear(in_features=16, out_features=10, bias=True)
+  (orbit_head): Linear(in_features=16, out_features=4, bias=True)
+)
+args = (tensor([[0, 1, 0, 1, 0, 1],
+        [0, 1, 0, 1, 0, 0],
+        [0, 0, 0, 0, 0, 0]]), tensor([[[0, 1, 0, 0, 0, 2],
+  ...  True],
+        [ True,  True,  True,  True, False, False],
+        [ True, False, False, False, False, False]]), ...)
+kwargs = {'edge_support': tensor([[[False,  True, False, False, False,  True],
+         [ True, False,  True, False, False, Fal...0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000],
+         [ 0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000]]])}
+
+    def _call_impl(self, *args, **kwargs):
+        forward_call = (self._slow_forward if torch._C._get_tracing_state() else self.forward)
+        # If we don't have any hooks, we want to skip the rest of the logic in
+        # this function, and just call forward.
+        if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
+                or _global_backward_pre_hooks or _global_backward_hooks
+                or _global_forward_hooks or _global_forward_pre_hooks):
+>           return forward_call(*args, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: SpectralCategoricalDenoiser.forward() got an unexpected keyword argument 'proposal_basis'
+
+/opt/pyvenv/lib/python3.13/site-packages/torch/nn/modules/module.py:1787: TypeError
+_ test_training_bank_provenance_excludes_validation_and_survives_reservoir_replacement _
+
+    def test_training_bank_provenance_excludes_validation_and_survives_reservoir_replacement():
+        op=options(False);cfg=resolve(op);cfg['initialization']['basis_max_per_size']=2
+        train=[nx.path_graph(6),nx.cycle_graph(6),nx.complete_graph(6),nx.star_graph(5),nx.wheel_graph(6)]
+        val=[nx.path_graph(5)]
+        _,_,_,_,bank,schema=prepare_data(train,val,6,cfg,42)
+        assert set(bank)=={6} and len(bank[6])==2
+>       records=schema['basis_bank_provenance']['entries'][6]
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'basis_bank_provenance'
+
+tests/test_gdsm_training_basis.py:133: KeyError
+__________ test_fixed_basis_rejects_sorted_current_spectrum_feedback ___________
+
+    def test_fixed_basis_rejects_sorted_current_spectrum_feedback():
+        op=options(False)
+        op['extensions']['attributed_categorical']['topology']['basis_source']='training_bank'
+>       with pytest.raises(ValueError,match='spectrum_feedback: 0.0'):resolve(op)
+                                                                      ^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:154: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:68: in resolve
+    _unknown(cfg[section],DEFAULTS[section],section)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'basis_source': 'training_bank', 'decoder': 'degree_preserving', 'initial_random_swaps_per_edge': 4, 'max_swaps_per_step': 2, ...}
+template = {'decoder': 'degree_preserving', 'initial_random_swaps_per_edge': 4, 'max_swaps_per_step': 2, 'mode': 'categorical', ...}
+path = 'topology'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown topology settings: ['basis_source']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+
+During handling of the above exception, another exception occurred:
+
+    def test_fixed_basis_rejects_sorted_current_spectrum_feedback():
+        op=options(False)
+        op['extensions']['attributed_categorical']['topology']['basis_source']='training_bank'
+>       with pytest.raises(ValueError,match='spectrum_feedback: 0.0'):resolve(op)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'spectrum_feedback: 0.0'
+E         Actual message: "Unknown topology settings: ['basis_source']"
+
+tests/test_gdsm_training_basis.py:154: AssertionError
+_ test_new_explicit_configs_preserve_training_and_degree_prior_settings[42-community_small] _
+
+dataset = 'community_small', seed = 42
+
+    @pytest.mark.parametrize('dataset',['community_small','ego_small','qm9','zinc'])
+    @pytest.mark.parametrize('seed',[42,43,44])
+    def test_new_explicit_configs_preserve_training_and_degree_prior_settings(dataset,seed):
+        root=Path('configs/experiments')
+        new=yaml.safe_load((root/f'gdsm_training_basis_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+        old=yaml.safe_load((root/f'gdsm_spectral_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+>       cfg=resolve(new)
+            ^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'gra...stering_bins': 100, 'connected_only': True, 'counting': 'exact_connected', 'max_connected_subsets': 1000000, ...}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ test_new_explicit_configs_preserve_training_and_degree_prior_settings[42-ego_small] _
+
+dataset = 'ego_small', seed = 42
+
+    @pytest.mark.parametrize('dataset',['community_small','ego_small','qm9','zinc'])
+    @pytest.mark.parametrize('seed',[42,43,44])
+    def test_new_explicit_configs_preserve_training_and_degree_prior_settings(dataset,seed):
+        root=Path('configs/experiments')
+        new=yaml.safe_load((root/f'gdsm_training_basis_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+        old=yaml.safe_load((root/f'gdsm_spectral_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+>       cfg=resolve(new)
+            ^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'gra...stering_bins': 100, 'connected_only': True, 'counting': 'exact_connected', 'max_connected_subsets': 1000000, ...}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ test_new_explicit_configs_preserve_training_and_degree_prior_settings[42-qm9] _
+
+dataset = 'qm9', seed = 42
+
+    @pytest.mark.parametrize('dataset',['community_small','ego_small','qm9','zinc'])
+    @pytest.mark.parametrize('seed',[42,43,44])
+    def test_new_explicit_configs_preserve_training_and_degree_prior_settings(dataset,seed):
+        root=Path('configs/experiments')
+        new=yaml.safe_load((root/f'gdsm_training_basis_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+        old=yaml.safe_load((root/f'gdsm_spectral_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+>       cfg=resolve(new)
+            ^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond_type', 'edge_categories': [1, 2, 3], 'node_attribute': 'atomic_num', 'node_cat...stering_bins': 100, 'connected_only': True, 'counting': 'exact_connected', 'max_connected_subsets': 1000000, ...}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ test_new_explicit_configs_preserve_training_and_degree_prior_settings[42-zinc] _
+
+dataset = 'zinc', seed = 42
+
+    @pytest.mark.parametrize('dataset',['community_small','ego_small','qm9','zinc'])
+    @pytest.mark.parametrize('seed',[42,43,44])
+    def test_new_explicit_configs_preserve_training_and_degree_prior_settings(dataset,seed):
+        root=Path('configs/experiments')
+        new=yaml.safe_load((root/f'gdsm_training_basis_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+        old=yaml.safe_load((root/f'gdsm_spectral_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+>       cfg=resolve(new)
+            ^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond_type', 'edge_categories': [1, 2, 3], 'node_attribute': 'atomic_num', 'node_cat...stering_bins': 100, 'connected_only': True, 'counting': 'exact_connected', 'max_connected_subsets': 1000000, ...}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ test_new_explicit_configs_preserve_training_and_degree_prior_settings[43-community_small] _
+
+dataset = 'community_small', seed = 43
+
+    @pytest.mark.parametrize('dataset',['community_small','ego_small','qm9','zinc'])
+    @pytest.mark.parametrize('seed',[42,43,44])
+    def test_new_explicit_configs_preserve_training_and_degree_prior_settings(dataset,seed):
+        root=Path('configs/experiments')
+        new=yaml.safe_load((root/f'gdsm_training_basis_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+        old=yaml.safe_load((root/f'gdsm_spectral_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+>       cfg=resolve(new)
+            ^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'gra...stering_bins': 100, 'connected_only': True, 'counting': 'exact_connected', 'max_connected_subsets': 1000000, ...}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ test_new_explicit_configs_preserve_training_and_degree_prior_settings[43-ego_small] _
+
+dataset = 'ego_small', seed = 43
+
+    @pytest.mark.parametrize('dataset',['community_small','ego_small','qm9','zinc'])
+    @pytest.mark.parametrize('seed',[42,43,44])
+    def test_new_explicit_configs_preserve_training_and_degree_prior_settings(dataset,seed):
+        root=Path('configs/experiments')
+        new=yaml.safe_load((root/f'gdsm_training_basis_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+        old=yaml.safe_load((root/f'gdsm_spectral_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+>       cfg=resolve(new)
+            ^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'gra...stering_bins': 100, 'connected_only': True, 'counting': 'exact_connected', 'max_connected_subsets': 1000000, ...}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ test_new_explicit_configs_preserve_training_and_degree_prior_settings[43-qm9] _
+
+dataset = 'qm9', seed = 43
+
+    @pytest.mark.parametrize('dataset',['community_small','ego_small','qm9','zinc'])
+    @pytest.mark.parametrize('seed',[42,43,44])
+    def test_new_explicit_configs_preserve_training_and_degree_prior_settings(dataset,seed):
+        root=Path('configs/experiments')
+        new=yaml.safe_load((root/f'gdsm_training_basis_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+        old=yaml.safe_load((root/f'gdsm_spectral_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+>       cfg=resolve(new)
+            ^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond_type', 'edge_categories': [1, 2, 3], 'node_attribute': 'atomic_num', 'node_cat...stering_bins': 100, 'connected_only': True, 'counting': 'exact_connected', 'max_connected_subsets': 1000000, ...}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ test_new_explicit_configs_preserve_training_and_degree_prior_settings[43-zinc] _
+
+dataset = 'zinc', seed = 43
+
+    @pytest.mark.parametrize('dataset',['community_small','ego_small','qm9','zinc'])
+    @pytest.mark.parametrize('seed',[42,43,44])
+    def test_new_explicit_configs_preserve_training_and_degree_prior_settings(dataset,seed):
+        root=Path('configs/experiments')
+        new=yaml.safe_load((root/f'gdsm_training_basis_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+        old=yaml.safe_load((root/f'gdsm_spectral_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+>       cfg=resolve(new)
+            ^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond_type', 'edge_categories': [1, 2, 3], 'node_attribute': 'atomic_num', 'node_cat...stering_bins': 100, 'connected_only': True, 'counting': 'exact_connected', 'max_connected_subsets': 1000000, ...}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ test_new_explicit_configs_preserve_training_and_degree_prior_settings[44-community_small] _
+
+dataset = 'community_small', seed = 44
+
+    @pytest.mark.parametrize('dataset',['community_small','ego_small','qm9','zinc'])
+    @pytest.mark.parametrize('seed',[42,43,44])
+    def test_new_explicit_configs_preserve_training_and_degree_prior_settings(dataset,seed):
+        root=Path('configs/experiments')
+        new=yaml.safe_load((root/f'gdsm_training_basis_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+        old=yaml.safe_load((root/f'gdsm_spectral_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+>       cfg=resolve(new)
+            ^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'gra...stering_bins': 100, 'connected_only': True, 'counting': 'exact_connected', 'max_connected_subsets': 1000000, ...}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ test_new_explicit_configs_preserve_training_and_degree_prior_settings[44-ego_small] _
+
+dataset = 'ego_small', seed = 44
+
+    @pytest.mark.parametrize('dataset',['community_small','ego_small','qm9','zinc'])
+    @pytest.mark.parametrize('seed',[42,43,44])
+    def test_new_explicit_configs_preserve_training_and_degree_prior_settings(dataset,seed):
+        root=Path('configs/experiments')
+        new=yaml.safe_load((root/f'gdsm_training_basis_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+        old=yaml.safe_load((root/f'gdsm_spectral_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+>       cfg=resolve(new)
+            ^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'gra...stering_bins': 100, 'connected_only': True, 'counting': 'exact_connected', 'max_connected_subsets': 1000000, ...}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ test_new_explicit_configs_preserve_training_and_degree_prior_settings[44-qm9] _
+
+dataset = 'qm9', seed = 44
+
+    @pytest.mark.parametrize('dataset',['community_small','ego_small','qm9','zinc'])
+    @pytest.mark.parametrize('seed',[42,43,44])
+    def test_new_explicit_configs_preserve_training_and_degree_prior_settings(dataset,seed):
+        root=Path('configs/experiments')
+        new=yaml.safe_load((root/f'gdsm_training_basis_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+        old=yaml.safe_load((root/f'gdsm_spectral_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+>       cfg=resolve(new)
+            ^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond_type', 'edge_categories': [1, 2, 3], 'node_attribute': 'atomic_num', 'node_cat...stering_bins': 100, 'connected_only': True, 'counting': 'exact_connected', 'max_connected_subsets': 1000000, ...}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+_ test_new_explicit_configs_preserve_training_and_degree_prior_settings[44-zinc] _
+
+dataset = 'zinc', seed = 44
+
+    @pytest.mark.parametrize('dataset',['community_small','ego_small','qm9','zinc'])
+    @pytest.mark.parametrize('seed',[42,43,44])
+    def test_new_explicit_configs_preserve_training_and_degree_prior_settings(dataset,seed):
+        root=Path('configs/experiments')
+        new=yaml.safe_load((root/f'gdsm_training_basis_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+        old=yaml.safe_load((root/f'gdsm_spectral_degree_explicit/{dataset}_seed_{seed}.yaml').read_text())['gdsm_simple']
+>       cfg=resolve(new)
+            ^^^^^^^^^^^^
+
+tests/test_gdsm_training_basis.py:272: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/grapher/models/gdsm_simple/categorical/config.py:60: in resolve
+    _unknown(raw,DEFAULTS,'attributed_categorical')
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'categories': {'edge_attribute': 'bond_type', 'edge_categories': [1, 2, 3], 'node_attribute': 'atomic_num', 'node_cat...stering_bins': 100, 'connected_only': True, 'counting': 'exact_connected', 'max_connected_subsets': 1000000, ...}, ...}
+template = {'categories': {'edge_attribute': None, 'node_attribute': None}, 'enabled': True, 'feedback_start_fraction': 0.2, 'final_acceptance': {'max_attempt_multiplier': 10.0, 'require_connected': False}, ...}
+path = 'attributed_categorical'
+
+    def _unknown(value,template,path):
+        extra=set(value)-set(template)
+>       if extra: raise ValueError(f"Unknown {path} settings: {sorted(extra)}")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+
+src/grapher/models/gdsm_simple/categorical/config.py:54: ValueError
+=============================== warnings summary ===============================
+tests/test_gdsm_option_a.py::test_option_a_roundtrip_invariants_and_actual_degree_changes
+  /opt/pyvenv/lib/python3.13/site-packages/torch/nn/modules/transformer.py:531: UserWarning: The PyTorch API of nested tensors is in prototype stage and will change in the near future. We recommend specifying layout=torch.jagged when constructing a nested tensor, as this layout receives active development, has better operator coverage, and works with torch.compile. (Triggered internally at /pytorch/aten/src/ATen/NestedTensorImpl.cpp:178.)
+    output = torch._nested_tensor_from_mask(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_baseline_exposure_budgets.py::test_effective_default_epoch_budgets[spectre-community_small] - assert 500 == 10000
+FAILED tests/test_baseline_exposure_budgets.py::test_effective_default_epoch_budgets[spectre-ego_small] - assert 270 == 10000
+FAILED tests/test_gdsm_training_basis.py::test_denoiser_uses_donor_not_current_eigenpairs[False] - TypeError: SpectralCategoricalDenoiser.forward() got an unexpected keyword argument 'proposal_basis'
+FAILED tests/test_gdsm_training_basis.py::test_denoiser_uses_donor_not_current_eigenpairs[True] - TypeError: SpectralCategoricalDenoiser.forward() got an unexpected keyword argument 'proposal_basis'
+FAILED tests/test_gdsm_training_basis.py::test_training_bank_provenance_excludes_validation_and_survives_reservoir_replacement - KeyError: 'basis_bank_provenance'
+FAILED tests/test_gdsm_training_basis.py::test_fixed_basis_rejects_sorted_current_spectrum_feedback - AssertionError: Regex pattern did not match.
+  Expected regex: 'spectrum_feedback: 0.0'
+  Actual message: "Unknown topology settings: ['basis_source']"
+FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[42-community_small] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[42-ego_small] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[42-qm9] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[42-zinc] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[43-community_small] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[43-ego_small] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[43-qm9] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[43-zinc] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[44-community_small] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[44-ego_small] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[44-qm9] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[44-zinc] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_reuse_existing_bond_only_checkpoint_and_audit[generic] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_fixed_generation_only_decomposes_final_graphs_and_is_reproducible[generic] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_full_intermediate_graphs_match_saved_degree_vectors[generic] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_old_v2_configs_without_new_default_keys_remain_compatible[generic] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_audit_catches_semantic_corruption_after_checksums_are_updated[generic-degree] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_audit_catches_semantic_corruption_after_checksums_are_updated[generic-proposal] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_audit_catches_semantic_corruption_after_checksums_are_updated[generic-donor] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_generate_from_old_v2_without_new_fields_or_bank_provenance[generic] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_fresh_training_with_generation_profile_keeps_explicit_training_contract[generic] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_reuse_existing_bond_only_checkpoint_and_audit[attributed] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_fixed_generation_only_decomposes_final_graphs_and_is_reproducible[attributed] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_full_intermediate_graphs_match_saved_degree_vectors[attributed] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_old_v2_configs_without_new_default_keys_remain_compatible[attributed] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_audit_catches_semantic_corruption_after_checksums_are_updated[attributed-degree] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_audit_catches_semantic_corruption_after_checksums_are_updated[attributed-proposal] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_audit_catches_semantic_corruption_after_checksums_are_updated[attributed-donor] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_generate_from_old_v2_without_new_fields_or_bank_provenance[attributed] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+ERROR tests/test_gdsm_training_basis.py::test_fresh_training_with_generation_profile_keeps_explicit_training_contract[attributed] - ValueError: Unknown attributed_categorical settings: ['save_degree_trajectory']
+18 failed, 690 passed, 8 skipped, 1 warning, 18 errors in 22.48s

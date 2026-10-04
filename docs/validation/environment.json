@@ -1,0 +1,18 @@
+{
+  "python": "3.13.5 (main, Jul 15 2026, 20:25:40) [GCC 14.2.0]",
+  "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+  "packages": {
+    "torch": "2.10.0+cpu",
+    "networkx": "3.6.1",
+    "numpy": "2.3.5",
+    "scipy": "1.17.0",
+    "PyYAML": "6.0.3",
+    "pytest": "9.0.2",
+    "rdkit": "2025.9.4"
+  },
+  "unavailable_optional_backends": [
+    "EDeN",
+    "fcd_torch",
+    "torch_geometric"
+  ]
+}

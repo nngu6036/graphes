@@ -1,0 +1,60 @@
+{
+  "failure_and_error_ids_identical": true,
+  "new_failure_or_error_ids": [],
+  "resolved_failure_or_error_ids": [],
+  "unchanged_failure_or_error_ids": [
+    "ERROR tests/test_gdsm_training_basis.py::test_audit_catches_semantic_corruption_after_checksums_are_updated[attributed-degree]",
+    "ERROR tests/test_gdsm_training_basis.py::test_audit_catches_semantic_corruption_after_checksums_are_updated[attributed-donor]",
+    "ERROR tests/test_gdsm_training_basis.py::test_audit_catches_semantic_corruption_after_checksums_are_updated[attributed-proposal]",
+    "ERROR tests/test_gdsm_training_basis.py::test_audit_catches_semantic_corruption_after_checksums_are_updated[generic-degree]",
+    "ERROR tests/test_gdsm_training_basis.py::test_audit_catches_semantic_corruption_after_checksums_are_updated[generic-donor]",
+    "ERROR tests/test_gdsm_training_basis.py::test_audit_catches_semantic_corruption_after_checksums_are_updated[generic-proposal]",
+    "ERROR tests/test_gdsm_training_basis.py::test_fixed_generation_only_decomposes_final_graphs_and_is_reproducible[attributed]",
+    "ERROR tests/test_gdsm_training_basis.py::test_fixed_generation_only_decomposes_final_graphs_and_is_reproducible[generic]",
+    "ERROR tests/test_gdsm_training_basis.py::test_fresh_training_with_generation_profile_keeps_explicit_training_contract[attributed]",
+    "ERROR tests/test_gdsm_training_basis.py::test_fresh_training_with_generation_profile_keeps_explicit_training_contract[generic]",
+    "ERROR tests/test_gdsm_training_basis.py::test_full_intermediate_graphs_match_saved_degree_vectors[attributed]",
+    "ERROR tests/test_gdsm_training_basis.py::test_full_intermediate_graphs_match_saved_degree_vectors[generic]",
+    "ERROR tests/test_gdsm_training_basis.py::test_generate_from_old_v2_without_new_fields_or_bank_provenance[attributed]",
+    "ERROR tests/test_gdsm_training_basis.py::test_generate_from_old_v2_without_new_fields_or_bank_provenance[generic]",
+    "ERROR tests/test_gdsm_training_basis.py::test_old_v2_configs_without_new_default_keys_remain_compatible[attributed]",
+    "ERROR tests/test_gdsm_training_basis.py::test_old_v2_configs_without_new_default_keys_remain_compatible[generic]",
+    "ERROR tests/test_gdsm_training_basis.py::test_reuse_existing_bond_only_checkpoint_and_audit[attributed]",
+    "ERROR tests/test_gdsm_training_basis.py::test_reuse_existing_bond_only_checkpoint_and_audit[generic]",
+    "FAILED tests/test_baseline_exposure_budgets.py::test_effective_default_epoch_budgets[spectre-community_small]",
+    "FAILED tests/test_baseline_exposure_budgets.py::test_effective_default_epoch_budgets[spectre-ego_small]",
+    "FAILED tests/test_gdsm_training_basis.py::test_denoiser_uses_donor_not_current_eigenpairs[False]",
+    "FAILED tests/test_gdsm_training_basis.py::test_denoiser_uses_donor_not_current_eigenpairs[True]",
+    "FAILED tests/test_gdsm_training_basis.py::test_fixed_basis_rejects_sorted_current_spectrum_feedback",
+    "FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[42-community_small]",
+    "FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[42-ego_small]",
+    "FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[42-qm9]",
+    "FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[42-zinc]",
+    "FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[43-community_small]",
+    "FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[43-ego_small]",
+    "FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[43-qm9]",
+    "FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[43-zinc]",
+    "FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[44-community_small]",
+    "FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[44-ego_small]",
+    "FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[44-qm9]",
+    "FAILED tests/test_gdsm_training_basis.py::test_new_explicit_configs_preserve_training_and_degree_prior_settings[44-zinc]",
+    "FAILED tests/test_gdsm_training_basis.py::test_training_bank_provenance_excludes_validation_and_survives_reservoir_replacement"
+  ],
+  "original": {
+    "passed": 652,
+    "failed": 18,
+    "errors": 18,
+    "skipped": 8
+  },
+  "updated": {
+    "passed": 690,
+    "failed": 18,
+    "errors": 18,
+    "skipped": 8
+  },
+  "focused": {
+    "passed": 61
+  },
+  "production_benchmark_run": false,
+  "gpu_tests_run": false
+}

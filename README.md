@@ -10,6 +10,19 @@ The repository is organized for controlled experiments: prepared dataset splits
 are frozen, generated artifacts are run-scoped, and baseline outputs are routed
 through the same evaluation code whenever the graph representation permits it.
 
+## Attributed log-gap masking and valence update (4 October 2026)
+
+The attributed Laplacian log-gap / PPGN branch now has leakage-free undirected
+categorical masking, empty-mask-safe losses, optional degree/valence-constrained
+attribute decoding, isolated topology/attribute RNG streams, and strict raw
+molecular evaluation controls. Existing experiment configs are retained.
+
+Start with [the implementation and migration guide](docs/ATTRIBUTED_MASKFIX_VALENCE_UPDATE.md)
+and [explicit training/generation/evaluation commands](docs/ATTRIBUTED_MASKFIX_VALENCE_COMMANDS.md).
+Fresh training with a new run ID is required for final corrected results; legacy
+checkpoints remain available only as explicitly labeled exploratory controls.
+See [the test report](docs/ATTRIBUTED_MASKFIX_VALIDATION.md) for validation scope.
+
 ## GDSM spectral–categorical attributed extension (17 September 2026)
 
 New opt-in node/edge marginal categorical diffusion coupled to binary-adjacency

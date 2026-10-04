@@ -27,12 +27,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import warnings
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
 import networkx as nx
 
+from grapher.rewiring_mlp.evaluation.molecular_failures import molecular_failure_diagnostics
 from grapher.rewiring_mlp.evaluation.metrics import mmd_graphlet_statistics
 from grapher.rewiring_mlp.evaluation.molecular_nspdk import eden_nspdk_mmd
 from grapher.rewiring_mlp.molecular.graph_io import (
@@ -739,7 +741,28 @@ def _select_valid_graphs(
     return [g for g, smi in zip(graphs, smiles) if smi is not None]
 
 
+def _resolve_metric_protocol(args: argparse.Namespace) -> tuple[str, bool, bool]:
+    """Resolve the metric population without silently overriding explicit choices."""
+    hogdiff = bool(getattr(args, 'hogdiff_compatible_metrics', False))
+    source = getattr(args, 'metric_molecule_source', None)
+    if source is not None:
+        source = str(source).lower()
+    corrected_fcd = bool(getattr(args, 'fcd_use_corrected', False))
+    strict = bool(getattr(args, 'strict_raw_metrics', False))
+    if source not in {None, 'raw_valid', 'corrected_valid'}:
+        raise ValueError('--metric-molecule-source must be raw_valid or corrected_valid')
+    if strict and (hogdiff or corrected_fcd or source == 'corrected_valid'):
+        raise ValueError('--strict-raw-metrics cannot be combined with corrected-molecule metric flags')
+    if hogdiff and source == 'raw_valid':
+        raise ValueError('--hogdiff-compatible-metrics conflicts with explicit --metric-molecule-source raw_valid; select one protocol')
+    resolved = source or ('corrected_valid' if hogdiff else 'raw_valid')
+    if corrected_fcd and resolved == 'raw_valid':
+        warnings.warn('FCD uses corrected molecules while the other distribution metrics use raw-valid molecules. This is a mixed-population report.', UserWarning, stacklevel=2)
+    return resolved, hogdiff, hogdiff or corrected_fcd
+
+
 def evaluate(args: argparse.Namespace) -> dict[str, Any]:
+    metric_source, hogdiff_compat, fcd_use_corrected = _resolve_metric_protocol(args)
     generated_graphs, generated_source, validity_denominator_complete = (
         _resolve_generated_graphs(args)
     )
@@ -779,15 +802,6 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         raw_smiles=valid_info["all_smiles"],
         max_steps=args.correction_max_steps,
     )
-    hogdiff_compat = bool(getattr(args, "hogdiff_compatible_metrics", False))
-    metric_source = (
-        "corrected_valid"
-        if hogdiff_compat
-        else str(getattr(args, "metric_molecule_source", "raw_valid")).lower()
-    )
-    if metric_source not in {"raw_valid", "corrected_valid"}:
-        raise ValueError("--metric-molecule-source must be raw_valid or corrected_valid.")
-
     raw_valid_graphs = _select_valid_graphs(generated_graphs, valid_info["all_smiles"])
     corrected_metric_graphs = _graphs_from_metric_smiles(
         corrected_valid_info["valid_smiles"]
@@ -889,7 +903,6 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     # HOG-Diff evaluates distributional metrics after its deterministic validity
     # correction. GraphER defaults to strict raw-valid molecules, but this flag
     # and --metric-molecule-source make cross-codebase reproduction explicit.
-    fcd_use_corrected = hogdiff_compat or bool(getattr(args, "fcd_use_corrected", False))
     fcd_generated_smiles = (
         corrected_valid_info["valid_smiles"]
         if fcd_use_corrected
@@ -992,12 +1005,17 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
 
     report = {
         "metrics": metrics,
+        "failure_diagnostics": molecular_failure_diagnostics(generated_graphs, valid_info["all_smiles"]),
         "paths": {
             "generated_source": generated_source,
             "reference_source": reference_source,
             "train_source": train_source,
         },
         "protocol": {
+            "strict_raw_metrics": bool(getattr(args, "strict_raw_metrics", False)),
+            "evaluation_correction_diagnostics_only": metric_source == "raw_valid" and not fcd_use_corrected,
+            "metric_population_count": len(metric_smiles),
+            "graphlet_population_count": len(metric_graphs),
             "validity_denominator_complete": bool(validity_denominator_complete),
             "validity_note": (
                 "Validity denominator includes all generated graphs."
@@ -1091,7 +1109,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     return report
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Evaluate generated molecular graphs from GraphER or managed baselines."
     )
@@ -1143,10 +1161,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--strict-raw-metrics", action="store_true",
+        help="Require raw-valid populations for all primary distribution metrics; reject conflicting correction flags. Evaluation-only correction diagnostics are still reported.",
+    )
+    parser.add_argument(
         "--metric-molecule-source",
         choices=["raw_valid", "corrected_valid"],
-        default="raw_valid",
+        default=None,
         help=(
+            "Default: raw_valid unless HOG-Diff compatibility is explicitly selected. "
             "Molecule subset used for uniqueness, novelty and NSPDK. "
             "Use corrected_valid to reproduce HOG-Diff's post-correction "
             "distributional-metric convention; raw_valid is the strict GraphER protocol."
@@ -1235,8 +1258,16 @@ def main() -> None:
         help="Maximum deterministic bond-order corrections attempted per molecule.",
     )
 
-    args = parser.parse_args()
+    return parser
 
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        _resolve_metric_protocol(args)
+    except ValueError as exc:
+        parser.error(str(exc))
     report = evaluate(args)
 
     if args.output_dir is not None:
