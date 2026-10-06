@@ -80,6 +80,27 @@ def _mean(values: list[float | int | bool]) -> float:
     return float(np.mean(values)) if values else 0.0
 
 
+def _unsupported_signatures(graph: nx.Graph, model) -> list[Any]:
+    """Return typed signatures not represented by the trained checkpoint.
+
+    The checkpoint vocabulary is fixed at training time.  External generated
+    molecules may legitimately contain domain-feasible signatures that were not
+    observed in the training split.  We must not expand/remap the vocabulary at
+    inference because that would change the trained model.
+    """
+    invariant = extract_typed_invariant(
+        graph,
+        edge_types=model.edge_types,
+        node_attribute=model.vectorizer.vocabulary.node_attribute,
+        edge_attribute=model.vectorizer.vocabulary.edge_attribute,
+    )
+    support = set(model.vectorizer.vocabulary.signatures)
+    return sorted(
+        {signature for signature in invariant.signatures if signature not in support},
+        key=lambda signature: (repr(signature.node_type), signature.edge_degrees),
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -168,6 +189,11 @@ def main() -> None:
 
     refiner_cfg = dict(config["attributed_refiner"])
     checkpoint_every = max(int(external.get("checkpoint_every", 64)), 0)
+    unsupported_policy = str(external.get("unsupported_signature_policy", "retain")).lower()
+    if unsupported_policy not in {"retain", "error"}:
+        raise ValueError(
+            "external_rewiring.unsupported_signature_policy must be retain or error."
+        )
     finals: list[nx.Graph] = []
     records: list[dict[str, Any]] = []
     started = time.perf_counter()
@@ -192,6 +218,7 @@ def main() -> None:
             "num_completed": len(finals),
             "paired_one_to_one": len(finals) == requested if complete else None,
             "refiner": refiner_cfg,
+            "unsupported_signature_policy": unsupported_policy,
             "runtime_seconds": float(time.perf_counter() - started),
             "records": records,
         }
@@ -199,6 +226,8 @@ def main() -> None:
             report["output_record_sha256"] = record_hash(
                 [graph_record(graph) for graph in finals]
             )
+            supported_records = [r for r in records if r.get("checkpoint_signature_supported", True)]
+            unsupported_records = [r for r in records if not r.get("checkpoint_signature_supported", True)]
             report["diagnostics"] = {
                 "source_raw_validity": _mean([r["source_raw_valid"] for r in records]),
                 "final_raw_validity": _mean([r["final_raw_valid"] for r in records]),
@@ -210,7 +239,21 @@ def main() -> None:
                 "typed_degree_preservation_rate": _mean([r["typed_degree_preserved"] for r in records]),
                 "connected_source_rate": _mean([r["source_connected"] for r in records]),
                 "connected_final_rate": _mean([r["final_connected"] for r in records]),
+                "checkpoint_signature_support_rate": _mean([r.get("checkpoint_signature_supported", True) for r in records]),
+                "supported_graph_count": len(supported_records),
+                "unsupported_signature_graph_count": len(unsupported_records),
+                "supported_changed_fraction": _mean([r["changed"] for r in supported_records]),
+                "supported_mean_accepted_steps": _mean([r["accepted_steps"] for r in supported_records]),
             }
+            supported_indices = [r["index"] for r in supported_records]
+            _atomic_pickle(
+                [sources[i] for i in supported_indices],
+                output_dir / "supported_source_graphs.pkl",
+            )
+            _atomic_pickle(
+                [finals[i] for i in supported_indices],
+                output_dir / "supported_base_graphs.pkl",
+            )
         _atomic_json(report, output_dir / "report.json")
 
     try:
@@ -220,19 +263,41 @@ def main() -> None:
             source_valid = bool(is_valid_molecular_graph(source))
             source_connected = bool(len(source) <= 1 or nx.is_connected(source))
 
-            targets, bridge = sample_soft_endpoint(
-                model,
-                source,
-                config,
-                seed=seed + index * 1009 + 7043,
-            )
-            final, refinement = refine_typed_graph(
-                source,
-                targets,
-                model,
-                config,
-                seed=seed + index * 1009 + 9049,
-            )
+            unsupported = _unsupported_signatures(source, model)
+            checkpoint_supported = not unsupported
+            if unsupported and unsupported_policy == "error":
+                raise ValueError(
+                    f"Graph {index} contains checkpoint-OOV typed signatures: "
+                    + ", ".join(repr(sig) for sig in unsupported)
+                )
+
+            if unsupported:
+                # Safe selective-refinement policy: keep the graph exactly as it
+                # was generated.  Do not remap an unseen typed signature into the
+                # model vocabulary and do not filter/replace the sample.
+                final = source.copy()
+                bridge = {"prediction_calls": 0, "sampling_steps": 0}
+                refinement = {
+                    "accepted_steps": 0,
+                    "stop_reason": "unsupported_typed_signature_retained",
+                    "typed_degree_preserved": True,
+                    "connected": source_connected,
+                    "unsupported_typed_signatures": [sig.to_dict() for sig in unsupported],
+                }
+            else:
+                targets, bridge = sample_soft_endpoint(
+                    model,
+                    source,
+                    config,
+                    seed=seed + index * 1009 + 7043,
+                )
+                final, refinement = refine_typed_graph(
+                    source,
+                    targets,
+                    model,
+                    config,
+                    seed=seed + index * 1009 + 9049,
+                )
             final = _normalize_graph(final)
 
             if _node_types(source) != _node_types(final):
@@ -259,6 +324,8 @@ def main() -> None:
                 "ordinary_degrees_preserved": True,
                 "bond_type_counts_preserved": True,
                 "typed_degree_preserved": bool(refinement.get("typed_degree_preserved", True)),
+                "checkpoint_signature_supported": bool(checkpoint_supported),
+                "unsupported_typed_signatures": [sig.to_dict() for sig in unsupported],
                 "bridge_prediction_calls": int(bridge.get("prediction_calls", 0)),
                 "bridge_sampling_steps": int(bridge.get("sampling_steps", 0)),
                 "refinement": refinement,
@@ -269,6 +336,7 @@ def main() -> None:
             print(
                 f"[ExternalAttributedRewire] graph={index + 1}/{requested} "
                 f"accepted={record['accepted_steps']} changed={record['changed']} "
+                f"supported={record['checkpoint_signature_supported']} "
                 f"valid={source_valid}->{final_valid}",
                 flush=True,
             )

@@ -9,6 +9,7 @@ external_rewiring:
   output_dir: outputs/post_rewire/qm9/gdsm_atom_bond_valence/seed_42/steps_4
   num_graphs: 1024
   checkpoint_every: 64
+  unsupported_signature_policy: retain
 
 # Must match the trained GraphER checkpoint.
 categorical_state:
