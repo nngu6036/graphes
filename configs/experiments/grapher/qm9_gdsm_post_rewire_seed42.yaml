@@ -1,0 +1,63 @@
+experiment: qm9_gdsm_atom_bond_valence_post_rewire_seed42
+seed: 42
+
+# Existing GDSM attributed samples are the fixed source population. They are
+# never regenerated, rejected, replaced, or post-hoc corrected by this runner.
+external_rewiring:
+  input_graphs: outputs/baselines/gdsm_simple/qm9/seed_42_qm9_loggap_maskfix_v2/generations/atom_bond_valence_seed_42_n_10000/base_graphs.pkl
+  checkpoint: outputs/attributed_grapher/qm9_joint_typed_edge_laplacian_graphlets345_learned/seed_42/checkpoint.pt
+  output_dir: outputs/post_rewire/qm9/gdsm_atom_bond_valence/seed_42/steps_4
+  num_graphs: 1024
+  checkpoint_every: 64
+
+# Must match the trained GraphER checkpoint.
+categorical_state:
+  node_attribute: atomic_num
+  node_categories: [6, 7, 8, 9]
+  edge_attribute: bond_type
+  edge_categories: [1, 2, 3]
+
+attributed_predictor:
+  type: joint_typed_soft_edge
+
+# These soft-bridge semantics are checkpoint/training semantics and must not be
+# tuned at post-rewiring time. Only sampling_steps is a generation setting.
+edge_diffusion:
+  bridge: centered_logit_brownian
+  smoothing: 0.01
+  sigma: 1.0
+  spectral_enabled: true
+  spectral_mode: laplacian_independent
+  spectral_sigma: 0.15
+  sampling_steps: 32
+
+# Must describe the graphlet head stored in the trained checkpoint.
+structure_summary_prediction:
+  clustering_histogram: true
+  clustering_bins: 100
+  orbit_summary: true
+  orbit_width: 15
+  induced_graphlet_histogram: true
+  induced_graphlet_attributed: true
+  induced_graphlet_k_min: 3
+  induced_graphlet_k_max: 5
+  induced_graphlet_scope: all
+
+# Strict molecular rewiring for the paired degradation/refinement ablation.
+# Same-bond-type swaps preserve each node's typed degree and weighted valence.
+attributed_refiner:
+  steps: 4
+  proposal_budget: 1024
+  valid_candidate_budget: 256
+  preserve_connectivity: true
+  strict_same_bond: true
+  rdkit_candidate_filter: true
+  normalization: initial
+  epsilon: 1.0e-6
+  min_improvement: 1.0e-8
+  weights:
+    edge: 1.0
+    clustering: 0.25
+    orbit: 1.0
+    graphlet: 0.1
+    spectral: 0.1
