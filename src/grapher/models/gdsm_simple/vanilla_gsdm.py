@@ -427,8 +427,17 @@ def validate_options(options: Mapping[str, Any]) -> None:
         graphlet_cfg = dict(summary_cfg.get("graphlet", {}) or {})
         if not bool(graphlet_cfg.get("enabled", False)):
             raise ValueError("The selected joint structural model requires graphlet.enabled=true")
-        if list(graphlet_cfg.get("orders", [3, 4, 5])) != [3, 4, 5]:
-            raise ValueError("log-gap structural ablation is fixed to graphlet orders 3,4,5")
+        graphlet_orders = [int(k) for k in graphlet_cfg.get("orders", [3, 4, 5])]
+        if (
+            not graphlet_orders
+            or graphlet_orders[0] != 3
+            or graphlet_orders != list(range(3, graphlet_orders[-1] + 1))
+            or graphlet_orders[-1] > 7
+        ):
+            raise ValueError(
+                "Topology graphlet orders must be a consecutive prefix [3,...,K] "
+                "with 3 <= K <= 7."
+            )
         if float(summary_cfg.get("loss_weight", 0.0)) < 0.0:
             raise ValueError("structure-summary loss_weight must be nonnegative")
         clustering_cfg = dict(summary_cfg.get("clustering", {}) or {})
@@ -1771,6 +1780,7 @@ def _joint_structure_targets(
     graphlet_cfg = dict(structure_cfg.get("graphlet", {}) or {})
     clustering_cfg = dict(structure_cfg.get("clustering", {}) or {})
     orbit_cfg = dict(structure_cfg.get("orbit", {}) or {})
+    graphlet_orders = [int(k) for k in graphlet_cfg.get("orders", [3, 4, 5])]
     cfg = SummaryConfig.from_dict(
         {
             "clustering_summary": False,
@@ -1778,8 +1788,8 @@ def _joint_structure_targets(
             "motif_proxy": False,
             "orbit_count": False,
             "graphlet_history": True,
-            "graphlet_k_min": 3,
-            "graphlet_k_max": 5,
+            "graphlet_k_min": min(graphlet_orders),
+            "graphlet_k_max": max(graphlet_orders),
             "graphlet_connected_only": True,
             "graphlet_topology_filter": "all",
             "graphlet_backend": "exact",
@@ -3004,7 +3014,13 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                 "reverse_sampler": "Euler_Maruyama_plus_optional_Langevin_corrector",
                 "structure_summary_training": (
                     {
-                        "graphlet": "connected_induced_k3_k4_k5_histograms_plus_connected_subset_mass",
+                        "graphlet": (
+                            "connected_induced_topology_graphlet_histograms_plus_connected_subset_mass_"
+                            + "_".join(
+                                f"k{int(k)}"
+                                for k in joint_graphlet_cfg.get("graphlet", {}).get("orders", [3, 4, 5])
+                            )
+                        ),
                         "clustering": (
                             "node_clustering_coefficient_histogram"
                             if bool(joint_graphlet_cfg.get("clustering", {}).get("enabled", False))
@@ -3019,7 +3035,13 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS else "none"
                 ),
                 "graphlet_summary_training": (
-                    "joint_auxiliary_head_shared_with_spectrum_denoiser_predicting_clean_k3_k4_k5_graphlet_histograms_and_connected_subset_mass"
+                    (
+                        "joint_auxiliary_head_shared_with_spectrum_denoiser_predicting_clean_topology_graphlet_histograms_and_connected_subset_mass_"
+                        + "_".join(
+                            f"k{int(k)}"
+                            for k in joint_graphlet_cfg.get("graphlet", {}).get("orders", [3, 4, 5])
+                        )
+                    )
                     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS else "none"
                 ),
                 "discretization": (
