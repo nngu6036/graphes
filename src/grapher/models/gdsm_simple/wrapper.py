@@ -251,6 +251,19 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             )
         ).lower()
 
+        from grapher.models.gdsm_simple.hybrid_attributed_loggap import (
+            VARIANTS as HYBRID_ATTRIBUTED_LOGGAP_VARIANTS,
+            default_options as default_hybrid_attributed_loggap_options,
+            validate_options as validate_hybrid_attributed_loggap_options,
+        )
+        if requested_variant in HYBRID_ATTRIBUTED_LOGGAP_VARIANTS:
+            options = default_hybrid_attributed_loggap_options()
+            options = _deep_update(options, comparison_defaults)
+            options = _deep_update(options, selected)
+            options = _deep_update(options, request_options)
+            validate_hybrid_attributed_loggap_options(options)
+            return options
+
         from grapher.models.gdsm_simple.hierarchical_attributed_loggap import (
             VARIANTS as HIERARCHICAL_ATTRIBUTED_LOGGAP_VARIANTS,
             default_options as default_hierarchical_attributed_loggap_options,
@@ -396,6 +409,14 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         if request.resume_from is not None:
             raise ValueError("gdsm_simple resume is not implemented")
         options = self._options(request)
+        from grapher.models.gdsm_simple.hybrid_attributed_loggap import (
+            VARIANTS as HYBRID_ATTRIBUTED_LOGGAP_VARIANTS,
+        )
+        if str(options.get("variant", "legacy_simple")).lower() in HYBRID_ATTRIBUTED_LOGGAP_VARIANTS:
+            from grapher.models.gdsm_simple.hybrid_attributed_loggap import (
+                train as train_hybrid_attributed_loggap,
+            )
+            return train_hybrid_attributed_loggap(self, request, options)
         from grapher.models.gdsm_simple.hierarchical_attributed_loggap import (
             VARIANTS as HIERARCHICAL_ATTRIBUTED_LOGGAP_VARIANTS,
         )
@@ -624,7 +645,7 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         # rewiring, but never the trained denoiser architecture/diffusion.
         unknown = sorted(
             set(request.options)
-            - {"runtime", "generation_batch_size", "sample", "extensions", "graphlet_refinement", "attributed"}
+            - {"runtime", "generation_batch_size", "sample", "extensions", "graphlet_refinement", "attributed", "attribute_diffusion"}
         )
         if unknown:
             raise ValueError(f"Unsupported gdsm_simple generation overrides: {unknown}")
@@ -638,8 +659,33 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                     "Only attributed.decode may be overridden during generation; "
                     f"found training-time attributed keys: {bad_attr}"
                 )
+        if "attribute_diffusion" in request.options:
+            diffusion_override = request.options.get("attribute_diffusion", {}) or {}
+            if not isinstance(diffusion_override, Mapping):
+                raise TypeError("gdsm_simple attribute_diffusion generation override must be a mapping")
+            bad_diffusion = sorted(set(diffusion_override) - {"sample_steps", "save_trajectory"})
+            if bad_diffusion:
+                raise ValueError(
+                    "Only attribute_diffusion.sample_steps/save_trajectory may be overridden "
+                    f"during generation; found training-time keys: {bad_diffusion}"
+                )
         _deep_update(options, request.options)
         generation_extensions = options.get("extensions", {}) or {}
+        from grapher.models.gdsm_simple.hybrid_attributed_loggap import (
+            CHECKPOINT_FORMAT as HYBRID_ATTRIBUTED_LOGGAP_CHECKPOINT_FORMAT,
+            VARIANTS as HYBRID_ATTRIBUTED_LOGGAP_VARIANTS,
+        )
+        if (
+            state.get("format") == HYBRID_ATTRIBUTED_LOGGAP_CHECKPOINT_FORMAT
+            or str(options.get("variant", "legacy_simple")).lower()
+            in HYBRID_ATTRIBUTED_LOGGAP_VARIANTS
+        ):
+            from grapher.models.gdsm_simple.hybrid_attributed_loggap import (
+                generate as generate_hybrid_attributed_loggap,
+            )
+            return generate_hybrid_attributed_loggap(
+                self, request, state, manifest, options
+            )
         from grapher.models.gdsm_simple.hierarchical_attributed_loggap import (
             CHECKPOINT_FORMAT as HIERARCHICAL_ATTRIBUTED_LOGGAP_CHECKPOINT_FORMAT,
             VARIANTS as HIERARCHICAL_ATTRIBUTED_LOGGAP_VARIANTS,
