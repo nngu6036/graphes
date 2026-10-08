@@ -42,7 +42,9 @@ def main() -> int:
     root = args.generated_dir
     graph_path = _resolve_graph_path(root, args.graphs)
     graphs = _load(graph_path)
-    prediction_path = root / "predicted_structure_summaries.pkl"
+    prediction_path = root / "predicted_topology_summaries.pkl"
+    if not prediction_path.is_file():
+        prediction_path = root / "predicted_structure_summaries.pkl"
     if not prediction_path.is_file():
         prediction_path = root / "predicted_graphlet_summaries.pkl"
     predictions = _load(prediction_path)
@@ -75,8 +77,16 @@ def main() -> int:
     for graph, pred in zip(graphs, predictions):
         g = nx.convert_node_labels_to_integers(graph, ordering="sorted")
         target, mass = extract_topology_graphlet_target(g, graphlet_basis=basis, summary_config=cfg)
-        ph = np.asarray(pred["graphlet_histogram"], dtype=np.float64).reshape(-1)
-        pm = np.asarray(pred["graphlet_mass"], dtype=np.float64).reshape(-1)
+        graphlet_hist_key = (
+            "graphlet_histogram"
+            if "graphlet_histogram" in pred
+            else "topology_graphlet_histogram"
+        )
+        graphlet_mass_key = (
+            "graphlet_mass" if "graphlet_mass" in pred else "topology_graphlet_mass"
+        )
+        ph = np.asarray(pred[graphlet_hist_key], dtype=np.float64).reshape(-1)
+        pm = np.asarray(pred[graphlet_mass_key], dtype=np.float64).reshape(-1)
         if not np.isfinite(ph).all() or not np.isfinite(pm).all():
             raise FloatingPointError(f"Non-finite graphlet prediction at graph {pred.get('graph_index', '?')}")
         for order, (start, stop) in zip((3, 4, 5), basis.slices):
@@ -85,17 +95,28 @@ def main() -> int:
                 graphlet_hist_mae[str(order)].append(float(np.mean(np.abs(ph[start:stop] - block))))
             graphlet_mass_mae[str(order)].append(float(abs(pm[(3,4,5).index(order)] - mass[(3,4,5).index(order)])))
 
-        if "clustering_histogram" in pred:
-            pc = np.asarray(pred["clustering_histogram"], dtype=np.float64).reshape(-1)
+        clustering_key = (
+            "clustering_histogram"
+            if "clustering_histogram" in pred
+            else "topology_clustering_histogram"
+        )
+        if clustering_key in pred:
+            pc = np.asarray(pred[clustering_key], dtype=np.float64).reshape(-1)
             tc = clustering_histogram(g, bins=pc.size)
             if not np.isfinite(pc).all():
                 raise FloatingPointError("Non-finite clustering prediction")
             clustering_hist_mae.append(float(np.mean(np.abs(pc - tc))))
             clustering_cdf_mae.append(float(np.mean(np.abs(np.cumsum(pc - tc)[:-1]))))
 
-        if "orbit_histogram" in pred and "orbit_log_total" in pred:
-            po = np.asarray(pred["orbit_histogram"], dtype=np.float64).reshape(-1)
-            plt = float(np.asarray(pred["orbit_log_total"], dtype=np.float64).reshape(-1)[0])
+        orbit_hist_key = (
+            "orbit_histogram" if "orbit_histogram" in pred else "topology_orbit_histogram"
+        )
+        orbit_total_key = (
+            "orbit_log_total" if "orbit_log_total" in pred else "topology_orbit_log_total"
+        )
+        if orbit_hist_key in pred and orbit_total_key in pred:
+            po = np.asarray(pred[orbit_hist_key], dtype=np.float64).reshape(-1)
+            plt = float(np.asarray(pred[orbit_total_key], dtype=np.float64).reshape(-1)[0])
             counts = np.maximum(np.asarray(python_orbit_count_vector(g), dtype=np.float64), 0.0)
             total = float(counts.sum())
             to = counts / total if total > 0.0 else np.zeros_like(counts)
@@ -111,6 +132,7 @@ def main() -> int:
         "num_graphs": len(graphs),
         "graphs_path": str(graph_path),
         "predictions_path": str(prediction_path),
+        "summary_type": "topology_only",
         "graphlet_histogram_mae": {k: (float(np.mean(v)) if v else None) for k, v in graphlet_hist_mae.items()},
         "graphlet_mass_mae": {k: (float(np.mean(v)) if v else None) for k, v in graphlet_mass_mae.items()},
         "clustering_histogram_mae": float(np.mean(clustering_hist_mae)) if clustering_hist_mae else None,

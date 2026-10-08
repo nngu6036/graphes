@@ -10,6 +10,20 @@ The repository is organized for controlled experiments: prepared dataset splits
 are frozen, generated artifacts are run-scoped, and baseline outputs are routed
 through the same evaluation code whenever the graph representation permits it.
 
+## Hierarchical attributed topology/attribute generation (8 October 2026)
+
+The molecular Laplacian log-gap branch now has an opt-in hierarchical variant
+that follows `p(A,X,R)=p(A)p(X,R|A)`. The topology PPGN is supervised by
+topology-only connected induced graphlets and ORCA orbit summaries, while a
+separate attribute PPGN predicts atoms, present-edge bond types, and typed
+graphlets. The branches have disjoint parameters, and the final decoder retains
+degree-compatible atom sampling and valence-budgeted bond sampling. This path
+uses no post-generation rewiring, repair, filtering, or replacement sampling.
+
+See [the architecture and run guide](docs/HIERARCHICAL_ATTRIBUTED_GDSM.md) and
+the explicit QM9 seed-42/43/44 configs under
+`configs/experiments/gdsm_laplacian_loggap_hierarchical_attributed_explicit/`.
+
 ## Attributed log-gap masking and valence update (4 October 2026)
 
 The attributed Laplacian log-gap / PPGN branch now has leakage-free undirected

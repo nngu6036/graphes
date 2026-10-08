@@ -251,6 +251,19 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             )
         ).lower()
 
+        from grapher.models.gdsm_simple.hierarchical_attributed_loggap import (
+            VARIANTS as HIERARCHICAL_ATTRIBUTED_LOGGAP_VARIANTS,
+            default_options as default_hierarchical_attributed_loggap_options,
+            validate_options as validate_hierarchical_attributed_loggap_options,
+        )
+        if requested_variant in HIERARCHICAL_ATTRIBUTED_LOGGAP_VARIANTS:
+            options = default_hierarchical_attributed_loggap_options()
+            options = _deep_update(options, comparison_defaults)
+            options = _deep_update(options, selected)
+            options = _deep_update(options, request_options)
+            validate_hierarchical_attributed_loggap_options(options)
+            return options
+
         from grapher.models.gdsm_simple.attributed_loggap import (
             VARIANTS as ATTRIBUTED_LOGGAP_VARIANTS,
             default_options as default_attributed_loggap_options,
@@ -383,6 +396,14 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
         if request.resume_from is not None:
             raise ValueError("gdsm_simple resume is not implemented")
         options = self._options(request)
+        from grapher.models.gdsm_simple.hierarchical_attributed_loggap import (
+            VARIANTS as HIERARCHICAL_ATTRIBUTED_LOGGAP_VARIANTS,
+        )
+        if str(options.get("variant", "legacy_simple")).lower() in HIERARCHICAL_ATTRIBUTED_LOGGAP_VARIANTS:
+            from grapher.models.gdsm_simple.hierarchical_attributed_loggap import (
+                train as train_hierarchical_attributed_loggap,
+            )
+            return train_hierarchical_attributed_loggap(self, request, options)
         from grapher.models.gdsm_simple.attributed_loggap import VARIANTS as ATTRIBUTED_LOGGAP_VARIANTS
         if str(options.get("variant", "legacy_simple")).lower() in ATTRIBUTED_LOGGAP_VARIANTS:
             from grapher.models.gdsm_simple.attributed_loggap import train as train_attributed_loggap
@@ -619,6 +640,21 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
                 )
         _deep_update(options, request.options)
         generation_extensions = options.get("extensions", {}) or {}
+        from grapher.models.gdsm_simple.hierarchical_attributed_loggap import (
+            CHECKPOINT_FORMAT as HIERARCHICAL_ATTRIBUTED_LOGGAP_CHECKPOINT_FORMAT,
+            VARIANTS as HIERARCHICAL_ATTRIBUTED_LOGGAP_VARIANTS,
+        )
+        if (
+            state.get("format") == HIERARCHICAL_ATTRIBUTED_LOGGAP_CHECKPOINT_FORMAT
+            or str(options.get("variant", "legacy_simple")).lower()
+            in HIERARCHICAL_ATTRIBUTED_LOGGAP_VARIANTS
+        ):
+            from grapher.models.gdsm_simple.hierarchical_attributed_loggap import (
+                generate as generate_hierarchical_attributed_loggap,
+            )
+            return generate_hierarchical_attributed_loggap(
+                self, request, state, manifest, options
+            )
         from grapher.models.gdsm_simple.attributed_loggap import (
             CHECKPOINT_FORMAT as ATTRIBUTED_LOGGAP_CHECKPOINT_FORMAT,
             VARIANTS as ATTRIBUTED_LOGGAP_VARIANTS,
