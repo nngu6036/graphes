@@ -973,9 +973,22 @@ def train(
             "factorization": "p(A) p(X,R|A)",
             "topology": "combinatorial_laplacian_log_gap_VP_diffusion",
             "topology_edge_existence": "spectral_decoder_only",
-            "topology_auxiliary": "connected_induced_unattributed_graphlets_k3_k4_k5_plus_ORCA_orbits",
+            "topology_auxiliary": (
+                "connected_induced_unattributed_graphlets_"
+                + "_".join(
+                    f"k{k}" for k in options["topology_summary"]["graphlet"]["orders"]
+                )
+                + "_plus_ORCA_orbits"
+            ),
             "attribute_process": "fixed_topology_exact_terminal_marginal_categorical_diffusion",
-            "attribute_auxiliary": "connected_induced_typed_graphlets_k3_k4_k5_training_vocabulary_plus_overflow",
+            "attribute_auxiliary": (
+                "connected_induced_typed_graphlets_"
+                + "_".join(
+                    f"k{k}"
+                    for k in options["attribute_summary"]["typed_graphlet"]["orders"]
+                )
+                + "_training_vocabulary_plus_overflow"
+            ),
             "gradient_routing": "separate_topology_and_attribute_PPGN_encoders",
             "node_categories": "iterative_marginal_categorical_diffusion",
             "edge_categories": "iterative_real_bond_diffusion_on_fixed_present_edges_only",
@@ -1773,7 +1786,10 @@ def generate(
                     "factorization": "p(A) p(X,R|A)",
                     "topology": "Laplacian_log_gap_reverse_diffusion",
                     "topology_auxiliary_supervision": [
-                        "topology_only_connected_induced_graphlets_k3_k4_k5",
+                        "topology_only_connected_induced_graphlets_"
+                        + "_".join(
+                            f"k{k}" for k in options["topology_summary"]["graphlet"]["orders"]
+                        ),
                         "ORCA_orbit_histogram_and_log_total",
                     ],
                     "attribute_process": "fixed_topology_marginal_categorical_reverse_diffusion",
@@ -1781,7 +1797,13 @@ def generate(
                     "attribute_sampling_steps": int(diffusion_cfg["sample_steps"]),
                     "attribute_schedule": "cosine_exact_terminal",
                     "categorical_posterior": "clean_endpoint_mixture_exact_skip_posterior",
-                    "attribute_auxiliary_supervision": "typed_connected_induced_graphlets_k3_k4_k5",
+                    "attribute_auxiliary_supervision": (
+                        "typed_connected_induced_graphlets_"
+                        + "_".join(
+                            f"k{k}"
+                            for k in options["attribute_summary"]["typed_graphlet"]["orders"]
+                        )
+                    ),
                     "topology_attribute_encoder_sharing": False,
                     "edge_attributes": "real_bond_type_diffusion_on_generated_edges_only",
                     "edge_head_includes_no_edge": False,

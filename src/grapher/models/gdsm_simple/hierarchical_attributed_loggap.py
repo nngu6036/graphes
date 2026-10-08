@@ -297,8 +297,16 @@ def validate_options(options: Mapping[str, Any]) -> None:
     topology_graphlet = dict(topology_summary.get("graphlet", {}) or {})
     if not bool(topology_graphlet.get("enabled", False)):
         raise ValueError("topology_summary.graphlet.enabled must be true")
-    if list(topology_graphlet.get("orders", [])) != [3, 4, 5]:
-        raise ValueError("Topology graphlets are fixed to orders [3,4,5]")
+    topology_orders = list(topology_graphlet.get("orders", []))
+    if (
+        not topology_orders
+        or any(type(k) is not int for k in topology_orders)
+        or topology_orders != list(range(3, max(topology_orders) + 1))
+        or max(topology_orders) > 7
+    ):
+        raise ValueError(
+            "Topology graphlet orders must be a consecutive prefix [3,...,K] with 3 <= K <= 7"
+        )
     if not bool(topology_graphlet.get("connected_only", True)):
         raise ValueError("Topology graphlets must be connected-only")
     orbit = dict(topology_summary.get("orbit", {}) or {})
@@ -310,8 +318,16 @@ def validate_options(options: Mapping[str, Any]) -> None:
     typed_graphlet = dict(attribute_summary.get("typed_graphlet", {}) or {})
     if not bool(typed_graphlet.get("enabled", False)):
         raise ValueError("attribute_summary.typed_graphlet.enabled must be true")
-    if list(typed_graphlet.get("orders", [])) != [3, 4, 5]:
-        raise ValueError("Typed graphlets are fixed to orders [3,4,5]")
+    typed_orders = list(typed_graphlet.get("orders", []))
+    if (
+        not typed_orders
+        or any(type(k) is not int for k in typed_orders)
+        or typed_orders != list(range(3, max(typed_orders) + 1))
+        or max(typed_orders) > 7
+    ):
+        raise ValueError(
+            "Typed graphlet orders must be a consecutive prefix [3,...,K] with 3 <= K <= 7"
+        )
     if not bool(typed_graphlet.get("connected_only", True)):
         raise ValueError("Typed graphlets must be connected-only")
     attr = dict(options.get("attributed", {}) or {})
