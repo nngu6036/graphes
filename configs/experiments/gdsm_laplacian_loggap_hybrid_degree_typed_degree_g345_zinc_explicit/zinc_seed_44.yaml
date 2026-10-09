@@ -1,0 +1,180 @@
+# ZINC250k: topology-first hybrid spectral/categorical generator.
+# Stage 1: Laplacian log-gap topology diffusion with soft degree-histogram,
+#          topology graphlet (k=3,4,5), and ORCA-orbit supervision.
+# Stage 2: fixed-topology marginal categorical diffusion for atom and real
+#          bond types, with typed-degree and typed graphlet supervision (k=3,4,5).
+# No no-edge bond category, no rewiring, no repair, no filtering/replacement.
+#
+# ZINC contains P/S/Cl/Br/I and projected formal charges. The current hard
+# neutral C/N/O/F endpoint mask is therefore NOT chemically valid for this
+# vocabulary; constraint_mode is deliberately set to none.
+gdsm_simple:
+  variant: vanilla_laplacian_loggap_hybrid_categorical_attributed_ppgn
+
+  train:
+    epochs: 200
+    batch_size: 32
+    lr: 0.0002
+    node_lr: 0.0002
+    spectrum_lr: 0.0002
+    weight_decay: 1.0e-6
+    grad_norm: 1.0
+    lr_schedule: true
+    lr_decay: 0.999
+    ema: 0.999
+    validation_every: 5
+    log_every: 5
+
+  model:
+    max_nodes: 38
+    max_feat_num: 38
+    hidden_dim: 64
+    depth: 4
+    node_backbone: dense_gcn
+    spectrum_backbone: ppgn
+    ppgn_hidden_dim: 96
+    ppgn_depth: 4
+    ppgn_residual_scale: 0.1
+    ppgn_norm_eps: 1.0e-5
+    ppgn_input_clip: 10.0
+
+  structural_features:
+    enabled: true
+    binarize_threshold: 0.5
+    random_walk:
+      enabled: true
+      steps: 4
+    shortest_path:
+      enabled: true
+      max_distance: 8
+
+  sde:
+    x:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    spectrum:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    eps: 1.0e-5
+    eigen_mask: laplacian_nonzero_prefix
+    spectral_parameterization: laplacian_log_gap
+    log_gap_epsilon: 1.0e-6
+    log_gap_min_std: 0.001
+    log_gap_exp_clip: 20.0
+
+  sample:
+    predictor: euler
+    corrector: langevin
+    snr: 0.05
+    scale_eps: 0.7
+    n_steps: 1
+    noise_removal: true
+    probability_flow: false
+    eps: 0.0001
+    threshold: 0.5
+    use_ema: false
+    separate_attribute_rng: true
+
+  topology_summary:
+    enabled: true
+    loss_weight: 0.1
+
+    degree:
+      enabled: true
+      max_degree: 37
+      histogram_weight: 0.25
+      cdf_weight: 1.0
+
+    graphlet:
+      enabled: true
+      orders: [3, 4, 5]
+      histogram_weight: 1.0
+      mass_weight: 0.25
+      connected_only: true
+      topology_filter: all
+      # Exact k=5 enumeration over the full ZINC250k split is intractable.
+      # Targets are sampled once and cached.
+      backend: sampled
+      num_samples: 128
+
+    clustering:
+      enabled: false
+      bins: 100
+      histogram_weight: 0.25
+      cdf_weight: 1.0
+
+    orbit:
+      enabled: true
+      width: 15
+      histogram_weight: 0.25
+      log_total_weight: 0.1
+
+  attribute_summary:
+    enabled: true
+    loss_weight: 0.1
+    typed_degree:
+      enabled: true
+      min_count: 1
+      max_signatures: 1024
+      overflow_bin: true
+      histogram_weight: 0.25
+    typed_graphlet:
+      enabled: true
+      orders: [3, 4, 5]
+      histogram_weight: 1.0
+      mass_weight: 0.25
+      connected_only: true
+      topology_filter: all
+      attributed_backend: python
+      backend: sampled
+      num_samples: 128
+      # Fit the labelled vocabulary from a deterministic training-only subset.
+      max_basis_graphs: 2000
+
+  attributed:
+    node_attribute: atomic_num
+    node_categories: [6, 7, 8, 9, 15, 16, 17, 35, 53]
+    edge_attribute: bond_type
+    edge_categories: [1, 2, 3]
+    node_loss_weight: 1.0
+    edge_loss_weight: 1.0
+    decode:
+      node_mode: sample
+      edge_mode: sample
+      node_temperature: 1.0
+      edge_temperature: 0.6
+      constraint_mode: none
+      edge_order: random
+      infeasible_policy: retain
+
+  preprocess:
+    num_workers: 8
+    chunksize: 16
+    progress_every: 5000
+    cache_structure_targets: true
+
+  generation_batch_size: 16
+
+  runtime:
+    device: auto
+
+  extensions:
+    degree_conditioning: false
+    hh_initialization: false
+    degree_preserving_rewiring: false
+    structural_summary: none
+
+  attribute_diffusion:
+    enabled: true
+    steps: 100
+    sample_steps: 100
+    noise: marginal
+    schedule: cosine_exact_terminal
+    pseudocount: 0.001
+    objective: clean_endpoint_cross_entropy
+    endpoint_constraint: final_reverse_transition
+    save_trajectory: false

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate hierarchical GDSM typed-graphlet auxiliary predictions."""
+"""Evaluate attributed GDSM typed-graphlet and typed-degree predictions."""
 from __future__ import annotations
 
 import argparse
@@ -11,7 +11,8 @@ import numpy as np
 import torch
 
 from grapher.properties.summary import SummaryConfig
-from grapher.rewiring_mlp.attributed.data import GraphletBasis
+from grapher.rewiring_mlp.attributed.data import GraphCategoryVocabulary, GraphletBasis
+from grapher.models.gdsm_simple.typed_degree_summary import TypedDegreeHistogramBasis
 
 
 def _load_pickle(path: Path):
@@ -50,6 +51,12 @@ def main() -> int:
     summary = dict(state["attribute_summary"])
     basis = GraphletBasis.from_dict(dict(summary["graphlet_basis"]))
     cfg = SummaryConfig.from_dict(dict(summary["summary_config"]))
+    vocabulary = GraphCategoryVocabulary.from_dict(dict(state["vocabulary"]))
+    typed_degree_enabled = bool(summary.get("typed_degree_enabled", False))
+    typed_degree_basis = (
+        TypedDegreeHistogramBasis.from_dict(dict(summary["typed_degree_basis"]))
+        if typed_degree_enabled else None
+    )
 
     graphs = _load_pickle(graph_path)
     predictions = _load_pickle(prediction_path)
@@ -61,6 +68,12 @@ def main() -> int:
     hist_mae = {str(k): [] for k in basis.sizes}
     mass_mae = {str(k): [] for k in basis.sizes}
     overflow_mass = {str(k): [] for k in basis.sizes}
+    typed_degree_hist_mae: list[float] = []
+    typed_degree_hist_l1: list[float] = []
+    typed_degree_target_overflow: list[float] = []
+    typed_degree_predicted_overflow: list[float] = []
+    typed_degree_node_marginal_mae: list[float] = []
+    typed_degree_edge_incidence_mae: list[float] = []
     for index, (graph, pred) in enumerate(zip(graphs, predictions)):
         history, mass = basis.statistics_for_graph(
             graph, cfg, rng=np.random.default_rng(index)
@@ -90,12 +103,68 @@ def main() -> int:
                 overflow_index = basis.keys_by_k[order].index(basis.overflow_key)
                 overflow_mass[order].append(float(block[overflow_index]))
 
+        if typed_degree_basis is not None:
+            target_typed_degree = typed_degree_basis.histogram_for_graph(
+                graph, vocabulary
+            ).astype(np.float64)
+            predicted_typed_degree = np.asarray(
+                pred.get("typed_degree_histogram"), dtype=np.float64
+            ).reshape(-1)
+            if predicted_typed_degree.size != typed_degree_basis.width:
+                raise ValueError(
+                    "Typed-degree prediction has an incompatible width: "
+                    f"{predicted_typed_degree.size} != {typed_degree_basis.width}"
+                )
+            typed_degree_hist_mae.append(
+                float(np.mean(np.abs(predicted_typed_degree - target_typed_degree)))
+            )
+            typed_degree_hist_l1.append(
+                float(np.sum(np.abs(predicted_typed_degree - target_typed_degree)))
+            )
+            typed_degree_target_overflow.append(
+                float(target_typed_degree[typed_degree_basis.overflow_index])
+            )
+            typed_degree_predicted_overflow.append(
+                float(predicted_typed_degree[typed_degree_basis.overflow_index])
+            )
+            typed_degree_node_marginal_mae.append(
+                float(
+                    np.mean(
+                        np.abs(
+                            typed_degree_basis.node_marginal_from_histogram(
+                                predicted_typed_degree
+                            )
+                            - typed_degree_basis.node_marginal_from_histogram(
+                                target_typed_degree
+                            )
+                        )
+                    )
+                )
+            )
+            typed_degree_edge_incidence_mae.append(
+                float(
+                    np.mean(
+                        np.abs(
+                            typed_degree_basis.edge_incidence_from_histogram(
+                                predicted_typed_degree
+                            )
+                            - typed_degree_basis.edge_incidence_from_histogram(
+                                target_typed_degree
+                            )
+                        )
+                    )
+                )
+            )
+
     result = {
         "num_graphs": len(graphs),
         "graphs_path": str(graph_path),
         "predictions_path": str(prediction_path),
         "checkpoint_path": str(checkpoint_path),
-        "summary_type": "typed_graphlet",
+        "summary_type": (
+            "typed_graphlet_plus_typed_degree"
+            if typed_degree_enabled else "typed_graphlet"
+        ),
         "graphlet_histogram_mae": {
             key: (float(np.mean(values)) if values else None)
             for key, values in hist_mae.items()
@@ -108,6 +177,35 @@ def main() -> int:
             key: (float(np.mean(values)) if values else None)
             for key, values in overflow_mass.items()
         },
+        "typed_degree_enabled": typed_degree_enabled,
+        "typed_degree_num_bins": (
+            int(typed_degree_basis.width) if typed_degree_basis is not None else 0
+        ),
+        "typed_degree_num_known_signatures": (
+            len(typed_degree_basis.signatures) if typed_degree_basis is not None else 0
+        ),
+        "typed_degree_histogram_mae": (
+            float(np.mean(typed_degree_hist_mae)) if typed_degree_hist_mae else None
+        ),
+        "typed_degree_histogram_l1": (
+            float(np.mean(typed_degree_hist_l1)) if typed_degree_hist_l1 else None
+        ),
+        "typed_degree_target_overflow_mass": (
+            float(np.mean(typed_degree_target_overflow))
+            if typed_degree_target_overflow else None
+        ),
+        "typed_degree_predicted_overflow_mass": (
+            float(np.mean(typed_degree_predicted_overflow))
+            if typed_degree_predicted_overflow else None
+        ),
+        "typed_degree_node_marginal_mae": (
+            float(np.mean(typed_degree_node_marginal_mae))
+            if typed_degree_node_marginal_mae else None
+        ),
+        "typed_degree_edge_incidence_mae": (
+            float(np.mean(typed_degree_edge_incidence_mae))
+            if typed_degree_edge_incidence_mae else None
+        ),
     }
     output = args.output or (root / "typed_graphlet_prediction_evaluation.json")
     output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

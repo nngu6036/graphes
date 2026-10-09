@@ -1,0 +1,32 @@
+# Topology-only report for the ZINC hybrid model. Molecular FCD/NSPDK/validity
+# are computed with scripts/evaluate_generated_molecules.py.
+benchmark: zinc250k_hybrid_degree_g345
+seed: 42
+protocol:
+  evaluation_seeds: [42, 43, 44]
+  report_mean_and_std: true
+  generated_graphs_per_seed: 10000
+  tune_on_split: val
+  final_split: test
+  max_reference_graphs: null
+dataset:
+  name: zinc
+  config_path: configs/datasets/zinc.yaml
+  root: outputs/datasets
+  build_if_missing: false
+  max_train_graphs: null
+  max_val_graphs: null
+evaluation:
+  inline_during_generation: false
+  orca_exec: null
+  compute_orbit: true
+  compute_graphlet_history: true
+  graphlet_k_min: 3
+  graphlet_k_max: 5
+  graphlet_connected_only: true
+  graphlet_topology_filter: all
+  graphlet_backend: sampled
+  graphlet_num_samples: 4096
+  generic_mmd_protocol: graphrnn
+  generic_clustering_bins: 100
+experiment: zinc_hybrid_topology_degree_graphlets_3_5_evaluation

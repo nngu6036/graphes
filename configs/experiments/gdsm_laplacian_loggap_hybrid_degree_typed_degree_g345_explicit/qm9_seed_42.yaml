@@ -1,0 +1,165 @@
+# QM9 hybrid topology-first / fixed-topology categorical-attribute GSDM.
+# Stage 1: Laplacian log-gap diffusion + degree histogram + topology-only graphlets + ORCA orbits.
+# Stage 2: 100-step marginal categorical diffusion of atoms and real bond types
+#          on the frozen topology, with typed-degree and typed-graphlet supervision.
+# Final transition: degree-compatible atoms + valence-budgeted bonds.
+# No no-edge bond class, rewiring, repair, filtering, or replacement sampling.
+gdsm_simple:
+  variant: vanilla_laplacian_loggap_hybrid_categorical_attributed_ppgn
+  train:
+    epochs: 200
+    batch_size: 128
+    lr: 0.001
+    node_lr: 0.01
+    spectrum_lr: 0.001
+    weight_decay: 0.0001
+    grad_norm: 1.0
+    lr_schedule: true
+    lr_decay: 0.999
+    ema: 0.999
+    validation_every: 1
+    log_every: 10
+  model:
+    max_nodes: 9
+    max_feat_num: 9
+    hidden_dim: 32
+    depth: 3
+    node_backbone: dense_gcn
+    spectrum_backbone: ppgn
+    ppgn_hidden_dim: 64
+    ppgn_depth: 4
+    ppgn_residual_scale: 0.1
+    ppgn_norm_eps: 1.0e-05
+    ppgn_input_clip: 10.0
+  structural_features:
+    enabled: true
+    binarize_threshold: 0.5
+    random_walk:
+      enabled: true
+      steps: 4
+    shortest_path:
+      enabled: true
+      max_distance: 5
+  sde:
+    x:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    spectrum:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    eps: 1.0e-05
+    eigen_mask: laplacian_nonzero_prefix
+    spectral_parameterization: laplacian_log_gap
+    log_gap_epsilon: 1.0e-06
+    log_gap_min_std: 0.001
+    log_gap_exp_clip: 20.0
+  sample:
+    predictor: euler
+    corrector: langevin
+    snr: 0.05
+    scale_eps: 0.7
+    n_steps: 1
+    noise_removal: true
+    probability_flow: false
+    eps: 0.0001
+    threshold: 0.5
+    use_ema: false
+    separate_attribute_rng: true
+  topology_summary:
+    enabled: true
+    loss_weight: 0.1
+    degree:
+      enabled: true
+      max_degree: 4
+      histogram_weight: 0.25
+      cdf_weight: 1.0
+    graphlet:
+      enabled: true
+      orders:
+      - 3
+      - 4
+      - 5
+      histogram_weight: 1.0
+      mass_weight: 0.25
+      connected_only: true
+      topology_filter: all
+    clustering:
+      enabled: false
+      bins: 100
+      histogram_weight: 0.25
+      cdf_weight: 1.0
+    orbit:
+      enabled: true
+      width: 15
+      histogram_weight: 0.25
+      log_total_weight: 0.1
+  attribute_summary:
+    enabled: true
+    loss_weight: 0.1
+    typed_degree:
+      enabled: true
+      min_count: 1
+      max_signatures: null
+      overflow_bin: true
+      histogram_weight: 0.25
+    typed_graphlet:
+      enabled: true
+      orders:
+      - 3
+      - 4
+      - 5
+      histogram_weight: 1.0
+      mass_weight: 0.25
+      connected_only: true
+      topology_filter: all
+      attributed_backend: python
+      max_basis_graphs: 20000
+  attributed:
+    node_attribute: atomic_num
+    node_categories:
+    - 6
+    - 7
+    - 8
+    - 9
+    edge_attribute: bond_type
+    edge_categories:
+    - 1
+    - 2
+    - 3
+    node_loss_weight: 1.0
+    edge_loss_weight: 1.0
+    decode:
+      node_mode: sample
+      edge_mode: sample
+      node_temperature: 1.0
+      edge_temperature: 0.6
+      constraint_mode: atom_bond_valence
+      edge_order: random
+      infeasible_policy: retain
+  preprocess:
+    num_workers: 4
+    chunksize: 64
+    progress_every: 2000
+    cache_structure_targets: true
+  generation_batch_size: 128
+  runtime:
+    device: auto
+  extensions:
+    degree_conditioning: false
+    hh_initialization: false
+    degree_preserving_rewiring: false
+    structural_summary: none
+  attribute_diffusion:
+    enabled: true
+    steps: 100
+    sample_steps: 100
+    noise: marginal
+    schedule: cosine_exact_terminal
+    pseudocount: 0.001
+    objective: clean_endpoint_cross_entropy
+    endpoint_constraint: final_reverse_transition
+    save_trajectory: false

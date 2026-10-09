@@ -13,9 +13,10 @@ Design contract
 * Node/edge categorical inputs are masked/corrupted one-hot vectors injected
   into the PPGN pair tensor.  This is masked categorical denoising, not a
   categorical flow-matching process.
-* Typed connected induced graphlets k=3,4,5 supervise only the attribute branch.
-  The topology and attribute PPGN encoders are separate, so typed-graphlet and
-  categorical gradients cannot alter the topology score network.
+* Typed connected induced graphlets and a training-vocabulary typed-degree
+  histogram supervise only the attribute branch.  The topology and attribute
+  PPGN encoders are separate, so attribute-summary and categorical gradients
+  cannot alter the topology score network.
 * No post-generation rewiring or repair is performed.
 """
 from __future__ import annotations
@@ -53,7 +54,11 @@ from grapher.properties.summary import SummaryConfig
 from grapher.rewiring_mlp.attributed.data import GraphCategoryVocabulary, GraphletBasis
 from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
 from grapher.rewiring_mlp.generic.graphlets import extract_topology_graphlet_target
-from grapher.rewiring_mlp.properties.summary import clustering_histogram, python_orbit_count_vector
+from grapher.rewiring_mlp.properties.summary import (
+    clustering_histogram,
+    degree_histogram,
+    python_orbit_count_vector,
+)
 
 from .vanilla_gsdm import (
     MLP,
@@ -83,6 +88,7 @@ from .attribute_decoding import (
     sample_categorical_logits as _sample_categorical_logits,
     validate_decode_config, sample_atoms, sample_bonds, decoding_diagnostics,
 )
+from .typed_degree_summary import TypedDegreeHistogramBasis
 
 CATEGORICAL_TRAINING_CONTRACT = "undirected_mask_no_visible_target_fallback_v2"
 
@@ -198,6 +204,8 @@ def default_options() -> dict[str, Any]:
                 "mass_weight": 0.25,
                 "connected_only": True,
                 "topology_filter": "all",
+                "backend": "exact",
+                "num_samples": None,
             },
             "clustering": {
                 "enabled": False,
@@ -210,6 +218,12 @@ def default_options() -> dict[str, Any]:
                 "width": 15,
                 "histogram_weight": 0.25,
                 "log_total_weight": 0.10,
+            },
+            "degree": {
+                "enabled": False,
+                "max_degree": None,
+                "histogram_weight": 0.25,
+                "cdf_weight": 1.0,
             },
         },
         "attribute_summary": {
@@ -224,6 +238,15 @@ def default_options() -> dict[str, Any]:
                 "topology_filter": "all",
                 "attributed_backend": "python",
                 "max_basis_graphs": 20000,
+                "backend": "exact",
+                "num_samples": None,
+            },
+            "typed_degree": {
+                "enabled": False,
+                "min_count": 1,
+                "max_signatures": None,
+                "overflow_bin": True,
+                "histogram_weight": 0.25,
             },
         },
         "attributed": {
@@ -309,9 +332,25 @@ def validate_options(options: Mapping[str, Any]) -> None:
         )
     if not bool(topology_graphlet.get("connected_only", True)):
         raise ValueError("Topology graphlets must be connected-only")
+    topology_backend = str(topology_graphlet.get("backend", "exact")).lower()
+    if topology_backend not in {"exact", "sampled"}:
+        raise ValueError("topology_summary.graphlet.backend must be exact or sampled")
+    topology_num_samples = topology_graphlet.get("num_samples", None)
+    if topology_num_samples not in {None, "", "none", "None"}:
+        if type(topology_num_samples) is not int or topology_num_samples < 1:
+            raise ValueError("topology_summary.graphlet.num_samples must be a positive integer or null")
     orbit = dict(topology_summary.get("orbit", {}) or {})
     if bool(orbit.get("enabled", False)) and int(orbit.get("width", 15)) != 15:
         raise ValueError("Orbit width must be 15")
+    degree = dict(topology_summary.get("degree", {}) or {})
+    if bool(degree.get("enabled", False)):
+        max_degree = degree.get("max_degree", None)
+        if max_degree is not None and (type(max_degree) is not int or max_degree < 0):
+            raise ValueError("topology_summary.degree.max_degree must be a non-negative integer or null")
+        for key in ("histogram_weight", "cdf_weight"):
+            value = float(degree.get(key, 1.0))
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"topology_summary.degree.{key} must be finite and non-negative")
     attribute_summary = dict(options.get("attribute_summary", {}) or {})
     if not bool(attribute_summary.get("enabled", False)):
         raise ValueError("attribute_summary.enabled must be true")
@@ -330,6 +369,33 @@ def validate_options(options: Mapping[str, Any]) -> None:
         )
     if not bool(typed_graphlet.get("connected_only", True)):
         raise ValueError("Typed graphlets must be connected-only")
+    typed_backend = str(typed_graphlet.get("backend", "exact")).lower()
+    if typed_backend not in {"exact", "sampled"}:
+        raise ValueError("attribute_summary.typed_graphlet.backend must be exact or sampled")
+    typed_num_samples = typed_graphlet.get("num_samples", None)
+    if typed_num_samples not in {None, "", "none", "None"}:
+        if type(typed_num_samples) is not int or typed_num_samples < 1:
+            raise ValueError("attribute_summary.typed_graphlet.num_samples must be a positive integer or null")
+    typed_degree = dict(attribute_summary.get("typed_degree", {}) or {})
+    if bool(typed_degree.get("enabled", False)):
+        min_count = typed_degree.get("min_count", 1)
+        if type(min_count) is not int or min_count < 1:
+            raise ValueError("attribute_summary.typed_degree.min_count must be an integer >= 1")
+        max_signatures = typed_degree.get("max_signatures", None)
+        if max_signatures not in {None, "", "none", "None"}:
+            if type(max_signatures) is not int or max_signatures < 1:
+                raise ValueError(
+                    "attribute_summary.typed_degree.max_signatures must be a positive integer or null"
+                )
+        if not bool(typed_degree.get("overflow_bin", True)):
+            raise ValueError(
+                "attribute_summary.typed_degree.overflow_bin must be true so validation/test signatures remain representable"
+            )
+        weight = float(typed_degree.get("histogram_weight", 0.25))
+        if not math.isfinite(weight) or weight < 0:
+            raise ValueError(
+                "attribute_summary.typed_degree.histogram_weight must be finite and non-negative"
+            )
     attr = dict(options.get("attributed", {}) or {})
     for key in ("node_attribute", "edge_attribute"):
         if not attr.get(key):
@@ -362,6 +428,17 @@ def validate_options(options: Mapping[str, Any]) -> None:
 def _model_config(options: Mapping[str, Any], max_nodes: int, vocab: GraphCategoryVocabulary) -> dict[str, Any]:
     raw = dict(options["model"])
     max_feat_num = int(raw.get("max_feat_num") or max_nodes)
+    degree_cfg = dict(
+        (options.get("topology_summary", {}) or {}).get("degree", {}) or {}
+    )
+    degree_enabled = bool(degree_cfg.get("enabled", False))
+    degree_max = degree_cfg.get("max_degree", None)
+    if degree_enabled:
+        degree_max = int(max_nodes - 1 if degree_max is None else degree_max)
+        if degree_max > max_nodes - 1:
+            raise ValueError(
+                "topology_summary.degree.max_degree cannot exceed model.max_nodes - 1"
+            )
     return {
         "max_nodes": int(max_nodes),
         "max_feat_num": max_feat_num,
@@ -386,8 +463,8 @@ class AttributedSpectrumPPGNScore(nn.Module):
     The topology branch sees no atom/bond categories and produces the log-gap
     noise prediction plus topology-only graphlet/orbit summaries.  The attribute
     branch sees the fixed topology and masked categorical inputs and produces
-    atom logits, present-edge bond logits, and typed graphlet summaries.  The
-    branches have disjoint parameters by construction.
+    atom logits, present-edge bond logits, typed-degree histograms, and typed
+    graphlet summaries.  The branches have disjoint parameters by construction.
     """
 
     def __init__(
@@ -402,6 +479,8 @@ class AttributedSpectrumPPGNScore(nn.Module):
         structural_features: Mapping[str, Any] | None,
         topology_clustering_bins: int,
         topology_orbit_width: int,
+        topology_degree_bins: int = 0,
+        typed_degree_bins: int = 0,
         ppgn_hidden_dim: int = 64,
         ppgn_depth: int = 4,
         ppgn_residual_scale: float = 0.1,
@@ -482,6 +561,7 @@ class AttributedSpectrumPPGNScore(nn.Module):
         )
         self.topology_clustering_bins = int(topology_clustering_bins)
         self.topology_orbit_width = int(topology_orbit_width)
+        self.topology_degree_bins = int(topology_degree_bins)
         self.topology_clustering_logits = (
             MLP(shared_dim, 2 * shared_dim, self.topology_clustering_bins, 2)
             if self.topology_clustering_bins > 0 else None
@@ -494,6 +574,10 @@ class AttributedSpectrumPPGNScore(nn.Module):
             MLP(shared_dim, 2 * shared_dim, 1, 2)
             if self.topology_orbit_width > 0 else None
         )
+        self.topology_degree_histogram_logits = (
+            MLP(shared_dim, 2 * shared_dim, self.topology_degree_bins, 2)
+            if self.topology_degree_bins > 0 else None
+        )
 
         typed_width = self.typed_graphlet_slices[-1][1]
         self.typed_graphlet_logits = MLP(
@@ -501,6 +585,11 @@ class AttributedSpectrumPPGNScore(nn.Module):
         )
         self.typed_graphlet_mass_logits = MLP(
             shared_dim, 2 * shared_dim, len(self.typed_graphlet_slices), 2
+        )
+        self.typed_degree_bins = int(typed_degree_bins)
+        self.typed_degree_histogram_logits = (
+            MLP(shared_dim, 2 * shared_dim, self.typed_degree_bins, 2)
+            if self.typed_degree_bins > 0 else None
         )
         self.node_category_head = MLP(hdim, 2 * hdim, self.node_classes, 2)
         self.edge_category_head = MLP(hdim, 2 * hdim, self.edge_classes, 2)
@@ -521,6 +610,8 @@ class AttributedSpectrumPPGNScore(nn.Module):
                 self.topology_orbit_histogram_logits,
                 self.topology_orbit_log_total_raw,
             ])
+        if self.topology_degree_histogram_logits is not None:
+            modules.append(self.topology_degree_histogram_logits)
         for module in modules:
             yield from module.parameters()
 
@@ -534,6 +625,8 @@ class AttributedSpectrumPPGNScore(nn.Module):
             self.node_category_head,
             self.edge_category_head,
         ]
+        if self.typed_degree_histogram_logits is not None:
+            modules.append(self.typed_degree_histogram_logits)
         for module in modules:
             yield from module.parameters()
 
@@ -697,6 +790,10 @@ class AttributedSpectrumPPGNScore(nn.Module):
         if self.topology_orbit_histogram_logits is not None:
             outputs["topology_orbit_histogram_logits"] = self.topology_orbit_histogram_logits(shared)
             outputs["topology_orbit_log_total_raw"] = self.topology_orbit_log_total_raw(shared)
+        if self.topology_degree_histogram_logits is not None:
+            outputs["topology_degree_histogram_logits"] = (
+                self.topology_degree_histogram_logits(shared)
+            )
         for name, value in outputs.items():
             if not torch.isfinite(value).all():
                 raise FloatingPointError(f"Non-finite {name} from topology PPGN")
@@ -732,6 +829,10 @@ class AttributedSpectrumPPGNScore(nn.Module):
             "node_logits": self.node_category_head(diag),
             "edge_logits": self.edge_category_head(sym_pair),
         }
+        if self.typed_degree_histogram_logits is not None:
+            outputs["typed_degree_histogram_logits"] = (
+                self.typed_degree_histogram_logits(shared)
+            )
         for name, value in outputs.items():
             if not torch.isfinite(value).all():
                 raise FloatingPointError(f"Non-finite {name} from attribute PPGN")
@@ -799,13 +900,17 @@ class AttributedSpectrumPPGNScore(nn.Module):
             result["orbit_histogram"] = orbit_hist
             result["orbit_log_total"] = orbit_log_total
             result["orbit_mean_counts"] = orbit_hist * torch.expm1(orbit_log_total)
+        if "topology_degree_histogram_logits" in outputs:
+            result["degree_histogram"] = torch.softmax(
+                outputs["topology_degree_histogram_logits"], dim=-1
+            )
         return result
 
     def attribute_structure_means_from_outputs(
         self,
         outputs: Mapping[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
-        return {
+        result = {
             "typed_graphlet_histogram": self._block_histogram(
                 outputs["typed_graphlet_logits"], self.typed_graphlet_slices
             ),
@@ -813,6 +918,11 @@ class AttributedSpectrumPPGNScore(nn.Module):
                 outputs["typed_graphlet_mass_logits"]
             ),
         }
+        if "typed_degree_histogram_logits" in outputs:
+            result["typed_degree_histogram"] = torch.softmax(
+                outputs["typed_degree_histogram_logits"], dim=-1
+            )
+        return result
 
 def _attributed_labels(graphs: Sequence[nx.Graph], vocab: GraphCategoryVocabulary, max_nodes: int) -> tuple[torch.Tensor, torch.Tensor]:
     nodes = np.full((len(graphs), max_nodes), -1, dtype=np.int64)
@@ -841,6 +951,10 @@ def _topology_summary_spec(options: Mapping[str, Any]) -> SummaryConfig:
     summary = _topology_summary_config(options)
     graphlet = dict(summary.get("graphlet", {}) or {})
     orders = list(graphlet.get("orders", [3, 4, 5]))
+    backend = str(graphlet.get("backend", "exact")).lower()
+    samples = graphlet.get("num_samples", None)
+    if backend == "exact":
+        samples = None
     return SummaryConfig.from_dict({
         "clustering_summary": False,
         "spectral_summary": False,
@@ -851,8 +965,8 @@ def _topology_summary_spec(options: Mapping[str, Any]) -> SummaryConfig:
         "graphlet_k_max": max(orders),
         "graphlet_connected_only": bool(graphlet.get("connected_only", True)),
         "graphlet_topology_filter": str(graphlet.get("topology_filter", "all")),
-        "graphlet_backend": "exact",
-        "graphlet_num_samples": None,
+        "graphlet_backend": backend,
+        "graphlet_num_samples": samples,
     })
 
 
@@ -863,6 +977,10 @@ def _typed_summary_spec(
     summary = _attribute_summary_config(options)
     graphlet = dict(summary.get("typed_graphlet", {}) or {})
     orders = list(graphlet.get("orders", [3, 4, 5]))
+    backend = str(graphlet.get("backend", "exact")).lower()
+    samples = graphlet.get("num_samples", None)
+    if backend == "exact":
+        samples = None
     return SummaryConfig.from_dict({
         "clustering_summary": False,
         "spectral_summary": False,
@@ -873,8 +991,8 @@ def _typed_summary_spec(
         "graphlet_k_max": max(orders),
         "graphlet_connected_only": bool(graphlet.get("connected_only", True)),
         "graphlet_topology_filter": str(graphlet.get("topology_filter", "all")),
-        "graphlet_backend": "exact",
-        "graphlet_num_samples": None,
+        "graphlet_backend": backend,
+        "graphlet_num_samples": samples,
         "attributed": True,
         "node_attribute": vocab.node_attribute,
         "edge_attribute": vocab.edge_attribute,
@@ -890,10 +1008,15 @@ def _init_hierarchical_target_worker(
     topology_scfg: SummaryConfig,
     typed_basis: GraphletBasis,
     typed_scfg: SummaryConfig,
+    vocabulary: GraphCategoryVocabulary,
+    typed_degree_basis: TypedDegreeHistogramBasis,
+    typed_degree_enabled: bool,
     bins: int,
     width: int,
     clustering_enabled: bool,
     orbit_enabled: bool,
+    degree_bins: int,
+    degree_enabled: bool,
     seed: int,
 ) -> None:
     global _HIERARCHICAL_TARGET_WORKER_STATE
@@ -902,17 +1025,32 @@ def _init_hierarchical_target_worker(
         "topology_scfg": topology_scfg,
         "typed_basis": typed_basis,
         "typed_scfg": typed_scfg,
+        "vocabulary": vocabulary,
+        "typed_degree_basis": typed_degree_basis,
+        "typed_degree_enabled": bool(typed_degree_enabled),
         "bins": int(bins),
         "width": int(width),
         "clustering_enabled": bool(clustering_enabled),
         "orbit_enabled": bool(orbit_enabled),
+        "degree_bins": int(degree_bins),
+        "degree_enabled": bool(degree_enabled),
         "seed": int(seed),
     }
 
 
 def _hierarchical_target_worker(
     item: tuple[int, nx.Graph],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
     index, graph = item
     state = _HIERARCHICAL_TARGET_WORKER_STATE
     topology_target, topology_mass = extract_topology_graphlet_target(
@@ -948,14 +1086,34 @@ def _hierarchical_target_worker(
     else:
         orbit_hist = np.zeros(width, dtype=np.float32)
         orbit_total = np.zeros(1, dtype=np.float32)
+    degree_bins = int(state["degree_bins"])
+    if bool(state["degree_enabled"]):
+        degree_target = degree_histogram(
+            graph, max_degree=max(degree_bins - 1, 0)
+        ).astype(np.float32)
+        if degree_target.size != degree_bins:
+            raise ValueError(
+                f"Expected degree histogram width {degree_bins}, got {degree_target.size}"
+            )
+    else:
+        degree_target = np.zeros(max(degree_bins, 1), dtype=np.float32)
+    typed_degree_basis = state["typed_degree_basis"]
+    if bool(state["typed_degree_enabled"]):
+        typed_degree_target = typed_degree_basis.histogram_for_graph(
+            graph, state["vocabulary"]
+        ).astype(np.float32)
+    else:
+        typed_degree_target = np.zeros(1, dtype=np.float32)
     return (
         np.asarray(topology_target, dtype=np.float32),
         np.asarray(topology_mass, dtype=np.float32),
         clustering,
         orbit_hist,
         orbit_total,
+        degree_target,
         typed_target,
         typed_mass_vec,
+        typed_degree_target,
     )
 
 
@@ -967,7 +1125,7 @@ def _structure_cache_path(
     max_nodes: int,
 ) -> Path:
     payload = {
-        "format": "gdsm_hierarchical_attr_structure_cache_v3",
+        "format": "gdsm_hierarchical_attr_structure_cache_v5",
         "dataset_fingerprint": _jsonable(fingerprint),
         "topology_summary": _jsonable(_topology_summary_config(options)),
         "attribute_summary": _jsonable(_attribute_summary_config(options)),
@@ -1038,6 +1196,32 @@ def _fit_typed_graphlet_basis(
     return basis, typed_scfg
 
 
+def _fit_typed_degree_basis(
+    graphs: Sequence[nx.Graph],
+    options: Mapping[str, Any],
+    vocab: GraphCategoryVocabulary,
+) -> TypedDegreeHistogramBasis:
+    cfg = dict(_attribute_summary_config(options).get("typed_degree", {}) or {})
+    if not bool(cfg.get("enabled", False)):
+        return TypedDegreeHistogramBasis.disabled(vocab)
+    max_signatures = cfg.get("max_signatures", None)
+    if max_signatures in {"", "none", "None"}:
+        max_signatures = None
+    basis = TypedDegreeHistogramBasis.fit_from_graphs(
+        graphs,
+        vocab,
+        min_count=int(cfg.get("min_count", 1)),
+        max_signatures=(None if max_signatures is None else int(max_signatures)),
+    )
+    print(
+        "[hierarchical-preprocess] typed-degree vocabulary complete: "
+        f"bins={basis.width}, represented_signatures={len(basis.signatures)}, "
+        f"training_overflow_nodes={basis.overflow_count}",
+        flush=True,
+    )
+    return basis
+
+
 def _hierarchical_structure_targets(
     graphs: Sequence[nx.Graph],
     options: Mapping[str, Any],
@@ -1045,6 +1229,7 @@ def _hierarchical_structure_targets(
     *,
     topology_basis: TopologyGraphletBasis | None = None,
     typed_basis: GraphletBasis | None = None,
+    typed_degree_basis: TypedDegreeHistogramBasis | None = None,
     seed: int = 0,
 ) -> tuple[
     tuple[torch.Tensor, ...],
@@ -1057,6 +1242,10 @@ def _hierarchical_structure_targets(
     topology_graphlet_cfg = dict(topology_cfg.get("graphlet", {}) or {})
     clustering_cfg = dict(topology_cfg.get("clustering", {}) or {})
     orbit_cfg = dict(topology_cfg.get("orbit", {}) or {})
+    degree_cfg = dict(topology_cfg.get("degree", {}) or {})
+    attribute_cfg = _attribute_summary_config(options)
+    typed_degree_cfg = dict(attribute_cfg.get("typed_degree", {}) or {})
+    typed_degree_enabled = bool(typed_degree_cfg.get("enabled", False))
     topology_scfg = _topology_summary_spec(options)
     if topology_basis is None:
         topology_basis = TopologyGraphletBasis.from_config(topology_scfg)
@@ -1066,10 +1255,26 @@ def _hierarchical_structure_targets(
         )
     else:
         typed_scfg = _typed_summary_spec(options, vocab)
+    if typed_degree_basis is None:
+        typed_degree_basis = _fit_typed_degree_basis(graphs, options, vocab)
+    else:
+        typed_degree_basis.validate_vocabulary(vocab)
 
     pcfg = dict(options.get("preprocess", {}) or {})
     bins = int(clustering_cfg.get("bins", 100))
     width = int(orbit_cfg.get("width", 15))
+    degree_enabled = bool(degree_cfg.get("enabled", False))
+    configured_degree_max = degree_cfg.get("max_degree", None)
+    if degree_enabled:
+        degree_max = int(
+            max(g.number_of_nodes() for g in graphs) - 1
+            if configured_degree_max is None
+            else configured_degree_max
+        )
+        degree_bins = degree_max + 1
+    else:
+        degree_max = None
+        degree_bins = 1
     workers = max(int(pcfg.get("num_workers", 0)), 0)
     chunksize = max(int(pcfg.get("chunksize", 64)), 1)
     progress_every = max(int(pcfg.get("progress_every", 2000)), 1)
@@ -1080,7 +1285,7 @@ def _hierarchical_structure_targets(
         f"graphs={total_graphs}, workers={workers}",
         flush=True,
     )
-    columns: list[list[np.ndarray]] = [[] for _ in range(7)]
+    columns: list[list[np.ndarray]] = [[] for _ in range(9)]
 
     def _consume(result, done: int) -> None:
         for column, value in zip(columns, result):
@@ -1099,10 +1304,15 @@ def _hierarchical_structure_targets(
         topology_scfg,
         typed_basis,
         typed_scfg,
+        vocab,
+        typed_degree_basis,
+        typed_degree_enabled,
         bins,
         width,
         bool(clustering_cfg.get("enabled", False)),
         bool(orbit_cfg.get("enabled", False)),
+        degree_bins,
+        degree_enabled,
         int(seed),
     )
     if workers > 1 and total_graphs > 1:
@@ -1141,6 +1351,10 @@ def _hierarchical_structure_targets(
         "clustering_bins": bins,
         "orbit_enabled": bool(orbit_cfg.get("enabled", False)),
         "orbit_width": width,
+        "degree_enabled": degree_enabled,
+        "degree_max_degree": degree_max,
+        "degree_bins": degree_bins if degree_enabled else 0,
+        "degree_representation": "normalized_node_degree_histogram",
     }
     typed_cfg = dict(
         _attribute_summary_config(options).get("typed_graphlet", {}) or {}
@@ -1153,6 +1367,15 @@ def _hierarchical_structure_targets(
         "orders": list(typed_cfg.get("orders", [3, 4, 5])),
         "typed_graphlets": True,
         "graphlet_vocabulary": "training_only_plus_overflow",
+        "typed_degree_enabled": typed_degree_enabled,
+        "typed_degree_bins": (
+            int(typed_degree_basis.width) if typed_degree_enabled else 0
+        ),
+        "typed_degree_basis": typed_degree_basis.to_dict(),
+        "typed_degree_representation": (
+            "normalized_histogram_over_(node_category,incident_edge_category_counts)_"
+            "training_vocabulary_plus_overflow"
+        ),
     }
     return tensors, topology_basis, typed_basis, topology_meta, attribute_meta
 
@@ -1168,6 +1391,17 @@ def _topology_structure_targets(
     graphlet_cfg = dict(cfg.get("graphlet", {}) or {})
     clustering_cfg = dict(cfg.get("clustering", {}) or {})
     orbit_cfg = dict(cfg.get("orbit", {}) or {})
+    degree_cfg = dict(cfg.get("degree", {}) or {})
+    degree_enabled = bool(degree_cfg.get("enabled", False))
+    degree_max = degree_cfg.get("max_degree", None)
+    if degree_enabled:
+        degree_max = int(
+            max(g.number_of_nodes() for g in graphs) - 1
+            if degree_max is None else degree_max
+        )
+        degree_bins = degree_max + 1
+    else:
+        degree_bins = 1
     scfg = _topology_summary_spec(options)
     basis = TopologyGraphletBasis.from_config(scfg)
     rows = []
@@ -1189,10 +1423,15 @@ def _topology_structure_targets(
         else:
             oh = np.zeros(width, dtype=np.float32)
             ot = np.zeros(1, dtype=np.float32)
-        rows.append((hist, mass, clustering, oh, ot))
+        dh = (
+            degree_histogram(graph, max_degree=degree_max).astype(np.float32)
+            if degree_enabled
+            else np.zeros(degree_bins, dtype=np.float32)
+        )
+        rows.append((hist, mass, clustering, oh, ot, dh))
     tensors = tuple(
         torch.tensor(np.stack([row[i] for row in rows]), dtype=torch.float32)
-        for i in range(5)
+        for i in range(6)
     )
     meta = {
         "graphlet_slices": [list(x) for x in basis.slices],
@@ -1205,6 +1444,10 @@ def _topology_structure_targets(
         "clustering_bins": int(clustering_cfg.get("bins", 100)),
         "orbit_enabled": bool(orbit_cfg.get("enabled", False)),
         "orbit_width": int(orbit_cfg.get("width", 15)),
+        "degree_enabled": degree_enabled,
+        "degree_max_degree": degree_max if degree_enabled else None,
+        "degree_bins": degree_bins if degree_enabled else 0,
+        "degree_representation": "normalized_node_degree_histogram",
     }
     del dummy
     return tensors, basis, meta
@@ -1362,11 +1605,13 @@ def _topology_structure_loss(
     clustering_target: torch.Tensor,
     orbit_hist_target: torch.Tensor,
     orbit_total_target: torch.Tensor,
+    degree_hist_target: torch.Tensor,
     cfg: Mapping[str, Any],
 ) -> tuple[torch.Tensor, dict[str, float]]:
     graphlet_cfg = dict(cfg.get("graphlet", {}) or {})
     clustering_cfg = dict(cfg.get("clustering", {}) or {})
     orbit_cfg = dict(cfg.get("orbit", {}) or {})
+    degree_cfg = dict(cfg.get("degree", {}) or {})
     total, metrics = _graphlet_summary_loss(
         logits=outputs["topology_graphlet_logits"],
         mass_logits=outputs["topology_graphlet_mass_logits"],
@@ -1417,6 +1662,38 @@ def _topology_structure_loss(
                 torch.sqrt(total_loss.detach().clamp_min(0.0))
             ),
         })
+    if bool(degree_cfg.get("enabled", False)):
+        logits = outputs["topology_degree_histogram_logits"]
+        if degree_hist_target.shape[-1] != logits.shape[-1]:
+            raise ValueError(
+                "Degree target width does not match topology degree head: "
+                f"{degree_hist_target.shape[-1]} != {logits.shape[-1]}"
+            )
+        logp = torch.log_softmax(logits, dim=-1)
+        hist_loss = -(degree_hist_target * logp).sum(dim=-1).mean()
+        pred = torch.softmax(logits, dim=-1)
+        hist_mae = (pred - degree_hist_target).abs().mean()
+        if logits.shape[-1] > 1:
+            cdf_mae = torch.abs(
+                torch.cumsum(pred - degree_hist_target, dim=-1)[..., :-1]
+            ).mean()
+        else:
+            cdf_mae = hist_loss.detach() * 0.0
+        degree_axis = torch.arange(
+            logits.shape[-1], dtype=pred.dtype, device=pred.device
+        )
+        pred_mean = (pred * degree_axis.unsqueeze(0)).sum(dim=-1)
+        target_mean = (degree_hist_target * degree_axis.unsqueeze(0)).sum(dim=-1)
+        mean_mae = (pred_mean - target_mean).abs().mean()
+        total = total + float(degree_cfg.get("histogram_weight", 0.25)) * (
+            hist_loss + float(degree_cfg.get("cdf_weight", 1.0)) * cdf_mae
+        )
+        metrics.update({
+            "topology_degree_histogram_loss": float(hist_loss.detach()),
+            "topology_degree_histogram_mae": float(hist_mae.detach()),
+            "topology_degree_cdf_mae": float(cdf_mae.detach()),
+            "topology_degree_mean_mae": float(mean_mae.detach()),
+        })
     return total, metrics
 
 
@@ -1437,6 +1714,57 @@ def _typed_graphlet_loss(
         cfg=graphlet_cfg,
         prefix="typed_graphlet",
     )
+
+
+def _attribute_structure_loss(
+    model: AttributedSpectrumPPGNScore,
+    outputs: Mapping[str, torch.Tensor],
+    graphlet_target: torch.Tensor,
+    mass_target: torch.Tensor,
+    typed_degree_target: torch.Tensor,
+    cfg: Mapping[str, Any],
+) -> tuple[torch.Tensor, dict[str, float]]:
+    total, metrics = _typed_graphlet_loss(
+        model,
+        outputs,
+        graphlet_target,
+        mass_target,
+        cfg,
+    )
+    degree_cfg = dict(cfg.get("typed_degree", {}) or {})
+    if bool(degree_cfg.get("enabled", False)):
+        if "typed_degree_histogram_logits" not in outputs:
+            raise RuntimeError(
+                "Typed-degree summary is enabled but the attribute head is unavailable"
+            )
+        logits = outputs["typed_degree_histogram_logits"]
+        if typed_degree_target.shape[-1] != logits.shape[-1]:
+            raise ValueError(
+                "Typed-degree target width does not match the prediction head: "
+                f"{typed_degree_target.shape[-1]} != {logits.shape[-1]}"
+            )
+        target_mass = typed_degree_target.sum(dim=-1)
+        if not torch.allclose(
+            target_mass,
+            torch.ones_like(target_mass),
+            atol=1.0e-5,
+            rtol=1.0e-5,
+        ):
+            raise ValueError("Typed-degree targets must be normalized histograms")
+        logp = torch.log_softmax(logits, dim=-1)
+        histogram_loss = -(typed_degree_target * logp).sum(dim=-1).mean()
+        pred = torch.softmax(logits, dim=-1)
+        histogram_mae = (pred - typed_degree_target).abs().mean()
+        overflow_target = typed_degree_target[..., -1].mean()
+        overflow_pred = pred[..., -1].mean()
+        total = total + float(degree_cfg.get("histogram_weight", 0.25)) * histogram_loss
+        metrics.update({
+            "typed_degree_histogram_loss": float(histogram_loss.detach()),
+            "typed_degree_histogram_mae": float(histogram_mae.detach()),
+            "typed_degree_target_overflow_mass": float(overflow_target.detach()),
+            "typed_degree_predicted_overflow_mass": float(overflow_pred.detach()),
+        })
+    return total, metrics
 
 
 def _loss_batch(
@@ -1468,8 +1796,10 @@ def _loss_batch(
         topology_ch,
         topology_oh,
         topology_ot,
+        topology_dh,
         typed_gh,
         typed_gm,
+        typed_dh,
     ) = batch
     del adj0
     b = x0.size(0)
@@ -1547,13 +1877,15 @@ def _loss_batch(
         topology_ch,
         topology_oh,
         topology_ot,
+        topology_dh,
         topology_summary_cfg,
     )
-    typed_loss, typed_metrics = _typed_graphlet_loss(
+    attribute_structure_loss, typed_metrics = _attribute_structure_loss(
         model_lam,
         attribute_out,
         typed_gh,
         typed_gm,
+        typed_dh,
         attribute_summary_cfg,
     )
     metrics.update(typed_metrics)
@@ -1571,7 +1903,7 @@ def _loss_batch(
         loss_x
         + loss_spectrum
         + float(topology_summary_cfg.get("loss_weight", 0.10)) * topology_loss
-        + float(attribute_summary_cfg.get("loss_weight", 0.10)) * typed_loss
+        + float(attribute_summary_cfg.get("loss_weight", 0.10)) * attribute_structure_loss
         + float(attr_cfg.get("node_loss_weight", 1.0)) * node_ce
         + float(attr_cfg.get("edge_loss_weight", 1.0)) * edge_ce
     )
@@ -1579,7 +1911,7 @@ def _loss_batch(
         "loss_x": float(loss_x.detach()),
         "loss_spectrum": float(loss_spectrum.detach()),
         "topology_structure_loss": float(topology_loss.detach()),
-        "attribute_typed_graphlet_loss": float(typed_loss.detach()),
+        "attribute_structure_loss": float(attribute_structure_loss.detach()),
         "node_ce": float(node_ce.detach()),
         "edge_ce": float(edge_ce.detach()),
     })
@@ -1618,6 +1950,14 @@ def _build_models(
         topology_orbit_width=(
             int(topology_meta["orbit_width"])
             if topology_meta.get("orbit_enabled") else 0
+        ),
+        topology_degree_bins=(
+            int(topology_meta["degree_bins"])
+            if topology_meta.get("degree_enabled") else 0
+        ),
+        typed_degree_bins=(
+            int(attribute_meta["typed_degree_bins"])
+            if attribute_meta.get("typed_degree_enabled") else 0
         ),
     ).to(device)
     return model_x, model_lam
@@ -1666,7 +2006,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str,Any]) -> Training
     if cache_enabled and cache_path.is_file():
         try:
             cached=_torch_load_unrestricted(cache_path)
-            if cached.get('format')=='gdsm_hierarchical_attr_structure_cache_v3':
+            if cached.get('format')=='gdsm_hierarchical_attr_structure_cache_v5':
                 train_targets=tuple(cached['train_targets'])
                 val_targets=tuple(cached['val_targets'])
                 topology_basis=cached['topology_basis']
@@ -1685,11 +2025,15 @@ def train(wrapper, request: TrainRequest, options: Mapping[str,Any]) -> Training
                 train_graphs,options,vocab,seed=request.run.train_seed
             )
         )
+        typed_degree_basis = TypedDegreeHistogramBasis.from_dict(
+            dict(attribute_meta["typed_degree_basis"])
+        )
         val_targets,_,_,val_topology_meta,val_attribute_meta=(
             _hierarchical_structure_targets(
                 val_graphs,options,vocab,
                 topology_basis=topology_basis,
                 typed_basis=typed_basis,
+                typed_degree_basis=typed_degree_basis,
                 seed=request.run.train_seed+1,
             )
         )
@@ -1697,7 +2041,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str,Any]) -> Training
             cache_path.parent.mkdir(parents=True,exist_ok=True)
             tmp=cache_path.with_suffix(cache_path.suffix+'.tmp')
             torch.save({
-                'format':'gdsm_hierarchical_attr_structure_cache_v3',
+                'format':'gdsm_hierarchical_attr_structure_cache_v5',
                 'train_targets':tuple(t.cpu() for t in train_targets),
                 'val_targets':tuple(t.cpu() for t in val_targets),
                 'topology_basis':topology_basis,
@@ -1711,8 +2055,12 @@ def train(wrapper, request: TrainRequest, options: Mapping[str,Any]) -> Training
             print(f'[hierarchical-preprocess] cached hierarchical structure targets: {cache_path}',flush=True)
     if val_topology_meta['graphlet_slices']!=topology_meta['graphlet_slices']:
         raise AssertionError('Topology graphlet basis mismatch')
+    if val_topology_meta.get('degree_bins', 0) != topology_meta.get('degree_bins', 0):
+        raise AssertionError('Topology degree-histogram basis mismatch')
     if val_attribute_meta['graphlet_slices']!=attribute_meta['graphlet_slices']:
         raise AssertionError('Typed graphlet basis mismatch')
+    if val_attribute_meta.get('typed_degree_basis') != attribute_meta.get('typed_degree_basis'):
+        raise AssertionError('Typed-degree histogram basis mismatch')
     print(f'[hierarchical-preprocess] all preprocessing complete in {time.monotonic()-prep_started:.1f}s; starting optimization',flush=True)
     stats=_fit_laplacian_log_gap_stats(train_base[5],train_base[2],epsilon=float(options['sde'].get('log_gap_epsilon',1e-6)),min_std=float(options['sde'].get('log_gap_min_std',1e-3)))
     transform={'kind':'laplacian_log_gap','epsilon':float(options['sde'].get('log_gap_epsilon',1e-6)),'exp_clip':float(options['sde'].get('log_gap_exp_clip',20)),'mean':stats['mean'],'std':stats['std'],'count':stats['count']}
@@ -1771,6 +2119,9 @@ def train(wrapper, request: TrainRequest, options: Mapping[str,Any]) -> Training
             'topology_edge_existence':'spectral_decoder_only',
             'topology_auxiliary':'connected_induced_unattributed_graphlets_k3_k4_k5_plus_ORCA_orbits',
             'attribute_auxiliary':'connected_induced_typed_graphlets_k3_k4_k5_training_vocabulary_plus_overflow',
+            'typed_degree_histogram_auxiliary':bool(
+                (options.get('attribute_summary',{}) or {}).get('typed_degree',{}).get('enabled',False)
+            ),
             'gradient_routing':'separate_topology_and_attribute_PPGN_encoders',
             'node_categories':'masked_categorical_denoising_head_no_flow_matching',
             'edge_categories':'masked_categorical_denoising_head_real_edge_types_only_no_no-edge_class',
@@ -2123,9 +2474,18 @@ def generate(
         files['base_graphs']['role'] = 'final_attributed_graphs'
         files['predicted_topology_summaries'].update({
             'topology_only_graphlets': True,
+            'graphlet_orders': list(options['topology_summary']['graphlet']['orders']),
             'orbit_summary': bool(state['topology_summary'].get('orbit_enabled', False)),
+            'degree_histogram_summary': bool(
+                state['topology_summary'].get('degree_enabled', False)
+            ),
         })
-        files['predicted_typed_graphlet_summaries']['typed_graphlets'] = True
+        files['predicted_typed_graphlet_summaries'].update({
+            'typed_graphlets': True,
+            'typed_degree_histogram': bool(
+                state['attribute_summary'].get('typed_degree_enabled', False)
+            ),
+        })
         files['predicted_structure_summaries']['role'] = 'combined_hierarchical_predictions'
         ap = staging / 'attribute_prediction_diagnostics.json'
         _write_json(ap, {'per_graph': attr_conf, 'aggregate': aggregate})
@@ -2155,7 +2515,20 @@ def generate(
                     'topology_only_connected_induced_graphlets_k3_k4_k5',
                     'ORCA_orbit_histogram_and_log_total',
                 ],
-                'attribute_auxiliary_supervision': 'typed_connected_induced_graphlets_k3_k4_k5',
+                'attribute_auxiliary_supervision': [
+                    'typed_connected_induced_graphlets_'
+                    + '_'.join(
+                        f'k{k}'
+                        for k in options['attribute_summary']['typed_graphlet']['orders']
+                    ),
+                    *(
+                        ['typed_degree_histogram_training_vocabulary_plus_overflow']
+                        if (options.get('attribute_summary', {}) or {})
+                        .get('typed_degree', {})
+                        .get('enabled', False)
+                        else []
+                    ),
+                ],
                 'topology_attribute_encoder_sharing': False,
                 'node_attributes': ('two_pass_masked_categorical_denoising' if decode_cfg.get('two_pass', True)
                                     else 'one_shot_masked_categorical_denoising'),
@@ -2163,6 +2536,9 @@ def generate(
                 'edge_head_includes_no_edge': False, 'categorical_flow_matching': False,
                 'topology_graphlet_supervision': True,
                 'typed_graphlet_supervision': True,
+                'typed_degree_histogram_supervision': bool(
+                    (options.get('attribute_summary',{}) or {}).get('typed_degree',{}).get('enabled',False)
+                ),
                 'node_decode_mode': decode_cfg.get('node_mode', 'argmax'),
                 'edge_decode_mode': decode_cfg.get('edge_mode', 'argmax'),
                 'node_temperature': float(decode_cfg.get('node_temperature', 1.0)),

@@ -57,6 +57,7 @@ from .attribute_decoding import (
     validate_decode_config,
 )
 from .categorical.noise import MarginalNoise, cosine_alpha_bar, draw_categories
+from .typed_degree_summary import TypedDegreeHistogramBasis
 from .vanilla_gsdm import (
     _EMA,
     _fit_laplacian_log_gap_stats,
@@ -306,6 +307,10 @@ class HybridAttributedSpectrumPPGNScore(hierarchical.AttributedSpectrumPPGNScore
             "node_logits": self.node_category_head(diag),
             "edge_logits": self.edge_category_head(sym_pair),
         }
+        if self.typed_degree_histogram_logits is not None:
+            outputs["typed_degree_histogram_logits"] = (
+                self.typed_degree_histogram_logits(shared)
+            )
         for name, value in outputs.items():
             if not torch.isfinite(value).all():
                 raise FloatingPointError(f"Non-finite {name} from hybrid attribute PPGN")
@@ -452,8 +457,10 @@ def _loss_batch(
         topology_ch,
         topology_oh,
         topology_ot,
+        topology_dh,
         typed_gh,
         typed_gm,
+        typed_dh,
     ) = batch
     b = x0.size(0)
     state0 = _operator_eigenvalues_to_spectral_state(
@@ -548,13 +555,15 @@ def _loss_batch(
         topology_ch,
         topology_oh,
         topology_ot,
+        topology_dh,
         topology_summary_cfg,
     )
-    typed_loss, typed_metrics = hierarchical._typed_graphlet_loss(
+    attribute_structure_loss, typed_metrics = hierarchical._attribute_structure_loss(
         model_lam,
         attribute_out,
         typed_gh,
         typed_gm,
+        typed_dh,
         attribute_summary_cfg,
     )
     metrics.update(typed_metrics)
@@ -570,7 +579,7 @@ def _loss_batch(
         loss_x
         + loss_spectrum
         + float(topology_summary_cfg.get("loss_weight", 0.10)) * topology_loss
-        + float(attribute_summary_cfg.get("loss_weight", 0.10)) * typed_loss
+        + float(attribute_summary_cfg.get("loss_weight", 0.10)) * attribute_structure_loss
         + float(attr_cfg.get("node_loss_weight", 1.0)) * node_ce
         + float(attr_cfg.get("edge_loss_weight", 1.0)) * edge_ce
     )
@@ -578,7 +587,7 @@ def _loss_batch(
         "loss_x": float(loss_x.detach()),
         "loss_spectrum": float(loss_spectrum.detach()),
         "topology_structure_loss": float(topology_loss.detach()),
-        "attribute_typed_graphlet_loss": float(typed_loss.detach()),
+        "attribute_structure_loss": float(attribute_structure_loss.detach()),
         "node_ce": float(node_ce.detach()),
         "edge_ce": float(edge_ce.detach()),
         "attribute_time_mean": float(attribute_t.float().mean().detach()),
@@ -621,6 +630,14 @@ def _build_models(
         topology_orbit_width=(
             int(topology_meta["orbit_width"])
             if topology_meta.get("orbit_enabled") else 0
+        ),
+        topology_degree_bins=(
+            int(topology_meta["degree_bins"])
+            if topology_meta.get("degree_enabled") else 0
+        ),
+        typed_degree_bins=(
+            int(attribute_meta["typed_degree_bins"])
+            if attribute_meta.get("typed_degree_enabled") else 0
         ),
     ).to(device)
     return model_x, model_lam
@@ -717,7 +734,7 @@ def train(
     if cache_enabled and cache_path.is_file():
         try:
             cached = hierarchical._torch_load_unrestricted(cache_path)
-            if cached.get("format") == "gdsm_hierarchical_attr_structure_cache_v3":
+            if cached.get("format") == "gdsm_hierarchical_attr_structure_cache_v5":
                 train_targets = tuple(cached["train_targets"])
                 val_targets = tuple(cached["val_targets"])
                 topology_basis = cached["topology_basis"]
@@ -759,6 +776,9 @@ def train(
             vocab,
             topology_basis=topology_basis,
             typed_basis=typed_basis,
+            typed_degree_basis=TypedDegreeHistogramBasis.from_dict(
+                dict(attribute_meta["typed_degree_basis"])
+            ),
             seed=request.run.train_seed + 1,
         )
         if cache_enabled:
@@ -766,7 +786,7 @@ def train(
             temp = cache_path.with_suffix(cache_path.suffix + ".tmp")
             torch.save(
                 {
-                    "format": "gdsm_hierarchical_attr_structure_cache_v3",
+                    "format": "gdsm_hierarchical_attr_structure_cache_v5",
                     "train_targets": tuple(t.cpu() for t in train_targets),
                     "val_targets": tuple(t.cpu() for t in val_targets),
                     "topology_basis": topology_basis,
@@ -785,8 +805,12 @@ def train(
             )
     if val_topology_meta["graphlet_slices"] != topology_meta["graphlet_slices"]:
         raise AssertionError("Topology graphlet basis mismatch")
+    if val_topology_meta.get("degree_bins", 0) != topology_meta.get("degree_bins", 0):
+        raise AssertionError("Topology degree-histogram basis mismatch")
     if val_attribute_meta["graphlet_slices"] != attribute_meta["graphlet_slices"]:
         raise AssertionError("Typed graphlet basis mismatch")
+    if val_attribute_meta.get("typed_degree_basis") != attribute_meta.get("typed_degree_basis"):
+        raise AssertionError("Typed-degree histogram basis mismatch")
     print(
         f"[hybrid-preprocess] all preprocessing complete in {time.monotonic()-prep_started:.1f}s; "
         "starting optimization",
@@ -988,6 +1012,11 @@ def train(
                     for k in options["attribute_summary"]["typed_graphlet"]["orders"]
                 )
                 + "_training_vocabulary_plus_overflow"
+            ),
+            "typed_degree_histogram_auxiliary": bool(
+                (options.get("attribute_summary", {}) or {})
+                .get("typed_degree", {})
+                .get("enabled", False)
             ),
             "gradient_routing": "separate_topology_and_attribute_PPGN_encoders",
             "node_categories": "iterative_marginal_categorical_diffusion",
@@ -1720,9 +1749,20 @@ def generate(
         files["topology_graphs"]["role"] = "fixed_binary_topologies_before_attributes"
         files["predicted_topology_summaries"].update({
             "topology_only_graphlets": True,
+            "graphlet_orders": list(
+                options["topology_summary"]["graphlet"]["orders"]
+            ),
             "orbit_summary": bool(state["topology_summary"].get("orbit_enabled", False)),
+            "degree_histogram_summary": bool(
+                state["topology_summary"].get("degree_enabled", False)
+            ),
         })
-        files["predicted_typed_graphlet_summaries"]["typed_graphlets"] = True
+        files["predicted_typed_graphlet_summaries"].update({
+            "typed_graphlets": True,
+            "typed_degree_histogram": bool(
+                state["attribute_summary"].get("typed_degree_enabled", False)
+            ),
+        })
         files["predicted_structure_summaries"]["role"] = (
             "combined_hierarchical_predictions"
         )
@@ -1797,18 +1837,35 @@ def generate(
                     "attribute_sampling_steps": int(diffusion_cfg["sample_steps"]),
                     "attribute_schedule": "cosine_exact_terminal",
                     "categorical_posterior": "clean_endpoint_mixture_exact_skip_posterior",
-                    "attribute_auxiliary_supervision": (
+                    "attribute_auxiliary_supervision": [
                         "typed_connected_induced_graphlets_"
                         + "_".join(
                             f"k{k}"
                             for k in options["attribute_summary"]["typed_graphlet"]["orders"]
-                        )
-                    ),
+                        ),
+                        *(
+                            ["typed_degree_histogram_training_vocabulary_plus_overflow"]
+                            if (options.get("attribute_summary", {}) or {})
+                            .get("typed_degree", {})
+                            .get("enabled", False)
+                            else []
+                        ),
+                    ],
                     "topology_attribute_encoder_sharing": False,
                     "edge_attributes": "real_bond_type_diffusion_on_generated_edges_only",
                     "edge_head_includes_no_edge": False,
                     "topology_graphlet_supervision": True,
+                    "topology_degree_histogram_supervision": bool(
+                        (options.get("topology_summary", {}) or {})
+                        .get("degree", {})
+                        .get("enabled", False)
+                    ),
                     "typed_graphlet_supervision": True,
+                    "typed_degree_histogram_supervision": bool(
+                        (options.get("attribute_summary", {}) or {})
+                        .get("typed_degree", {})
+                        .get("enabled", False)
+                    ),
                     "endpoint_constraint": "final_reverse_transition",
                     "node_decode_mode": attr_cfg.get("decode", {}).get(
                         "node_mode", "sample"

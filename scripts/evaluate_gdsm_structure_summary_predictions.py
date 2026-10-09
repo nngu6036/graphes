@@ -37,7 +37,11 @@ def _prediction_metadata(root: Path) -> dict:
     if not manifest_path.is_file():
         return {}
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    return dict(manifest.get("predicted_structure_summaries", {}) or {})
+    return dict(
+        manifest.get("predicted_topology_summaries", {})
+        or manifest.get("predicted_structure_summaries", {})
+        or {}
+    )
 
 
 def _degree_histogram(graph: nx.Graph, bins: int) -> np.ndarray:
@@ -58,6 +62,18 @@ def main() -> int:
     parser.add_argument("--generated-dir", type=Path, required=True)
     parser.add_argument("--graphs", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument(
+        "--graphlet-num-samples",
+        type=int,
+        default=None,
+        help="Sample this many induced subsets per graph/order; default is exact.",
+    )
+    parser.add_argument(
+        "--max-graphs",
+        type=int,
+        default=None,
+        help="Optional deterministic prefix for expensive summary diagnostics.",
+    )
     args = parser.parse_args()
 
     root = args.generated_dir
@@ -71,6 +87,11 @@ def main() -> int:
     predictions = _load(prediction_path)
     if len(graphs) != len(predictions):
         raise RuntimeError(f"graph/prediction count mismatch: {len(graphs)} vs {len(predictions)}")
+    if args.max_graphs is not None:
+        if args.max_graphs < 1:
+            raise ValueError("--max-graphs must be positive")
+        graphs = graphs[: args.max_graphs]
+        predictions = predictions[: args.max_graphs]
     metadata = _prediction_metadata(root)
     graphlet_orders = [int(k) for k in metadata.get("graphlet_orders", [3, 4, 5])]
     if not graphlet_orders:
@@ -88,8 +109,8 @@ def main() -> int:
         "graphlet_k_max": max(graphlet_orders),
         "graphlet_connected_only": True,
         "graphlet_topology_filter": "all",
-        "graphlet_backend": "exact",
-        "graphlet_num_samples": None,
+        "graphlet_backend": "sampled" if args.graphlet_num_samples else "exact",
+        "graphlet_num_samples": args.graphlet_num_samples,
     })
     basis = TopologyGraphletBasis.from_config(cfg)
 
