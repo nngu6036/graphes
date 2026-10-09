@@ -98,10 +98,6 @@ python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 # Recorded result — Community-small, seed 41
 # ------------------------------------------------------------------------------
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-gdsm_simple_base_to_test            0.070398          0.772747      0.379034        0.341562        0.552365
-gdsm_final_to_test                  0.012453          0.074927      0.010830        0.028859        0.101208
 
 
 # ==============================================================================
@@ -162,11 +158,10 @@ python scripts/evaluate_graph_generation_report.py \
 # Recorded result — Community-small, seed 42
 # Retained verbatim from the original source file.
 # ------------------------------------------------------------------------------
+Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-gdsm_simple_base_to_test            0.073732          0.785492      0.425264        0.356021        0.567814
-gdsm_final_to_test                  0.009559          0.080085      0.020576        0.031795        0.117862
-
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.009595
+gdsm_simple_to_test                 0.003172          0.007285      0.000372        0.005428        0.009454
 
 # ==============================================================================
 # Community-small — SEED 43
@@ -228,10 +223,8 @@ python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-gdsm_simple_base_to_test            0.073686          0.781639      0.428165        0.345489        0.559752
-gdsm_final_to_test                  0.015680          0.059785      0.014582        0.029287        0.073168
-
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.009595
+gdsm_simple_to_test                 0.005467          0.011144      0.000287        0.007214        0.009069
 
 # ==============================================================================
 # Community-small — SEED 44
@@ -292,10 +285,8 @@ python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-gdsm_simple_base_to_test            0.073171          0.778540      0.418779        0.351482        0.551315
-gdsm_final_to_test                  0.009113          0.051709      0.035813        0.036068        0.094187
-
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.009595
+gdsm_simple_to_test                 0.004253          0.010760      0.000256        0.005086        0.006481
 # ==============================================================================
 # Community-small — SEED 45
 # ==============================================================================
@@ -353,10 +344,6 @@ python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 # Recorded result — Community-small, seed 45
 # ------------------------------------------------------------------------------
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-gdsm_simple_base_to_test            0.075594          0.792313      0.423220        0.357634        0.552874
-gdsm_final_to_test                  0.005534          0.057164      0.022514        0.032710        0.102349
 
 # ##############################################################################
 # DATASET 2/4: EGO-SMALL
@@ -419,9 +406,6 @@ python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 # Recorded result — Ego-small, seed 41
 # ------------------------------------------------------------------------------
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-gdsm_simple_base_to_test            0.145914          0.146903      0.048727        0.228012        0.061965
-gdsm_final_to_test                  0.022807          0.015729      0.012729        0.020684        0.002151
 
 # ==============================================================================
 # Ego-small — SEED 42
@@ -481,11 +465,10 @@ python scripts/evaluate_graph_generation_report.py \
 # Recorded result — Ego-small, seed 42
 # Retained verbatim from the original source file.
 # ------------------------------------------------------------------------------
+Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-gdsm_simple_base_to_test            0.148215          0.142648      0.042097        0.247210        0.089631
-gdsm_final_to_test                  0.027087          0.028338      0.007503        0.030461        0.008749
-
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.000658
+gdsm_simple_to_test                 0.021282          0.027590      0.006709        0.017033        0.008730
 # ==============================================================================
 # Ego-small — SEED 43
 # ==============================================================================
@@ -545,9 +528,8 @@ python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 Graph-distribution MMD against held-out test graphs (lower is better)
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-gdsm_simple_base_to_test            0.136475          0.141105      0.046870        0.218089        0.051638
-gdsm_final_to_test                  0.027205          0.017537      0.009457        0.026647        0.004976
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.000658
+gdsm_simple_to_test                 0.024007          0.045612      0.008640        0.024743        0.004829             0.027205          0.017537      0.009457        0.026647        0.004976
 
 # ==============================================================================
 # Ego-small — SEED 44
@@ -607,9 +589,8 @@ python scripts/evaluate_graph_generation_report.py \
 # Recorded result — Ego-small, seed 44
 # ------------------------------------------------------------------------------
 Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-gdsm_simple_base_to_test            0.139813          0.139293      0.040980        0.241120        0.073669
-gdsm_final_to_test                  0.022689          0.024077      0.006923        0.025337        0.003497
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.000658
+gdsm_simple_to_test                 0.014308          0.040446      0.004097        0.019597        0.007362
 # ==============================================================================
 # Ego-small — SEED 45
 # ==============================================================================
@@ -667,10 +648,6 @@ python scripts/evaluate_graph_generation_report.py \
 # ------------------------------------------------------------------------------
 # Recorded result — Ego-small, seed 45
 # ------------------------------------------------------------------------------
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-gdsm_simple_base_to_test            0.138821          0.145835      0.042400        0.247195        0.068350
-gdsm_final_to_test                  0.025923          0.026814      0.016071        0.042677        0.009534
 
 # ##############################################################################
 # DATASET 3/4: QM9

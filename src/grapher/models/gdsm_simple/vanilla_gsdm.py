@@ -24,11 +24,15 @@ trivial zero mode remains fixed.
 The ``vanilla_laplacian_loggap`` ablation diffuses training-standardized
 logarithms of successive nontrivial Laplacian eigenvalue gaps without any
 structural auxiliary head.  The ``vanilla_laplacian_loggap_graphlet`` Stage-2b
-variant adds a k=3,4,5 connected graphlet-summary head that shares the spectral
-denoiser encoder and is trained jointly as an auxiliary objective.  The same
+variant adds a configurable k=3,...,K connected graphlet-summary head that
+shares the spectral denoiser encoder and is trained jointly as an auxiliary
+objective.  The same
 shared encoder can additionally predict a node clustering-coefficient histogram
-and a 15-role ORCA orbit-count histogram (with log-total magnitude).  That joint
-variant can optionally enrich the current noisy graph state with random-walk
+and a 15-role ORCA orbit-count histogram (with log-total magnitude).  It can
+also predict a permutation-invariant normalized degree histogram as a soft
+structural target; this head does not supply a degree-sequence spectral anchor
+and does not constrain the realized degree sequence at generation time.  That
+joint variant can optionally enrich the current noisy graph state with random-walk
 arrival node features and truncated shortest-path pair features, and can use
 either the released-style DenseGCN backbone or a dense PPGN pair-tensor
 backbone.  Finally,
@@ -79,8 +83,11 @@ from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 
 CHECKPOINT_FORMAT_V1 = "gdsm_simple_vanilla_gsdm_checkpoint_v1"
 CHECKPOINT_FORMAT_V2 = "gdsm_simple_vanilla_gsdm_checkpoint_v2"
-CHECKPOINT_FORMAT = "gdsm_simple_vanilla_gsdm_checkpoint_v3"
-SUPPORTED_CHECKPOINT_FORMATS = {CHECKPOINT_FORMAT_V1, CHECKPOINT_FORMAT_V2, CHECKPOINT_FORMAT}
+CHECKPOINT_FORMAT_V3 = "gdsm_simple_vanilla_gsdm_checkpoint_v3"
+CHECKPOINT_FORMAT = "gdsm_simple_vanilla_gsdm_checkpoint_v4"
+SUPPORTED_CHECKPOINT_FORMATS = {
+    CHECKPOINT_FORMAT_V1, CHECKPOINT_FORMAT_V2, CHECKPOINT_FORMAT_V3, CHECKPOINT_FORMAT
+}
 TRAINING_FORMAT = "grapher_gdsm_simple_vanilla_gsdm_training_v1"
 GENERATION_FORMAT = "grapher_gdsm_simple_vanilla_gsdm_generation_v1"
 
@@ -318,7 +325,7 @@ def _resolved_structure_summary_config(options: Mapping[str, Any]) -> dict[str, 
 
     ``graphlet_summary`` is kept as a backwards-compatible graphlet-only alias.
     New experiments should use ``structure_summary`` so graphlet, clustering,
-    and orbit targets can share the same spectrum/PPGN encoder.
+    orbit, and degree-histogram targets can share the same spectrum/PPGN encoder.
     """
     raw_structure = dict(options.get("structure_summary", {}) or {})
     raw_graphlet = dict(options.get("graphlet_summary", {}) or {})
@@ -330,6 +337,7 @@ def _resolved_structure_summary_config(options: Mapping[str, Any]) -> dict[str, 
         graphlet = dict(raw_structure.get("graphlet", {}) or {})
         clustering = dict(raw_structure.get("clustering", {}) or {})
         orbit = dict(raw_structure.get("orbit", {}) or {})
+        degree = dict(raw_structure.get("degree", {}) or {})
         return {
             "enabled": True,
             "loss_weight": float(raw_structure.get("loss_weight", 0.10)),
@@ -350,6 +358,12 @@ def _resolved_structure_summary_config(options: Mapping[str, Any]) -> dict[str, 
                 "width": int(orbit.get("width", 15)),
                 "histogram_weight": float(orbit.get("histogram_weight", 0.25)),
                 "log_total_weight": float(orbit.get("log_total_weight", 0.10)),
+            },
+            "degree": {
+                "enabled": bool(degree.get("enabled", False)),
+                "max_degree": int(degree.get("max_degree", 0)),
+                "histogram_weight": float(degree.get("histogram_weight", 0.25)),
+                "cdf_weight": float(degree.get("cdf_weight", 1.0)),
             },
         }
     if bool(raw_graphlet.get("enabled", False)):
@@ -374,6 +388,12 @@ def _resolved_structure_summary_config(options: Mapping[str, Any]) -> dict[str, 
                 "histogram_weight": 0.0,
                 "log_total_weight": 0.0,
             },
+            "degree": {
+                "enabled": False,
+                "max_degree": 0,
+                "histogram_weight": 0.0,
+                "cdf_weight": 0.0,
+            },
         }
     return {
         "enabled": False,
@@ -381,6 +401,7 @@ def _resolved_structure_summary_config(options: Mapping[str, Any]) -> dict[str, 
         "graphlet": {"enabled": False, "orders": [3, 4, 5], "histogram_weight": 0.0, "mass_weight": 0.0},
         "clustering": {"enabled": False, "bins": 100, "histogram_weight": 0.0, "cdf_weight": 0.0},
         "orbit": {"enabled": False, "width": 15, "histogram_weight": 0.0, "log_total_weight": 0.0},
+        "degree": {"enabled": False, "max_degree": 0, "histogram_weight": 0.0, "cdf_weight": 0.0},
     }
 
 
@@ -450,10 +471,23 @@ def validate_options(options: Mapping[str, Any]) -> None:
             raise ValueError(
                 "structure_summary.orbit.width must be 15 (standard ORCA node orbits 0..14)"
             )
+        degree_cfg = dict(summary_cfg.get("degree", {}) or {})
+        if bool(degree_cfg.get("enabled", False)):
+            max_degree = int(degree_cfg.get("max_degree", 0))
+            if max_degree < 1:
+                raise ValueError(
+                    "structure_summary.degree.max_degree must be >= 1 when degree supervision is enabled"
+                )
+            configured_max_nodes = int((options.get("model", {}) or {}).get("max_nodes", 0) or 0)
+            if configured_max_nodes > 0 and max_degree > configured_max_nodes - 1:
+                raise ValueError(
+                    "structure_summary.degree.max_degree cannot exceed model.max_nodes - 1"
+                )
         for section, keys in (
             (graphlet_cfg, ("histogram_weight", "mass_weight")),
             (clustering_cfg, ("histogram_weight", "cdf_weight")),
             (orbit_cfg, ("histogram_weight", "log_total_weight")),
+            (degree_cfg, ("histogram_weight", "cdf_weight")),
         ):
             for key in keys:
                 if float(section.get(key, 0.0)) < 0.0:
@@ -920,6 +954,7 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         structural_features: Mapping[str, Any] | None = None,
         clustering_bins: int = 0,
         orbit_width: int = 0,
+        degree_bins: int = 0,
         ppgn_hidden_dim: int = 64,
         ppgn_depth: int = 4,
         ppgn_residual_scale: float = 0.1,
@@ -977,6 +1012,11 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
             MLP(shared_dim, 2 * shared_dim, 1, 2)
             if self.orbit_width > 0 else None
         )
+        self.degree_bins = int(degree_bins)
+        self.degree_histogram_logits = (
+            MLP(shared_dim, 2 * shared_dim, self.degree_bins, 2)
+            if self.degree_bins > 0 else None
+        )
 
     def _encode(
         self,
@@ -1033,6 +1073,8 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         if self.orbit_histogram_logits is not None and self.orbit_log_total_raw is not None:
             outputs["orbit_histogram_logits"] = self.orbit_histogram_logits(shared)
             outputs["orbit_log_total_raw"] = self.orbit_log_total_raw(shared)
+        if self.degree_histogram_logits is not None:
+            outputs["degree_histogram_logits"] = self.degree_histogram_logits(shared)
         for name, value in outputs.items():
             if not torch.isfinite(value).all():
                 raise FloatingPointError(f"Non-finite {name} from PPGN spectrum/graphlet score")
@@ -1078,6 +1120,13 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
             result["orbit_histogram"] = orbit_hist
             result["orbit_log_total"] = orbit_log_total
             result["orbit_mean_counts"] = orbit_hist * torch.expm1(orbit_log_total)
+        if "degree_histogram_logits" in outputs:
+            degree_hist = torch.softmax(outputs["degree_histogram_logits"], dim=-1)
+            degree_axis = torch.arange(
+                degree_hist.size(-1), device=degree_hist.device, dtype=degree_hist.dtype
+            )
+            result["degree_histogram"] = degree_hist
+            result["degree_mean"] = (degree_hist * degree_axis.unsqueeze(0)).sum(dim=-1, keepdim=True)
         for name, value in result.items():
             if not torch.isfinite(value).all():
                 raise FloatingPointError(f"Non-finite {name} from PPGN structural summary")
@@ -1300,6 +1349,7 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
         structural_features: Mapping[str, Any] | None = None,
         clustering_bins: int = 0,
         orbit_width: int = 0,
+        degree_bins: int = 0,
     ) -> None:
         super().__init__(
             max_feat_num=max_feat_num,
@@ -1356,6 +1406,11 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
             MLP(shared_dim, 2 * shared_dim, 1, 2)
             if self.orbit_width > 0 else None
         )
+        self.degree_bins = int(degree_bins)
+        self.degree_histogram_logits = (
+            MLP(shared_dim, 2 * shared_dim, self.degree_bins, 2)
+            if self.degree_bins > 0 else None
+        )
 
     def _encode(
         self,
@@ -1401,6 +1456,8 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
         if self.orbit_histogram_logits is not None and self.orbit_log_total_raw is not None:
             outputs["orbit_histogram_logits"] = self.orbit_histogram_logits(shared)
             outputs["orbit_log_total_raw"] = self.orbit_log_total_raw(shared)
+        if self.degree_histogram_logits is not None:
+            outputs["degree_histogram_logits"] = self.degree_histogram_logits(shared)
         return outputs
 
     def forward(
@@ -1441,6 +1498,13 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
             result["orbit_histogram"] = orbit_hist
             result["orbit_log_total"] = orbit_log_total
             result["orbit_mean_counts"] = orbit_hist * torch.expm1(orbit_log_total)
+        if "degree_histogram_logits" in outputs:
+            degree_hist = torch.softmax(outputs["degree_histogram_logits"], dim=-1)
+            degree_axis = torch.arange(
+                degree_hist.size(-1), device=degree_hist.device, dtype=degree_hist.dtype
+            )
+            result["degree_histogram"] = degree_hist
+            result["degree_mean"] = (degree_hist * degree_axis.unsqueeze(0)).sum(dim=-1, keepdim=True)
         return result
 
 
@@ -1780,6 +1844,7 @@ def _joint_structure_targets(
     graphlet_cfg = dict(structure_cfg.get("graphlet", {}) or {})
     clustering_cfg = dict(structure_cfg.get("clustering", {}) or {})
     orbit_cfg = dict(structure_cfg.get("orbit", {}) or {})
+    degree_cfg = dict(structure_cfg.get("degree", {}) or {})
     graphlet_orders = [int(k) for k in graphlet_cfg.get("orders", [3, 4, 5])]
     cfg = SummaryConfig.from_dict(
         {
@@ -1802,8 +1867,11 @@ def _joint_structure_targets(
     clustering_targets: list[np.ndarray] = []
     orbit_histograms: list[np.ndarray] = []
     orbit_log_totals: list[np.ndarray] = []
+    degree_histograms: list[np.ndarray] = []
     clustering_bins = int(clustering_cfg.get("bins", 100))
     orbit_width = int(orbit_cfg.get("width", 15))
+    degree_max_degree = int(degree_cfg.get("max_degree", 0))
+    degree_bins = degree_max_degree + 1
 
     for graph in graphs:
         g = nx.convert_node_labels_to_integers(graph, ordering="sorted")
@@ -1839,6 +1907,22 @@ def _joint_structure_targets(
             orbit_histograms.append(np.zeros(orbit_width, dtype=np.float32))
             orbit_log_totals.append(np.zeros(1, dtype=np.float32))
 
+        if bool(degree_cfg.get("enabled", False)):
+            degrees = np.asarray([int(d) for _, d in g.degree()], dtype=np.int64)
+            if degrees.size == 0:
+                raise ValueError("Degree-histogram supervision requires non-empty graphs")
+            observed_max = int(degrees.max(initial=0))
+            if observed_max > degree_max_degree:
+                raise ValueError(
+                    f"Observed degree {observed_max} exceeds configured max_degree "
+                    f"{degree_max_degree}. Increase structure_summary.degree.max_degree."
+                )
+            hist = np.bincount(degrees, minlength=degree_bins).astype(np.float64)
+            hist /= float(degrees.size)
+            degree_histograms.append(hist.astype(np.float32))
+        else:
+            degree_histograms.append(np.zeros(degree_bins, dtype=np.float32))
+
     meta = {
         "graphlet_slices": [list(pair) for pair in basis.slices],
         "graphlet_basis": basis.to_dict(),
@@ -1851,14 +1935,22 @@ def _joint_structure_targets(
         "orbit_enabled": bool(orbit_cfg.get("enabled", False)),
         "orbit_width": orbit_width,
         "orbit_representation": "normalized_histogram_over_mean_per_node_ORCA_0_14_plus_log1p_total",
+        "degree_enabled": bool(degree_cfg.get("enabled", False)),
+        "degree_max_degree": degree_max_degree,
+        "degree_bins": degree_bins,
+        "degree_representation": "normalized_node_degree_histogram_bins_0_to_max_degree",
     }
-    tensors = (
+    tensors: tuple[torch.Tensor, ...] = (
         torch.tensor(np.stack(graphlet_targets), dtype=torch.float32),
         torch.tensor(np.stack(graphlet_masses), dtype=torch.float32),
         torch.tensor(np.stack(clustering_targets), dtype=torch.float32),
         torch.tensor(np.stack(orbit_histograms), dtype=torch.float32),
         torch.tensor(np.stack(orbit_log_totals), dtype=torch.float32),
     )
+    if bool(degree_cfg.get("enabled", False)):
+        tensors = tensors + (
+            torch.tensor(np.stack(degree_histograms), dtype=torch.float32),
+        )
     return tensors, meta
 
 
@@ -1871,6 +1963,7 @@ def _joint_graphlet_targets(
         "graphlet": {"enabled": True, "orders": [3, 4, 5]},
         "clustering": {"enabled": False, "bins": 100},
         "orbit": {"enabled": False, "width": 15},
+        "degree": {"enabled": False, "max_degree": 0},
     }
     tensors, meta = _joint_structure_targets(graphs, cfg)
     return tensors[0], tensors[1], meta
@@ -1884,6 +1977,7 @@ def _structure_auxiliary_loss(
     clustering_target: torch.Tensor | None,
     orbit_histogram_target: torch.Tensor | None,
     orbit_log_total_target: torch.Tensor | None,
+    degree_histogram_target: torch.Tensor | None,
     *,
     structure_cfg: Mapping[str, Any],
 ) -> tuple[torch.Tensor, dict[str, float]]:
@@ -1892,6 +1986,7 @@ def _structure_auxiliary_loss(
     graphlet_cfg = dict(structure_cfg.get("graphlet", {}) or {})
     clustering_cfg = dict(structure_cfg.get("clustering", {}) or {})
     orbit_cfg = dict(structure_cfg.get("orbit", {}) or {})
+    degree_cfg = dict(structure_cfg.get("degree", {}) or {})
 
     logits = outputs["graphlet_logits"]
     losses = []
@@ -1981,6 +2076,36 @@ def _structure_auxiliary_loss(
                 ),
             }
         )
+
+    if bool(degree_cfg.get("enabled", False)):
+        if degree_histogram_target is None or "degree_histogram_logits" not in outputs:
+            raise RuntimeError("Degree summary enabled but target/head is unavailable")
+        degree_logp = torch.log_softmax(outputs["degree_histogram_logits"], dim=-1)
+        degree_hist_loss = -(degree_histogram_target * degree_logp).sum(dim=-1).mean()
+        degree_pred = torch.softmax(outputs["degree_histogram_logits"], dim=-1)
+        degree_hist_mae = (degree_pred - degree_histogram_target).abs().mean()
+        if degree_pred.size(-1) > 1:
+            degree_cdf_mae = torch.abs(
+                torch.cumsum(degree_pred - degree_histogram_target, dim=-1)[..., :-1]
+            ).mean()
+        else:
+            degree_cdf_mae = degree_hist_loss.detach() * 0.0
+        degree_axis = torch.arange(
+            degree_pred.size(-1), device=degree_pred.device, dtype=degree_pred.dtype
+        )
+        degree_mean_pred = (degree_pred * degree_axis.unsqueeze(0)).sum(dim=-1)
+        degree_mean_target = (degree_histogram_target * degree_axis.unsqueeze(0)).sum(dim=-1)
+        degree_mean_mae = (degree_mean_pred - degree_mean_target).abs().mean()
+        degree_loss = degree_hist_loss + float(degree_cfg.get("cdf_weight", 1.0)) * degree_cdf_mae
+        total = total + float(degree_cfg.get("histogram_weight", 0.25)) * degree_loss
+        metrics.update(
+            {
+                "degree_histogram_loss": float(degree_hist_loss.detach().item()),
+                "degree_histogram_mae": float(degree_hist_mae.detach().item()),
+                "degree_cdf_mae": float(degree_cdf_mae.detach().item()),
+                "degree_mean_mae": float(degree_mean_mae.detach().item()),
+            }
+        )
     return total, metrics
 
 
@@ -2002,6 +2127,7 @@ def _graphlet_auxiliary_loss(
         None,
         None,
         None,
+        None,
         structure_cfg={
             "graphlet": {
                 "enabled": True,
@@ -2010,6 +2136,7 @@ def _graphlet_auxiliary_loss(
             },
             "clustering": {"enabled": False},
             "orbit": {"enabled": False},
+            "degree": {"enabled": False},
         },
     )
 
@@ -2154,15 +2281,25 @@ def _loss_batch_loggap_graphlet(
         # Backwards compatibility for graphlet-only checkpoints/tests.
         x0, _adj0, flags, _sizes, u, lam0, graphlet_target, graphlet_mass = batch
         clustering_target = orbit_histogram_target = orbit_log_total_target = None
+        degree_histogram_target = None
     elif len(batch) == 11:
+        # Backwards compatibility for graphlet+clustering+orbit checkpoints.
         (
             x0, _adj0, flags, _sizes, u, lam0,
             graphlet_target, graphlet_mass, clustering_target,
             orbit_histogram_target, orbit_log_total_target,
         ) = batch
+        degree_histogram_target = None
+    elif len(batch) == 12:
+        (
+            x0, _adj0, flags, _sizes, u, lam0,
+            graphlet_target, graphlet_mass, clustering_target,
+            orbit_histogram_target, orbit_log_total_target, degree_histogram_target,
+        ) = batch
     else:
         raise ValueError(
-            "joint log-gap structural training expects 8 legacy or 11 structural tensors per batch"
+            "joint log-gap structural training expects 8 legacy, 11 pre-degree, "
+            "or 12 structural tensors per batch"
         )
     b = x0.size(0)
     state0 = _operator_eigenvalues_to_spectral_state(
@@ -2211,6 +2348,7 @@ def _loss_batch_loggap_graphlet(
         clustering_target,
         orbit_histogram_target,
         orbit_log_total_target,
+        degree_histogram_target,
         structure_cfg=graphlet_cfg,
     )
     return loss_x, loss_state, loss_graphlet, metrics
@@ -2308,6 +2446,10 @@ def _build_models(
             "orbit_width": (
                 int(summary_meta.get("orbit_width", 0))
                 if bool(summary_meta.get("orbit_enabled", False)) else 0
+            ),
+            "degree_bins": (
+                int(summary_meta.get("degree_bins", 0))
+                if bool(summary_meta.get("degree_enabled", False)) else 0
             ),
         }
         if spectrum_backbone == "ppgn":
@@ -2623,7 +2765,10 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
         )
         if val_meta["graphlet_slices"] != graphlet_meta["graphlet_slices"]:
             raise AssertionError("Train/validation graphlet bases differ")
-        for key in ("clustering_bins", "clustering_enabled", "orbit_width", "orbit_enabled"):
+        for key in (
+            "clustering_bins", "clustering_enabled", "orbit_width", "orbit_enabled",
+            "degree_enabled", "degree_max_degree", "degree_bins",
+        ):
             if val_meta.get(key) != graphlet_meta.get(key):
                 raise AssertionError(f"Train/validation structural-summary metadata differs for {key}")
         train_data = (*train_data, *train_targets)
@@ -3029,6 +3174,11 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                         "orbit": (
                             "ORCA_0_14_orbit_type_histogram_plus_log1p_total_count"
                             if bool(joint_graphlet_cfg.get("orbit", {}).get("enabled", False))
+                            else "disabled"
+                        ),
+                        "degree": (
+                            "normalized_node_degree_histogram_soft_auxiliary_only_no_anchor"
+                            if bool(joint_graphlet_cfg.get("degree", {}).get("enabled", False))
                             else "disabled"
                         ),
                     }
@@ -3811,8 +3961,12 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 {
                     "path": "predicted_structure_summaries.pkl",
                     "sha256": _sha256(joint_structure_prediction_path),
+                    "graphlet_orders": list(structure_summary_payload.get("orders", [3, 4, 5])),
                     "clustering_enabled": bool(structure_summary_payload.get("clustering_enabled", False)),
                     "orbit_enabled": bool(structure_summary_payload.get("orbit_enabled", False)),
+                    "degree_enabled": bool(structure_summary_payload.get("degree_enabled", False)),
+                    "degree_max_degree": int(structure_summary_payload.get("degree_max_degree", 0)),
+                    "degree_bins": int(structure_summary_payload.get("degree_bins", 0)),
                 }
                 if joint_structure_prediction_path is not None else None
             ),
@@ -3858,6 +4012,11 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "auxiliary_degree_prior": "DH-VAE" if degree_prior_enabled else "none",
                 "degree_sequences_sampled": len(degree_sequences),
                 "degree_sequences_used_for_graph_generation": False,
+                "degree_histogram_auxiliary": bool(
+                    structure_summary_payload.get("degree_enabled", False)
+                ),
+                "degree_histogram_used_as_spectral_anchor": False,
+                "degree_histogram_used_as_hard_constraint": False,
                 "posthoc_repair": False,
                 "rewiring": (
                     "soft_structural_summary_guided_degree_preserving_double_edge_swaps"
