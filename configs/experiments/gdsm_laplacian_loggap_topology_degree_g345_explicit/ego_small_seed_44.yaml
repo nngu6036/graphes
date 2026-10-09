@@ -1,0 +1,114 @@
+comparison:
+  model: gdsm_simple
+  dataset: ego_small
+  common_config: common_ego_small.yaml
+  status: laplacian_loggap_topology_degree_histogram_graphlets_3_5_orbit_seed_44
+  budget:
+    basis: graphes_controlled_comparison
+    unit: train_set_passes
+    target_train_passes: 10000
+    epochs: 10000
+  fairness_note: 'Unattributed specialization of the hierarchical/hybrid model: Laplacian log-gap topology diffusion with a soft normalized degree-histogram head, connected induced topology graphlets k=3,4,5, and ORCA-0..14 orbit supervision. The degree histogram is auxiliary only: no degree-sequence spectral anchor, degree projection, rewiring, or post-generation repair.'
+gdsm_simple:
+  variant: vanilla_laplacian_loggap_graphlet
+  train:
+    epochs: 10000
+    batch_size: 128
+    lr: 0.01
+    node_lr: 0.01
+    spectrum_lr: 0.001
+    weight_decay: 0.0001
+    grad_norm: 1.0
+    lr_schedule: true
+    lr_decay: 0.9999799901935271
+    ema: 0.999
+    validation_every: 1
+    log_every: 10
+  sde:
+    x:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    spectrum:
+      type: vp
+      beta_min: 0.1
+      beta_max: 1.0
+      num_scales: 1000
+    eps: 1.0e-05
+    eigen_mask: laplacian_nonzero_prefix
+    spectral_parameterization: laplacian_log_gap
+    log_gap_epsilon: 1.0e-06
+    log_gap_min_std: 0.001
+    log_gap_exp_clip: 20.0
+  sample:
+    predictor: euler
+    corrector: langevin
+    snr: 0.05
+    scale_eps: 0.7
+    n_steps: 1
+    noise_removal: true
+    probability_flow: false
+    eps: 0.0001
+    threshold: 0.5
+    use_ema: false
+  structural_features:
+    enabled: true
+    binarize_threshold: 0.5
+    random_walk:
+      enabled: true
+      steps: 4
+    shortest_path:
+      enabled: true
+      max_distance: 5
+  graphlet_summary:
+    enabled: false
+  graphlet_refinement:
+    enabled: false
+  structure_summary:
+    enabled: true
+    loss_weight: 0.1
+    graphlet:
+      enabled: true
+      orders:
+      - 3
+      - 4
+      - 5
+      histogram_weight: 1.0
+      mass_weight: 0.25
+    clustering:
+      enabled: false
+      bins: 100
+      histogram_weight: 0.25
+      cdf_weight: 1.0
+    orbit:
+      enabled: true
+      width: 15
+      histogram_weight: 0.25
+      log_total_weight: 0.1
+    degree:
+      enabled: true
+      max_degree: 17
+      histogram_weight: 0.25
+      cdf_weight: 1.0
+  generation_batch_size: 128
+  runtime:
+    device: auto
+  extensions:
+    degree_conditioning: false
+    hh_initialization: false
+    degree_preserving_rewiring: false
+    structural_summary: none
+  model:
+    max_nodes: 18
+    max_feat_num: 18
+    hidden_dim: 32
+    depth: 3
+    backbone: dense_gcn
+    node_backbone: dense_gcn
+    spectrum_backbone: ppgn
+    ppgn_hidden_dim: 64
+    ppgn_depth: 4
+    ppgn_residual_scale: 0.1
+    ppgn_norm_eps: 1.0e-05
+    ppgn_input_clip: 10.0
