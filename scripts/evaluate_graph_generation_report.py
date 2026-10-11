@@ -22,6 +22,7 @@ from grapher.rewiring_mlp.evaluation.metrics import (
     mmd_graphlet_statistics,
     mmd_orbit,
     mmd_orbit_graphrnn,
+    wl_novelty_rate,
 )
 from grapher.rewiring_mlp.evaluation.degree_sequences import evaluate_degree_sequence_sets
 from grapher.rewiring_mlp.molecular.graph_io import nx_to_rdkit_mol, require_rdkit
@@ -34,7 +35,9 @@ from grapher.properties.summary import (
 from grapher.utils.io import ensure_dir, load_pickle, load_yaml, save_json
 
 REPORT_METRICS = ("degree_mmd", "clustering_mmd", "orbit_mmd")
-GENERIC_REPORT_METRICS = (*REPORT_METRICS, "spectral_mmd", "graphlet_history_mmd")
+GENERIC_REPORT_METRICS = (
+    *REPORT_METRICS, "spectral_mmd", "graphlet_history_mmd", "novelty_rate",
+)
 
 
 def _load_graph_list(path: Path) -> list[nx.Graph]:
@@ -551,6 +554,7 @@ def _paper_mmd(
     clustering_bins: int = 100,
     include_generic_metrics: bool = True,
     graphlet_options: dict[str, Any] | None = None,
+    train: Sequence[nx.Graph] | None = None,
     progress: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, float]:
     """Evaluate generic graph statistics under a declared metric protocol.
@@ -569,6 +573,8 @@ def _paper_mmd(
     Additional generic metrics use the existing evaluation conventions:
     20-bin normalized-Laplacian spectral histograms with adaptive Gaussian
     EMD, and graphlet-composition MMD (connected orders 3--5 by default).
+    Novelty is the fraction of candidate topology WL hashes absent from the
+    complete training split; it is unavailable when training graphs are absent.
     """
 
     protocol = str(metric_protocol).strip().lower().replace("-", "_")
@@ -590,6 +596,11 @@ def _paper_mmd(
 
     metrics = {}
     if include_generic_metrics:
+        announce("novelty", 0)
+        metrics["novelty_rate"] = (
+            wl_novelty_rate(candidate, train) if train else float("nan")
+        )
+        announce("novelty", 1)
         announce("spectral MMD", 0)
         spectral_reference = descriptor_matrix(reference, spectral_histogram)
         spectral_candidate = descriptor_matrix(candidate, spectral_histogram)
@@ -843,12 +854,15 @@ def validate_report_reference_split(output_dir: Path, reference_split: str) -> N
 
 def _print_table(rows: Sequence[dict[str, Any]], *, reference_split: str = "test") -> None:
     print(f"Graph-distribution MMD against held-out {reference_split} graphs (lower is better)")
+    if any("novelty_rate" in row for row in rows):
+        print("Novelty against the complete training split (WL topology hashes; higher is better)")
     columns = {
         "degree_mmd": ("Degree MMD", 14),
         "clustering_mmd": ("Clustering MMD", 18),
         "orbit_mmd": ("Orbit MMD", 14),
         "spectral_mmd": ("Spectral MMD", 16),
         "graphlet_history_mmd": ("Graphlet MMD", 16),
+        "novelty_rate": ("Novelty", 14),
     }
     metrics = _report_metrics(rows)
     print(f"{'Comparison':30s}" + "".join(
@@ -1153,6 +1167,7 @@ def main() -> None:
         "clustering_bins": generic_clustering_bins,
         "include_generic_metrics": not molecular,
         "graphlet_options": graphlet_options,
+        "train": train_graphs,
     }
     rows: list[dict[str, Any]] = []
     if train_graphs:
@@ -1236,7 +1251,7 @@ def main() -> None:
 
     save_json(
         {
-            "format": "graph_generation_evaluation_report_v7",
+            "format": "graph_generation_evaluation_report_v8",
             "reference_split": reference_split,
             "reference_split_sha256": provenance["split_sha256"][reference_split],
             "reference_graph_indices_zero_based": list(range(reference_count)),
@@ -1247,6 +1262,16 @@ def main() -> None:
             "graphlet_backend": graphlet_backend,
             "generic_graphlet_options": graphlet_options if not molecular else None,
             "generic_spectral_bins": 20 if not molecular else None,
+            "generic_novelty_protocol": (
+                {
+                    "definition": "candidate graphs with WL topology hashes absent from the complete training split / candidate graphs",
+                    "reference_split": "train",
+                    "num_training_graphs": len(train_graphs),
+                    "node_and_edge_attributes": False,
+                    "isomorphism_test": "approximate Weisfeiler-Lehman hash comparison",
+                }
+                if not molecular else None
+            ),
             "generic_spectral_descriptor": (
                 "normalized_laplacian_isolates_zero_stable_boundaries_v2"
                 if not molecular else None

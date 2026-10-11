@@ -1558,39 +1558,40 @@ python scripts/evaluate_qed_research.py \
 # Recorded result — ZINC, seed 42
 # ------------------------------------------------------------------------------
 Molecular evaluation
-  validity: 0.9296
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.9714
-  validity_without_correction: 0.9296
-  fcd: 10.242715430385047
+  validity: 0.9337
+  validity_with_correction: 0.9967
+  validity_with_projected_formal_charges: 0.9916
+  validity_without_correction: 0.9337
+  fcd: 0.43261765892935955
   num_generated_graphs: 10000
-  num_valid_generated_molecules: 9296
-  num_invalid_generated_molecules: 704
-  num_valid_generated_molecules_with_projected_formal_charges: 9714
-  num_invalid_generated_molecules_after_projected_formal_charges: 286
-  num_raw_invalid_resolved_by_projected_formal_charges: 418
-  projected_formal_charge_success_rate_on_raw_invalid: 0.59375
-  num_valid_generated_molecules_with_correction: 10000
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 704
-  correction_success_rate_on_raw_invalid: 1.0
+  num_valid_generated_molecules: 9337
+  num_invalid_generated_molecules: 663
+  num_valid_generated_molecules_with_projected_formal_charges: 9916
+  num_invalid_generated_molecules_after_projected_formal_charges: 84
+  num_raw_invalid_resolved_by_projected_formal_charges: 579
+  projected_formal_charge_success_rate_on_raw_invalid: 0.8733031674208145
+  num_valid_generated_molecules_with_correction: 9967
+  num_invalid_generated_molecules_after_correction: 33
+  num_molecules_corrected_to_valid: 630
+  correction_success_rate_on_raw_invalid: 0.9502262443438914
   metric_molecule_source: raw_valid
   hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 1.0
-  unique_valid_count: 9296
-  novelty_rate: 0.9997848537005164
-  novel_unique_valid_count: 9294
-  nspdk_mmd: 0.0029276155277734306
-  nspdk_mmd_valid_only: 0.0029276155277734306
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.00015508451510053768
-  nspdk_proxy_mmd_metric_source: 0.00015569979119450163
+  uniqueness_rate: 0.9995715968726572
+  unique_valid_count: 9333
+  novelty_rate: 0.9712846887388835
+  novel_unique_valid_count: 9065
+  nspdk_mmd: 0.0004001724630942848
+  nspdk_mmd_valid_only: 0.0004001724630942848
+  graphlet_histogram_mmd: 0.0004438777184907483
+  graphlet_selected_mass_mmd: 0.0
+  graphlet_histogram_mmd_by_order: {'3': 0.0003955395901646952, '4': 0.0004251617645438799, '5': 0.0004478864633423729}
+  graphlet_selected_mass_mmd_by_order: {'3': 0.0, '4': 0.0, '5': 0.0}
+  nspdk_proxy_mmd_all_generated: 3.273139576739256e-06
+  nspdk_proxy_mmd_metric_source: 2.9587290678235403e-06
   fcd_num_reference_molecules: 23728
-  fcd_num_valid_generated_molecules: 9296
+  fcd_num_valid_generated_molecules: 9337
   fcd_generated_smiles_source: raw_valid
+
 
 
 {

@@ -16,7 +16,7 @@ spec.loader.exec_module(report)
 @pytest.mark.parametrize("protocol", ["graphrnn", "graphes_adaptive"])
 def test_generic_metrics_distinguish_graphs_and_reach_outputs(protocol, tmp_path, capsys):
     reference = [nx.path_graph(5), nx.cycle_graph(5)]
-    options = {"compute_orbit": False, "metric_protocol": protocol}
+    options = {"compute_orbit": False, "metric_protocol": protocol, "train": reference}
     identical = report._paper_mmd(reference, reference, **options)
     different = report._paper_mmd(reference, [nx.complete_graph(5)], **options)
     for key in ("spectral_mmd", "graphlet_history_mmd"):
@@ -31,10 +31,34 @@ def test_generic_metrics_distinguish_graphs_and_reach_outputs(protocol, tmp_path
     assert set(stored) == {"comparison", *report.GENERIC_REPORT_METRICS}
     assert float(stored["spectral_mmd"]) == different["spectral_mmd"]
     assert float(stored["graphlet_history_mmd"]) == different["graphlet_history_mmd"]
+    assert identical["novelty_rate"] == 0.0
+    assert float(stored["novelty_rate"]) == different["novelty_rate"] == 1.0
     report._print_table(rows)
     output = capsys.readouterr().out
     assert "Spectral MMD" in output
     assert "Graphlet MMD" in output
+    assert "Novelty" in output
+    assert "higher is better" in output
+
+
+def test_generic_novelty_uses_training_topology_and_counts_duplicates():
+    train = [nx.path_graph(5)]
+    relabelled = nx.relabel_nodes(train[0], lambda node: f"node_{node}")
+    nx.set_node_attributes(relabelled, "ignored", "label")
+    candidate = [relabelled, nx.cycle_graph(5), nx.cycle_graph(5)]
+    metrics = report._paper_mmd(
+        [nx.cycle_graph(5)], candidate, train=train, compute_orbit=False,
+    )
+    assert metrics["novelty_rate"] == pytest.approx(2 / 3)
+
+
+@pytest.mark.parametrize("train", [None, []])
+def test_generic_novelty_without_training_is_unavailable(train):
+    import math
+
+    graphs = [nx.path_graph(4)]
+    metrics = report._paper_mmd(graphs, graphs, train=train, compute_orbit=False)
+    assert math.isnan(metrics["novelty_rate"])
 
 
 def test_molecular_report_keeps_existing_metrics(monkeypatch):
