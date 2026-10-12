@@ -715,6 +715,8 @@ class GDSMSimpleWrapper(BaseGeneratorWrapper):
             "gdsm_simple_vanilla_gsdm_checkpoint_v1",
             "gdsm_simple_vanilla_gsdm_checkpoint_v2",
             "gdsm_simple_vanilla_gsdm_checkpoint_v3",
+            "gdsm_simple_vanilla_gsdm_checkpoint_v4",
+            "gdsm_simple_vanilla_gsdm_checkpoint_v5",
         } or str(options.get("variant", "legacy_simple")).lower() in {
             "vanilla_gsdm", "vanilla", "gsdm",
             "vanilla_gsdm_dhvae", "vanilla_gsdm_plus_dhvae",

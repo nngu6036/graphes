@@ -40,6 +40,14 @@ backbone.  Finally,
 and uses the final auxiliary graphlet prediction as a fixed post-generation
 target for degree-preserving double-edge-swap refinement.
 
+The joint Laplacian log-gap variants also support an optional fixed-dimensional
+low-frequency spectral bottleneck.  When ``sde.spectral_cutoff.enabled`` is
+true, only the first ``min(k,n-1)`` nontrivial Laplacian eigenpairs contribute
+to topology reconstruction and the high-frequency eigenvalue tail is zeroed.
+A stochastic connected degree-budget decoder can then sample a discrete graph
+from the low-rank edge scores using the predicted degree histogram.  This is a
+fixed-k ablation rather than a learnable cutoff.
+
 None of these variants uses Havel-Hakimi construction, degree projection,
 categorical edge prediction, graphlet guidance, rewiring, or post-hoc repair.
 """
@@ -84,9 +92,11 @@ from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 CHECKPOINT_FORMAT_V1 = "gdsm_simple_vanilla_gsdm_checkpoint_v1"
 CHECKPOINT_FORMAT_V2 = "gdsm_simple_vanilla_gsdm_checkpoint_v2"
 CHECKPOINT_FORMAT_V3 = "gdsm_simple_vanilla_gsdm_checkpoint_v3"
-CHECKPOINT_FORMAT = "gdsm_simple_vanilla_gsdm_checkpoint_v4"
+CHECKPOINT_FORMAT_V4 = "gdsm_simple_vanilla_gsdm_checkpoint_v4"
+CHECKPOINT_FORMAT = "gdsm_simple_vanilla_gsdm_checkpoint_v5"
 SUPPORTED_CHECKPOINT_FORMATS = {
-    CHECKPOINT_FORMAT_V1, CHECKPOINT_FORMAT_V2, CHECKPOINT_FORMAT_V3, CHECKPOINT_FORMAT
+    CHECKPOINT_FORMAT_V1, CHECKPOINT_FORMAT_V2, CHECKPOINT_FORMAT_V3,
+    CHECKPOINT_FORMAT_V4, CHECKPOINT_FORMAT,
 }
 TRAINING_FORMAT = "grapher_gdsm_simple_vanilla_gsdm_training_v1"
 GENERATION_FORMAT = "grapher_gdsm_simple_vanilla_gsdm_generation_v1"
@@ -261,6 +271,16 @@ def default_vanilla_options() -> dict[str, Any]:
             "log_gap_epsilon": 1.0e-6,
             "log_gap_min_std": 1.0e-3,
             "log_gap_exp_clip": 20.0,
+            # Optional fixed-dimensional low-frequency spectral bottleneck.
+            # When enabled, only the first k nontrivial Laplacian eigenpairs
+            # contribute to the reconstructed topology; all higher-frequency
+            # eigenvalues are zeroed.
+            "spectral_cutoff": {
+                "enabled": False,
+                "k": None,
+                "selection": "low_frequency_nonzero",
+                "tail_policy": "zero",
+            },
         },
         "sample": {
             "predictor": "euler",
@@ -273,6 +293,17 @@ def default_vanilla_options() -> dict[str, Any]:
             "eps": 1.0e-4,
             "threshold": 0.5,
             "use_ema": False,
+            # A strict rank-k Laplacian reconstruction is too smooth for a
+            # fixed 0.5 threshold.  This optional decoder uses the predicted
+            # degree histogram to choose an edge budget and samples a connected
+            # topology from the low-rank edge scores.  It is active only when
+            # sde.spectral_cutoff.enabled=true.
+            "fixed_k_decoder": {
+                "mode": "threshold",
+                "temperature": 0.5,
+                "require_connected": True,
+                "edge_count_source": "predicted_degree_histogram",
+            },
         },
         "graphlet_refinement": {"enabled": False},
         "graphlet_summary": {"enabled": False},  # legacy graphlet-only alias
@@ -402,6 +433,96 @@ def _resolved_structure_summary_config(options: Mapping[str, Any]) -> dict[str, 
         "clustering": {"enabled": False, "bins": 100, "histogram_weight": 0.0, "cdf_weight": 0.0},
         "orbit": {"enabled": False, "width": 15, "histogram_weight": 0.0, "log_total_weight": 0.0},
         "degree": {"enabled": False, "max_degree": 0, "histogram_weight": 0.0, "cdf_weight": 0.0},
+    }
+
+
+def _resolved_spectral_cutoff(
+    sde_cfg: Mapping[str, Any] | None,
+    *,
+    max_nodes: int | None = None,
+) -> dict[str, Any]:
+    """Normalize the optional fixed-k low-frequency spectral bottleneck.
+
+    ``k`` counts nontrivial Laplacian modes.  For an ``n``-node graph the
+    effective number of active modes is ``min(k, n-1)``.  The trivial zero
+    Laplacian eigenvalue is never diffused.  The initial implementation uses a
+    strict zero tail so that high-frequency donor eigenpairs cannot leak into
+    topology reconstruction.
+    """
+
+    raw = dict((sde_cfg or {}).get("spectral_cutoff", {}) or {})
+    enabled = bool(raw.get("enabled", False))
+    if not enabled:
+        return {
+            "enabled": False,
+            "k": None,
+            "selection": "low_frequency_nonzero",
+            "tail_policy": "zero",
+        }
+    if raw.get("k") is None:
+        raise ValueError("sde.spectral_cutoff.k is required when the cutoff is enabled")
+    k = int(raw["k"])
+    if k < 1:
+        raise ValueError("sde.spectral_cutoff.k must be >= 1")
+    if max_nodes is not None and int(max_nodes) > 0 and k > int(max_nodes) - 1:
+        raise ValueError(
+            "sde.spectral_cutoff.k cannot exceed model.max_nodes - 1 "
+            f"(got k={k}, max_nodes={int(max_nodes)})"
+        )
+    selection = str(raw.get("selection", "low_frequency_nonzero")).lower()
+    if selection not in {
+        "low_frequency_nonzero",
+        "smallest_nonzero",
+        "laplacian_low_frequency",
+    }:
+        raise ValueError(
+            "sde.spectral_cutoff.selection must be low_frequency_nonzero"
+        )
+    tail_policy = str(raw.get("tail_policy", "zero")).lower()
+    if tail_policy not in {"zero", "zero_tail"}:
+        raise ValueError(
+            "The fixed-k implementation currently supports only "
+            "sde.spectral_cutoff.tail_policy=zero"
+        )
+    return {
+        "enabled": True,
+        "k": k,
+        "selection": "low_frequency_nonzero",
+        "tail_policy": "zero",
+    }
+
+
+def _resolved_fixed_k_decoder(sample_cfg: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw = dict((sample_cfg or {}).get("fixed_k_decoder", {}) or {})
+    mode = str(raw.get("mode", "threshold")).lower()
+    aliases = {
+        "stochastic": "stochastic_degree_budget",
+        "degree_budget": "stochastic_degree_budget",
+        "stochastic_top_m": "stochastic_degree_budget",
+        "top_m": "stochastic_degree_budget",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in {"threshold", "stochastic_degree_budget"}:
+        raise ValueError(
+            "sample.fixed_k_decoder.mode must be threshold or "
+            "stochastic_degree_budget"
+        )
+    temperature = float(raw.get("temperature", 0.5))
+    if not math.isfinite(temperature) or temperature < 0.0:
+        raise ValueError("sample.fixed_k_decoder.temperature must be finite and >= 0")
+    edge_count_source = str(
+        raw.get("edge_count_source", "predicted_degree_histogram")
+    ).lower()
+    if edge_count_source not in {"predicted_degree_histogram"}:
+        raise ValueError(
+            "sample.fixed_k_decoder.edge_count_source currently supports only "
+            "predicted_degree_histogram"
+        )
+    return {
+        "mode": mode,
+        "temperature": temperature,
+        "require_connected": bool(raw.get("require_connected", True)),
+        "edge_count_source": edge_count_source,
     }
 
 
@@ -628,6 +749,31 @@ def validate_options(options: Mapping[str, Any]) -> None:
             "adjacency vanilla GSDM requires sde.eigen_mask=official_extremes "
             "(or all_padded_eigenvalues for debugging)"
         )
+
+    configured_max_nodes = int((options.get("model", {}) or {}).get("max_nodes", 0) or 0)
+    spectral_cutoff = _resolved_spectral_cutoff(
+        sde, max_nodes=configured_max_nodes if configured_max_nodes > 0 else None
+    )
+    if spectral_cutoff["enabled"]:
+        if operator != "combinatorial_laplacian" or variant not in LAPLACIAN_LOGGAP_ALL_VARIANTS:
+            raise ValueError(
+                "sde.spectral_cutoff is implemented only for Laplacian log-gap variants"
+            )
+        decoder_cfg = _resolved_fixed_k_decoder(options.get("sample", {}))
+        if decoder_cfg["mode"] == "stochastic_degree_budget":
+            if not bool(summary_cfg.get("degree", {}).get("enabled", False)):
+                raise ValueError(
+                    "sample.fixed_k_decoder.mode=stochastic_degree_budget requires "
+                    "structure_summary.degree.enabled=true"
+                )
+            if not summary_enabled:
+                raise ValueError(
+                    "The fixed-k stochastic decoder requires the joint structure-summary model"
+                )
+    else:
+        # Still validate the decoder block so typos do not silently pass.
+        _resolved_fixed_k_decoder(options.get("sample", {}))
+
     if int(options.get("generation_batch_size", 0)) <= 0:
         raise ValueError("generation_batch_size must be positive")
     sample = options.get("sample", {})
@@ -1607,6 +1753,75 @@ def _laplacian_eigh_padded(
 
 
 
+
+def _fixed_k_laplacian_mask(flags: torch.Tensor, k: int) -> torch.Tensor:
+    """Mask the first ``k`` nontrivial low-frequency Laplacian modes.
+
+    Coordinate zero is the fixed trivial eigenvalue.  For each graph with
+    ``n`` active nodes, coordinates ``1:min(k,n-1)+1`` are active and all
+    higher-frequency and padded coordinates are zero.
+    """
+
+    if flags.ndim != 2:
+        raise ValueError("fixed-k Laplacian mask expects flags=[B,N]")
+    if int(k) < 1:
+        raise ValueError("fixed-k Laplacian mask requires k >= 1")
+    mask = torch.zeros_like(flags, dtype=torch.float32)
+    for row, n_raw in enumerate(flags.sum(dim=1).tolist()):
+        n = int(n_raw)
+        active = min(int(k), max(0, n - 1))
+        if active > 0:
+            mask[row, 1 : 1 + active] = 1.0
+    return mask
+
+
+def _spectral_cutoff_from_transform(
+    spectral_transform: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    raw = dict((spectral_transform or {}).get("spectral_cutoff", {}) or {})
+    if not bool(raw.get("enabled", False)):
+        return {
+            "enabled": False,
+            "k": None,
+            "selection": "low_frequency_nonzero",
+            "tail_policy": "zero",
+        }
+    return {
+        "enabled": True,
+        "k": int(raw["k"]),
+        "selection": str(raw.get("selection", "low_frequency_nonzero")),
+        "tail_policy": str(raw.get("tail_policy", "zero")),
+    }
+
+
+def _effective_eigen_mask(
+    flags: torch.Tensor,
+    mode: str,
+    spectral_transform: Mapping[str, Any] | None = None,
+) -> torch.Tensor:
+    base = eigen_mask_from_flags(flags, mode)
+    cutoff = _spectral_cutoff_from_transform(spectral_transform)
+    if not cutoff["enabled"]:
+        return base
+    return base * _fixed_k_laplacian_mask(flags, int(cutoff["k"]))
+
+
+def _apply_spectral_cutoff_to_eigenvalues(
+    eigenvalues: torch.Tensor,
+    flags: torch.Tensor,
+    spectral_transform: Mapping[str, Any] | None,
+) -> torch.Tensor:
+    cutoff = _spectral_cutoff_from_transform(spectral_transform)
+    if not cutoff["enabled"]:
+        return eigenvalues
+    if str(cutoff.get("tail_policy", "zero")).lower() != "zero":
+        raise ValueError("Only zero-tail fixed-k spectral reconstruction is supported")
+    mask = _fixed_k_laplacian_mask(flags, int(cutoff["k"]))
+    # The trivial mode is already zero.  Zeroing the high-frequency tail means
+    # the reconstructed operator depends only on the selected low-frequency
+    # eigenpairs, even though a padded full basis tensor is carried internally.
+    return eigenvalues * mask.to(dtype=eigenvalues.dtype)
+
 def _fit_laplacian_log_gap_stats(
     eigenvalues: torch.Tensor,
     flags: torch.Tensor,
@@ -1648,6 +1863,7 @@ def _laplacian_eigenvalues_to_log_gap_state(
     mean: torch.Tensor,
     std: torch.Tensor,
     epsilon: float,
+    spectral_cutoff: Mapping[str, Any] | None = None,
 ) -> torch.Tensor:
     if eigenvalues.shape != flags.shape:
         raise ValueError("log-gap transform expects eigenvalues/flags with matching [B,N]")
@@ -1657,7 +1873,10 @@ def _laplacian_eigenvalues_to_log_gap_state(
     gaps = (eigenvalues[:, 1:] - eigenvalues[:, :-1]).clamp_min(0.0)
     raw = torch.log(gaps + float(epsilon))
     state[:, 1:] = (raw - mean[1:]) / std[1:].clamp_min(1.0e-12)
-    mask = eigen_mask_from_flags(flags, "laplacian_nonzero_prefix")
+    transform = {"spectral_cutoff": dict(spectral_cutoff or {})}
+    mask = _effective_eigen_mask(
+        flags, "laplacian_nonzero_prefix", transform
+    )
     return state * mask
 
 
@@ -1669,6 +1888,7 @@ def _log_gap_state_to_laplacian_eigenvalues(
     std: torch.Tensor,
     epsilon: float,
     exp_clip: float,
+    spectral_cutoff: Mapping[str, Any] | None = None,
 ) -> torch.Tensor:
     """Invert normalized log gaps with a hard positivity/order guarantee."""
     if state.shape != flags.shape:
@@ -1683,7 +1903,12 @@ def _log_gap_state_to_laplacian_eigenvalues(
     if state.size(1) > 1:
         eig[:, 1:] = torch.cumsum(gaps, dim=1)
     active = torch.arange(state.size(1), device=state.device).unsqueeze(0) < sizes.unsqueeze(1)
-    return eig * active.to(eig.dtype)
+    eig = eig * active.to(eig.dtype)
+    return _apply_spectral_cutoff_to_eigenvalues(
+        eig,
+        flags,
+        {"spectral_cutoff": dict(spectral_cutoff or {})},
+    )
 
 
 def _spectral_state_to_operator_eigenvalues(
@@ -1706,6 +1931,7 @@ def _spectral_state_to_operator_eigenvalues(
             std=torch.as_tensor((spectral_transform or {})["std"]),
             epsilon=float((spectral_transform or {}).get("epsilon", 1.0e-6)),
             exp_clip=float((spectral_transform or {}).get("exp_clip", 20.0)),
+            spectral_cutoff=dict((spectral_transform or {}).get("spectral_cutoff", {}) or {}),
         )
     raise ValueError(f"Unknown spectral parameterization: {mode!r}")
 
@@ -1729,6 +1955,7 @@ def _operator_eigenvalues_to_spectral_state(
             mean=torch.as_tensor((spectral_transform or {})["mean"]),
             std=torch.as_tensor((spectral_transform or {})["std"]),
             epsilon=float((spectral_transform or {}).get("epsilon", 1.0e-6)),
+            spectral_cutoff=dict((spectral_transform or {}).get("spectral_cutoff", {}) or {}),
         )
     raise ValueError(f"Unknown spectral parameterization: {mode!r}")
 
@@ -2235,7 +2462,7 @@ def _loss_batch_loggap(
             generator=generator,
         )
     z_x = mask_x(z_x, flags)
-    e_mask = eigen_mask_from_flags(flags, eigen_mask_mode)
+    e_mask = _effective_eigen_mask(flags, eigen_mask_mode, spectral_transform)
     z_state = z_state * e_mask
 
     mean_x, std_x = sde_x.marginal_x(x0, t)
@@ -2317,7 +2544,7 @@ def _loss_batch_loggap_graphlet(
         z_x = torch.randn(x0.shape, dtype=x0.dtype, device=x0.device, generator=generator)
         z_state = torch.randn(state0.shape, dtype=state0.dtype, device=state0.device, generator=generator)
     z_x = mask_x(z_x, flags)
-    e_mask = eigen_mask_from_flags(flags, eigen_mask_mode)
+    e_mask = _effective_eigen_mask(flags, eigen_mask_mode, spectral_transform)
     z_state = z_state * e_mask
 
     mean_x, std_x = sde_x.marginal_x(x0, t)
@@ -2740,8 +2967,9 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
     graphlet_meta: dict[str, Any] | None = None
     spectral_transform: dict[str, Any] = {"kind": "direct_eigenvalues"}
     joint_graphlet_cfg = _resolved_structure_summary_config(options)
+    sde_cfg = dict(options.get("sde", {}) or {})
+    spectral_cutoff = _resolved_spectral_cutoff(sde_cfg, max_nodes=max_nodes)
     if variant in LAPLACIAN_LOGGAP_ALL_VARIANTS:
-        sde_cfg = dict(options.get("sde", {}) or {})
         stats = _fit_laplacian_log_gap_stats(
             train_data[5],
             train_data[2],
@@ -2755,6 +2983,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
             "mean": stats["mean"],
             "std": stats["std"],
             "count": stats["count"],
+            "spectral_cutoff": spectral_cutoff,
         }
     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
         train_targets, graphlet_meta = _joint_structure_targets(
@@ -3049,6 +3278,7 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
             "variant": variant,
             "spectral_operator": spectral_operator,
             "spectral_transform": _jsonable(spectral_transform),
+            "spectral_cutoff": _jsonable(spectral_cutoff),
             "structure_summary": (
                 {
                     "enabled": True,
@@ -3137,6 +3367,15 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                 ),
                 "spectral_operator": spectral_operator,
                 "spectral_parameterization": str(spectral_transform.get("kind", "direct_eigenvalues")),
+                "spectral_cutoff": _jsonable(spectral_cutoff),
+                "spectral_information_bottleneck": (
+                    "first_min(k,n-1)_nontrivial_low_frequency_laplacian_eigenpairs"
+                    if spectral_cutoff["enabled"] else False
+                ),
+                "spectral_tail_policy": (
+                    "zero_high_frequency_eigenvalues_before_operator_reconstruction"
+                    if spectral_cutoff["enabled"] else "full_active_spectrum"
+                ),
                 "spectral_corruption": (
                     "VP_SDE_on_standardized_log_successive_laplacian_eigenvalue_gaps"
                     if variant in LAPLACIAN_LOGGAP_ALL_VARIANTS
@@ -3152,9 +3391,17 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     else "continuous_U_diag_lambda_t_Ut_plus_noisy_degree_features"
                 ),
                 "generation_basis": (
-                    "uniform_training_laplacian_eigenbasis_joint_with_node_count"
+                    (
+                        "uniform_training_laplacian_low_frequency_eigenbasis_prefix_"
+                        "joint_with_node_count"
+                    )
                     if spectral_operator == "combinatorial_laplacian"
-                    else "uniform_training_adjacency_eigenbasis_joint_with_node_count"
+                    and spectral_cutoff["enabled"]
+                    else (
+                        "uniform_training_laplacian_eigenbasis_joint_with_node_count"
+                        if spectral_operator == "combinatorial_laplacian"
+                        else "uniform_training_adjacency_eigenbasis_joint_with_node_count"
+                    )
                 ),
                 "reverse_sampler": "Euler_Maruyama_plus_optional_Langevin_corrector",
                 "structure_summary_training": (
@@ -3195,9 +3442,18 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS else "none"
                 ),
                 "discretization": (
-                    "single_final_threshold_on_negative_laplacian_offdiagonal"
-                    if spectral_operator == "combinatorial_laplacian"
-                    else "single_final_threshold"
+                    (
+                        "stochastic_connected_degree_budget_decoder_from_low_rank_laplacian_scores"
+                        if _resolved_fixed_k_decoder(options.get("sample", {}))["mode"]
+                        == "stochastic_degree_budget"
+                        else "single_final_threshold_on_low_rank_negative_laplacian_offdiagonal"
+                    )
+                    if spectral_cutoff["enabled"]
+                    else (
+                        "single_final_threshold_on_negative_laplacian_offdiagonal"
+                        if spectral_operator == "combinatorial_laplacian"
+                        else "single_final_threshold"
+                    )
                 ),
                 "auxiliary_degree_prior": (
                     "jointly_trained_DH-VAE_independent_of_GSDM"
@@ -3423,7 +3679,7 @@ def sample_batch(
         _, u = _laplacian_eigh_padded(donor_adjacencies, donor_sizes)
     else:
         raise ValueError(f"Unknown spectral operator {spectral_operator!r}")
-    e_mask = eigen_mask_from_flags(flags, eigen_mask_mode)
+    e_mask = _effective_eigen_mask(flags, eigen_mask_mode, spectral_transform)
     max_feat_num = model_x.max_feat_num
     x = mask_x(
         torch.randn((b, nmax, max_feat_num), device=device, generator=generator), flags
@@ -3492,6 +3748,149 @@ def sample_batch(
     return x, adj, eig_sample, u
 
 
+def _edge_budget_from_degree_histogram(
+    degree_histogram: np.ndarray,
+    n: int,
+    *,
+    require_connected: bool,
+) -> tuple[int, float]:
+    """Convert a normalized degree histogram into a feasible edge budget."""
+
+    if n < 1:
+        raise ValueError("edge-budget decoding requires n >= 1")
+    hist = np.asarray(degree_histogram, dtype=np.float64).reshape(-1)
+    hist = np.nan_to_num(hist, nan=0.0, posinf=0.0, neginf=0.0)
+    hist = np.maximum(hist, 0.0)
+    if hist.size == 0 or float(hist.sum()) <= 0.0:
+        raise ValueError("predicted degree histogram has no positive mass")
+    # Degrees above n-1 are impossible for this graph size.  Fold their mass
+    # into the largest feasible bin rather than silently dropping it.
+    feasible = np.zeros(n, dtype=np.float64)
+    take = min(n, hist.size)
+    feasible[:take] = hist[:take]
+    if hist.size > n:
+        feasible[-1] += float(hist[n:].sum())
+    total = float(feasible.sum())
+    if total <= 0.0:
+        feasible[0] = 1.0
+        total = 1.0
+    feasible /= total
+    mean_degree = float(np.dot(np.arange(n, dtype=np.float64), feasible))
+    max_edges = n * (n - 1) // 2
+    min_edges = n - 1 if require_connected and n > 1 else 0
+    edge_budget = int(np.rint(0.5 * n * mean_degree))
+    edge_budget = min(max(edge_budget, min_edges), max_edges)
+    return edge_budget, mean_degree
+
+
+def _sample_fixed_k_topology(
+    edge_scores: np.ndarray,
+    degree_histogram: np.ndarray,
+    *,
+    seed: int,
+    temperature: float,
+    require_connected: bool,
+) -> tuple[nx.Graph, dict[str, Any]]:
+    """Sample one topology from low-rank spectral edge scores.
+
+    A Gumbel-perturbed weighted spanning tree provides connectivity, then the
+    remaining edge budget is filled by the highest remaining perturbed scores.
+    The budget is derived from the predicted degree histogram.  This decoder is
+    intentionally stochastic and contains no training-graph adjacency copy.
+    """
+
+    scores = np.asarray(edge_scores, dtype=np.float64)
+    if scores.ndim != 2 or scores.shape[0] != scores.shape[1]:
+        raise ValueError("fixed-k topology decoder expects a square score matrix")
+    n = int(scores.shape[0])
+    graph = nx.Graph()
+    graph.add_nodes_from(range(n))
+    if n <= 1:
+        return graph, {
+            "seed": int(seed),
+            "predicted_mean_degree": 0.0,
+            "requested_edges": 0,
+            "realized_edges": 0,
+            "connected": True,
+        }
+
+    edge_budget, mean_degree = _edge_budget_from_degree_histogram(
+        degree_histogram,
+        n,
+        require_connected=require_connected,
+    )
+    pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+    raw = np.asarray([scores[i, j] for i, j in pairs], dtype=np.float64)
+    raw = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
+    scale = float(raw.std())
+    standardized = (raw - float(raw.mean())) / max(scale, 1.0e-8)
+    rng = np.random.default_rng(int(seed))
+    if float(temperature) > 0.0:
+        uniforms = np.clip(rng.random(len(pairs)), 1.0e-12, 1.0 - 1.0e-12)
+        gumbel = -np.log(-np.log(uniforms))
+        priority = standardized / float(temperature) + gumbel
+    else:
+        priority = standardized
+    order = np.argsort(-priority, kind="mergesort")
+
+    selected: list[int] = []
+    selected_set: set[int] = set()
+    if require_connected:
+        parent = list(range(n))
+        rank = [0] * n
+
+        def find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a: int, b: int) -> bool:
+            ra, rb = find(a), find(b)
+            if ra == rb:
+                return False
+            if rank[ra] < rank[rb]:
+                ra, rb = rb, ra
+            parent[rb] = ra
+            if rank[ra] == rank[rb]:
+                rank[ra] += 1
+            return True
+
+        for idx_raw in order.tolist():
+            i, j = pairs[int(idx_raw)]
+            if union(i, j):
+                selected.append(int(idx_raw))
+                selected_set.add(int(idx_raw))
+                if len(selected) == n - 1:
+                    break
+        if len(selected) != n - 1:
+            raise RuntimeError("failed to construct a spanning tree from complete edge candidates")
+
+    for idx_raw in order.tolist():
+        idx = int(idx_raw)
+        if len(selected) >= edge_budget:
+            break
+        if idx in selected_set:
+            continue
+        selected.append(idx)
+        selected_set.add(idx)
+
+    graph.add_edges_from(pairs[idx] for idx in selected)
+    connected = bool(n <= 1 or nx.is_connected(graph))
+    if require_connected and not connected:
+        raise AssertionError("fixed-k decoder violated its connectedness contract")
+    return graph, {
+        "seed": int(seed),
+        "predicted_mean_degree": mean_degree,
+        "requested_edges": int(edge_budget),
+        "realized_edges": int(graph.number_of_edges()),
+        "connected": connected,
+        "score_mean": float(raw.mean()) if raw.size else 0.0,
+        "score_std": float(raw.std()) if raw.size else 0.0,
+        "temperature": float(temperature),
+    }
+
+
 def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manifest: Mapping[str, Any], options: Mapping[str, Any]) -> GenerationArtifacts:
     validate_options(options)
     if state.get("format") not in SUPPORTED_CHECKPOINT_FORMATS:
@@ -3543,6 +3942,14 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
         state.get("spectral_operator", spectral_operator_for_variant(variant))
     )
     spectral_transform = dict(state.get("spectral_transform", {"kind": "direct_eigenvalues"}) or {})
+    spectral_cutoff = _spectral_cutoff_from_transform(spectral_transform)
+    fixed_k_decoder = _resolved_fixed_k_decoder(sample_cfg)
+    if spectral_cutoff["enabled"] and fixed_k_decoder["mode"] == "stochastic_degree_budget":
+        if not bool(structure_summary_payload.get("degree_enabled", False)):
+            raise RuntimeError(
+                "The fixed-k stochastic decoder requires a checkpoint trained with "
+                "degree-histogram summary supervision"
+            )
     degree_payload = state.get("degree_prior", {})
     degree_prior_enabled = bool(
         isinstance(degree_payload, Mapping) and degree_payload.get("enabled", False)
@@ -3556,6 +3963,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     basis_indices: list[int] = []
     joint_graphlet_predictions: list[dict[str, Any]] = []
     joint_structure_predictions: list[dict[str, Any]] = []
+    fixed_k_decoder_diagnostics: list[dict[str, Any]] = []
     start = time.monotonic()
     with torch.no_grad():
         while len(graphs) < request.num_graphs:
@@ -3606,9 +4014,40 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 n = int(donor_n[row].item())
                 matrix = soft[row, :n, :n].detach().cpu().numpy().astype(np.float64)
                 np.fill_diagonal(matrix, 0.0)
-                discrete = matrix > threshold
-                np.fill_diagonal(discrete, False)
-                graph = nx.from_numpy_array(discrete.astype(np.int8), create_using=nx.Graph)
+                graph_index = len(graphs)
+                if spectral_cutoff["enabled"] and fixed_k_decoder["mode"] == "stochastic_degree_budget":
+                    if batch_structure_summary is None or "degree_histogram" not in batch_structure_summary:
+                        raise RuntimeError(
+                            "Fixed-k stochastic topology decoding requires a predicted degree histogram"
+                        )
+                    degree_hist = (
+                        batch_structure_summary["degree_histogram"][row]
+                        .detach().cpu().numpy().astype(np.float64)
+                    )
+                    decoder_seed = (
+                        int(request.generation_seed)
+                        + 2_000_003
+                        + graph_index * 1_000_003
+                    ) % (2**63 - 1)
+                    graph, decoder_diag = _sample_fixed_k_topology(
+                        matrix,
+                        degree_hist,
+                        seed=decoder_seed,
+                        temperature=float(fixed_k_decoder["temperature"]),
+                        require_connected=bool(fixed_k_decoder["require_connected"]),
+                    )
+                    decoder_diag.update({
+                        "graph_index": graph_index,
+                        "basis_index": int(idx),
+                        "requested_k": int(spectral_cutoff["k"]),
+                        "effective_k": min(int(spectral_cutoff["k"]), max(0, n - 1)),
+                        "num_nodes": n,
+                    })
+                    fixed_k_decoder_diagnostics.append(decoder_diag)
+                else:
+                    discrete = matrix > threshold
+                    np.fill_diagonal(discrete, False)
+                    graph = nx.from_numpy_array(discrete.astype(np.int8), create_using=nx.Graph)
                 graphs.append(graph)
                 continuous.append(matrix)
                 if spectral_operator == "combinatorial_laplacian":
@@ -3843,6 +4282,10 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "spectral_parameterization": str(spectral_transform.get("kind", "direct_eigenvalues")),
                 "nonnegative_and_nondecreasing_by_construction": (
                     str(spectral_transform.get("kind", "")).lower() == "laplacian_log_gap"
+                    and not spectral_cutoff["enabled"]
+                ),
+                "selected_low_frequency_prefix_nondecreasing_by_construction": (
+                    str(spectral_transform.get("kind", "")).lower() == "laplacian_log_gap"
                 ),
                 "valid_laplacian_projection_applied": False,
             }
@@ -3905,6 +4348,42 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 },
             )
 
+        fixed_k_aggregate: dict[str, Any] = {}
+        if fixed_k_decoder_diagnostics:
+            fixed_k_aggregate = {
+                "enabled": True,
+                "requested_k": int(spectral_cutoff["k"]),
+                "mean_effective_k": float(np.mean([
+                    int(row["effective_k"]) for row in fixed_k_decoder_diagnostics
+                ])),
+                "min_effective_k": int(min(
+                    int(row["effective_k"]) for row in fixed_k_decoder_diagnostics
+                )),
+                "max_effective_k": int(max(
+                    int(row["effective_k"]) for row in fixed_k_decoder_diagnostics
+                )),
+                "mean_predicted_degree": float(np.mean([
+                    float(row["predicted_mean_degree"]) for row in fixed_k_decoder_diagnostics
+                ])),
+                "mean_requested_edges": float(np.mean([
+                    int(row["requested_edges"]) for row in fixed_k_decoder_diagnostics
+                ])),
+                "mean_realized_edges": float(np.mean([
+                    int(row["realized_edges"]) for row in fixed_k_decoder_diagnostics
+                ])),
+                "connectedness_rate": float(np.mean([
+                    bool(row["connected"]) for row in fixed_k_decoder_diagnostics
+                ])),
+                "decoder": _jsonable(fixed_k_decoder),
+            }
+            _write_json(
+                staging / "fixed_k_decoder_diagnostics.json",
+                {
+                    "aggregate": fixed_k_aggregate,
+                    "per_graph": fixed_k_decoder_diagnostics,
+                },
+            )
+
         _write_json(staging / "manifest.json", {
             "format": GENERATION_FORMAT,
             "model_id": wrapper.model_id,
@@ -3947,6 +4426,13 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             "rewiring_diagnostics": (
                 {"path": "rewiring_diagnostics.json", "sha256": _sha256(staging / "rewiring_diagnostics.json")}
                 if graphlet_refinement_diagnostics else None
+            ),
+            "fixed_k_decoder_diagnostics": (
+                {
+                    "path": "fixed_k_decoder_diagnostics.json",
+                    "sha256": _sha256(staging / "fixed_k_decoder_diagnostics.json"),
+                }
+                if fixed_k_decoder_diagnostics else None
             ),
             "continuous_adjacencies": {"path": "continuous_adjacencies.pkl", "sha256": _sha256(soft_path), "role": "pre_refinement_continuous_adjacency_scores"},
             "continuous_laplacians": (
@@ -3997,17 +4483,38 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "structural_features": _jsonable(model_cfg.get("structural_features", {})),
                 "spectral_operator": spectral_operator,
                 "spectral_parameterization": str(spectral_transform.get("kind", "direct_eigenvalues")),
+                "spectral_cutoff": _jsonable(spectral_cutoff),
                 "eigenvectors": (
-                    "training_split_empirical_laplacian_eigenbasis"
-                    if spectral_operator == "combinatorial_laplacian"
-                    else "training_split_empirical"
+                    (
+                        "first_min(k,n-1)_nontrivial_low_frequency_columns_of_"
+                        "training_split_empirical_laplacian_eigenbasis"
+                    )
+                    if spectral_cutoff["enabled"]
+                    else (
+                        "training_split_empirical_laplacian_eigenbasis"
+                        if spectral_operator == "combinatorial_laplacian"
+                        else "training_split_empirical"
+                    )
+                ),
+                "high_frequency_tail": (
+                    "zeroed_before_operator_reconstruction"
+                    if spectral_cutoff["enabled"] else "diffused_full_active_spectrum"
                 ),
                 "reverse_process": "coupled_VP_spectral_predictor_corrector",
+                "topology_decoder": (
+                    _jsonable(fixed_k_decoder)
+                    if spectral_cutoff["enabled"] else {"mode": "threshold"}
+                ),
                 "threshold": threshold,
                 "threshold_semantics": (
-                    "edge iff -L_ij > threshold for i!=j"
-                    if spectral_operator == "combinatorial_laplacian"
-                    else "edge iff reconstructed_A_ij > threshold"
+                    "not_used_for_final_graph_when_fixed_k_stochastic_degree_budget_is_active"
+                    if spectral_cutoff["enabled"]
+                    and fixed_k_decoder["mode"] == "stochastic_degree_budget"
+                    else (
+                        "edge iff -L_ij > threshold for i!=j"
+                        if spectral_operator == "combinatorial_laplacian"
+                        else "edge iff reconstructed_A_ij > threshold"
+                    )
                 ),
                 "auxiliary_degree_prior": "DH-VAE" if degree_prior_enabled else "none",
                 "degree_sequences_sampled": len(degree_sequences),
@@ -4052,6 +4559,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             "diagnostics": {
                 "connectedness_rate": float(np.mean(connected)),
                 "mean_degree_sum": float(np.mean(degree_sums)),
+                "fixed_k": fixed_k_aggregate,
                 **laplacian_diagnostics,
                 **graphlet_aggregate,
             },
