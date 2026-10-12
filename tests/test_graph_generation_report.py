@@ -124,3 +124,66 @@ def test_auxiliary_degree_sequence_artifact_reports_graphrnn_degree_mmd(tmp_path
     output = capsys.readouterr().out
     assert "Auxiliary generated degree-sequence MMD" in output
     assert "dhvae_degree_sequences_to_test" in output
+
+
+def test_exact_isomorphism_novelty_detects_wl_collision():
+    # C6 and two disjoint triangles are both 2-regular on six nodes and share
+    # NetworkX's topology-only WL hash, but they are not isomorphic.
+    train_graph = nx.cycle_graph(6)
+    wl_collision = nx.disjoint_union(nx.cycle_graph(3), nx.cycle_graph(3))
+    assert nx.weisfeiler_lehman_graph_hash(train_graph) == nx.weisfeiler_lehman_graph_hash(wl_collision)
+    assert not nx.is_isomorphic(train_graph, wl_collision)
+
+    diagnostics = report.exact_isomorphism_support_diagnostics(
+        {
+            "train": [train_graph],
+            "heldout_test": [train_graph.copy()],
+            "generated": [wl_collision],
+        },
+        reference_name="heldout_test",
+    )
+    rows = {row["population"]: row for row in diagnostics["population_metrics"]}
+    assert rows["generated"]["wl_novelty_rate_against_train"] == pytest.approx(0.0)
+    assert rows["generated"]["exact_isomorphism_novelty_rate_against_train"] == pytest.approx(1.0)
+    assert rows["heldout_test"]["exact_isomorphism_novelty_rate_against_train"] == pytest.approx(0.0)
+
+
+def test_exact_isomorphism_class_frequency_matching_reports_tv_and_overlap():
+    path = nx.path_graph(4)
+    cycle = nx.cycle_graph(4)
+    diagnostics = report.exact_isomorphism_support_diagnostics(
+        {
+            "train": [path.copy(), path.copy(), cycle.copy(), cycle.copy()],
+            "heldout_test": [path.copy(), cycle.copy()],
+            "generated": [path.copy(), path.copy()],
+        },
+        reference_name="heldout_test",
+    )
+    rows = {row["population"]: row for row in diagnostics["population_metrics"]}
+
+    assert rows["train"]["class_frequency_tv_to_train"] == pytest.approx(0.0)
+    assert rows["heldout_test"]["class_frequency_tv_to_train"] == pytest.approx(0.0)
+    assert rows["generated"]["class_frequency_tv_to_train"] == pytest.approx(0.5)
+    assert rows["generated"]["class_frequency_overlap_to_train"] == pytest.approx(0.5)
+    assert rows["generated"]["class_frequency_tv_to_reference"] == pytest.approx(0.5)
+    assert rows["generated"]["exact_isomorphism_novelty_rate_against_train"] == pytest.approx(0.0)
+    assert rows["generated"]["train_isomorphism_class_coverage_rate"] == pytest.approx(0.5)
+
+
+def test_exact_isomorphism_support_csv_contains_per_class_frequencies(tmp_path):
+    diagnostics = report.exact_isomorphism_support_diagnostics(
+        {
+            "train": [nx.path_graph(4)],
+            "heldout_test": [nx.cycle_graph(4)],
+            "generated": [nx.path_graph(4), nx.cycle_graph(4)],
+        },
+        reference_name="heldout_test",
+    )
+    path = tmp_path / "classes.csv"
+    report._write_isomorphism_support_csv(diagnostics["class_frequencies"], path)
+    with path.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 2
+    assert {row["is_training_class"] for row in rows} == {"True", "False"}
+    assert all("generated_count" in row for row in rows)
+    assert all("heldout_test_count" in row for row in rows)

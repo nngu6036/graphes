@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -545,6 +545,275 @@ def resolve_base_graph_path(
     return None, None
 
 
+
+def _topology_invariant_key(graph: nx.Graph) -> tuple[Any, ...]:
+    """Return cheap exact-isomorphism invariants for topology-only bucketing.
+
+    Equal keys are necessary, not sufficient, for isomorphism.  The key is
+    intentionally attribute-free because the generic-graph novelty protocol
+    measures topology only.  Exact ``nx.is_isomorphic`` checks are still
+    performed within each bucket, so WL collisions cannot create false
+    duplicate matches.
+    """
+
+    num_nodes = int(graph.number_of_nodes())
+    num_edges = int(graph.number_of_edges())
+    directed = bool(graph.is_directed())
+    multigraph = bool(graph.is_multigraph())
+    if directed:
+        degree_signature = tuple(sorted(
+            (int(graph.in_degree(node)), int(graph.out_degree(node)))
+            for node in graph.nodes()
+        ))
+        component_sizes = tuple(sorted(
+            (len(component) for component in nx.weakly_connected_components(graph)),
+            reverse=True,
+        ))
+        triangle_count = -1
+    else:
+        degree_signature = tuple(sorted(
+            (int(degree) for _, degree in graph.degree()), reverse=True
+        ))
+        component_sizes = tuple(sorted(
+            (len(component) for component in nx.connected_components(graph)),
+            reverse=True,
+        ))
+        # Triangle count is an exact isomorphism invariant and cheaply separates
+        # many regular WL-collision buckets before VF2 is invoked.
+        triangle_count = int(sum(nx.triangles(nx.Graph(graph)).values()) // 3)
+
+    wl_hash = nx.weisfeiler_lehman_graph_hash(graph)
+    return (
+        directed,
+        multigraph,
+        num_nodes,
+        num_edges,
+        degree_signature,
+        component_sizes,
+        triangle_count,
+        wl_hash,
+    )
+
+
+class _ExactTopologyClassIndex:
+    """Incremental exact-isomorphism class index with invariant bucketing."""
+
+    def __init__(self) -> None:
+        self.representatives: list[nx.Graph] = []
+        self.keys: list[tuple[Any, ...]] = []
+        self.buckets: dict[tuple[Any, ...], list[int]] = defaultdict(list)
+        self.num_exact_checks = 0
+
+    def classify(self, graph: nx.Graph) -> int:
+        key = _topology_invariant_key(graph)
+        for class_id in self.buckets.get(key, []):
+            representative = self.representatives[class_id]
+            self.num_exact_checks += 1
+            if nx.is_isomorphic(graph, representative):
+                return int(class_id)
+        class_id = len(self.representatives)
+        self.representatives.append(graph.copy())
+        self.keys.append(key)
+        self.buckets[key].append(class_id)
+        return class_id
+
+
+def _frequency_tv(
+    left: Counter[int],
+    right: Counter[int],
+) -> float:
+    """Total-variation distance between two empirical class distributions."""
+
+    left_total = int(sum(left.values()))
+    right_total = int(sum(right.values()))
+    if left_total <= 0 or right_total <= 0:
+        return float("nan")
+    class_ids = set(left) | set(right)
+    return 0.5 * sum(
+        abs(
+            float(left.get(class_id, 0)) / left_total
+            - float(right.get(class_id, 0)) / right_total
+        )
+        for class_id in class_ids
+    )
+
+
+def exact_isomorphism_support_diagnostics(
+    populations: Mapping[str, Sequence[nx.Graph]],
+    *,
+    train_name: str = "train",
+    reference_name: str,
+) -> dict[str, Any]:
+    """Measure exact topology novelty and isomorphism-class frequency matching.
+
+    All supplied populations are partitioned jointly into exact topology
+    isomorphism classes.  WL hashes and additional graph invariants are used
+    only as safe pre-filters; class membership is confirmed with
+    ``networkx.is_isomorphic``.  This makes the diagnostic strictly stronger
+    than WL-hash novelty while remaining practical for the small generic-graph
+    benchmarks used by this project.
+
+    The returned per-population metrics include:
+
+    * WL-hash novelty against the complete training split;
+    * exact-isomorphism novelty against training;
+    * exact-isomorphism uniqueness;
+    * coverage of training isomorphism classes; and
+    * total-variation/overlap of class frequencies versus training and the
+      held-out reference population.
+    """
+
+    if train_name not in populations:
+        raise KeyError(f"Missing training population {train_name!r}.")
+    if reference_name not in populations:
+        raise KeyError(f"Missing reference population {reference_name!r}.")
+
+    index = _ExactTopologyClassIndex()
+    assignments: dict[str, list[int]] = {}
+    class_counts: dict[str, Counter[int]] = {}
+
+    # Train first so class IDs 0..K_train-1 are stable training-support classes.
+    ordered_names = [train_name, reference_name] + [
+        name for name in populations
+        if name not in {train_name, reference_name}
+    ]
+    for name in ordered_names:
+        graphs = list(populations[name])
+        ids = [index.classify(graph) for graph in graphs]
+        assignments[name] = ids
+        class_counts[name] = Counter(ids)
+
+    train_counts = class_counts[train_name]
+    reference_counts = class_counts[reference_name]
+    train_classes = set(train_counts)
+    num_train_classes = len(train_classes)
+    train_graphs = list(populations[train_name])
+
+    summary_rows: list[dict[str, Any]] = []
+    for name in ordered_names:
+        counts = class_counts[name]
+        total = int(sum(counts.values()))
+        classes = set(counts)
+        novel_classes = classes - train_classes
+        novel_graphs = int(sum(counts[class_id] for class_id in novel_classes))
+        represented_train_classes = classes & train_classes
+        tv_train = _frequency_tv(counts, train_counts)
+        tv_reference = _frequency_tv(counts, reference_counts)
+        wl_novelty = (
+            wl_novelty_rate(populations[name], train_graphs)
+            if train_graphs and total > 0
+            else float("nan")
+        )
+        summary_rows.append({
+            "population": name,
+            "num_graphs": total,
+            "num_exact_isomorphism_classes": len(classes),
+            "exact_isomorphism_uniqueness_rate": (
+                len(classes) / total if total > 0 else float("nan")
+            ),
+            "wl_novelty_rate_against_train": wl_novelty,
+            "exact_isomorphism_novelty_rate_against_train": (
+                novel_graphs / total if total > 0 else float("nan")
+            ),
+            "num_exact_novel_graphs_against_train": novel_graphs,
+            "num_exact_novel_classes_against_train": len(novel_classes),
+            "train_isomorphism_class_coverage_rate": (
+                len(represented_train_classes) / num_train_classes
+                if num_train_classes > 0 else float("nan")
+            ),
+            "class_frequency_tv_to_train": tv_train,
+            "class_frequency_overlap_to_train": (
+                1.0 - tv_train if tv_train == tv_train else float("nan")
+            ),
+            "class_frequency_tv_to_reference": tv_reference,
+            "class_frequency_overlap_to_reference": (
+                1.0 - tv_reference
+                if tv_reference == tv_reference else float("nan")
+            ),
+        })
+
+    class_rows: list[dict[str, Any]] = []
+    for class_id, representative in enumerate(index.representatives):
+        key = index.keys[class_id]
+        row: dict[str, Any] = {
+            "class_id": f"iso_{class_id:06d}",
+            "is_training_class": class_id in train_classes,
+            "num_nodes": int(representative.number_of_nodes()),
+            "num_edges": int(representative.number_of_edges()),
+            "degree_sequence": json.dumps(
+                sorted(
+                    [int(degree) for _, degree in representative.degree()],
+                    reverse=True,
+                ),
+                separators=(",", ":"),
+            ),
+            "wl_hash": str(key[-1]),
+        }
+        for name in ordered_names:
+            total = max(int(sum(class_counts[name].values())), 1)
+            count = int(class_counts[name].get(class_id, 0))
+            row[f"{name}_count"] = count
+            row[f"{name}_rate"] = count / total
+        class_rows.append(row)
+
+    return {
+        "protocol": {
+            "topology_only": True,
+            "node_and_edge_attributes": False,
+            "wl_hash_role": "safe prefilter only; never accepted as proof of isomorphism",
+            "exact_test": "networkx.is_isomorphic",
+            "frequency_distance": "total variation over jointly constructed exact-isomorphism classes",
+            "train_population": train_name,
+            "reference_population": reference_name,
+        },
+        "num_joint_isomorphism_classes": len(index.representatives),
+        "num_exact_isomorphism_checks": int(index.num_exact_checks),
+        "population_metrics": summary_rows,
+        "class_frequencies": class_rows,
+        "assignments": assignments,
+    }
+
+
+def _write_isomorphism_support_csv(
+    rows: Sequence[Mapping[str, Any]], path: Path,
+) -> None:
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(str(key))
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _print_isomorphism_support_diagnostics(
+    rows: Sequence[Mapping[str, Any]],
+) -> None:
+    print("\nExact topology-support diagnostics (attributes ignored)")
+    print(
+        f"{'Population':30s}"
+        f"{'WL novel':>12s}"
+        f"{'Exact novel':>14s}"
+        f"{'Iso unique':>13s}"
+        f"{'TV->train':>12s}"
+        f"{'TV->heldout':>14s}"
+    )
+    for row in rows:
+        print(
+            f"{str(row['population']):30s}"
+            f"{float(row['wl_novelty_rate_against_train']):12.6f}"
+            f"{float(row['exact_isomorphism_novelty_rate_against_train']):14.6f}"
+            f"{float(row['exact_isomorphism_uniqueness_rate']):13.6f}"
+            f"{float(row['class_frequency_tv_to_train']):12.6f}"
+            f"{float(row['class_frequency_tv_to_reference']):14.6f}"
+        )
+    print(
+        "Exact novelty = fraction of graphs not isomorphic to any training graph; "
+        "TV=0 means identical empirical isomorphism-class frequencies."
+    )
+
 def _paper_mmd(
     reference: Sequence[nx.Graph],
     candidate: Sequence[nx.Graph],
@@ -855,7 +1124,8 @@ def validate_report_reference_split(output_dir: Path, reference_split: str) -> N
 def _print_table(rows: Sequence[dict[str, Any]], *, reference_split: str = "test") -> None:
     print(f"Graph-distribution MMD against held-out {reference_split} graphs (lower is better)")
     if any("novelty_rate" in row for row in rows):
-        print("Novelty against the complete training split (WL topology hashes; higher is better)")
+        print("WL novelty against the complete training split (candidate population only; higher is better)")
+        print("The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.")
     columns = {
         "degree_mmd": ("Degree MMD", 14),
         "clustering_mmd": ("Clustering MMD", 18),
@@ -977,6 +1247,16 @@ def main() -> None:
         choices=("stratified", "random"),
         default="stratified",
         help=argparse.SUPPRESS,
+    )
+
+    parser.add_argument(
+        "--skip-exact-isomorphism-diagnostics",
+        action="store_true",
+        help=(
+            "Skip topology-only exact-isomorphism novelty and isomorphism-class "
+            "frequency diagnostics for generic graphs. They are enabled by "
+            "default and use the complete training split."
+        ),
     )
     parser.add_argument("--sample-seed", type=int, default=42, help=argparse.SUPPRESS)
     parser.add_argument("--layout-seed", type=int, default=42, help=argparse.SUPPRESS)
@@ -1202,6 +1482,49 @@ def main() -> None:
         )
     )
 
+    isomorphism_diagnostics: dict[str, Any] | None = None
+    isomorphism_support_csv_path = output_dir / "isomorphism_support_metrics.csv"
+    isomorphism_class_csv_path = output_dir / "isomorphism_class_frequencies.csv"
+    if (
+        not molecular
+        and train_graphs
+        and not args.skip_exact_isomorphism_diagnostics
+    ):
+        reference_population_name = f"heldout_{reference_split}"
+        populations: dict[str, Sequence[nx.Graph]] = {
+            "train": train_graphs,
+            reference_population_name: reference,
+        }
+        if base_graphs:
+            base_count = len(base_graphs)
+            if args.max_graphs is not None:
+                base_count = min(base_count, int(args.max_graphs))
+            populations[str(base_stage)] = base_graphs[:base_count]
+        if enriched_base_graphs and not _same_artifact(enriched_base_path, generated_path):
+            enriched_count = len(enriched_base_graphs)
+            if args.max_graphs is not None:
+                enriched_count = min(enriched_count, int(args.max_graphs))
+            populations["enriched_base"] = enriched_base_graphs[:enriched_count]
+        populations[final_stage] = generated
+        print(
+            "Computing exact-isomorphism support diagnostics with the complete "
+            f"training split ({len(train_graphs)} graphs)...",
+            flush=True,
+        )
+        isomorphism_diagnostics = exact_isomorphism_support_diagnostics(
+            populations,
+            train_name="train",
+            reference_name=reference_population_name,
+        )
+        _write_isomorphism_support_csv(
+            isomorphism_diagnostics["population_metrics"],
+            isomorphism_support_csv_path,
+        )
+        _write_isomorphism_support_csv(
+            isomorphism_diagnostics["class_frequencies"],
+            isomorphism_class_csv_path,
+        )
+
     csv_path = output_dir / "graph_mmd_metrics.csv"
     json_path = output_dir / "graph_evaluation_report.json"
     degree_sequence_csv_path = output_dir / "degree_sequence_mmd.csv"
@@ -1251,7 +1574,7 @@ def main() -> None:
 
     save_json(
         {
-            "format": "graph_generation_evaluation_report_v8",
+            "format": "graph_generation_evaluation_report_v9",
             "reference_split": reference_split,
             "reference_split_sha256": provenance["split_sha256"][reference_split],
             "reference_graph_indices_zero_based": list(range(reference_count)),
@@ -1271,6 +1594,22 @@ def main() -> None:
                     "isomorphism_test": "approximate Weisfeiler-Lehman hash comparison",
                 }
                 if not molecular else None
+            ),
+            "generic_exact_isomorphism_diagnostics": (
+                {
+                    key: value
+                    for key, value in (isomorphism_diagnostics or {}).items()
+                    if key not in {"assignments", "class_frequencies"}
+                }
+                if not molecular else None
+            ),
+            "generic_exact_isomorphism_support_csv": (
+                str(isomorphism_support_csv_path)
+                if isomorphism_diagnostics is not None else None
+            ),
+            "generic_exact_isomorphism_class_frequency_csv": (
+                str(isomorphism_class_csv_path)
+                if isomorphism_diagnostics is not None else None
             ),
             "generic_spectral_descriptor": (
                 "normalized_laplacian_isolates_zero_stable_boundaries_v2"
@@ -1353,6 +1692,10 @@ def main() -> None:
         json_path,
     )
     _print_table(rows, reference_split=reference_split)
+    if isomorphism_diagnostics is not None:
+        _print_isomorphism_support_diagnostics(
+            isomorphism_diagnostics["population_metrics"]
+        )
     if degree_sequence_prior_metrics is not None:
         _print_degree_sequence_prior(
             degree_sequence_prior_metrics, reference_split=reference_split
@@ -1360,6 +1703,9 @@ def main() -> None:
     if molecular_metrics is not None:
         _print_molecular_metrics(molecular_stage_rows)
     print(f"Saved metrics: {csv_path}")
+    if isomorphism_diagnostics is not None:
+        print(f"Saved support metrics: {isomorphism_support_csv_path}")
+        print(f"Saved class frequencies: {isomorphism_class_csv_path}")
     if degree_sequence_prior_metrics is not None:
         print(f"Saved metrics: {degree_sequence_csv_path}")
     if molecular_metrics is not None:
