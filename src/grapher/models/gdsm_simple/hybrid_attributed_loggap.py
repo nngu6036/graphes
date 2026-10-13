@@ -17,8 +17,11 @@ Design contract
 * Typed connected induced graphlets supervise only the attribute branch.
 * The final reverse transition applies degree-compatible atom sampling and the
   joint valence-budgeted bond decoder.  This is an intrinsic endpoint
-  transition, not RDKit repair, filtering, replacement sampling, or rewiring.
+  transition, not RDKit repair, filtering, or replacement sampling. Optional
+  same-bond diversification, when enabled, is applied only after this endpoint.
 * Topology and attribute PPGN encoders are parameter-disjoint.
+* Optional generation-only same-bond-type stochastic rewiring can diversify the
+  final attributed sample while preserving node types and indexed typed degrees.
 """
 from __future__ import annotations
 
@@ -47,7 +50,9 @@ from grapher.models.artifacts import ArtifactLayout
 from grapher.models.base import GenerateRequest, GenerationArtifacts, TrainRequest, TrainingArtifacts
 from grapher.models.errors import ArtifactCollisionError
 from grapher.models.gdsm_simple.model import sinusoidal_time_embedding
-from grapher.rewiring_mlp.attributed.data import GraphCategoryVocabulary
+from grapher.rewiring_mlp.attributed.data import GraphCategoryVocabulary, GraphletBasis
+from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
+from grapher.properties.summary import SummaryConfig
 
 from . import hierarchical_attributed_loggap as hierarchical
 from .attribute_decoding import (
@@ -58,6 +63,7 @@ from .attribute_decoding import (
 )
 from .categorical.noise import MarginalNoise, cosine_alpha_bar, draw_categories
 from .typed_degree_summary import TypedDegreeHistogramBasis
+from . import attributed_diversification
 from .vanilla_gsdm import (
     _EMA,
     _fit_laplacian_log_gap_stats,
@@ -103,6 +109,11 @@ def default_options() -> dict[str, Any]:
         "endpoint_constraint": "final_reverse_transition",
         "save_trajectory": False,
     }
+    # Optional generation-only stochastic same-bond-type diversification.
+    # Disabled by default so existing checkpoints/generation remain identical.
+    options["attributed_diversification"] = copy.deepcopy(
+        attributed_diversification.DEFAULT_ATTRIBUTED_DIVERSIFICATION
+    )
     # Mask corruption belongs to the previous decoder and is intentionally not
     # part of this model.  The final endpoint policy remains configurable.
     options["attributed"].pop("corruption", None)
@@ -171,7 +182,13 @@ def validate_options(options: Mapping[str, Any]) -> None:
     if str(cfg.get("endpoint_constraint", "")) != "final_reverse_transition":
         raise ValueError("Chemical constraints are applied in the final reverse transition")
     if bool((options.get("graphlet_refinement", {}) or {}).get("enabled", False)):
-        raise ValueError("Hybrid attributed generation does not use rewiring")
+        raise ValueError(
+            "Hybrid attributed generation does not use legacy graphlet_refinement; "
+            "use attributed_diversification for same-bond stochastic rewiring"
+        )
+    attributed_diversification.validate_options(
+        dict(options.get("attributed_diversification", {}) or {})
+    )
 
 
 def _model_config(
@@ -1679,6 +1696,82 @@ def generate(
                 flush=True,
             )
 
+    # ------------------------------------------------------------------
+    # Optional generation-only stochastic same-bond-type diversification.
+    # Attribute diffusion has already finished; node/bond labels from that
+    # endpoint define the source graph.  Same-bond swaps preserve indexed
+    # ordinary and typed degrees exactly while the frozen topology/typed
+    # summary predictions constrain higher-order drift.
+    # ------------------------------------------------------------------
+    diversification_cfg = attributed_diversification.resolve_options(
+        dict(options.get("attributed_diversification", {}) or {})
+    )
+    pre_refinement_graphs: list[nx.Graph] | None = None
+    diversification_rows: list[dict[str, Any]] = []
+    if bool(diversification_cfg.get("enabled", False)):
+        pre_refinement_graphs = [graph.copy() for graph in graphs]
+        topology_basis = TopologyGraphletBasis.from_dict(
+            dict(state["topology_summary"]["graphlet_basis"])
+        )
+        typed_basis = GraphletBasis.from_dict(
+            dict(state["attribute_summary"]["graphlet_basis"])
+        )
+        topology_summary_spec = SummaryConfig.from_dict(
+            dict(state["topology_summary"]["summary_config"])
+        )
+        typed_summary_spec = SummaryConfig.from_dict(
+            dict(state["attribute_summary"]["summary_config"])
+        )
+        diversification_rng = np.random.default_rng(
+            int(request.generation_seed) + 610001
+        )
+        diversified_graphs: list[nx.Graph] = []
+        for graph_index, graph in enumerate(pre_refinement_graphs):
+            diversified, row = attributed_diversification.diversify_same_bond_graph(
+                graph,
+                topology_prediction=topology_predictions[graph_index],
+                attribute_prediction=typed_predictions[graph_index],
+                topology_basis=topology_basis,
+                typed_basis=typed_basis,
+                topology_summary_config=topology_summary_spec,
+                typed_summary_config=typed_summary_spec,
+                vocabulary=vocab,
+                config=diversification_cfg,
+                rng=diversification_rng,
+            )
+            row["graph_index"] = graph_index
+            diversified.graph["attributed_diversification"] = {
+                "mode": "stochastic_same_bond_diversification",
+                "requested_steps": int(row["requested_steps"]),
+                "accepted_steps": int(row["accepted_steps"]),
+                "typed_degree_preserved": bool(row.get("typed_degree_preserved", False)),
+                "degree_preserved": bool(row.get("degree_preserved", False)),
+                "bond_type_counts_preserved": bool(
+                    row.get("bond_type_counts_preserved", False)
+                ),
+            }
+            diversification_rows.append(row)
+            diversified_graphs.append(diversified)
+        graphs = diversified_graphs
+
+        # The topology used by categorical attribute diffusion is retained in
+        # topology_graphs.pkl for auditability.  base_graphs.pkl below is the
+        # post-diversification attributed sample; pre_refinement_graphs.pkl is
+        # the paired attributed endpoint before rewiring.
+        for row, diagnostic in zip(diversification_rows, attribute_rows):
+            diagnostic["rewiring"] = True
+            diagnostic["same_bond_type_rewiring"] = True
+            diagnostic["rewiring_requested_steps"] = int(row["requested_steps"])
+            diagnostic["rewiring_accepted_steps"] = int(row["accepted_steps"])
+            diagnostic["rewiring_changed"] = bool(row["changed"])
+            diagnostic["typed_degree_preserved_after_rewiring"] = bool(
+                row.get("typed_degree_preserved", False)
+            )
+    else:
+        for diagnostic in attribute_rows:
+            diagnostic["rewiring"] = False
+            diagnostic["same_bond_type_rewiring"] = False
+
     aggregate: dict[str, Any] = {
         "num_requested": request.num_graphs,
         "num_generated": len(graphs),
@@ -1700,6 +1793,28 @@ def generate(
     aggregate["edge_confidence_mean"] = (
         float(np.mean(finite_edge)) if finite_edge else None
     )
+    aggregate["same_bond_type_rewiring_enabled"] = bool(
+        diversification_cfg.get("enabled", False)
+    )
+    if diversification_rows:
+        aggregate.update({
+            "rewiring_requested_steps_mean": float(np.mean([
+                row["requested_steps"] for row in diversification_rows
+            ])),
+            "rewiring_accepted_steps_mean": float(np.mean([
+                row["accepted_steps"] for row in diversification_rows
+            ])),
+            "rewiring_changed_rate": float(np.mean([
+                bool(row["changed"]) for row in diversification_rows
+            ])),
+            "rewiring_typed_degree_preservation_rate": float(np.mean([
+                bool(row.get("typed_degree_preserved", False))
+                for row in diversification_rows
+            ])),
+            "rewiring_connected_rate": float(np.mean([
+                bool(row.get("connected", False)) for row in diversification_rows
+            ])),
+        })
     for key in (
         "topology_infeasible",
         "atom_degree_incompatible",
@@ -1736,6 +1851,8 @@ def generate(
             "predicted_typed_graphlet_summaries": typed_predictions,
             "predicted_structure_summaries": combined_predictions,
         }
+        if pre_refinement_graphs is not None:
+            payloads["pre_refinement_graphs"] = pre_refinement_graphs
         if bool(diffusion_cfg.get("save_trajectory", False)):
             payloads["attribute_diffusion_trajectories"] = trajectories
         files: dict[str, dict[str, Any]] = {}
@@ -1744,9 +1861,16 @@ def generate(
             with path.open("wb") as handle:
                 pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
             files[name] = {"path": path.name, "sha256": _sha256(path)}
-        files["base_graphs"]["role"] = "final_attributed_graphs"
+        files["base_graphs"]["role"] = (
+            "final_diversified_attributed_graphs"
+            if diversification_rows else "final_attributed_graphs"
+        )
         files["molecular_graphs"]["role"] = "compatibility_alias"
-        files["topology_graphs"]["role"] = "fixed_binary_topologies_before_attributes"
+        files["topology_graphs"]["role"] = "fixed_binary_topologies_before_attributes_and_diversification"
+        if "pre_refinement_graphs" in files:
+            files["pre_refinement_graphs"]["role"] = (
+                "attributed_endpoint_before_same_bond_diversification"
+            )
         files["predicted_topology_summaries"].update({
             "topology_only_graphlets": True,
             "graphlet_orders": list(
@@ -1795,6 +1919,24 @@ def generate(
             "path": diagnostics_path.name,
             "sha256": _sha256(diagnostics_path),
         }
+        if diversification_rows:
+            diversification_path = staging / "attributed_diversification_diagnostics.json"
+            _write_json(
+                diversification_path,
+                {
+                    "format": "gdsm_attributed_same_bond_diversification_v1",
+                    "config": diversification_cfg,
+                    "per_graph": diversification_rows,
+                    "aggregate": {
+                        key: value for key, value in aggregate.items()
+                        if key.startswith("rewiring_") or key == "same_bond_type_rewiring_enabled"
+                    },
+                },
+            )
+            files["attributed_diversification_diagnostics"] = {
+                "path": diversification_path.name,
+                "sha256": _sha256(diversification_path),
+            }
         files["topology_pairing"] = {
             "path": pairing_path.name,
             "sha256": _sha256(pairing_path),
@@ -1896,7 +2038,16 @@ def generate(
                     "degree_sequence_prescribed_during_topology_diffusion": False,
                     "connectivity_guaranteed": False,
                     "full_chemical_validity_guaranteed": False,
-                    "rewiring": False,
+                    "rewiring": bool(diversification_rows),
+                    "rewiring_mode": (
+                        "stochastic_same_bond_diversification"
+                        if diversification_rows else None
+                    ),
+                    "same_bond_type_rewiring": bool(diversification_rows),
+                    "ordinary_degree_preserved_by_rewiring": bool(diversification_rows),
+                    "typed_degree_preserved_by_rewiring": bool(diversification_rows),
+                    "bond_type_counts_preserved_by_rewiring": bool(diversification_rows),
+                    "attributed_diversification": diversification_cfg,
                     "posthoc_repair": False,
                     "filtering": False,
                     "replacement_sampling": False,
