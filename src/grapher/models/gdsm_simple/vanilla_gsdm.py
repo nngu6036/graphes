@@ -42,11 +42,13 @@ target for degree-preserving double-edge-swap refinement.
 
 The joint Laplacian log-gap variants also support an optional fixed-dimensional
 low-frequency spectral bottleneck.  When ``sde.spectral_cutoff.enabled`` is
-true, only the first ``min(k,n-1)`` nontrivial Laplacian eigenpairs contribute
-to topology reconstruction and the high-frequency eigenvalue tail is zeroed.
-A stochastic connected degree-budget decoder can then sample a discrete graph
-from the low-rank edge scores using the predicted degree histogram.  This is a
-fixed-k ablation rather than a learnable cutoff.
+true, only the first ``min(k,n-1)`` nontrivial Laplacian log-gap coordinates are
+diffused.  The missing high-frequency spectral tail can either be zeroed (the
+legacy fixed-k ablation) or completed by a training-only conditional Gaussian
+ridge model fitted to the clean log-gap tail.  Tail completion preserves the
+original threshold topology decoder, so ``k=max_nodes-1`` recovers the ordinary
+full-spectrum path instead of switching to a separate edge-budget heuristic.
+This is a fixed-k ablation rather than a learnable cutoff.
 
 None of these variants uses Havel-Hakimi construction, degree projection,
 categorical edge prediction, graphlet guidance, rewiring, or post-hoc repair.
@@ -93,10 +95,11 @@ CHECKPOINT_FORMAT_V1 = "gdsm_simple_vanilla_gsdm_checkpoint_v1"
 CHECKPOINT_FORMAT_V2 = "gdsm_simple_vanilla_gsdm_checkpoint_v2"
 CHECKPOINT_FORMAT_V3 = "gdsm_simple_vanilla_gsdm_checkpoint_v3"
 CHECKPOINT_FORMAT_V4 = "gdsm_simple_vanilla_gsdm_checkpoint_v4"
-CHECKPOINT_FORMAT = "gdsm_simple_vanilla_gsdm_checkpoint_v5"
+CHECKPOINT_FORMAT_V5 = "gdsm_simple_vanilla_gsdm_checkpoint_v5"
+CHECKPOINT_FORMAT = "gdsm_simple_vanilla_gsdm_checkpoint_v6"
 SUPPORTED_CHECKPOINT_FORMATS = {
     CHECKPOINT_FORMAT_V1, CHECKPOINT_FORMAT_V2, CHECKPOINT_FORMAT_V3,
-    CHECKPOINT_FORMAT_V4, CHECKPOINT_FORMAT,
+    CHECKPOINT_FORMAT_V4, CHECKPOINT_FORMAT_V5, CHECKPOINT_FORMAT,
 }
 TRAINING_FORMAT = "grapher_gdsm_simple_vanilla_gsdm_training_v1"
 GENERATION_FORMAT = "grapher_gdsm_simple_vanilla_gsdm_generation_v1"
@@ -272,14 +275,18 @@ def default_vanilla_options() -> dict[str, Any]:
             "log_gap_min_std": 1.0e-3,
             "log_gap_exp_clip": 20.0,
             # Optional fixed-dimensional low-frequency spectral bottleneck.
-            # When enabled, only the first k nontrivial Laplacian eigenpairs
-            # contribute to the reconstructed topology; all higher-frequency
-            # eigenvalues are zeroed.
+            # Only the first k nontrivial Laplacian log-gap coordinates are
+            # diffused.  The high-frequency tail can be completed from a
+            # training-only conditional Gaussian ridge model at the endpoint.
             "spectral_cutoff": {
                 "enabled": False,
                 "k": None,
                 "selection": "low_frequency_nonzero",
-                "tail_policy": "zero",
+                "tail_policy": "conditional_ridge_gaussian",
+                "tail_ridge": 1.0e-2,
+                "tail_min_std": 5.0e-2,
+                "tail_temperature": 1.0,
+                "tail_condition_on_size": True,
             },
         },
         "sample": {
@@ -444,20 +451,29 @@ def _resolved_spectral_cutoff(
     """Normalize the optional fixed-k low-frequency spectral bottleneck.
 
     ``k`` counts nontrivial Laplacian modes.  For an ``n``-node graph the
-    effective number of active modes is ``min(k, n-1)``.  The trivial zero
-    Laplacian eigenvalue is never diffused.  The initial implementation uses a
-    strict zero tail so that high-frequency donor eigenpairs cannot leak into
-    topology reconstruction.
+    effective number of diffused modes is ``min(k, n-1)``.  The trivial zero
+    Laplacian eigenvalue is never diffused.
+
+    ``tail_policy=conditional_ridge_gaussian`` fits a training-only conditional
+    Gaussian model in normalized log-gap space.  At generation the model
+    completes coordinates beyond the diffused prefix and the ordinary topology
+    threshold decoder is applied to the reconstructed full Laplacian.  The
+    legacy ``zero`` policy remains available for backwards compatibility.
     """
 
     raw = dict((sde_cfg or {}).get("spectral_cutoff", {}) or {})
     enabled = bool(raw.get("enabled", False))
+    default_policy = "conditional_ridge_gaussian"
     if not enabled:
         return {
             "enabled": False,
             "k": None,
             "selection": "low_frequency_nonzero",
-            "tail_policy": "zero",
+            "tail_policy": default_policy,
+            "tail_ridge": 1.0e-2,
+            "tail_min_std": 5.0e-2,
+            "tail_temperature": 1.0,
+            "tail_condition_on_size": True,
         }
     if raw.get("k") is None:
         raise ValueError("sde.spectral_cutoff.k is required when the cutoff is enabled")
@@ -478,17 +494,44 @@ def _resolved_spectral_cutoff(
         raise ValueError(
             "sde.spectral_cutoff.selection must be low_frequency_nonzero"
         )
-    tail_policy = str(raw.get("tail_policy", "zero")).lower()
-    if tail_policy not in {"zero", "zero_tail"}:
+    tail_policy = str(raw.get("tail_policy", default_policy)).lower()
+    aliases = {
+        "conditional_gaussian": "conditional_ridge_gaussian",
+        "ridge_gaussian": "conditional_ridge_gaussian",
+        "learned_conditional_gaussian": "conditional_ridge_gaussian",
+        "zero_tail": "zero",
+    }
+    tail_policy = aliases.get(tail_policy, tail_policy)
+    if tail_policy not in {"zero", "conditional_ridge_gaussian"}:
         raise ValueError(
-            "The fixed-k implementation currently supports only "
-            "sde.spectral_cutoff.tail_policy=zero"
+            "sde.spectral_cutoff.tail_policy must be zero or "
+            "conditional_ridge_gaussian"
         )
+    tail_ridge = float(raw.get("tail_ridge", 1.0e-2))
+    tail_min_std = float(raw.get("tail_min_std", 5.0e-2))
+    tail_temperature = float(raw.get("tail_temperature", 1.0))
+    if not math.isfinite(tail_ridge) or tail_ridge < 0.0:
+        raise ValueError("sde.spectral_cutoff.tail_ridge must be finite and >= 0")
+    if not math.isfinite(tail_min_std) or tail_min_std <= 0.0:
+        raise ValueError("sde.spectral_cutoff.tail_min_std must be finite and > 0")
+    if not math.isfinite(tail_temperature) or tail_temperature < 0.0:
+        raise ValueError("sde.spectral_cutoff.tail_temperature must be finite and >= 0")
+    if tail_policy == "zero":
+        return {
+            "enabled": True,
+            "k": k,
+            "selection": "low_frequency_nonzero",
+            "tail_policy": "zero",
+        }
     return {
         "enabled": True,
         "k": k,
         "selection": "low_frequency_nonzero",
-        "tail_policy": "zero",
+        "tail_policy": tail_policy,
+        "tail_ridge": tail_ridge,
+        "tail_min_std": tail_min_std,
+        "tail_temperature": tail_temperature,
+        "tail_condition_on_size": bool(raw.get("tail_condition_on_size", True)),
     }
 
 
@@ -760,6 +803,12 @@ def validate_options(options: Mapping[str, Any]) -> None:
                 "sde.spectral_cutoff is implemented only for Laplacian log-gap variants"
             )
         decoder_cfg = _resolved_fixed_k_decoder(options.get("sample", {}))
+        if spectral_cutoff["tail_policy"] == "conditional_ridge_gaussian" and decoder_cfg["mode"] != "threshold":
+            raise ValueError(
+                "conditional_ridge_gaussian tail completion is a controlled fixed-k ablation "
+                "and requires sample.fixed_k_decoder.mode=threshold so the original topology "
+                "decoder is preserved"
+            )
         if decoder_cfg["mode"] == "stochastic_degree_budget":
             if not bool(summary_cfg.get("degree", {}).get("enabled", False)):
                 raise ValueError(
@@ -1784,13 +1833,28 @@ def _spectral_cutoff_from_transform(
             "enabled": False,
             "k": None,
             "selection": "low_frequency_nonzero",
-            "tail_policy": "zero",
+            "tail_policy": "conditional_ridge_gaussian",
+            "tail_ridge": 1.0e-2,
+            "tail_min_std": 5.0e-2,
+            "tail_temperature": 1.0,
+            "tail_condition_on_size": True,
         }
+    policy = str(raw.get("tail_policy", "conditional_ridge_gaussian")).lower()
+    policy = {
+        "conditional_gaussian": "conditional_ridge_gaussian",
+        "ridge_gaussian": "conditional_ridge_gaussian",
+        "learned_conditional_gaussian": "conditional_ridge_gaussian",
+        "zero_tail": "zero",
+    }.get(policy, policy)
     return {
         "enabled": True,
         "k": int(raw["k"]),
         "selection": str(raw.get("selection", "low_frequency_nonzero")),
-        "tail_policy": str(raw.get("tail_policy", "zero")),
+        "tail_policy": policy,
+        "tail_ridge": float(raw.get("tail_ridge", 1.0e-2)),
+        "tail_min_std": float(raw.get("tail_min_std", 5.0e-2)),
+        "tail_temperature": float(raw.get("tail_temperature", 1.0)),
+        "tail_condition_on_size": bool(raw.get("tail_condition_on_size", True)),
     }
 
 
@@ -1811,15 +1875,16 @@ def _apply_spectral_cutoff_to_eigenvalues(
     flags: torch.Tensor,
     spectral_transform: Mapping[str, Any] | None,
 ) -> torch.Tensor:
+    """Apply the diffused-prefix mask during the reverse process.
+
+    Even when the endpoint tail policy is conditional, the high-frequency tail
+    is absent *during* low-frequency diffusion.  It is completed only after the
+    reverse process by :func:`_complete_conditional_spectral_tail`.
+    """
     cutoff = _spectral_cutoff_from_transform(spectral_transform)
     if not cutoff["enabled"]:
         return eigenvalues
-    if str(cutoff.get("tail_policy", "zero")).lower() != "zero":
-        raise ValueError("Only zero-tail fixed-k spectral reconstruction is supported")
     mask = _fixed_k_laplacian_mask(flags, int(cutoff["k"]))
-    # The trivial mode is already zero.  Zeroing the high-frequency tail means
-    # the reconstructed operator depends only on the selected low-frequency
-    # eigenpairs, even though a padded full basis tensor is carried internally.
     return eigenvalues * mask.to(dtype=eigenvalues.dtype)
 
 def _fit_laplacian_log_gap_stats(
@@ -1958,6 +2023,224 @@ def _operator_eigenvalues_to_spectral_state(
             spectral_cutoff=dict((spectral_transform or {}).get("spectral_cutoff", {}) or {}),
         )
     raise ValueError(f"Unknown spectral parameterization: {mode!r}")
+
+
+def _spectral_transform_without_cutoff(
+    spectral_transform: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return a shallow tensor-safe copy with the fixed-k cutoff disabled."""
+    result = dict(spectral_transform or {})
+    result["spectral_cutoff"] = {"enabled": False}
+    return result
+
+
+def _fit_conditional_spectral_tail_model(
+    eigenvalues: torch.Tensor,
+    flags: torch.Tensor,
+    spectral_transform: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Fit a training-only conditional Gaussian model for log-gap tail states.
+
+    For each high-frequency normalized log-gap coordinate ``j > k`` we fit an
+    independent ridge regression
+
+        y_j = beta_j^T [1, y_1, ..., y_k, n / N] + eps_j,
+
+    using only training graphs on which coordinate ``j`` exists.  The residual
+    standard deviation supplies endpoint sampling noise.  This intentionally
+    small model provides a controlled spectral-tail completion baseline without
+    changing the main denoiser or topology decoder.
+    """
+    cutoff = _spectral_cutoff_from_transform(spectral_transform)
+    if not cutoff["enabled"] or cutoff["tail_policy"] != "conditional_ridge_gaussian":
+        return {"enabled": False, "policy": str(cutoff.get("tail_policy", "none"))}
+    if str((spectral_transform or {}).get("kind", "")).lower() != "laplacian_log_gap":
+        raise ValueError("conditional spectral-tail modeling requires laplacian_log_gap")
+    if eigenvalues.ndim != 2 or flags.shape != eigenvalues.shape:
+        raise ValueError("spectral-tail fitting expects eigenvalues/flags with shape [B,N]")
+
+    full_transform = _spectral_transform_without_cutoff(spectral_transform)
+    full_state = _operator_eigenvalues_to_spectral_state(
+        eigenvalues,
+        flags,
+        spectral_operator="combinatorial_laplacian",
+        spectral_transform=full_transform,
+    ).detach().cpu().to(torch.float64)
+    flags_cpu = flags.detach().cpu().to(torch.float64)
+    sizes = flags_cpu.sum(dim=1).long()
+    nmax = int(full_state.size(1))
+    k = int(cutoff["k"])
+    prefix_width = min(k, max(0, nmax - 1))
+    condition_on_size = bool(cutoff.get("tail_condition_on_size", True))
+    feature_dim = 1 + prefix_width + (1 if condition_on_size else 0)
+
+    features = torch.ones((full_state.size(0), feature_dim), dtype=torch.float64)
+    if prefix_width:
+        features[:, 1 : 1 + prefix_width] = full_state[:, 1 : 1 + prefix_width]
+    if condition_on_size:
+        features[:, -1] = sizes.to(torch.float64) / float(max(nmax, 1))
+
+    coefficients = torch.zeros((nmax, feature_dim), dtype=torch.float64)
+    residual_std = torch.ones(nmax, dtype=torch.float64)
+    counts = torch.zeros(nmax, dtype=torch.long)
+    ridge = float(cutoff.get("tail_ridge", 1.0e-2))
+    min_std = float(cutoff.get("tail_min_std", 5.0e-2))
+
+    for j in range(1 + prefix_width, nmax):
+        valid = sizes > j
+        count = int(valid.sum().item())
+        counts[j] = count
+        if count <= 0:
+            residual_std[j] = 1.0
+            continue
+        x = features[valid]
+        y = full_state[valid, j]
+        if count == 1:
+            coefficients[j, 0] = y[0]
+            residual_std[j] = max(min_std, 1.0)
+            continue
+        gram = x.transpose(0, 1) @ x
+        penalty = torch.eye(feature_dim, dtype=torch.float64) * ridge
+        penalty[0, 0] = 0.0  # do not regularize the intercept
+        rhs = x.transpose(0, 1) @ y
+        try:
+            beta = torch.linalg.solve(gram + penalty, rhs)
+        except RuntimeError:
+            beta = torch.linalg.pinv(gram + penalty) @ rhs
+        coefficients[j] = beta
+        residual = y - x @ beta
+        sigma = torch.sqrt(torch.mean(residual.square()).clamp_min(0.0))
+        residual_std[j] = sigma.clamp_min(min_std)
+
+    return {
+        "enabled": True,
+        "format": "conditional_ridge_gaussian_loggap_tail_v1",
+        "policy": "conditional_ridge_gaussian",
+        "k": k,
+        "max_nodes": nmax,
+        "prefix_width": prefix_width,
+        "condition_on_size": condition_on_size,
+        "feature_dim": feature_dim,
+        "ridge": ridge,
+        "min_std": min_std,
+        "temperature": float(cutoff.get("tail_temperature", 1.0)),
+        "coefficients": coefficients.to(torch.float32),
+        "residual_std": residual_std.to(torch.float32),
+        "counts": counts,
+    }
+
+
+def _complete_conditional_spectral_tail(
+    prefix_state: torch.Tensor,
+    flags: torch.Tensor,
+    spectral_transform: Mapping[str, Any],
+    *,
+    generator: torch.Generator,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+    """Complete a fixed-k log-gap state and return full Laplacian eigenvalues."""
+    cutoff = _spectral_cutoff_from_transform(spectral_transform)
+    if not cutoff["enabled"]:
+        eig = _spectral_state_to_operator_eigenvalues(
+            prefix_state,
+            flags,
+            spectral_operator="combinatorial_laplacian",
+            spectral_transform=spectral_transform,
+        )
+        return prefix_state, eig, {"enabled": False, "reason": "cutoff_disabled"}
+    if cutoff["tail_policy"] == "zero":
+        eig = _spectral_state_to_operator_eigenvalues(
+            prefix_state,
+            flags,
+            spectral_operator="combinatorial_laplacian",
+            spectral_transform=spectral_transform,
+        )
+        return prefix_state, eig, {"enabled": False, "reason": "zero_tail_policy"}
+    if cutoff["tail_policy"] != "conditional_ridge_gaussian":
+        raise ValueError(f"Unsupported spectral tail policy {cutoff['tail_policy']!r}")
+
+    payload = dict((spectral_transform or {}).get("spectral_tail_model", {}) or {})
+    if not bool(payload.get("enabled", False)):
+        raise RuntimeError(
+            "conditional_ridge_gaussian spectral tail requested but checkpoint has no fitted tail model"
+        )
+    nmax = int(prefix_state.size(1))
+    if int(payload.get("max_nodes", nmax)) != nmax:
+        raise RuntimeError("spectral tail model max_nodes does not match generation state")
+    k = int(cutoff["k"])
+    prefix_width = min(k, max(0, nmax - 1))
+    condition_on_size = bool(payload.get("condition_on_size", True))
+    feature_dim = 1 + prefix_width + (1 if condition_on_size else 0)
+    if int(payload.get("feature_dim", feature_dim)) != feature_dim:
+        raise RuntimeError("spectral tail model feature dimension mismatch")
+
+    dtype = prefix_state.dtype
+    device = prefix_state.device
+    sizes = flags.sum(dim=1).long()
+    features = torch.ones((prefix_state.size(0), feature_dim), dtype=dtype, device=device)
+    if prefix_width:
+        features[:, 1 : 1 + prefix_width] = prefix_state[:, 1 : 1 + prefix_width]
+    if condition_on_size:
+        features[:, -1] = sizes.to(dtype) / float(max(nmax, 1))
+
+    coefficients = torch.as_tensor(payload["coefficients"], dtype=dtype, device=device)
+    residual_std = torch.as_tensor(payload["residual_std"], dtype=dtype, device=device)
+    conditional_mean = features @ coefficients.transpose(0, 1)
+    base_mask = eigen_mask_from_flags(flags, "laplacian_nonzero_prefix").to(dtype)
+    prefix_mask = _fixed_k_laplacian_mask(flags, k).to(dtype)
+    tail_mask = (base_mask - prefix_mask).clamp_min(0.0)
+    active_tail = int(tail_mask.sum().item())
+    temperature = float(cutoff.get("tail_temperature", payload.get("temperature", 1.0)))
+    if active_tail == 0:
+        full_state = prefix_state * prefix_mask
+        full_transform = _spectral_transform_without_cutoff(spectral_transform)
+        eig = _spectral_state_to_operator_eigenvalues(
+            full_state,
+            flags,
+            spectral_operator="combinatorial_laplacian",
+            spectral_transform=full_transform,
+        )
+        return full_state, eig, {
+            "enabled": True,
+            "policy": "conditional_ridge_gaussian",
+            "requested_k": k,
+            "active_tail_coordinates": 0,
+            "temperature": temperature,
+            "conditional_mean_abs_mean": 0.0,
+            "sampled_tail_abs_mean": 0.0,
+        }
+    noise = torch.randn(
+        conditional_mean.shape,
+        dtype=dtype,
+        device=device,
+        generator=generator,
+    )
+    sampled_tail = conditional_mean + temperature * residual_std.unsqueeze(0) * noise
+
+    full_state = prefix_state * prefix_mask + sampled_tail * tail_mask
+    full_transform = _spectral_transform_without_cutoff(spectral_transform)
+    eig = _spectral_state_to_operator_eigenvalues(
+        full_state,
+        flags,
+        spectral_operator="combinatorial_laplacian",
+        spectral_transform=full_transform,
+    )
+
+    diagnostics = {
+        "enabled": True,
+        "policy": "conditional_ridge_gaussian",
+        "requested_k": k,
+        "active_tail_coordinates": active_tail,
+        "temperature": temperature,
+        "conditional_mean_abs_mean": (
+            float((conditional_mean * tail_mask).abs().sum().item() / active_tail)
+            if active_tail else 0.0
+        ),
+        "sampled_tail_abs_mean": (
+            float((sampled_tail * tail_mask).abs().sum().item() / active_tail)
+            if active_tail else 0.0
+        ),
+    }
+    return full_state, eig, diagnostics
 
 
 def _operator_to_adjacency_state(
@@ -2985,6 +3268,10 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
             "count": stats["count"],
             "spectral_cutoff": spectral_cutoff,
         }
+        if spectral_cutoff["enabled"] and spectral_cutoff["tail_policy"] == "conditional_ridge_gaussian":
+            spectral_transform["spectral_tail_model"] = _fit_conditional_spectral_tail_model(
+                train_data[5], train_data[2], spectral_transform
+            )
     if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
         train_targets, graphlet_meta = _joint_structure_targets(
             train_graphs, joint_graphlet_cfg
@@ -3373,7 +3660,11 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                     if spectral_cutoff["enabled"] else False
                 ),
                 "spectral_tail_policy": (
-                    "zero_high_frequency_eigenvalues_before_operator_reconstruction"
+                    (
+                        "training_only_conditional_ridge_gaussian_completion_in_normalized_log_gap_space"
+                        if spectral_cutoff.get("tail_policy") == "conditional_ridge_gaussian"
+                        else "zero_high_frequency_eigenvalues_before_operator_reconstruction"
+                    )
                     if spectral_cutoff["enabled"] else "full_active_spectrum"
                 ),
                 "spectral_corruption": (
@@ -3392,8 +3683,8 @@ def train(wrapper, request: TrainRequest, options: Mapping[str, Any]) -> Trainin
                 ),
                 "generation_basis": (
                     (
-                        "uniform_training_laplacian_low_frequency_eigenbasis_prefix_"
-                        "joint_with_node_count"
+                        "uniform_training_full_laplacian_eigenbasis_joint_with_node_count;_"
+                        "only_first_k_nontrivial_log_gap_coordinates_are_diffused"
                     )
                     if spectral_operator == "combinatorial_laplacian"
                     and spectral_cutoff["enabled"]
@@ -3738,12 +4029,34 @@ def sample_batch(
         final_lam_mean = pred_mean
         lam = pred_mean * e_mask
     if bool(sample_cfg.get("noise_removal", True)):
+        final_state = final_lam_mean
+        if spectral_operator == "combinatorial_laplacian":
+            cutoff = _spectral_cutoff_from_transform(spectral_transform)
+            if cutoff["enabled"] and cutoff["tail_policy"] == "conditional_ridge_gaussian":
+                _full_state, eig_mean, _tail_diag = _complete_conditional_spectral_tail(
+                    final_state, flags, spectral_transform or {}, generator=generator
+                )
+                operator_mean = reconstruct_adjacency(u, eig_mean)
+                adj_mean = _operator_to_adjacency_state(
+                    operator_mean, flags, spectral_operator
+                )
+                return x_mean, adj_mean, eig_mean, u
         eig_mean = _spectral_state_to_operator_eigenvalues(
-            final_lam_mean, flags, spectral_operator=spectral_operator, spectral_transform=spectral_transform
+            final_state, flags, spectral_operator=spectral_operator, spectral_transform=spectral_transform
         )
         return x_mean, adj_mean, eig_mean, u
+    final_state = final_lam_sample
+    if spectral_operator == "combinatorial_laplacian":
+        cutoff = _spectral_cutoff_from_transform(spectral_transform)
+        if cutoff["enabled"] and cutoff["tail_policy"] == "conditional_ridge_gaussian":
+            _full_state, eig_sample, _tail_diag = _complete_conditional_spectral_tail(
+                final_state, flags, spectral_transform or {}, generator=generator
+            )
+            operator_sample = reconstruct_adjacency(u, eig_sample)
+            adj = _operator_to_adjacency_state(operator_sample, flags, spectral_operator)
+            return x, adj, eig_sample, u
     eig_sample = _spectral_state_to_operator_eigenvalues(
-        final_lam_sample, flags, spectral_operator=spectral_operator, spectral_transform=spectral_transform
+        final_state, flags, spectral_operator=spectral_operator, spectral_transform=spectral_transform
     )
     return x, adj, eig_sample, u
 
@@ -4282,7 +4595,10 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "spectral_parameterization": str(spectral_transform.get("kind", "direct_eigenvalues")),
                 "nonnegative_and_nondecreasing_by_construction": (
                     str(spectral_transform.get("kind", "")).lower() == "laplacian_log_gap"
-                    and not spectral_cutoff["enabled"]
+                    and (
+                        not spectral_cutoff["enabled"]
+                        or spectral_cutoff.get("tail_policy") == "conditional_ridge_gaussian"
+                    )
                 ),
                 "selected_low_frequency_prefix_nondecreasing_by_construction": (
                     str(spectral_transform.get("kind", "")).lower() == "laplacian_log_gap"
@@ -4486,8 +4802,8 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "spectral_cutoff": _jsonable(spectral_cutoff),
                 "eigenvectors": (
                     (
-                        "first_min(k,n-1)_nontrivial_low_frequency_columns_of_"
-                        "training_split_empirical_laplacian_eigenbasis"
+                        "training_split_empirical_full_laplacian_eigenbasis;_"
+                        "first_k_nontrivial_coordinates_drive_the_diffused_prefix"
                     )
                     if spectral_cutoff["enabled"]
                     else (
@@ -4497,7 +4813,11 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     )
                 ),
                 "high_frequency_tail": (
-                    "zeroed_before_operator_reconstruction"
+                    (
+                        "sampled_from_training_only_conditional_ridge_gaussian_log_gap_model"
+                        if spectral_cutoff.get("tail_policy") == "conditional_ridge_gaussian"
+                        else "zeroed_before_operator_reconstruction"
+                    )
                     if spectral_cutoff["enabled"] else "diffused_full_active_spectrum"
                 ),
                 "reverse_process": "coupled_VP_spectral_predictor_corrector",

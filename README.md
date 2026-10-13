@@ -1448,3 +1448,14 @@ See [the Option-A guide](docs/GDSM_SIMPLE_OPTION_A.md) for the strict
 initialization-only training configurations, compatibility sampling with existing
 Structure3 checkpoints, Community-small/Ego-small commands, and degree audits.
 The original degree-constrained modes remain unchanged.
+
+## Fixed-k spectral bottleneck with modeled high-frequency tail
+
+The controlled fixed-k Laplacian ablation now supports a training-only
+conditional ridge-Gaussian completion model for the high-frequency normalized
+log-gap tail. Only the first `k` nontrivial low-frequency coordinates are
+diffused; the tail is sampled conditionally at the endpoint and the original
+threshold topology decoder is retained. This replaces the earlier zero-tail +
+stochastic edge-budget confound for the new fixed-k configs.
+
+See [`docs/FIXED_K_CONDITIONAL_SPECTRAL_TAIL.md`](docs/FIXED_K_CONDITIONAL_SPECTRAL_TAIL.md).
