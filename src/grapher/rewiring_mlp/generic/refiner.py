@@ -67,6 +67,13 @@ class TopologyRefinerConfig:
     # negative relative limit disables that bound.
     max_target_worsening: float = 0.0
     max_relative_target_worsening: float = -1.0
+    # Optional global trust region measured against the *initial* source-to-
+    # target structural discrepancy.  This is stronger than the per-step
+    # worsening bound above: every accepted candidate must remain inside the
+    # same source-anchored structural neighbourhood.
+    target_trust_region_enabled: bool = False
+    target_trust_region_absolute: float = 0.0
+    target_trust_region_relative: float = -1.0
     relative_improvement_epsilon: float = 1.0e-12
     sample_graphlet: bool = False
     # Conservative higher-order trust region.  -1 disables an individual
@@ -158,6 +165,13 @@ class TopologyRefinerConfig:
             soft.get("max_relative_target_worsening", -1.0)
         )
 
+        trust = values.get("target_trust_region", {}) or {}
+        if not isinstance(trust, dict):
+            raise ValueError("topology_refiner.target_trust_region must be a mapping.")
+        target_trust_region_enabled = bool(trust.get("enabled", False))
+        target_trust_region_absolute = float(trust.get("absolute_worsening", 0.0))
+        target_trust_region_relative = float(trust.get("relative_worsening", -1.0))
+
         motif = values.get("motif_guard", {}) or {}
         if not isinstance(motif, dict):
             raise ValueError("topology_refiner.motif_guard must be a mapping.")
@@ -220,6 +234,9 @@ class TopologyRefinerConfig:
             min_relative_improvement=float(values.get("min_relative_improvement", 0.0)),
             max_target_worsening=max_target_worsening,
             max_relative_target_worsening=max_relative_target_worsening,
+            target_trust_region_enabled=target_trust_region_enabled,
+            target_trust_region_absolute=target_trust_region_absolute,
+            target_trust_region_relative=target_trust_region_relative,
             relative_improvement_epsilon=float(values.get("relative_improvement_epsilon", 1.0e-12)),
             sample_graphlet=bool(values.get("sample_graphlet", False)),
             motif_guard_enabled=bool(motif.get("enabled", False)),
@@ -283,6 +300,20 @@ class TopologyRefinerConfig:
         ):
             raise ValueError(
                 "topology_refiner.soft_selection.max_relative_target_worsening must be >= -1."
+            )
+        if (
+            not np.isfinite(config.target_trust_region_absolute)
+            or config.target_trust_region_absolute < 0.0
+        ):
+            raise ValueError(
+                "topology_refiner.target_trust_region.absolute_worsening must be finite and nonnegative."
+            )
+        if (
+            not np.isfinite(config.target_trust_region_relative)
+            or config.target_trust_region_relative < -1.0
+        ):
+            raise ValueError(
+                "topology_refiner.target_trust_region.relative_worsening must be >= -1."
             )
         if not np.isfinite(config.relative_improvement_epsilon) or config.relative_improvement_epsilon <= 0.0:
             raise ValueError(
@@ -658,6 +689,7 @@ def _select_row(
     config: TopologyRefinerConfig,
     rng: np.random.Generator,
     progress: float,
+    max_structural_discrepancy: float | None = None,
 ) -> tuple[int | None, float, list[float], float, int]:
     """Select a candidate or STOP using greedy or relaxed softmax selection.
 
@@ -679,6 +711,12 @@ def _select_row(
     if config.accept_only_improving:
         eligible = improvements > float(config.min_improvement)
         eligible &= relative_improvements > float(config.min_relative_improvement)
+        if max_structural_discrepancy is not None:
+            candidate_discrepancies = np.asarray(
+                [float(row["candidate_structural_discrepancy"]) for row in rows],
+                dtype=np.float64,
+            )
+            eligible &= candidate_discrepancies <= float(max_structural_discrepancy) + 1.0e-12
         scores[:-1][~eligible] = -np.inf
         if np.any(np.isfinite(scores[:-1])):
             # Preserve historical greedy semantics: STOP is offered only on a
@@ -691,6 +729,12 @@ def _select_row(
                 relative_improvements
                 >= -float(config.max_relative_target_worsening)
             )
+        if max_structural_discrepancy is not None:
+            candidate_discrepancies = np.asarray(
+                [float(row["candidate_structural_discrepancy"]) for row in rows],
+                dtype=np.float64,
+            )
+            eligible &= candidate_discrepancies <= float(max_structural_discrepancy) + 1.0e-12
         scores[:-1][~eligible] = -np.inf
         if not config.stop_action and np.any(np.isfinite(scores[:-1])):
             scores[-1] = -np.inf
@@ -775,6 +819,8 @@ def refine_graph_with_topology_predictions(
     prediction_horizon = 1
     prediction_progress = 0.0
     prediction_time = 0.0
+    initial_structural_discrepancy: float | None = None
+    target_trust_region_limit: float | None = None
 
     while accepted_steps < cfg.steps:
         prediction_refreshed = False
@@ -873,12 +919,37 @@ def refine_graph_with_topology_predictions(
         for row in rows:
             row.update(motif_damage.get(row["action"], {}))
 
+        if initial_structural_discrepancy is None and rows:
+            initial_structural_discrepancy = float(
+                rows[0]["current_structural_discrepancy"]
+            )
+            if cfg.target_trust_region_enabled:
+                absolute = float(cfg.target_trust_region_absolute)
+                relative = (
+                    float(cfg.target_trust_region_relative)
+                    * max(
+                        initial_structural_discrepancy,
+                        float(cfg.relative_improvement_epsilon),
+                    )
+                    if float(cfg.target_trust_region_relative) >= 0.0
+                    else 0.0
+                )
+                # Either an absolute or relative budget may be specified.  If
+                # both are present, use the larger tolerance so a near-zero
+                # source discrepancy does not make stochastic exploration
+                # impossible.
+                allowed_worsening = max(absolute, relative)
+                target_trust_region_limit = (
+                    initial_structural_discrepancy + allowed_worsening
+                )
+
         selection_progress = float(accepted_steps / max(cfg.steps - 1, 1))
         selected, stop_probability, probabilities, selection_temperature, num_eligible = _select_row(
             rows,
             config=cfg,
             rng=generator,
             progress=selection_progress,
+            max_structural_discrepancy=target_trust_region_limit,
         )
         if selected is None:
             refresh_after_plateau = bool(
@@ -912,6 +983,9 @@ def refine_graph_with_topology_predictions(
                     "num_eligible_candidates": int(num_eligible),
                     "max_target_worsening": float(cfg.max_target_worsening),
                     "max_relative_target_worsening": float(cfg.max_relative_target_worsening),
+                    "initial_structural_discrepancy": initial_structural_discrepancy,
+                    "target_trust_region_limit": target_trust_region_limit,
+                    "target_trust_region_enabled": bool(cfg.target_trust_region_enabled),
                     "current_graphlet_discrepancy": float(
                         rows[0]["current_graphlet_discrepancy"]
                     ),
@@ -990,6 +1064,25 @@ def refine_graph_with_topology_predictions(
                 ),
                 "candidate_structural_discrepancy": float(
                     chosen["candidate_structural_discrepancy"]
+                ),
+                "current_clustering_discrepancy": float(
+                    chosen["current_clustering_discrepancy"]
+                ),
+                "candidate_clustering_discrepancy": float(
+                    chosen["candidate_clustering_discrepancy"]
+                ),
+                "current_orbit_discrepancy": float(
+                    chosen["current_orbit_discrepancy"]
+                ),
+                "candidate_orbit_discrepancy": float(
+                    chosen["candidate_orbit_discrepancy"]
+                ),
+                "initial_structural_discrepancy": initial_structural_discrepancy,
+                "target_trust_region_limit": target_trust_region_limit,
+                "target_trust_region_passed": (
+                    target_trust_region_limit is None
+                    or float(chosen["candidate_structural_discrepancy"])
+                    <= float(target_trust_region_limit) + 1.0e-12
                 ),
                 "graphlet_gain": float(chosen["graphlet_gain"]),
                 "clustering_gain": float(chosen["clustering_gain"]),

@@ -20,7 +20,7 @@ from __future__ import annotations
 import copy
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 import networkx as nx
@@ -105,6 +105,11 @@ def default_graphlet_refinement_options() -> dict[str, Any]:
             "clustering_weight": 0.0,
             "orbit_weight": 0.0,
             "accept_only_improving": True,
+            "target_trust_region": {
+                "enabled": False,
+                "absolute_worsening": 0.02,
+                "relative_worsening": 0.10,
+            },
             "min_improvement": 1.0e-8,
             "min_relative_improvement": 0.0,
             "relative_improvement_epsilon": 1.0e-12,
@@ -132,7 +137,15 @@ def default_fixed_target_graphlet_refinement_options() -> dict[str, Any]:
 
     return {
         "enabled": True,
+        "mode": "refinement",
         "target_source": "joint_auxiliary_head",
+        "random_steps": {
+            "enabled": False,
+            "distribution": "uniform_integer",
+            "min_steps": 1,
+            "max_steps": 8,
+            "mean_steps": 4.0,
+        },
         "graphlet_k_min": 3,
         "graphlet_k_max": 5,
         "graphlet_connected_only": True,
@@ -149,6 +162,11 @@ def default_fixed_target_graphlet_refinement_options() -> dict[str, Any]:
             "clustering_weight": 0.0,
             "orbit_weight": 0.0,
             "accept_only_improving": True,
+            "target_trust_region": {
+                "enabled": False,
+                "absolute_worsening": 0.02,
+                "relative_worsening": 0.10,
+            },
             "min_improvement": 1.0e-8,
             "min_relative_improvement": 0.0,
             "relative_improvement_epsilon": 1.0e-12,
@@ -213,6 +231,28 @@ def validate_graphlet_refinement_options(cfg: Mapping[str, Any]) -> None:
 def validate_fixed_target_graphlet_refinement_options(cfg: Mapping[str, Any]) -> None:
     if not bool(cfg.get("enabled", False)):
         raise ValueError("Fixed-target graphlet refinement requires enabled=true")
+    mode = str(cfg.get("mode", "refinement")).lower()
+    if mode not in {"refinement", "stochastic_diversification"}:
+        raise ValueError(
+            "Fixed-target graphlet refinement mode must be refinement or stochastic_diversification"
+        )
+    random_steps = cfg.get("random_steps", {}) or {}
+    if not isinstance(random_steps, Mapping):
+        raise ValueError("graphlet_refinement.random_steps must be a mapping")
+    if bool(random_steps.get("enabled", False)):
+        distribution = str(random_steps.get("distribution", "uniform_integer")).lower()
+        if distribution not in {"uniform_integer", "poisson"}:
+            raise ValueError(
+                "graphlet_refinement.random_steps.distribution must be uniform_integer or poisson"
+            )
+        minimum = int(random_steps.get("min_steps", 0))
+        maximum = int(random_steps.get("max_steps", 0))
+        if minimum < 0 or maximum < minimum:
+            raise ValueError(
+                "graphlet_refinement.random_steps requires 0 <= min_steps <= max_steps"
+            )
+        if distribution == "poisson" and float(random_steps.get("mean_steps", 0.0)) < 0.0:
+            raise ValueError("graphlet_refinement.random_steps.mean_steps must be nonnegative")
     target_source = str(cfg.get("target_source", "joint_auxiliary_head")).lower()
     if target_source not in {"joint_auxiliary_head", "joint_structure_summary_head"}:
         raise ValueError(
@@ -227,7 +267,48 @@ def validate_fixed_target_graphlet_refinement_options(cfg: Mapping[str, Any]) ->
         raise ValueError("Fixed-target refinement uses the complete connected graphlet basis")
     if str(cfg.get("disconnected_source_policy", "skip")).lower() != "skip":
         raise ValueError("Fixed-target refinement currently requires disconnected_source_policy=skip")
-    TopologyRefinerConfig.from_dict(dict(cfg.get("refiner", {}) or {}))
+    refiner_cfg = TopologyRefinerConfig.from_dict(dict(cfg.get("refiner", {}) or {}))
+    if mode == "stochastic_diversification":
+        if refiner_cfg.accept_only_improving:
+            raise ValueError(
+                "stochastic_diversification requires refiner.accept_only_improving=false"
+            )
+        if refiner_cfg.selection not in {"softmax", "sample", "softmax_safe"}:
+            raise ValueError(
+                "stochastic_diversification requires stochastic softmax/sample selection"
+            )
+        if not refiner_cfg.target_trust_region_enabled:
+            raise ValueError(
+                "stochastic_diversification requires refiner.target_trust_region.enabled=true"
+            )
+
+
+def _sample_random_step_budget(
+    rng: np.random.Generator,
+    cfg: Mapping[str, Any],
+    *,
+    fallback: int,
+) -> int:
+    """Sample a per-graph accepted-swap budget for stochastic diversification.
+
+    The budget is an upper bound: the refiner may stop earlier if no valid
+    degree/connectivity-preserving candidate remains inside the structural
+    trust region.  Sampling uses the dedicated rewiring RNG, so the spectral
+    generator trajectory is unchanged when diversification is toggled.
+    """
+
+    random_steps = cfg.get("random_steps", {}) or {}
+    if not bool(random_steps.get("enabled", False)):
+        return max(0, int(fallback))
+    minimum = int(random_steps.get("min_steps", 0))
+    maximum = int(random_steps.get("max_steps", max(minimum, fallback)))
+    distribution = str(random_steps.get("distribution", "uniform_integer")).lower()
+    if distribution == "uniform_integer":
+        return int(rng.integers(minimum, maximum + 1))
+    if distribution == "poisson":
+        mean = float(random_steps.get("mean_steps", max(minimum, fallback)))
+        return int(np.clip(rng.poisson(mean), minimum, maximum))
+    raise ValueError(f"Unsupported random step distribution: {distribution!r}")
 
 
 def _summary_config(cfg: Mapping[str, Any]) -> SummaryConfig:
@@ -690,6 +771,7 @@ def refine_generated_graphs_with_fixed_predictions(
     if tuple(int(k) for k in basis.sizes) != (3, 4, 5):
         raise RuntimeError(f"Expected graphlet orders 3,4,5, found {basis.sizes}")
     refiner_cfg = TopologyRefinerConfig.from_dict(dict(cfg.get("refiner", {}) or {}))
+    mode = str(cfg.get("mode", "refinement")).lower()
     rng = np.random.default_rng(int(seed) + 510001)
 
     refined: list[nx.Graph] = []
@@ -742,6 +824,10 @@ def refine_generated_graphs_with_fixed_predictions(
             clustering_target=clustering,
             orbit_target=orbit,
         )
+        requested_steps = _sample_random_step_budget(
+            rng, cfg, fallback=int(refiner_cfg.steps)
+        )
+        local_refiner_cfg = replace(refiner_cfg, steps=int(requested_steps))
         prediction_record = {
             "time": 0.0,
             "source": "joint_structure_summary_head_final_diffusion_state",
@@ -749,6 +835,8 @@ def refine_generated_graphs_with_fixed_predictions(
             "graphlet_mass_target": mass.tolist(),
             "clustering_target": clustering.tolist(),
             "orbit_target": orbit.tolist(),
+            "rewiring_mode": mode,
+            "requested_steps": int(requested_steps),
         }
 
         if not source_connected:
@@ -759,9 +847,11 @@ def refine_generated_graphs_with_fixed_predictions(
                     "source_connected": False,
                     "skipped": True,
                     "skip_reason": "disconnected_generated_source",
+                    "requested_steps": int(requested_steps),
                     "accepted_steps": 0,
                     "prediction_calls": 0,
                     "changed": False,
+                    "rewiring_mode": mode,
                     "degree_preserved": True,
                     "target_source": str(cfg.get("target_source", "joint_auxiliary_head")),
                 }
@@ -784,7 +874,7 @@ def refine_generated_graphs_with_fixed_predictions(
             model=None,  # type: ignore[arg-type]
             graphlet_basis=basis,
             summary_config=summary_cfg,
-            refiner_config=refiner_cfg,
+            refiner_config=local_refiner_cfg,
             device="cpu",
             rng=rng,
             return_trace=True,
@@ -797,18 +887,52 @@ def refine_generated_graphs_with_fixed_predictions(
             raise AssertionError("Fixed-target graphlet refinement disconnected a connected source")
         accepted = sum(bool(row.get("accepted", False)) for row in trace)
         changed = topology_state_key(source) != topology_state_key(result)
+        accepted_trace = [row for row in trace if bool(row.get("accepted", False))]
+        initial_structural = next(
+            (
+                float(row["initial_structural_discrepancy"])
+                for row in trace
+                if row.get("initial_structural_discrepancy") is not None
+            ),
+            None,
+        )
+        trust_limit = next(
+            (
+                float(row["target_trust_region_limit"])
+                for row in trace
+                if row.get("target_trust_region_limit") is not None
+            ),
+            None,
+        )
+        if accepted_trace:
+            final_structural = float(
+                accepted_trace[-1]["candidate_structural_discrepancy"]
+            )
+        else:
+            final_structural = initial_structural
+        trust_preserved = bool(
+            trust_limit is None
+            or final_structural is None
+            or final_structural <= trust_limit + 1.0e-12
+        )
         refined.append(result)
         diagnostics.append(
             {
                 "graph_index": index,
                 "source_connected": True,
                 "skipped": False,
+                "rewiring_mode": mode,
+                "requested_steps": int(requested_steps),
                 "accepted_steps": int(accepted),
                 "prediction_calls": int(calls),
                 "changed": bool(changed),
                 "degree_preserved": True,
                 "final_connected": bool(result.number_of_nodes() <= 1 or nx.is_connected(result)),
                 "target_source": str(cfg.get("target_source", "joint_auxiliary_head")),
+                "initial_structural_discrepancy": initial_structural,
+                "final_structural_discrepancy": final_structural,
+                "target_trust_region_limit": trust_limit,
+                "structural_trust_region_preserved": trust_preserved,
                 "trace": trace,
             }
         )

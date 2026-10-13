@@ -3647,6 +3647,11 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
         and str(refinement_selector.get("selection", "greedy")).lower()
         in {"softmax", "sample", "softmax_safe"}
     )
+    stochastic_diversification_enabled = bool(
+        fixed_structure_refinement_enabled
+        and str(refinement_options.get("mode", "refinement")).lower()
+        == "stochastic_diversification"
+    )
 
     vanilla_graphs: list[nx.Graph] = []
     pre_refinement_graphs: list[nx.Graph] = []
@@ -3872,11 +3877,51 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 int(step.get("num_motif_guard_rejections", 0))
                 for step in all_trace_rows
             ]
+            requested_steps = [
+                int(row.get("requested_steps", row.get("accepted_steps", 0)))
+                for row in graphlet_refinement_diagnostics
+            ]
+            trust_preserved = [
+                bool(row.get("structural_trust_region_preserved", True))
+                for row in graphlet_refinement_diagnostics
+            ]
+            initial_structural = [
+                float(row["initial_structural_discrepancy"])
+                for row in graphlet_refinement_diagnostics
+                if row.get("initial_structural_discrepancy") is not None
+            ]
+            final_structural = [
+                float(row["final_structural_discrepancy"])
+                for row in graphlet_refinement_diagnostics
+                if row.get("final_structural_discrepancy") is not None
+            ]
             graphlet_aggregate = {
+                "mode": (
+                    "stochastic_structural_diversification"
+                    if stochastic_diversification_enabled
+                    else "structural_refinement"
+                ),
                 "hard_degree_constraint": True,
                 "degree_preservation_rate": float(np.mean(preserved)),
                 "changed_rate": float(np.mean(changed)),
+                "mean_requested_steps": float(np.mean(requested_steps)),
+                "min_requested_steps": int(min(requested_steps)),
+                "max_requested_steps": int(max(requested_steps)),
                 "mean_accepted_steps": float(np.mean(accepted)),
+                "completed_requested_budget_rate": float(np.mean([
+                    a >= r for a, r in zip(accepted, requested_steps)
+                ])),
+                "structural_trust_region_preservation_rate": float(np.mean(trust_preserved)),
+                "mean_initial_structural_discrepancy": (
+                    float(np.mean(initial_structural)) if initial_structural else None
+                ),
+                "mean_final_structural_discrepancy": (
+                    float(np.mean(final_structural)) if final_structural else None
+                ),
+                "mean_structural_discrepancy_delta": (
+                    float(np.mean(np.asarray(final_structural) - np.asarray(initial_structural)))
+                    if initial_structural and len(initial_structural) == len(final_structural) else None
+                ),
                 "mean_prediction_calls": float(np.mean(calls)),
                 "disconnected_source_skip_rate": float(np.mean(skipped)),
                 "graphlet_orders": [3, 4, 5],
@@ -4019,12 +4064,16 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "degree_histogram_used_as_hard_constraint": False,
                 "posthoc_repair": False,
                 "rewiring": (
-                    "soft_structural_summary_guided_degree_preserving_double_edge_swaps"
-                    if soft_structure_refinement_enabled
+                    "random_length_structural_summary_guided_degree_preserving_double_edge_swaps"
+                    if stochastic_diversification_enabled
                     else (
+                        "soft_structural_summary_guided_degree_preserving_double_edge_swaps"
+                        if soft_structure_refinement_enabled
+                        else (
                         "graphlet_guided_degree_preserving_double_edge_swaps"
                         if fixed_structure_refinement_enabled or variant in GRAPHLET_REFINEMENT_VARIANTS
                         else False
+                    )
                     )
                 ),
                 "degree_constraint": (
@@ -4033,9 +4082,12 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     else False
                 ),
                 "structural_guidance": (
-                    "fixed_joint_graphlet_clustering_orbit_summary_with_softmax_safe_rewiring"
-                    if soft_structure_refinement_enabled
+                    "fixed_joint_degree_graphlet_orbit_summary_with_random_length_stochastic_rewiring"
+                    if stochastic_diversification_enabled
                     else (
+                        "fixed_joint_graphlet_clustering_orbit_summary_with_softmax_safe_rewiring"
+                        if soft_structure_refinement_enabled
+                        else (
                         "fixed_joint_auxiliary_graphlet_summary_k3_k4_k5"
                         if fixed_structure_refinement_enabled
                         else (
@@ -4043,10 +4095,22 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                             if variant in GRAPHLET_REFINEMENT_VARIANTS else False
                         )
                     )
+                    )
                 ),
                 "soft_rewiring": (
                     _jsonable(refinement_options.get("refiner", {}))
                     if soft_structure_refinement_enabled else None
+                ),
+                "stochastic_diversification": (
+                    {
+                        "random_steps": _jsonable(refinement_options.get("random_steps", {})),
+                        "refiner": _jsonable(refinement_options.get("refiner", {})),
+                        "target_source": str(refinement_options.get("target_source", "joint_structure_summary_head")),
+                        "degree_preserved_exactly": True,
+                        "connectivity_preserved_for_connected_sources": True,
+                        "structural_summary_preservation": "source_anchored_target_trust_region",
+                    }
+                    if stochastic_diversification_enabled else None
                 ),
             },
             "diagnostics": {

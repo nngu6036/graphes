@@ -1448,3 +1448,14 @@ See [the Option-A guide](docs/GDSM_SIMPLE_OPTION_A.md) for the strict
 initialization-only training configurations, compatibility sampling with existing
 Structure3 checkpoints, Community-small/Ego-small commands, and degree audits.
 The original degree-constrained modes remain unchanged.
+
+### Stochastic structural diversification for spectral GDSM
+
+The generic Laplacian log-gap GDSM now supports a generation-only
+`stochastic_diversification` mode.  The full spectral generator is left
+unchanged; after threshold reconstruction, each graph receives a random number
+of structural-summary-guided, degree-preserving double-edge swaps.  Graphlet and
+orbit discrepancies are constrained by a source-anchored target trust region,
+while degree and connectedness are exact invariants.  See
+`docs/STOCHASTIC_STRUCTURAL_DIVERSIFICATION.md` for configs, commands, and
+interpretation.

@@ -236,3 +236,179 @@ def test_selected_structure_checkpoint_accepts_generation_only_soft_rewiring(tmp
     assert manifest["sampling"]["rewiring"] == "soft_structural_summary_guided_degree_preserving_double_edge_swaps"
     assert manifest["diagnostics"]["degree_preservation_rate"] == 1.0
     assert (generated.generation_dir / "pre_refinement_graphs.pkl").is_file()
+
+    diversify = {
+        **refiner,
+        "mode": "stochastic_diversification",
+        "random_steps": {
+            "enabled": True,
+            "distribution": "uniform_integer",
+            "min_steps": 1,
+            "max_steps": 2,
+        },
+        "refiner": {
+            **refiner["refiner"],
+            "steps": 2,
+            "accept_only_improving": False,
+            "soft_selection": {
+                **refiner["refiner"]["soft_selection"],
+                "stop_action": False,
+                "max_target_worsening": 0.05,
+                "max_relative_target_worsening": 0.50,
+            },
+            "target_trust_region": {
+                "enabled": True,
+                "absolute_worsening": 0.05,
+                "relative_worsening": 0.50,
+            },
+        },
+    }
+    diversified = wrapper.generate(
+        GenerateRequest(
+            run,
+            artifacts.checkpoint_path,
+            2,
+            91,
+            generation_id="diverse",
+            options={"graphlet_refinement": diversify},
+        )
+    )
+    diverse_manifest = json.loads(diversified.manifest_path.read_text())
+    assert diverse_manifest["sampling"]["rewiring"] == (
+        "random_length_structural_summary_guided_degree_preserving_double_edge_swaps"
+    )
+    assert diverse_manifest["diagnostics"]["degree_preservation_rate"] == 1.0
+    assert diverse_manifest["diagnostics"]["structural_trust_region_preservation_rate"] == 1.0
+    assert diverse_manifest["sampling"]["stochastic_diversification"]["degree_preserved_exactly"] is True
+
+
+def test_source_anchored_trust_region_filters_candidates_outside_structural_neighbourhood():
+    cfg = TopologyRefinerConfig.from_dict(
+        {
+            "steps": 4,
+            "proposal_budget": 32,
+            "valid_candidate_budget": 16,
+            "preserve_connectivity": True,
+            "selection": "softmax_safe",
+            "graphlet_weight": 1.0,
+            "clustering_weight": 0.25,
+            "orbit_weight": 0.25,
+            "accept_only_improving": False,
+            "soft_selection": {
+                "temperature_start": 0.5,
+                "temperature_end": 0.5,
+                "score_normalization": "none",
+                "stop_action": False,
+                "max_target_worsening": 1.0,
+                "max_relative_target_worsening": -1.0,
+            },
+            "target_trust_region": {
+                "enabled": True,
+                "absolute_worsening": 0.02,
+                "relative_worsening": 0.10,
+            },
+        }
+    )
+    rows = [
+        {
+            "energy_improvement": -0.01,
+            "relative_energy_improvement": -0.05,
+            "candidate_structural_discrepancy": 0.029,
+        },
+        {
+            "energy_improvement": 0.20,
+            "relative_energy_improvement": 1.0,
+            "candidate_structural_discrepancy": 0.08,
+        },
+    ]
+    selected, p_stop, probs, _temp, n_eligible = _select_row(
+        rows,
+        config=cfg,
+        rng=np.random.default_rng(5),
+        progress=0.5,
+        max_structural_discrepancy=0.03,
+    )
+    assert selected == 0
+    assert probs[0] == 1.0
+    assert probs[1] == 0.0
+    assert p_stop == 0.0
+    assert n_eligible == 1
+
+
+def test_random_diversification_step_budget_is_reproducible_and_bounded():
+    from grapher.models.gdsm_simple.graphlet_stage3 import _sample_random_step_budget
+
+    config = {
+        "random_steps": {
+            "enabled": True,
+            "distribution": "uniform_integer",
+            "min_steps": 2,
+            "max_steps": 6,
+        }
+    }
+    a = np.random.default_rng(123)
+    b = np.random.default_rng(123)
+    draws_a = [_sample_random_step_budget(a, config, fallback=4) for _ in range(64)]
+    draws_b = [_sample_random_step_budget(b, config, fallback=4) for _ in range(64)]
+    assert draws_a == draws_b
+    assert min(draws_a) >= 2
+    assert max(draws_a) <= 6
+    assert len(set(draws_a)) > 1
+
+
+def test_stochastic_diversification_config_requires_trust_region():
+    import pytest
+    from grapher.models.gdsm_simple.graphlet_stage3 import (
+        validate_fixed_target_graphlet_refinement_options,
+    )
+
+    config = {
+        "enabled": True,
+        "mode": "stochastic_diversification",
+        "target_source": "joint_structure_summary_head",
+        "graphlet_k_min": 3,
+        "graphlet_k_max": 5,
+        "graphlet_connected_only": True,
+        "graphlet_topology_filter": "all",
+        "random_steps": {"enabled": True, "distribution": "uniform_integer", "min_steps": 1, "max_steps": 4},
+        "refiner": {
+            "steps": 4,
+            "proposal_budget": 32,
+            "valid_candidate_budget": 16,
+            "preserve_connectivity": True,
+            "selection": "softmax_safe",
+            "graphlet_weight": 1.0,
+            "clustering_weight": 0.0,
+            "orbit_weight": 0.25,
+            "accept_only_improving": False,
+            "soft_selection": {
+                "temperature_start": 0.5,
+                "temperature_end": 0.2,
+                "stop_action": False,
+                "max_target_worsening": 0.02,
+            },
+            "target_trust_region": {"enabled": False},
+        },
+        "disconnected_source_policy": "skip",
+    }
+    with pytest.raises(ValueError, match="target_trust_region"):
+        validate_fixed_target_graphlet_refinement_options(config)
+
+
+def test_shipped_stochastic_diversification_configs_validate():
+    from pathlib import Path
+    import yaml
+    from grapher.models.gdsm_simple.graphlet_stage3 import (
+        validate_fixed_target_graphlet_refinement_options,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    cfg_root = root / "configs/experiments/gdsm_laplacian_loggap_structure_diversification_explicit"
+    for dataset in ("community_small", "ego_small"):
+        for seed in (42, 43, 44):
+            raw = yaml.safe_load((cfg_root / f"{dataset}_seed_{seed}.yaml").read_text())
+            refinement = raw["gdsm_simple"]["graphlet_refinement"]
+            validate_fixed_target_graphlet_refinement_options(refinement)
+            assert refinement["mode"] == "stochastic_diversification"
+            assert refinement["random_steps"]["enabled"] is True
+            assert refinement["refiner"]["target_trust_region"]["enabled"] is True
