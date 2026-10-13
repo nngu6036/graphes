@@ -85,6 +85,30 @@ def _expected_split_sizes(config: Mapping[str, Any]) -> dict[str, int] | None:
     return {"train": n_train, "val": n_val, "test": total - n_train - n_val}
 
 
+
+
+def _source_index_contract(
+    splits: Mapping[str, Sequence[nx.Graph]],
+) -> dict[str, list[int]] | None:
+    """Return per-split precomputed-source indices when every graph has one.
+
+    Unlike pickle-byte hashes, source indices are stable across Python, NetworkX,
+    and pickle protocol versions.  They are therefore suitable for freezing a
+    split of a pinned benchmark artifact such as SPECTRE Community-small.
+    """
+
+    contract: dict[str, list[int]] = {}
+    for split in ("train", "val", "test"):
+        graphs = list(splits.get(split, []))
+        indices: list[int] = []
+        for graph in graphs:
+            value = graph.graph.get("source_index")
+            if value is None:
+                return None
+            indices.append(int(value))
+        contract[split] = indices
+    return contract
+
 def validate_prepared_dataset_contract(
     dataset: str,
     *,
@@ -175,23 +199,55 @@ def validate_prepared_dataset_contract(
                     "prepared split sizes differ from frozen_split: "
                     f"expected={expected}, found={actual_sizes}"
                 )
-        observed_hashes = {split: _sha256(path) for split, path in paths.items()}
-        frozen_hashes = frozen.get("split_sha256")
-        if isinstance(frozen_hashes, Mapping):
-            for split in paths:
-                expected = frozen_hashes.get(split)
-                if expected is not None and str(expected) != observed_hashes[split]:
-                    mismatches.append(
-                        f"{split} split SHA-256 differs from frozen_split: "
-                        f"expected={expected}, found={observed_hashes[split]}"
-                    )
-        frozen_fingerprint = frozen.get("fingerprint")
-        observed_fingerprint = _combined_split_fingerprint(observed_hashes)
-        if frozen_fingerprint is not None and str(frozen_fingerprint) != observed_fingerprint:
-            mismatches.append(
-                "prepared dataset fingerprint differs from frozen_split: "
-                f"expected={frozen_fingerprint}, found={observed_fingerprint}"
-            )
+        # Prefer a semantic split identity when the benchmark comes from a
+        # pinned precomputed artifact.  Pickle-byte SHA-256 values are not a
+        # stable dataset identity: they can change across Python/NetworkX or
+        # pickle protocol versions even when the graph split is identical.
+        frozen_source_indices = frozen.get("source_indices")
+        if isinstance(frozen_source_indices, Mapping):
+            if splits is None:
+                loaded_splits = {
+                    split: load_pickle(path) for split, path in paths.items()
+                }
+            else:
+                loaded_splits = {
+                    split: list(splits.get(split, [])) for split in paths
+                }
+            observed_source_indices = _source_index_contract(loaded_splits)
+            if observed_source_indices is None:
+                mismatches.append(
+                    "frozen_split.source_indices is configured, but one or more "
+                    "prepared graphs do not carry graph['source_index']"
+                )
+            else:
+                for split in paths:
+                    expected = [int(v) for v in frozen_source_indices.get(split, [])]
+                    found = observed_source_indices[split]
+                    if expected != found:
+                        mismatches.append(
+                            f"{split} source-index sequence differs from frozen_split: "
+                            f"expected={expected}, found={found}"
+                        )
+        else:
+            # Legacy fallback.  Raw pickle hashes remain supported for older
+            # configs, but new precomputed benchmarks should use source_indices.
+            observed_hashes = {split: _sha256(path) for split, path in paths.items()}
+            frozen_hashes = frozen.get("split_sha256")
+            if isinstance(frozen_hashes, Mapping):
+                for split in paths:
+                    expected = frozen_hashes.get(split)
+                    if expected is not None and str(expected) != observed_hashes[split]:
+                        mismatches.append(
+                            f"{split} split SHA-256 differs from frozen_split: "
+                            f"expected={expected}, found={observed_hashes[split]}"
+                        )
+            frozen_fingerprint = frozen.get("fingerprint")
+            observed_fingerprint = _combined_split_fingerprint(observed_hashes)
+            if frozen_fingerprint is not None and str(frozen_fingerprint) != observed_fingerprint:
+                mismatches.append(
+                    "prepared dataset fingerprint differs from frozen_split: "
+                    f"expected={frozen_fingerprint}, found={observed_fingerprint}"
+                )
 
     if mismatches and policy == "error":
         dataset_arg = config_file.stem
