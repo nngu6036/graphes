@@ -187,3 +187,35 @@ def test_exact_isomorphism_support_csv_contains_per_class_frequencies(tmp_path):
     assert {row["is_training_class"] for row in rows} == {"True", "False"}
     assert all("generated_count" in row for row in rows)
     assert all("heldout_test_count" in row for row in rows)
+
+
+def test_diversification_artifacts_use_semantic_stage_labels(tmp_path):
+    import pickle
+
+    generated_dir = tmp_path / "generations" / "seed_42_n_4"
+    generated_dir.mkdir(parents=True)
+    final_path = generated_dir / "base_graphs.pkl"
+    source_path = generated_dir / "pre_refinement_graphs.pkl"
+    graphs = [nx.path_graph(4)]
+    for path in (final_path, source_path):
+        with path.open("wb") as handle:
+            pickle.dump(graphs, handle)
+
+    manifest = {
+        "model_id": "gdsm_simple",
+        "sampling": {"stochastic_diversification": {"random_steps": {"enabled": True}}},
+    }
+    assert report.resolve_generated_stage(
+        {}, final_path, generation_manifest=manifest
+    ) == "gdsm_simple_diversified"
+    assert report.resolve_generated_stage(
+        {}, source_path, generation_manifest=manifest
+    ) == "gdsm_simple_spectral_pre_rewire"
+
+    base_path, base_stage = report.resolve_base_graph_path(
+        generated_dir,
+        generated_path=final_path,
+        generation_manifest=manifest,
+    )
+    assert base_path == source_path
+    assert base_stage == "gdsm_simple_spectral_pre_rewire"

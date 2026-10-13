@@ -92,6 +92,18 @@ class DatasetReference:
                 "The baseline wrapper requires prepared GraphER dataset splits; "
                 f"missing: {[str(path) for path in missing]}."
             )
+        if self.config_path is not None:
+            # Refuse to train/generate against stale prepared splits.  This is
+            # intentionally checked here because baseline wrappers read split
+            # pickle files directly instead of going through data.io loaders.
+            from grapher.data.io import validate_prepared_dataset_contract
+
+            validate_prepared_dataset_contract(
+                str(self.serialized_id),
+                root=self.root,
+                config_path=self.config_path,
+                mismatch_policy="error",
+            )
         return self
 
     def fingerprint(self) -> str:

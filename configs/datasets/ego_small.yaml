@@ -35,6 +35,17 @@ split:
   val: 0.16
   test: 0.20
 
+frozen_split:
+  split_sizes:
+    train: 128
+    val: 32
+    test: 40
+  fingerprint: fdfa17060a0e887fe84aa7ed95ae31d94a24b042b641a2fdbd3bbdc135ebdb4a
+  split_sha256:
+    train: f55e1d722742da14d8da90de215d4cb3abcb845a0458744298a81e54b1a9a8f1
+    val: 46792b72abec46c7499d915cf31ea8c2978924a8abb379f17b24fdb84c860f13
+    test: c8a67540cae94fbed652e5692775677abf2153e7e20f28fbf26595d0151e168b
+
 filters:
   require_connected: true
   reject_zero_degree: true

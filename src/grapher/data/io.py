@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
+
+import hashlib
+import json
 
 import networkx as nx
 
@@ -35,6 +38,176 @@ def save_dataset_splits(
         out / "metadata.json",
     )
 
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _combined_split_fingerprint(split_sha256: Mapping[str, str]) -> str:
+    record = {
+        split: {"path": f"{split}.pkl", "sha256": str(split_sha256[split])}
+        for split in sorted(split_sha256)
+    }
+    payload = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _dataset_config_payload(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the dataset payload from either a bare or wrapped YAML config."""
+
+    nested = raw.get("dataset")
+    if isinstance(nested, Mapping):
+        # Some report-facing YAML files wrap the actual dataset under `dataset`.
+        # Prefer that mapping only when it contains the dataset contract itself.
+        if any(key in nested for key in ("name", "split", "num_graphs", "protocol_id")):
+            return dict(nested)
+    return dict(raw)
+
+
+def _expected_split_sizes(config: Mapping[str, Any]) -> dict[str, int] | None:
+    total = config.get("num_graphs")
+    split = config.get("split")
+    if total is None or not isinstance(split, Mapping):
+        return None
+    total = int(total)
+    train_fraction = float(split.get("train", 0.8))
+    val_fraction = float(split.get("val", 0.1))
+    test_fraction = float(split.get("test", 1.0 - train_fraction - val_fraction))
+    if abs(train_fraction + val_fraction + test_fraction - 1.0) > 1.0e-8:
+        raise ValueError("Configured train/val/test fractions must sum to 1.0.")
+    n_train = int(round(total * train_fraction))
+    n_val = int(round(total * val_fraction))
+    return {"train": n_train, "val": n_val, "test": total - n_train - n_val}
+
+
+def validate_prepared_dataset_contract(
+    dataset: str,
+    *,
+    root: str | Path = "outputs/datasets",
+    config_path: str | Path | None = None,
+    splits: Mapping[str, Sequence[nx.Graph]] | None = None,
+    mismatch_policy: str = "error",
+) -> list[str]:
+    """Verify that prepared split files match the frozen dataset contract.
+
+    This check prevents a stale prepared dataset (for example 70/10/20) from
+    being silently reused after the benchmark config has been frozen to another
+    split (for example 64/16/20).  When `frozen_split` hashes are present in the
+    dataset config, the exact split artifacts are verified as well.
+    """
+
+    policy = str(mismatch_policy).strip().lower()
+    if policy not in {"error", "warn", "ignore"}:
+        raise ValueError(f"Unknown dataset mismatch policy: {mismatch_policy!r}")
+    if config_path is None:
+        return []
+
+    config_file = Path(config_path)
+    if not config_file.is_file():
+        return []
+    requested = _dataset_config_payload(load_yaml(config_file))
+    directory = dataset_dir(dataset, root)
+    paths = {split: directory / f"{split}.pkl" for split in ("train", "val", "test")}
+    if not all(path.is_file() for path in paths.values()):
+        return []
+
+    if splits is None:
+        actual_sizes = {split: len(load_pickle(path)) for split, path in paths.items()}
+    else:
+        actual_sizes = {split: len(list(splits.get(split, []))) for split in paths}
+
+    mismatches: list[str] = []
+    expected_sizes = _expected_split_sizes(requested)
+    if expected_sizes is not None and actual_sizes != expected_sizes:
+        mismatches.append(
+            "prepared split sizes differ from the dataset config: "
+            f"expected train/val/test={expected_sizes['train']}/{expected_sizes['val']}/{expected_sizes['test']}, "
+            f"found {actual_sizes['train']}/{actual_sizes['val']}/{actual_sizes['test']}"
+        )
+
+    resolved_path = directory / "resolved_dataset_config.yaml"
+    if resolved_path.is_file():
+        resolved = _dataset_config_payload(load_yaml(resolved_path))
+        requested_split = requested.get("split")
+        resolved_split = resolved.get("split")
+        if isinstance(requested_split, Mapping) and isinstance(resolved_split, Mapping):
+            normalized_requested = {
+                "seed": int(requested_split.get("seed", requested.get("seed", 0))),
+                "train": float(requested_split.get("train", 0.8)),
+                "val": float(requested_split.get("val", 0.1)),
+                "test": float(requested_split.get("test", 0.1)),
+            }
+            normalized_resolved = {
+                "seed": int(resolved_split.get("seed", resolved.get("seed", 0))),
+                "train": float(resolved_split.get("train", 0.8)),
+                "val": float(resolved_split.get("val", 0.1)),
+                "test": float(resolved_split.get("test", 0.1)),
+            }
+            if normalized_requested != normalized_resolved:
+                mismatches.append(
+                    "prepared resolved_dataset_config.yaml uses a different split "
+                    f"contract: requested={normalized_requested}, prepared={normalized_resolved}"
+                )
+        requested_protocol = requested.get("protocol_id")
+        resolved_protocol = resolved.get("protocol_id")
+        if (
+            requested_protocol is not None
+            and resolved_protocol is not None
+            and str(requested_protocol) != str(resolved_protocol)
+        ):
+            mismatches.append(
+                "prepared protocol_id differs from the requested dataset config: "
+                f"requested={requested_protocol!r}, prepared={resolved_protocol!r}"
+            )
+
+    frozen = requested.get("frozen_split")
+    if isinstance(frozen, Mapping):
+        frozen_sizes = frozen.get("split_sizes")
+        if isinstance(frozen_sizes, Mapping):
+            expected = {split: int(frozen_sizes[split]) for split in paths}
+            if actual_sizes != expected:
+                mismatches.append(
+                    "prepared split sizes differ from frozen_split: "
+                    f"expected={expected}, found={actual_sizes}"
+                )
+        observed_hashes = {split: _sha256(path) for split, path in paths.items()}
+        frozen_hashes = frozen.get("split_sha256")
+        if isinstance(frozen_hashes, Mapping):
+            for split in paths:
+                expected = frozen_hashes.get(split)
+                if expected is not None and str(expected) != observed_hashes[split]:
+                    mismatches.append(
+                        f"{split} split SHA-256 differs from frozen_split: "
+                        f"expected={expected}, found={observed_hashes[split]}"
+                    )
+        frozen_fingerprint = frozen.get("fingerprint")
+        observed_fingerprint = _combined_split_fingerprint(observed_hashes)
+        if frozen_fingerprint is not None and str(frozen_fingerprint) != observed_fingerprint:
+            mismatches.append(
+                "prepared dataset fingerprint differs from frozen_split: "
+                f"expected={frozen_fingerprint}, found={observed_fingerprint}"
+            )
+
+    if mismatches and policy == "error":
+        dataset_arg = config_file.stem
+        detail = "\n  - ".join(mismatches)
+        raise RuntimeError(
+            "Prepared dataset does not match the frozen benchmark configuration:\n  - "
+            + detail
+            + "\nRebuild the prepared split before training/evaluation with:\n  "
+            + f"PYTHONPATH=src python scripts/prepare_generic_dataset.py --dataset {dataset_arg} --root {root}"
+            + "\nThen retrain/regenerate models whose manifests reference the old split fingerprint."
+        )
+    if mismatches and policy == "warn":
+        print("WARNING: prepared dataset contract mismatch detected:")
+        for mismatch in mismatches:
+            print(f"  - {mismatch}")
+    return mismatches
 
 def load_dataset_splits(
     dataset: str,

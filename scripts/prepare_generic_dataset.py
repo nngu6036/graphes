@@ -30,7 +30,11 @@ from grapher.data.builders import (
     infer_dataset_type,
     split_graphs,
 )
-from grapher.data.io import dataset_dir, save_dataset_splits
+from grapher.data.io import (
+    dataset_dir,
+    save_dataset_splits,
+    validate_prepared_dataset_contract,
+)
 from grapher.utils.io import load_yaml, save_json
 
 
@@ -187,6 +191,16 @@ def main() -> None:
     graphs = build_graphs_from_config(config)
     splits = split_graphs(graphs, config)
     save_dataset_splits(dataset_name, splits, config, args.root)
+    # Verify not only graph validity but also the frozen split identity.  This
+    # catches accidental changes in split fractions, split seed, or prepared
+    # artifacts before any baseline is trained on them.
+    validate_prepared_dataset_contract(
+        dataset_name,
+        root=args.root,
+        config_path=_config_path,
+        splits=splits,
+        mismatch_policy="error",
+    )
 
     report = verify_splits(splits, config)
     report["action"] = "built"

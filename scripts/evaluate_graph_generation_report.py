@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import networkx as nx
 
-from grapher.data.io import load_dataset_splits
+from grapher.data.io import load_dataset_splits, validate_prepared_dataset_contract
 from grapher.rewiring_mlp.evaluation.metrics import (
     descriptor_matrix,
     mmd_gaussian_emd,
@@ -482,6 +482,27 @@ def resolve_generated_graph_path(
     )
 
 
+def _semantic_graph_stage(
+    graph_path: Path,
+    generation_manifest: dict[str, Any] | None = None,
+) -> str | None:
+    """Return a semantic stage label for managed spectral-diversification artifacts."""
+
+    name = graph_path.name
+    sampling = (generation_manifest or {}).get("sampling", {})
+    stochastic = (
+        isinstance(sampling, dict)
+        and sampling.get("stochastic_diversification") is not None
+    )
+    model_id = _baseline_model_id(graph_path, generation_manifest) or "generated"
+
+    if name == "pre_refinement_graphs.pkl":
+        return f"{model_id}_spectral_pre_rewire"
+    if name == "base_graphs.pkl" and stochastic:
+        return f"{model_id}_diversified"
+    return None
+
+
 def resolve_generated_stage(
     config: dict[str, Any],
     generated_path: Path,
@@ -493,6 +514,10 @@ def resolve_generated_stage(
 
     if explicit_stage is not None:
         return _normalize_stage_label(explicit_stage, field="--generated-stage")
+
+    semantic_stage = _semantic_graph_stage(generated_path, generation_manifest)
+    if semantic_stage is not None:
+        return semantic_stage
 
     model_id = _baseline_model_id(generated_path, generation_manifest)
     if model_id is not None:
@@ -516,31 +541,54 @@ def _same_artifact(left: Path | None, right: Path | None) -> bool:
 def resolve_base_graph_path(
     generated_dir: Path,
     *,
+    generated_path: Path | None = None,
+    generation_manifest: dict[str, Any] | None = None,
     base_graphs: str | Path | None = None,
     coarse_graphs: str | Path | None = None,
 ) -> tuple[Path | None, str | None]:
-    """Resolve a saved source stage without mislabelling managed baselines."""
+    """Resolve a semantically meaningful source stage for paired evaluation.
+
+    For stochastic structural diversification, ``pre_refinement_graphs.pkl``
+    is the actual spectral source and ``base_graphs.pkl`` is the diversified
+    endpoint.  Prefer the former automatically so report labels cannot invert
+    the two populations merely because the final file is named ``base_graphs``.
+    """
 
     if base_graphs is not None and coarse_graphs is not None:
         raise ValueError("Use --base-graphs or --coarse-graphs, not both.")
     if base_graphs is not None:
         path = Path(base_graphs)
-        model_id = _baseline_model_id(path)
+        semantic = _semantic_graph_stage(path, generation_manifest)
+        if semantic is not None:
+            return path, semantic
+        model_id = _baseline_model_id(path, generation_manifest)
         return path, f"{model_id}_base" if model_id else "base"
     if coarse_graphs is not None:
         return Path(coarse_graphs), "hh_source"
 
-    candidates = (
+    candidates: list[tuple[Path, str | None]] = []
+    pre_refinement = generated_dir / "pre_refinement_graphs.pkl"
+    if pre_refinement.is_file():
+        candidates.append(
+            (pre_refinement, _semantic_graph_stage(pre_refinement, generation_manifest))
+        )
+    candidates.extend((
         (generated_dir / "defog_base_graphs.pkl", "defog_base"),
         (generated_dir / "base_graphs.pkl", None),
         (generated_dir / "coarse_graphs.pkl", "hh_source"),
-    )
+    ))
+
     for path, declared_stage in candidates:
         if not path.is_file():
             continue
+        if generated_path is not None and _same_artifact(path, generated_path):
+            continue
         if declared_stage is not None:
             return path, declared_stage
-        model_id = _baseline_model_id(path)
+        semantic = _semantic_graph_stage(path, generation_manifest)
+        if semantic is not None:
+            return path, semantic
+        model_id = _baseline_model_id(path, generation_manifest)
         return path, f"{model_id}_base" if model_id else "base"
     return None, None
 
@@ -1277,6 +1325,8 @@ def main() -> None:
     )
     base_path, base_stage = resolve_base_graph_path(
         generated_dir,
+        generated_path=generated_path,
+        generation_manifest=generation_manifest,
         base_graphs=args.base_graphs,
         coarse_graphs=args.coarse_graphs,
     )
@@ -1329,6 +1379,12 @@ def main() -> None:
     )
 
     dataset_cfg = config.get("dataset", {}) or {}
+    validate_prepared_dataset_contract(
+        str(dataset_cfg.get("name", "sbm")),
+        root=dataset_cfg.get("root", "outputs/datasets"),
+        config_path=dataset_cfg.get("config_path"),
+        mismatch_policy=args.dataset_mismatch_policy,
+    )
     splits = load_dataset_splits(
         str(dataset_cfg.get("name", "sbm")),
         root=dataset_cfg.get("root", "outputs/datasets"),
