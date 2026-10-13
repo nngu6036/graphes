@@ -202,15 +202,15 @@ def test_diversification_artifacts_use_semantic_stage_labels(tmp_path):
             pickle.dump(graphs, handle)
 
     manifest = {
-        "model_id": "gdsm_simple",
+        "model_id": "grapher",
         "sampling": {"stochastic_diversification": {"random_steps": {"enabled": True}}},
     }
     assert report.resolve_generated_stage(
         {}, final_path, generation_manifest=manifest
-    ) == "gdsm_simple_diversified"
+    ) == "grapher_diversified"
     assert report.resolve_generated_stage(
         {}, source_path, generation_manifest=manifest
-    ) == "gdsm_simple_spectral_pre_rewire"
+    ) == "grapher_spectral_pre_rewire"
 
     base_path, base_stage = report.resolve_base_graph_path(
         generated_dir,
@@ -218,4 +218,4 @@ def test_diversification_artifacts_use_semantic_stage_labels(tmp_path):
         generation_manifest=manifest,
     )
     assert base_path == source_path
-    assert base_stage == "gdsm_simple_spectral_pre_rewire"
+    assert base_stage == "grapher_spectral_pre_rewire"

@@ -1749,6 +1749,15 @@ def generate(
                 "bond_type_counts_preserved": bool(
                     row.get("bond_type_counts_preserved", False)
                 ),
+                "neighbor_atom_bond_signature_preserved": bool(
+                    row.get("neighbor_atom_bond_signature_preserved", False)
+                ),
+                "bond_valence_preserved": bool(
+                    row.get("bond_valence_preserved", False)
+                ),
+                "rdkit_validity_preserved_for_valid_source": row.get(
+                    "rdkit_validity_preserved_for_valid_source"
+                ),
             }
             diversification_rows.append(row)
             diversified_graphs.append(diversified)
@@ -1766,6 +1775,15 @@ def generate(
             diagnostic["rewiring_changed"] = bool(row["changed"])
             diagnostic["typed_degree_preserved_after_rewiring"] = bool(
                 row.get("typed_degree_preserved", False)
+            )
+            diagnostic["neighbor_atom_bond_signature_preserved_after_rewiring"] = bool(
+                row.get("neighbor_atom_bond_signature_preserved", False)
+            )
+            diagnostic["bond_valence_preserved_after_rewiring"] = bool(
+                row.get("bond_valence_preserved", False)
+            )
+            diagnostic["rdkit_validity_preserved_for_valid_source_after_rewiring"] = row.get(
+                "rdkit_validity_preserved_for_valid_source"
             )
     else:
         for diagnostic in attribute_rows:
@@ -1814,7 +1832,35 @@ def generate(
             "rewiring_connected_rate": float(np.mean([
                 bool(row.get("connected", False)) for row in diversification_rows
             ])),
+            "rewiring_neighbor_atom_bond_signature_preservation_rate": float(np.mean([
+                bool(row.get("neighbor_atom_bond_signature_preserved", False))
+                for row in diversification_rows
+            ])),
+            "rewiring_bond_valence_preservation_rate": float(np.mean([
+                bool(row.get("bond_valence_preserved", False))
+                for row in diversification_rows
+            ])),
         })
+        rdkit_preserved = [
+            row.get("rdkit_validity_preserved_for_valid_source")
+            for row in diversification_rows
+            if row.get("rdkit_validity_preserved_for_valid_source") is not None
+        ]
+        aggregate["rewiring_rdkit_validity_preservation_rate_for_valid_sources"] = (
+            float(np.mean([bool(value) for value in rdkit_preserved]))
+            if rdkit_preserved
+            else None
+        )
+        qm9_valence_preserved = [
+            row.get("qm9_bond_valence_validity_preserved")
+            for row in diversification_rows
+            if row.get("qm9_bond_valence_validity_preserved") is not None
+        ]
+        aggregate["rewiring_qm9_bond_valence_validity_preservation_rate"] = (
+            float(np.mean([bool(value) for value in qm9_valence_preserved]))
+            if qm9_valence_preserved
+            else None
+        )
     for key in (
         "topology_infeasible",
         "atom_degree_incompatible",
@@ -1924,7 +1970,7 @@ def generate(
             _write_json(
                 diversification_path,
                 {
-                    "format": "gdsm_attributed_same_bond_diversification_v1",
+                    "format": "grapher_attributed_strict_same_bond_diversification_v2",
                     "config": diversification_cfg,
                     "per_graph": diversification_rows,
                     "aggregate": {
@@ -2047,6 +2093,14 @@ def generate(
                     "ordinary_degree_preserved_by_rewiring": bool(diversification_rows),
                     "typed_degree_preserved_by_rewiring": bool(diversification_rows),
                     "bond_type_counts_preserved_by_rewiring": bool(diversification_rows),
+                    "neighbor_atom_bond_signature_preserved_by_rewiring": bool(
+                        diversification_rows
+                    ),
+                    "bond_valence_preserved_by_rewiring": bool(diversification_rows),
+                    "rdkit_validity_preserved_for_valid_sources": (
+                        bool(diversification_rows)
+                        and bool(diversification_cfg.get("rdkit_candidate_filter", True))
+                    ),
                     "attributed_diversification": diversification_cfg,
                     "posthoc_repair": False,
                     "filtering": False,

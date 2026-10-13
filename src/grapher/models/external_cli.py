@@ -54,9 +54,23 @@ _MODEL_DATASETS: dict[str, dict[str, DatasetCLIProfile]] = {
         key: DatasetCLIProfile(PROFILES[key].serialized_id)
         for key in ("community_small", "ego_small", "grid")
     },
-    "gdsm_simple": {
-        key: DatasetCLIProfile(PROFILES[key].serialized_id)
-        for key in ("community_small", "ego_small", "grid", "qm9", "zinc")
+    "grapher": {
+        "community_small": DatasetCLIProfile(
+            PROFILES["community_small"].serialized_id,
+            dataset_config="configs/datasets/community_small.yaml",
+        ),
+        "ego_small": DatasetCLIProfile(
+            PROFILES["ego_small"].serialized_id,
+            dataset_config="configs/datasets/ego_small.yaml",
+        ),
+        "qm9": DatasetCLIProfile(
+            PROFILES["qm9"].serialized_id,
+            dataset_config="configs/datasets/qm9.yaml",
+        ),
+        "zinc": DatasetCLIProfile(
+            PROFILES["zinc"].serialized_id,
+            dataset_config="configs/datasets/zinc.yaml",
+        ),
     },
     "edge": {
         key: DatasetCLIProfile(PROFILES[key].serialized_id)
@@ -139,14 +153,12 @@ _TRAINING_ESTIMATE_DEFAULT: dict[str, bool | None] = {
     "dhvae_hh": True,
     "catflow": None,
     "gdsm": None,
-    "gdsm_simple": None,
+    "grapher": None,
     "edge": None,
     "spectre": None,
 }
 
 
-# Generic user-prepared categorical graphs; never impersonates a benchmark.
-_MODEL_DATASETS['gdsm_simple']['attributed'] = DatasetCLIProfile('attributed')
 
 
 def _positive_int(raw: str) -> int:
@@ -252,8 +264,10 @@ def _add_common_arguments(parser: argparse.ArgumentParser, model: str) -> None:
             type=Path,
             default=None,
             help=(
-                "Model-specific YAML; defaults to "
-                f"configs/baselines/{model}_<dataset>.yaml when present."
+                "Model-specific YAML. GraphER final configs live under "
+                "configs/experiments/grapher_final/."
+                if model == "grapher"
+                else "Model-specific YAML; defaults to configs/baselines/<model>_<dataset>.yaml when present."
             ),
         )
         parser.add_argument(
@@ -538,14 +552,14 @@ def _training_options(
     if args.max_nodes is not None:
         raise ValueError(f"--max-nodes is only supported by source-backed adapters, not {model}.")
 
-    if model == "gdsm_simple":
+    if model == "grapher":
         train = options.setdefault("train", {})
         if args.epochs is not None:
             train["epochs"] = int(args.epochs)
         if args.batch_size is not None:
             train["batch_size"] = int(args.batch_size)
         if args.num_workers is not None:
-            raise ValueError("gdsm_simple is an in-process tensor baseline and does not use DataLoader workers yet")
+            raise ValueError("grapher is an in-process tensor baseline and does not use DataLoader workers yet")
         if args.generation_batch_size is not None:
             options["generation_batch_size"] = int(args.generation_batch_size)
         return options
@@ -669,15 +683,15 @@ def _generation_options(
         return result
 
     result: dict[str, Any] = {}
-    # gdsm_simple has generation-only spectral-rewiring controls in its YAML.
+    # grapher has generation-only spectral-rewiring controls in its YAML.
     # Reading only generation-safe sections here lets an already-trained S0
     # checkpoint be reused for S1 rewiring without an unnecessary retrain.
-    if model == "gdsm_simple" and wrapper_config is not None:
+    if model == "grapher" and wrapper_config is not None:
         loaded = yaml.safe_load(wrapper_config.read_text(encoding="utf-8")) or {}
-        selected = loaded.get("gdsm_simple", loaded)
+        selected = loaded.get("grapher", loaded)
         if not isinstance(selected, Mapping):
-            raise TypeError("gdsm_simple config section must be a mapping")
-        for key in ("sample", "extensions", "graphlet_refinement", "generation_batch_size"):
+            raise TypeError("grapher config section must be a mapping")
+        for key in ("sample", "extensions", "graphlet_refinement", "attributed_diversification", "generation_batch_size"):
             if key in selected:
                 value = selected[key]
                 result[key] = (
@@ -690,7 +704,7 @@ def _generation_options(
         if isinstance(attributed, Mapping) and "decode" in attributed:
             decode = attributed.get("decode", {}) or {}
             if not isinstance(decode, Mapping):
-                raise TypeError("gdsm_simple attributed.decode must be a mapping")
+                raise TypeError("grapher attributed.decode must be a mapping")
             result["attributed"] = {"decode": dict(decode)}
 
     # Explicit CLI runtime / throughput controls remain highest priority.

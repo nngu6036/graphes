@@ -161,6 +161,8 @@ gdsm_simple:
     valid_candidate_budget: 48
     preserve_connectivity: true
     strict_same_bond: true
+    preserve_neighbor_atom_type_by_bond_type: true
+    verify_bond_valence_preservation: true
     rdkit_candidate_filter: true
     reject_revisited_states: true
     normalization: initial

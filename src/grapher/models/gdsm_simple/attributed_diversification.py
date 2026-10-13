@@ -1,12 +1,14 @@
-"""Stochastic same-bond-type diversification for attributed GDSM samples.
+"""Stochastic same-bond-type diversification for attributed GraphER samples.
 
 The input graph is already a complete attributed sample.  A move chooses two
 edges with the same configured edge category and applies a valid double-edge
-swap while assigning that same edge category to the two inserted edges.  Hence
-node attributes, indexed ordinary degrees, indexed typed degrees, the global
-edge-category histogram, and (for molecular bond categories) per-node weighted
-valence are hard invariants.  Simplicity/connectivity are checked before a move
-is scored.  Optional RDKit filtering provides an additional molecular guard.
+swap while assigning that same edge category to the two inserted edges.  The
+strict variant additionally requires every node to keep the same multiset of
+``(neighbor atom type, bond type)`` incidences.  Hence node attributes, indexed
+ordinary degrees, indexed typed degrees, local atom-pair/bond environments, the
+global edge-category histogram, and per-node weighted bond valence are hard
+invariants.  Simplicity/connectivity are checked before a move is scored.
+Optional RDKit filtering provides an additional molecular-validity guard.
 
 Candidate selection is deliberately stochastic.  Predicted topology and typed
 structure summaries are frozen at the pre-rewiring endpoint and define a trust
@@ -33,6 +35,10 @@ from grapher.rewiring_mlp.generic.graphlets import (
     extract_topology_graphlet_counts,
     topology_structural_discrepancy_from_counts,
 )
+from grapher.rewiring_mlp.molecular.constraints import (
+    QM9_PROJECTED_MAX_VALENCE,
+    bond_order,
+)
 from grapher.rewiring_mlp.molecular.typed_invariants import (
     extract_typed_invariant,
     typed_invariant_matches_graph,
@@ -52,6 +58,12 @@ DEFAULT_ATTRIBUTED_DIVERSIFICATION: dict[str, Any] = {
     "valid_candidate_budget": 48,
     "preserve_connectivity": True,
     "strict_same_bond": True,
+    # Stronger molecular locality invariant: for every node preserve the
+    # number of neighbours of each atom type under each bond type.
+    "preserve_neighbor_atom_type_by_bond_type": True,
+    # Same-bond swaps already imply exact weighted bond-valence preservation;
+    # keep an explicit check/diagnostic so this contract is audited at runtime.
+    "verify_bond_valence_preservation": True,
     "rdkit_candidate_filter": True,
     "reject_revisited_states": True,
     "normalization": "initial",
@@ -99,6 +111,8 @@ def validate_options(cfg: Mapping[str, Any]) -> None:
     allowed = {
         "enabled", "mode", "random_steps", "proposal_budget",
         "valid_candidate_budget", "preserve_connectivity", "strict_same_bond",
+        "preserve_neighbor_atom_type_by_bond_type",
+        "verify_bond_valence_preservation",
         "rdkit_candidate_filter", "reject_revisited_states", "normalization",
         "epsilon", "guidance", "soft_selection", "target_trust_region",
     }
@@ -113,6 +127,16 @@ def validate_options(cfg: Mapping[str, Any]) -> None:
         )
     if not bool(cfg.get("strict_same_bond", True)):
         raise ValueError("Attributed diversification requires strict_same_bond=true")
+    if not bool(cfg.get("preserve_neighbor_atom_type_by_bond_type", True)):
+        raise ValueError(
+            "Strict molecular diversification requires "
+            "preserve_neighbor_atom_type_by_bond_type=true"
+        )
+    if not bool(cfg.get("verify_bond_valence_preservation", True)):
+        raise ValueError(
+            "Strict molecular diversification requires "
+            "verify_bond_valence_preservation=true"
+        )
     if not bool(cfg.get("preserve_connectivity", True)):
         raise ValueError("Attributed diversification requires preserve_connectivity=true")
     for key in ("proposal_budget", "valid_candidate_budget"):
@@ -196,10 +220,101 @@ def _state_key(graph: nx.Graph, edge_attribute: str) -> tuple[Any, ...]:
     return edges
 
 
+def _neighbor_atom_bond_signature(
+    graph: nx.Graph,
+    *,
+    node_attribute: str,
+    edge_attribute: str,
+) -> tuple[Any, ...]:
+    """Return an indexed radius-one chemical-environment signature.
+
+    For each node this records its own atom type and a multiset of
+    ``(neighbor_atom_type, bond_type)`` incidences.  Equality therefore means
+    that a rewiring cannot replace, for example, a C--C single-bond neighbour
+    by an N neighbour even though ordinary/typed bond degrees are unchanged.
+    """
+
+    rows: list[Any] = []
+    for node in sorted(graph.nodes()):
+        data = graph.nodes[node]
+        if node_attribute not in data:
+            raise KeyError(f"Node {node!r} is missing {node_attribute!r}")
+        counts: Counter = Counter()
+        for neighbor, edge_data in graph[node].items():
+            if node_attribute not in graph.nodes[neighbor]:
+                raise KeyError(f"Node {neighbor!r} is missing {node_attribute!r}")
+            if edge_attribute not in edge_data:
+                raise KeyError(f"Edge {(node, neighbor)!r} is missing {edge_attribute!r}")
+            counts[(graph.nodes[neighbor][node_attribute], edge_data[edge_attribute])] += 1
+        environment = tuple(
+            sorted(
+                ((atom_type, bond_type, int(count))
+                 for (atom_type, bond_type), count in counts.items()),
+                key=lambda value: (repr(value[0]), repr(value[1]), value[2]),
+            )
+        )
+        rows.append((data[node_attribute], environment))
+    return tuple(rows)
+
+
+def _weighted_bond_valence_vector(
+    graph: nx.Graph,
+    *,
+    edge_attribute: str,
+) -> tuple[float, ...]:
+    """Per-node bond-order sums used to audit exact bond-valence invariance."""
+
+    values: list[float] = []
+    for node in sorted(graph.nodes()):
+        total = 0.0
+        for _, _, edge_data in graph.edges(node, data=True):
+            if edge_attribute not in edge_data:
+                raise KeyError(f"Incident edge at node {node!r} is missing {edge_attribute!r}")
+            total += float(bond_order(int(edge_data[edge_attribute])))
+        values.append(float(total))
+    return tuple(values)
+
+
+def _bond_valence_vectors_equal(
+    left: tuple[float, ...],
+    right: tuple[float, ...],
+    *,
+    atol: float = 1.0e-10,
+) -> bool:
+    if len(left) != len(right):
+        return False
+    return bool(np.allclose(np.asarray(left), np.asarray(right), rtol=0.0, atol=atol))
+
+
+def _qm9_projected_bond_valence_valid(
+    graph: nx.Graph,
+    *,
+    node_attribute: str,
+    edge_attribute: str,
+) -> bool | None:
+    """Check the projected QM9 valence envelope when all atoms are supported.
+
+    Returns ``None`` for non-QM9 atom vocabularies (for example ZINC atoms P,
+    S, Cl, Br, I), because applying the QM9 envelope there would be invalid.
+    """
+
+    valence = _weighted_bond_valence_vector(graph, edge_attribute=edge_attribute)
+    for index, node in enumerate(sorted(graph.nodes())):
+        atom = graph.nodes[node].get(node_attribute)
+        if atom not in QM9_PROJECTED_MAX_VALENCE:
+            return None
+        if valence[index] > float(QM9_PROJECTED_MAX_VALENCE[atom]) + 1.0e-10:
+            return False
+    return True
+
+
 def _candidate_graphs(
     current: nx.Graph,
     *,
     edge_attribute: str,
+    node_attribute: str,
+    neighbor_atom_bond_invariant: tuple[Any, ...],
+    bond_valence_invariant: tuple[float, ...],
     cfg: Mapping[str, Any],
     rng: np.random.Generator,
     seen: set[tuple[Any, ...]],
@@ -254,6 +369,24 @@ def _candidate_graphs(
             if bool(cfg.get("reject_revisited_states", True)) and key in seen:
                 stats["visited_rejections"] += 1
                 continue
+            if bool(cfg.get("preserve_neighbor_atom_type_by_bond_type", True)):
+                observed_local = _neighbor_atom_bond_signature(
+                    candidate,
+                    node_attribute=node_attribute,
+                    edge_attribute=edge_attribute,
+                )
+                if observed_local != neighbor_atom_bond_invariant:
+                    stats["neighbor_atom_bond_signature_rejections"] += 1
+                    continue
+            if bool(cfg.get("verify_bond_valence_preservation", True)):
+                observed_valence = _weighted_bond_valence_vector(
+                    candidate, edge_attribute=edge_attribute
+                )
+                if not _bond_valence_vectors_equal(
+                    observed_valence, bond_valence_invariant
+                ):
+                    stats["bond_valence_rejections"] += 1
+                    continue
             if bool(cfg.get("rdkit_candidate_filter", True)):
                 from grapher.rewiring_mlp.molecular.graph_io import is_valid_molecular_graph
 
@@ -365,6 +498,11 @@ def diversify_same_bond_graph(
             "accepted_steps": 0,
             "stop_reason": "disconnected_source_skipped",
             "changed": False,
+            "typed_degree_preserved": True,
+            "degree_preserved": True,
+            "neighbor_atom_bond_signature_preserved": True,
+            "bond_valence_preserved": True,
+            "connected": False,
         }
 
     invariant = extract_typed_invariant(
@@ -373,6 +511,24 @@ def diversify_same_bond_graph(
         node_attribute=str(vocabulary.node_attribute),
         edge_attribute=str(vocabulary.edge_attribute),
     )
+    neighbor_atom_bond_invariant = _neighbor_atom_bond_signature(
+        current,
+        node_attribute=str(vocabulary.node_attribute),
+        edge_attribute=str(vocabulary.edge_attribute),
+    )
+    bond_valence_invariant = _weighted_bond_valence_vector(
+        current, edge_attribute=str(vocabulary.edge_attribute)
+    )
+    source_qm9_bond_valence_valid = _qm9_projected_bond_valence_valid(
+        current,
+        node_attribute=str(vocabulary.node_attribute),
+        edge_attribute=str(vocabulary.edge_attribute),
+    )
+    source_rdkit_valid: bool | None = None
+    if bool(cfg.get("rdkit_candidate_filter", True)):
+        from grapher.rewiring_mlp.molecular.graph_io import is_valid_molecular_graph
+
+        source_rdkit_valid = bool(is_valid_molecular_graph(current))
     requested_steps = sample_step_budget(rng, cfg)
     if requested_steps <= 0:
         return current, {
@@ -382,6 +538,15 @@ def diversify_same_bond_graph(
             "changed": False,
             "typed_degree_preserved": True,
             "degree_preserved": True,
+            "neighbor_atom_bond_signature_preserved": True,
+            "bond_valence_preserved": True,
+            "source_qm9_bond_valence_valid": source_qm9_bond_valence_valid,
+            "final_qm9_bond_valence_valid": source_qm9_bond_valence_valid,
+            "source_rdkit_valid": source_rdkit_valid,
+            "final_rdkit_valid": source_rdkit_valid,
+            "rdkit_validity_preserved_for_valid_source": (
+                True if source_rdkit_valid is True else None
+            ),
             "connected": True,
         }
 
@@ -459,6 +624,9 @@ def diversify_same_bond_graph(
         for action, candidate, key in _candidate_graphs(
             current,
             edge_attribute=str(vocabulary.edge_attribute),
+            node_attribute=str(vocabulary.node_attribute),
+            neighbor_atom_bond_invariant=neighbor_atom_bond_invariant,
+            bond_valence_invariant=bond_valence_invariant,
             cfg=cfg,
             rng=rng,
             seen=seen,
@@ -507,6 +675,21 @@ def diversify_same_bond_graph(
         energy, candidate, key, action, parts, candidate_counts = candidate_rows[choice]
         if not typed_invariant_matches_graph(candidate, invariant):
             raise AssertionError("Same-bond swap changed indexed node/typed-degree invariant")
+        if _neighbor_atom_bond_signature(
+            candidate,
+            node_attribute=str(vocabulary.node_attribute),
+            edge_attribute=str(vocabulary.edge_attribute),
+        ) != neighbor_atom_bond_invariant:
+            raise AssertionError(
+                "Strict same-bond swap changed neighbor-atom-type-by-bond-type signature"
+            )
+        if not _bond_valence_vectors_equal(
+            _weighted_bond_valence_vector(
+                candidate, edge_attribute=str(vocabulary.edge_attribute)
+            ),
+            bond_valence_invariant,
+        ):
+            raise AssertionError("Strict same-bond swap changed per-node bond valence")
         if candidate.number_of_nodes() > 1 and not nx.is_connected(candidate):
             raise AssertionError("Same-bond diversification disconnected the graph")
         trace.append(
@@ -532,6 +715,40 @@ def diversify_same_bond_graph(
     preserved = typed_invariant_matches_graph(current, invariant)
     if not preserved:
         raise AssertionError("Attributed diversification violated typed-degree preservation")
+    neighbor_preserved = (
+        _neighbor_atom_bond_signature(
+            current,
+            node_attribute=str(vocabulary.node_attribute),
+            edge_attribute=str(vocabulary.edge_attribute),
+        )
+        == neighbor_atom_bond_invariant
+    )
+    if not neighbor_preserved:
+        raise AssertionError(
+            "Attributed diversification violated neighbor-atom-type-by-bond-type preservation"
+        )
+    final_bond_valence = _weighted_bond_valence_vector(
+        current, edge_attribute=str(vocabulary.edge_attribute)
+    )
+    bond_valence_preserved = _bond_valence_vectors_equal(
+        final_bond_valence, bond_valence_invariant
+    )
+    if not bond_valence_preserved:
+        raise AssertionError("Attributed diversification violated bond-valence preservation")
+    final_qm9_bond_valence_valid = _qm9_projected_bond_valence_valid(
+        current,
+        node_attribute=str(vocabulary.node_attribute),
+        edge_attribute=str(vocabulary.edge_attribute),
+    )
+    final_rdkit_valid: bool | None = None
+    if bool(cfg.get("rdkit_candidate_filter", True)):
+        from grapher.rewiring_mlp.molecular.graph_io import is_valid_molecular_graph
+
+        final_rdkit_valid = bool(is_valid_molecular_graph(current))
+        if source_rdkit_valid is True and not final_rdkit_valid:
+            raise AssertionError(
+                "RDKit-valid source became invalid after strict molecular rewiring"
+            )
     changed = _state_key(current, str(vocabulary.edge_attribute)) != _state_key(source, str(vocabulary.edge_attribute))
     return current, {
         "requested_steps": int(requested_steps),
@@ -540,6 +757,24 @@ def diversify_same_bond_graph(
         "changed": bool(changed),
         "typed_degree_preserved": True,
         "degree_preserved": True,
+        "neighbor_atom_bond_signature_preserved": bool(neighbor_preserved),
+        "bond_valence_preserved": bool(bond_valence_preserved),
+        "source_bond_valence_vector": [float(value) for value in bond_valence_invariant],
+        "final_bond_valence_vector": [float(value) for value in final_bond_valence],
+        "source_qm9_bond_valence_valid": source_qm9_bond_valence_valid,
+        "final_qm9_bond_valence_valid": final_qm9_bond_valence_valid,
+        "qm9_bond_valence_validity_preserved": (
+            None
+            if source_qm9_bond_valence_valid is None
+            else (not source_qm9_bond_valence_valid or bool(final_qm9_bond_valence_valid))
+        ),
+        "source_rdkit_valid": source_rdkit_valid,
+        "final_rdkit_valid": final_rdkit_valid,
+        "rdkit_validity_preserved_for_valid_source": (
+            None
+            if source_rdkit_valid is not True
+            else bool(final_rdkit_valid)
+        ),
         "node_types_preserved": True,
         "bond_type_counts_preserved": True,
         "connected": bool(current.number_of_nodes() <= 1 or nx.is_connected(current)),
@@ -553,4 +788,6 @@ def diversify_same_bond_graph(
         "candidate_search_totals": dict(search_totals),
         "target_scope": "frozen_topology_and_typed_summary_heads",
         "strict_same_bond": True,
+        "preserve_neighbor_atom_type_by_bond_type": True,
+        "verify_bond_valence_preservation": True,
     }

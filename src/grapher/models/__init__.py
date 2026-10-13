@@ -48,6 +48,7 @@ __all__ = [
 
 
 _LAZY_WRAPPERS = {
+    "GraphERWrapper": "grapher",
     "CatFlowWrapper": "catflow", "GDSMWrapper": "gdsm", "GSDMWrapper": "gdsm",
     "EDGEWrapper": "edge", "SPECTREWrapper": "spectre",
 }
