@@ -1,5 +1,6 @@
 import networkx as nx
 import numpy as np
+import pytest
 
 from grapher.properties.summary import SummaryConfig
 from grapher.models.grapher import attributed_diversification
@@ -158,7 +159,8 @@ def test_hybrid_options_accept_new_diversification_block():
     hybrid.validate_options(options)
 
 
-def test_hybrid_generation_writes_paired_same_bond_outputs(tmp_path):
+@pytest.mark.parametrize("generation_override", [False, True])
+def test_hybrid_generation_writes_paired_same_bond_outputs(tmp_path, generation_override):
     import json
     import pickle
     import torch
@@ -175,7 +177,7 @@ def test_hybrid_generation_writes_paired_same_bond_outputs(tmp_path):
     torch.set_num_threads(1)
     dataset = helper._write_dataset(tmp_path)
     options = helper._options()
-    options["attributed_diversification"] = {
+    diversification = {
         "enabled": True,
         "mode": "stochastic_same_bond_diversification",
         "random_steps": {"distribution": "uniform_integer", "min_steps": 1, "max_steps": 1},
@@ -208,11 +210,30 @@ def test_hybrid_generation_writes_paired_same_bond_outputs(tmp_path):
             "relative_worsening": 10.0,
         },
     }
+    if not generation_override:
+        options["attributed_diversification"] = diversification
     wrapper = GraphERWrapper()
     run = RunSpec("grapher", "qm9", "hybrid_div", 42, tmp_path / "runs")
     trained = wrapper.train(TrainRequest(run, dataset, options=options))
+    generation_options = {}
+    if generation_override:
+        import yaml
+        from grapher.models.external_cli import _generation_options, build_parser
+
+        config_path = tmp_path / "generation.yaml"
+        config_path.write_text(
+            yaml.safe_dump({"grapher": {"attributed_diversification": diversification}}),
+            encoding="utf-8",
+        )
+        args = build_parser("grapher").parse_args([
+            "--dataset", "qm9", "--stage", "generate", "--device", "cpu",
+        ])
+        generation_options = _generation_options("grapher", args, wrapper_config=config_path)
     generated = wrapper.generate(
-        GenerateRequest(run, trained.checkpoint_path, 6, 99, generation_id="sample")
+        GenerateRequest(
+            run, trained.checkpoint_path, 6, 99, generation_id="sample",
+            options=generation_options,
+        )
     )
     manifest = json.loads(generated.manifest_path.read_text())
     assert manifest["sampling"]["rewiring"] is True
@@ -220,6 +241,12 @@ def test_hybrid_generation_writes_paired_same_bond_outputs(tmp_path):
     assert manifest["sampling"]["typed_degree_preserved_by_rewiring"] is True
     assert (generated.generation_dir / "pre_refinement_graphs.pkl").is_file()
     assert (generated.generation_dir / "attributed_diversification_diagnostics.json").is_file()
+    diagnostics = json.loads(
+        (generated.generation_dir / "attributed_diversification_diagnostics.json").read_text()
+    )
+    assert diagnostics["config"]["enabled"] is True
+    assert diagnostics["config"]["random_steps"]["max_steps"] == 1
+    assert len(diagnostics["per_graph"]) == 6
 
     with (generated.generation_dir / "pre_refinement_graphs.pkl").open("rb") as handle:
         before = pickle.load(handle)

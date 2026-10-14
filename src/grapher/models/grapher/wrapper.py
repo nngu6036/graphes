@@ -645,7 +645,11 @@ class GraphERWrapper(BaseGeneratorWrapper):
         # rewiring, but never the trained denoiser architecture/diffusion.
         unknown = sorted(
             set(request.options)
-            - {"runtime", "generation_batch_size", "sample", "extensions", "graphlet_refinement", "attributed", "attribute_diffusion"}
+            - {
+                "runtime", "generation_batch_size", "sample", "extensions",
+                "graphlet_refinement", "attributed", "attribute_diffusion",
+                "attributed_diversification",
+            }
         )
         if unknown:
             raise ValueError(f"Unsupported grapher generation overrides: {unknown}")
