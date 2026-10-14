@@ -40,11 +40,11 @@ frozen_split:
     train: 128
     val: 32
     test: 40
-  fingerprint: fdfa17060a0e887fe84aa7ed95ae31d94a24b042b641a2fdbd3bbdc135ebdb4a
-  split_sha256:
-    train: f55e1d722742da14d8da90de215d4cb3abcb845a0458744298a81e54b1a9a8f1
-    val: 46792b72abec46c7499d915cf31ea8c2978924a8abb379f17b24fdb84c860f13
-    test: c8a67540cae94fbed652e5692775677abf2153e7e20f28fbf26595d0151e168b
+  # Ordered graph topology, center, and radius; independent of pickle bytes.
+  ego_content_sha256_v1:
+    train: 1714ba1f72d1fb34c77da4aefbe12a1e98dc8335ebd76f83f026262a0b5db698
+    val: 4eb620ebddd25055b4f73be600eabd705fa95eca35813fc1a9b79d17ebdb7881
+    test: 13551330f427913a4579858caf347e33cc20712d1d7c8215f8a8a9fc5be95dc7
 
 filters:
   require_connected: true

@@ -1,7 +1,3 @@
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")/.."
-
 N="${N:-1024}"
 DEVICE="${DEVICE:-cuda:0}"
 REFERENCE_SPLIT="${REFERENCE_SPLIT:-test}"

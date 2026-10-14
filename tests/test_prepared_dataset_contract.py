@@ -4,7 +4,11 @@ import networkx as nx
 import pytest
 import yaml
 
-from grapher.data.io import save_dataset_splits, validate_prepared_dataset_contract
+from grapher.data.io import (
+    _ego_split_content_sha256,
+    save_dataset_splits,
+    validate_prepared_dataset_contract,
+)
 
 
 def _write_config(path: Path, *, train: float, val: float, test: float) -> None:
@@ -118,3 +122,44 @@ def test_prepared_dataset_contract_rejects_wrong_source_indices(tmp_path):
         validate_prepared_dataset_contract(
             "fixture", root=root, config_path=config_path, splits=splits
         )
+
+
+@pytest.mark.parametrize("mutation", [None, "edge", "center", "order"])
+def test_ego_content_contract_is_portable_and_strict(tmp_path, mutation):
+    import pickle
+
+    graphs = [nx.path_graph(4), nx.cycle_graph(4)]
+    for center, graph in enumerate(graphs):
+        graph.graph.update(center=center, radius=1)
+    splits = {"train": graphs, "val": [], "test": []}
+    payload = {"frozen_split": {"ego_content_sha256_v1": _ego_split_content_sha256(splits)}}
+    config_path = tmp_path / "fixture.yaml"
+    config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    # Rebuild with reversed insertion order and an unrelated cached property.
+    rebuilt = []
+    for graph in graphs:
+        copy = nx.Graph()
+        copy.add_nodes_from(reversed(list(graph)))
+        copy.add_edges_from(reversed(list(graph.edges())))
+        copy.graph.update(graph.graph)
+        copy.__dict__["unrelated_cache"] = True
+        rebuilt.append(copy)
+    if mutation == "edge":
+        rebuilt[0].add_edge(0, 3)
+    elif mutation == "center":
+        rebuilt[0].graph["center"] = 99
+    elif mutation == "order":
+        rebuilt.reverse()
+    prepared = {"train": rebuilt, "val": [], "test": []}
+    save_dataset_splits("fixture", prepared, payload, tmp_path)
+    for split, rows in prepared.items():
+        (tmp_path / "fixture" / f"{split}.pkl").write_bytes(pickle.dumps(rows, protocol=2))
+    if mutation is None:
+        assert validate_prepared_dataset_contract(
+            "fixture", root=tmp_path, config_path=config_path,
+        ) == []
+    else:
+        with pytest.raises(RuntimeError, match="ego graph content differs"):
+            validate_prepared_dataset_contract(
+                "fixture", root=tmp_path, config_path=config_path,
+            )

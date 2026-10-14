@@ -41,309 +41,85 @@
 # DATASET 1/4: COMMUNITY-SMALL
 # ##############################################################################
 
-# ==============================================================================
-# Community-small — SEED 41
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=41 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_41.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset sbm \
-  --output-root outputs/baselines \
-  --seed-id 41 \
-  --run-id seed_41_gdsm_final_g345 \
-  --device cuda:0
-
-# ------------------------------------------------------------------------------
-# 2. Generate 1,024 graphs
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=41 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_41.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset sbm \
-  --output-root outputs/baselines \
-  --seed-id 41 \
-  --run-id seed_41_gdsm_final_g345 \
-  --device cuda:0 \
-  --generation-seed 41 \
-  --generation-id seed_41_n_1024 \
-  --num-samples 1024
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate topology
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=41 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src \
-python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_41_gdsm_final_g345/generations/seed_41_n_1024 \
-  --generated-graphs outputs/baselines/gdsm_simple/community_small/seed_41_gdsm_final_g345/generations/seed_41_n_1024/base_graphs.pkl \
-  --base-graphs outputs/baselines/gdsm_simple/community_small/seed_41_gdsm_final_g345/generations/seed_41_n_1024/initial_graphs.pkl \
-  --generated-stage gdsm_final \
-  --reference-split test \
-  --generic-mmd-protocol graphrnn \
-  --num-samples 1024 \
-  --output-dir outputs/baselines/gdsm_simple/community_small/seed_41_gdsm_final_g345/generations/seed_41_n_1024/evaluation_topology
-
-# ------------------------------------------------------------------------------
-# Recorded result — Community-small, seed 41
-# ------------------------------------------------------------------------------
-
-
-# ==============================================================================
-# Community-small — SEED 42
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_42.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset sbm \
-  --output-root outputs/baselines \
-  --seed-id 42 \
-  --run-id seed_42_gdsm_final_g345 \
-  --device cuda:0
-
-# ------------------------------------------------------------------------------
-# 2. Generate 1,024 graphs
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_42.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset sbm \
-  --output-root outputs/baselines \
-  --seed-id 42 \
-  --run-id seed_42_gdsm_final_g345 \
-  --device cuda:0 \
-  --generation-seed 42 \
-  --generation-id seed_42_n_1024 \
-  --num-samples 1024
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate topology
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=42 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src \
-python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024 \
-  --generated-graphs outputs/baselines/gdsm_simple/community_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/base_graphs.pkl \
-  --base-graphs outputs/baselines/gdsm_simple/community_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/initial_graphs.pkl \
-  --generated-stage gdsm_final \
-  --reference-split test \
-  --generic-mmd-protocol graphrnn \
-  --num-samples 1024 \
-  --output-dir outputs/baselines/gdsm_simple/community_small/seed_42_gdsm_final_g345/generations/seed_42_n_1024/evaluation_topology
-
-# ------------------------------------------------------------------------------
-# Recorded result — Community-small, seed 42
-# Retained verbatim from the original source file.
-# ------------------------------------------------------------------------------
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.009595
-gdsm_simple_to_test                 0.003172          0.007285      0.000372        0.005428        0.009454
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+grapher_spectral_pre_rewire_to_test      0.005482          0.011182      0.000816        0.009089        0.012607      0.000000
+grapher_diversified_to_test         0.005482          0.052224      0.000867        0.015877        0.021193      0.903320
 
-# ==============================================================================
-# Community-small — SEED 43
-# ==============================================================================
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+grapher_spectral_pre_rewire       0.000000      0.000000     0.040039    0.075195      0.803125
+grapher_diversified               0.903320      0.903320     0.704102    0.903320      0.946094
 
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_43.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset sbm \
-  --output-root outputs/baselines \
-  --seed-id 43 \
-  --run-id seed_43_gdsm_final_g345 \
-  --device cuda:0
 
-# ------------------------------------------------------------------------------
-# 2. Generate 1,024 graphs
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_43.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset sbm \
-  --output-root outputs/baselines \
-  --seed-id 43 \
-  --run-id seed_43_gdsm_final_g345 \
-  --device cuda:0 \
-  --generation-seed 43 \
-  --generation-id seed_43_n_1024 \
-  --num-samples 1024
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate topology
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=43 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src \
-python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024 \
-  --generated-graphs outputs/baselines/gdsm_simple/community_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/base_graphs.pkl \
-  --base-graphs outputs/baselines/gdsm_simple/community_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/initial_graphs.pkl \
-  --generated-stage gdsm_final \
-  --reference-split test \
-  --generic-mmd-protocol graphrnn \
-  --num-samples 1024 \
-  --output-dir outputs/baselines/gdsm_simple/community_small/seed_43_gdsm_final_g345/generations/seed_43_n_1024/evaluation_topology
-
-# ------------------------------------------------------------------------------
-# Recorded result — Community-small, seed 43
-# Retained verbatim from the original source file.
-# ------------------------------------------------------------------------------
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.009595
-gdsm_simple_to_test                 0.005467          0.011144      0.000287        0.007214        0.009069
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+grapher_spectral_pre_rewire_to_test      0.004253          0.010760      0.000256        0.005086        0.006945      0.000000
+grapher_diversified_to_test         0.004253          0.049767      0.000974        0.010237        0.012491      0.886719
 
-# ==============================================================================
-# Community-small — SEED 44
-# ==============================================================================
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+grapher_spectral_pre_rewire       0.000000      0.000000     0.040039    0.076172      0.801172
+grapher_diversified               0.886719      0.886719     0.673828    0.891602      0.944141
 
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_44.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset sbm \
-  --output-root outputs/baselines \
-  --seed-id 44 \
-  --run-id seed_44_gdsm_final_g345 \
-  --device cuda:0
 
-# ------------------------------------------------------------------------------
-# 2. Generate 1,024 graphs
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_44.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset sbm \
-  --output-root outputs/baselines \
-  --seed-id 44 \
-  --run-id seed_44_gdsm_final_g345 \
-  --device cuda:0 \
-  --generation-seed 44 \
-  --generation-id seed_44_n_1024 \
-  --num-samples 1024
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate topology
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=44 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src \
-python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024 \
-  --generated-graphs outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/base_graphs.pkl \
-  --base-graphs outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/initial_graphs.pkl \
-  --generated-stage gdsm_final \
-  --reference-split test \
-  --generic-mmd-protocol graphrnn \
-  --num-samples 1024 \
-  --output-dir outputs/baselines/gdsm_simple/community_small/seed_44_gdsm_final_g345/generations/seed_44_n_1024/evaluation_topology
-
-# ------------------------------------------------------------------------------
-# Recorded result — Community-small, seed 44
-# ------------------------------------------------------------------------------
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.009595
-gdsm_simple_to_test                 0.004253          0.010760      0.000256        0.005086        0.006481
-# ==============================================================================
-# Community-small — SEED 45
-# ==============================================================================
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+grapher_spectral_pre_rewire_to_test      0.005467          0.011144      0.000287        0.007214        0.010950      0.000000
+grapher_diversified_to_test         0.005467          0.036915      0.000498        0.011333        0.018961      0.826172
 
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=45 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_45.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset sbm \
-  --output-root outputs/baselines \
-  --seed-id 45 \
-  --run-id seed_45_gdsm_final_g345 \
-  --device cuda:0
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+grapher_spectral_pre_rewire       0.000000      0.000000     0.040039    0.061523      0.793359
+grapher_diversified               0.826172      0.826172     0.630859    0.827148      0.928516
 
-# ------------------------------------------------------------------------------
-# 2. Generate 1,024 graphs
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=45 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/community_small_seed_45.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset sbm \
-  --output-root outputs/baselines \
-  --seed-id 45 \
-  --run-id seed_45_gdsm_final_g345 \
-  --device cuda:0 \
-  --generation-seed 45 \
-  --generation-id seed_45_n_1024 \
-  --num-samples 1024
+Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+grapher_spectral_pre_rewire_to_test      0.003172          0.007285      0.000372        0.005428        0.009799      0.000000
+grapher_diversified_to_test         0.003172          0.046852      0.000655        0.010022        0.016076      0.840820
 
-# ------------------------------------------------------------------------------
-# 3. Evaluate topology
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=45 ORCA_EXEC=/home/quang/orca/orca.out PYTHONPATH=src \
-python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir outputs/baselines/gdsm_simple/community_small/seed_45_gdsm_final_g345/generations/seed_45_n_1024 \
-  --generated-graphs outputs/baselines/gdsm_simple/community_small/seed_45_gdsm_final_g345/generations/seed_45_n_1024/base_graphs.pkl \
-  --base-graphs outputs/baselines/gdsm_simple/community_small/seed_45_gdsm_final_g345/generations/seed_45_n_1024/initial_graphs.pkl \
-  --generated-stage gdsm_final \
-  --reference-split test \
-  --generic-mmd-protocol graphrnn \
-  --num-samples 1024 \
-  --output-dir outputs/baselines/gdsm_simple/community_small/seed_45_gdsm_final_g345/generations/seed_45_n_1024/evaluation_topology
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+grapher_spectral_pre_rewire       0.000000      0.000000     0.040039    0.070312      0.792383
+grapher_diversified               0.840820      0.840820     0.679688    0.850586      0.943164
 
-# ------------------------------------------------------------------------------
-# Recorded result — Community-small, seed 45
-# ------------------------------------------------------------------------------
+
+Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+grapher_spectral_pre_rewire_to_test      0.005873          0.009975      0.000489        0.009179        0.012819      0.000000
+grapher_diversified_to_test         0.005873          0.038515      0.000746        0.014422        0.016307      0.833008
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+grapher_spectral_pre_rewire       0.000000      0.000000     0.040039    0.071289      0.808008
+grapher_diversified               0.833008      0.833008     0.658203    0.840820      0.931445
+
+
 
 # ##############################################################################
 # DATASET 2/4: EGO-SMALL

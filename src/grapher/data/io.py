@@ -109,6 +109,33 @@ def _source_index_contract(
         contract[split] = indices
     return contract
 
+def _ego_split_content_sha256(
+    splits: Mapping[str, Sequence[nx.Graph]],
+) -> dict[str, str]:
+    """Hash ordered, integer-labelled ego topology and source-center identity.
+
+    JSON avoids pickle implementation details and NetworkX cached properties.
+    Node/edge insertion order is ignored; graph order within each split matters.
+    """
+    hashes = {}
+    for split in ("train", "val", "test"):
+        records = []
+        for graph in splits.get(split, []):
+            if graph.is_directed() or graph.is_multigraph():
+                raise ValueError("Ego content hashes require simple undirected graphs.")
+            if any(type(node) is not int for node in graph):
+                raise ValueError("Ego content hashes require integer node labels.")
+            records.append({
+                "nodes": sorted(graph.nodes()),
+                "edges": sorted(sorted(edge) for edge in graph.edges()),
+                "center": graph.graph.get("center"),
+                "radius": graph.graph.get("radius"),
+            })
+        payload = json.dumps(records, sort_keys=True, separators=(",", ":"))
+        hashes[split] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return hashes
+
+
 def validate_prepared_dataset_contract(
     dataset: str,
     *,
@@ -204,7 +231,20 @@ def validate_prepared_dataset_contract(
         # stable dataset identity: they can change across Python/NetworkX or
         # pickle protocol versions even when the graph split is identical.
         frozen_source_indices = frozen.get("source_indices")
-        if isinstance(frozen_source_indices, Mapping):
+        frozen_ego_hashes = frozen.get("ego_content_sha256_v1")
+        if isinstance(frozen_ego_hashes, Mapping):
+            loaded_splits = (
+                {split: load_pickle(path) for split, path in paths.items()}
+                if splits is None else splits
+            )
+            observed = _ego_split_content_sha256(loaded_splits)
+            for split in paths:
+                if frozen_ego_hashes.get(split) != observed[split]:
+                    mismatches.append(
+                        f"{split} ego graph content differs from frozen_split: "
+                        f"expected={frozen_ego_hashes.get(split)}, found={observed[split]}"
+                    )
+        elif isinstance(frozen_source_indices, Mapping):
             if splits is None:
                 loaded_splits = {
                     split: load_pickle(path) for split, path in paths.items()
