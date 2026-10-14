@@ -156,7 +156,7 @@ grapher:
     random_steps:
       distribution: uniform_integer
       min_steps: 0
-      max_steps: 4
+      max_steps: 2
       mean_steps: 2.0
     proposal_budget: 128
     valid_candidate_budget: 48
