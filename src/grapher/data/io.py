@@ -70,19 +70,58 @@ def _dataset_config_payload(raw: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _expected_split_sizes(config: Mapping[str, Any]) -> dict[str, int] | None:
-    total = config.get("num_graphs")
     split = config.get("split")
-    if total is None or not isinstance(split, Mapping):
+    if not isinstance(split, Mapping):
         return None
+    # Molecular protocols can name index-based partition rules rather than
+    # fractions. Their declared rules are compared against resolved metadata.
+    try:
+        train_fraction = float(split.get("train", 0.8))
+        val_fraction = float(split.get("val", 0.1))
+        test_fraction = float(split.get("test", 1.0 - train_fraction - val_fraction))
+    except (TypeError, ValueError):
+        return None
+    values = {"train": train_fraction, "val": val_fraction, "test": test_fraction}
+    total = config.get("num_graphs")
+    # QM9 and fixed-count molecular subsets declare absolute split sizes,
+    # often without the generic builder's num_graphs field.
+    if (
+        total is None
+        or split.get("strategy") == "fixed_counts"
+        or any(v > 1 for v in values.values())
+    ):
+        if all(
+            key in split and value >= 0 and value.is_integer()
+            for key, value in values.items()
+        ):
+            counts = {key: int(value) for key, value in values.items()}
+            if total is not None and sum(counts.values()) != int(total):
+                raise ValueError(
+                    "Configured train/val/test counts must sum to num_graphs."
+                )
+            return counts
+        if total is None:
+            return None
     total = int(total)
-    train_fraction = float(split.get("train", 0.8))
-    val_fraction = float(split.get("val", 0.1))
-    test_fraction = float(split.get("test", 1.0 - train_fraction - val_fraction))
     if abs(train_fraction + val_fraction + test_fraction - 1.0) > 1.0e-8:
         raise ValueError("Configured train/val/test fractions must sum to 1.0.")
     n_train = int(round(total * train_fraction))
     n_val = int(round(total * val_fraction))
     return {"train": n_train, "val": n_val, "test": total - n_train - n_val}
+
+
+def _normalized_split_contract(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve index-based rules and controls while normalizing numeric values."""
+    split = config.get("split", {})
+    contract = dict(split)
+    contract["seed"] = int(split.get("seed", config.get("seed", 0)))
+    for name, default in (("train", 0.8), ("val", 0.1), ("test", 0.1)):
+        value = split.get(name, default)
+        try:
+            contract[name] = float(value)
+        except (TypeError, ValueError):
+            contract[name] = value
+    return contract
 
 
 
@@ -187,18 +226,8 @@ def validate_prepared_dataset_contract(
         requested_split = requested.get("split")
         resolved_split = resolved.get("split")
         if isinstance(requested_split, Mapping) and isinstance(resolved_split, Mapping):
-            normalized_requested = {
-                "seed": int(requested_split.get("seed", requested.get("seed", 0))),
-                "train": float(requested_split.get("train", 0.8)),
-                "val": float(requested_split.get("val", 0.1)),
-                "test": float(requested_split.get("test", 0.1)),
-            }
-            normalized_resolved = {
-                "seed": int(resolved_split.get("seed", resolved.get("seed", 0))),
-                "train": float(resolved_split.get("train", 0.8)),
-                "val": float(resolved_split.get("val", 0.1)),
-                "test": float(resolved_split.get("test", 0.1)),
-            }
+            normalized_requested = _normalized_split_contract(requested)
+            normalized_resolved = _normalized_split_contract(resolved)
             if normalized_requested != normalized_resolved:
                 mismatches.append(
                     "prepared resolved_dataset_config.yaml uses a different split "

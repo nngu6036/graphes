@@ -9,6 +9,7 @@ from grapher.data.io import (
     save_dataset_splits,
     validate_prepared_dataset_contract,
 )
+from grapher.models.base import DatasetReference
 
 
 def _write_config(path: Path, *, train: float, val: float, test: float) -> None:
@@ -56,6 +57,133 @@ def test_prepared_dataset_contract_accepts_matching_split_contract(tmp_path):
     save_dataset_splits("fixture", splits, config, root)
     assert validate_prepared_dataset_contract(
         "fixture", root=root, config_path=config_path, splits=splits
+    ) == []
+
+
+def _symbolic_split_config() -> dict:
+    return {
+        "name": "fixture",
+        "protocol_id": "hogdiff_gdss_zinc250k_v1",
+        "source": {"expected_graphs": 10},
+        "split": {
+            "strategy": "hogdiff_gdss_fixed_test_indices",
+            "seed": 42,
+            "validation_count": 2,
+            "train": "complement_of_test_indices_minus_validation",
+            "val": "deterministic_subset_of_training_complement",
+            "test": "test_indices",
+        },
+    }
+
+
+@pytest.mark.parametrize("num_graphs", [None, 10])
+def test_dataset_reference_accepts_symbolic_zinc_split(tmp_path, num_graphs):
+    root = tmp_path / "datasets"
+    config_path = tmp_path / "fixture.yaml"
+    config = _symbolic_split_config()
+    if num_graphs is not None:
+        config["num_graphs"] = num_graphs
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    graphs = [nx.path_graph(4) for _ in range(10)]
+    splits = {"train": graphs[:6], "val": graphs[6:8], "test": graphs[8:]}
+    save_dataset_splits("fixture", splits, config, root)
+
+    reference = DatasetReference("fixture", root=root, config_path=config_path)
+    assert reference.require_prepared() is reference
+
+
+@pytest.mark.parametrize(
+    ("field", "stale_value"),
+    [
+        ("strategy", "fixed_counts"),
+        ("validation_count", 1),
+        ("seed", 7),
+        ("train", "complement_of_test_indices"),
+        ("val", "empty"),
+        ("test", "random_subset"),
+    ],
+)
+def test_symbolic_split_contract_rejects_stale_controls(tmp_path, field, stale_value):
+    import copy
+
+    root = tmp_path / "datasets"
+    config_path = tmp_path / "fixture.yaml"
+    config = _symbolic_split_config()
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    stale_config = copy.deepcopy(config)
+    stale_config["split"][field] = stale_value
+    graphs = [nx.path_graph(4) for _ in range(10)]
+    save_dataset_splits(
+        "fixture",
+        {"train": graphs[:6], "val": graphs[6:8], "test": graphs[8:]},
+        stale_config,
+        root,
+    )
+
+    with pytest.raises(RuntimeError, match="different split contract"):
+        validate_prepared_dataset_contract(
+            "fixture", root=root, config_path=config_path
+        )
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_absolute_count_contract_with_qm9_preparation_metadata(tmp_path, stale):
+    root = tmp_path / "datasets"
+    config_path = tmp_path / "fixture.yaml"
+    # QM9 declares counts without num_graphs and saves a top-level seed, with
+    # no split mapping, in its resolved preparation metadata.
+    config = {
+        "name": "fixture",
+        "split": {"seed": 42, "train": 6, "val": 2, "test": 2},
+    }
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    graphs = [nx.path_graph(4) for _ in range(10)]
+    train_end = 7 if stale else 6
+    save_dataset_splits(
+        "fixture",
+        {"train": graphs[:train_end], "val": graphs[train_end:8], "test": graphs[8:]},
+        {"name": "fixture", "kind": "qm9_attributed", "seed": 42},
+        root,
+    )
+
+    if stale:
+        with pytest.raises(RuntimeError, match="expected train/val/test=6/2/2"):
+            validate_prepared_dataset_contract(
+                "fixture", root=root, config_path=config_path
+            )
+    else:
+        assert validate_prepared_dataset_contract(
+            "fixture", root=root, config_path=config_path
+        ) == []
+
+
+@pytest.mark.parametrize("counts", [False, True])
+def test_split_contract_normalizes_numeric_strings(tmp_path, counts):
+    root = tmp_path / "datasets"
+    config_path = tmp_path / "fixture.yaml"
+    values = {"train": 6, "val": 2, "test": 2} if counts else {
+        "train": 0.6, "val": 0.2, "test": 0.2
+    }
+    config = {
+        "name": "fixture",
+        "num_graphs": 10,
+        "split": {"seed": 42, **values},
+    }
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    resolved = {
+        **config,
+        "split": {key: str(value) for key, value in config["split"].items()},
+    }
+    graphs = [nx.path_graph(4) for _ in range(10)]
+    save_dataset_splits(
+        "fixture",
+        {"train": graphs[:6], "val": graphs[6:8], "test": graphs[8:]},
+        resolved,
+        root,
+    )
+
+    assert validate_prepared_dataset_contract(
+        "fixture", root=root, config_path=config_path
     ) == []
 
 
