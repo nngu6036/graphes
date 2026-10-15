@@ -1,226 +1,191 @@
-export SPECTRE="/home/quang/SPECTRE"
-export SPECTRE_PYTHON="$(command -v python)"
-
-PYTHONPATH=src python scripts/run_spectre_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --wrapper-config configs/baselines/spectre_community_small.yaml \
-  --seed-id 42 \
-  --run-id seed_42 \
-  --device gpu \
-  --overwrite \
-
-# Generation
-PYTHONPATH=src python scripts/run_spectre_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --wrapper-config configs/baselines/spectre_community_small.yaml \
-  --seed-id 42 \
-  --run-id seed_42 \
-  --num-samples 1024 \
-  --device gpu
-
-# Evaluation
-GEN_DIR="outputs/baselines/spectre/community_small/seed_42/generations/seed_42_n_1024"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --generated-stage spectre \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-spectre_to_test                     0.014370          0.058542      0.003513        0.034871        0.077288
-
+1. Community-small
 
 export SPECTRE="/home/quang/SPECTRE"
 export SPECTRE_PYTHON="$(command -v python)"
-
-PYTHONPATH=src python scripts/run_spectre_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --wrapper-config configs/baselines/spectre_community_small.yaml \
-  --seed-id 43 \
-  --run-id seed_43 \
-  --device gpu \
-  --overwrite \
-
-# Generation
-PYTHONPATH=src python scripts/run_spectre_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --wrapper-config configs/baselines/spectre_community_small.yaml \
-  --seed-id 43 \
-  --run-id seed_43 \
-  --num-samples 1024 \
-  --device gpu
-
-# Evaluation
-GEN_DIR="outputs/baselines/spectre/community_small/seed_43/generations/seed_43_n_1024"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --generated-stage spectre \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-spectre_to_test                     0.025153          0.097951      0.008820        0.033084        0.218111
-
-export SPECTRE="/home/quang/SPECTRE"
-export SPECTRE_PYTHON="$(command -v python)"
-
-PYTHONPATH=src python scripts/run_spectre_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --wrapper-config configs/baselines/spectre_community_small.yaml \
-  --seed-id 44 \
-  --run-id seed_44 \
-  --device gpu \
-  --overwrite \
-
-# Generation
-PYTHONPATH=src python scripts/run_spectre_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --wrapper-config configs/baselines/spectre_community_small.yaml \
-  --seed-id 44 \
-  --run-id seed_44 \
-  --num-samples 1024 \
-  --device gpu
-
-# Evaluation
-GEN_DIR="outputs/baselines/spectre/community_small/seed_44/generations/seed_44_n_1024"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --generated-stage spectre \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-
-
-Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-spectre_to_test                     0.014736          0.066201      0.003613        0.020746        0.105857
-
-# Ego-small
-
-export SPECTRE="/home/quang/SPECTRE"
-export SPECTRE_PYTHON="$(command -v python)"
-
-PYTHONPATH=src python scripts/run_spectre_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --wrapper-config configs/baselines/spectre_ego_small.yaml \
-  --seed-id 42 \
-  --run-id seed_42 \
-  --device gpu \
-  --overwrite \
-
-# Generation
-PYTHONPATH=src python scripts/run_spectre_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --wrapper-config configs/baselines/spectre_ego_small.yaml \
-  --seed-id 42 \
-  --run-id seed_42 \
-  --overwrite \
-  --num-samples 1024 \
-  --device gpu
-
-# Evaluation
-GEN_DIR="outputs/baselines/spectre/ego_small/seed_42/generations/seed_42_n_1024"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --generated-stage spectre \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-spectre_to_test                     0.009915          0.012372      0.009334        0.009798        0.002621
-
-
-RUN=seed_43
 N=1024
+DEVICE="gpu"
 
-PYTHONPATH=src python scripts/run_spectre_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/spectre_ego_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-   --overwrite \
-  --device gpu
+for SEED in {42..44}; do
+  echo "========================================"
+  echo "Running SPECTRE community_small for SEED=$SEED"
+  echo "========================================"
 
-PYTHONPATH=src python scripts/run_spectre_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/spectre_ego_small.yaml \
-  --seed-id 43 \
-  --overwrite \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+  RUN="seed_${SEED}"
 
-GEN_DIR="outputs/baselines/spectre/ego_small/$RUN/generations/seed_43_n_${N}"
+  # Train
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_spectre_baseline.py \
+    --stage train \
+    --dataset community_small \
+    --wrapper-config configs/baselines/spectre_community_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --device "$DEVICE" \
+    --overwrite || break
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  # Generate
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_spectre_baseline.py \
+    --stage generate \
+    --dataset community_small \
+    --wrapper-config configs/baselines/spectre_community_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --num-samples "$N" \
+    --device "$DEVICE" || break
 
+  # Evaluate
+  GEN_DIR="outputs/baselines/spectre/community_small/$RUN/generations/seed_${SEED}_n_${N}"
+
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/community_small_evaluation.yaml \
+    --generated-dir "$GEN_DIR" \
+    --generated-stage spectre \
+    --output-dir "$GEN_DIR/evaluation_report" || break
+
+  echo "Completed SEED=$SEED"
+done
+
+echo "SPECTRE community_small loop finished."
+
+#Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-spectre_to_test                     0.011974          0.021264      0.011599        0.013504        0.001818
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+spectre_to_test                     0.014370          0.058542      0.003513        0.034871        0.077288      1.000000
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+spectre                           1.000000      1.000000     0.993164    1.000000      1.000000
 
 
+#Seed 43
+Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+spectre_to_test                     0.025153          0.097951      0.008820        0.033084        0.218111      1.000000
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+spectre                           1.000000      1.000000     0.994141    1.000000      1.000000
 
 
+#Seed 44
+Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+spectre_to_test                     0.014736          0.066201      0.003613        0.020746        0.105857      1.000000
 
-RUN=seed_44
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+spectre                           1.000000      1.000000     0.998047    1.000000      1.000000
+
+
+2. Ego-small
+
+export SPECTRE="/home/quang/SPECTRE"
+export SPECTRE_PYTHON="$(command -v python)"
+
 N=1024
+DEVICE="gpu"
 
-PYTHONPATH=src python scripts/run_spectre_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/spectre_ego_small.yaml \
-  --seed-id 44 \
-   --overwrite \
-  --run-id "$RUN" \
-  --device gpu
+for SEED in {42..44}; do
+  echo "========================================"
+  echo "Running SPECTRE ego_small for SEED=$SEED"
+  echo "========================================"
 
-PYTHONPATH=src python scripts/run_spectre_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/spectre_ego_small.yaml \
-  --seed-id 44 \
-  --overwrite \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+  RUN="seed_${SEED}"
 
-GEN_DIR="outputs/baselines/spectre/ego_small/$RUN/generations/seed_44_n_${N}"
+  # Train
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_spectre_baseline.py \
+    --stage train \
+    --dataset ego_small \
+    --wrapper-config configs/baselines/spectre_ego_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --device "$DEVICE" \
+    --overwrite || break
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  # Generate
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_spectre_baseline.py \
+    --stage generate \
+    --dataset ego_small \
+    --wrapper-config configs/baselines/spectre_ego_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --overwrite \
+    --num-samples "$N" \
+    --device "$DEVICE" || break
 
+  # Evaluate
+  GEN_DIR="outputs/baselines/spectre/ego_small/$RUN/generations/seed_${SEED}_n_${N}"
+
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/ego_small_evaluation.yaml \
+    --generated-dir "$GEN_DIR" \
+    --generated-stage spectre \
+    --output-dir "$GEN_DIR/evaluation_report" || break
+
+  echo "Completed SEED=$SEED"
+done
+
+echo "SPECTRE ego_small loop finished."
+
+
+#Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-spectre_to_test                     0.009240          0.018740      0.006621        0.010128        0.002351
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+spectre_to_test                     0.009915          0.012372      0.009334        0.009798        0.002621      0.484375
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+spectre                           0.484375      0.484375     0.356445    0.547852      0.588086
+
+#Seed 43
+Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+spectre_to_test                     0.011974          0.021264      0.011599        0.013504        0.001818      0.510742
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+spectre                           0.510742      0.510742     0.376953    0.558594      0.622656
+
+#Seed 44
+Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+spectre_to_test                     0.009240          0.018740      0.006621        0.010128        0.002351      0.457031
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+spectre                           0.457031      0.457031     0.354492    0.539062      0.580469

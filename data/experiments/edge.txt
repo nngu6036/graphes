@@ -1,224 +1,193 @@
+1. Community-small 
+
 export EDGE=/home/quang/EDGE
 export EDGE_PYTHON=/home/quang/miniconda3/envs/edge/bin/python
-
-RUN=seed_42
 N=1024
+DEVICE="gpu"
 
-PYTHONPATH=src python scripts/run_edge_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/edge_community_small.yaml \
-  --seed-id 42 \
-  --overwrite \
-  --run-id "$RUN" \
-  --device gpu
+for SEED in {42..44}; do
+  echo "========================================"
+  echo "Running EDGE community_small for SEED=$SEED"
+  echo "========================================"
 
-PYTHONPATH=src python scripts/run_edge_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/edge_community_small.yaml \
-  --seed-id 42 \
-  --overwrite \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+  RUN="seed_${SEED}"
 
-GEN_DIR="outputs/baselines/edge/community_small/$RUN/generations/seed_42_n_${N}"
+  # Train
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_edge_baseline.py \
+    --stage train \
+    --dataset community_small \
+    --common-config configs/baselines/common_community_small.yaml \
+    --wrapper-config configs/baselines/edge_community_small.yaml \
+    --seed-id "$SEED" \
+    --overwrite \
+    --run-id "$RUN" \
+    --device "$DEVICE" || break
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  # Generate
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_edge_baseline.py \
+    --stage generate \
+    --dataset community_small \
+    --common-config configs/baselines/common_community_small.yaml \
+    --wrapper-config configs/baselines/edge_community_small.yaml \
+    --seed-id "$SEED" \
+    --overwrite \
+    --run-id "$RUN" \
+    --num-samples "$N" \
+    --device "$DEVICE" || break
 
+  # Evaluate
+  GEN_DIR="outputs/baselines/edge/community_small/$RUN/generations/seed_${SEED}_n_${N}"
+
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/community_small_evaluation.yaml \
+    --generated-dir "$GEN_DIR" \
+    --output-dir "$GEN_DIR/evaluation_report" || break
+
+  echo "Completed SEED=$SEED"
+done
+
+echo "EDGE community_small loop finished."
+
+
+
+#Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+edge_to_test                        0.014876          0.638844      0.423690        0.247291        0.541492      1.000000
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-edge_to_test                        0.014876          0.638844      0.423690        0.247291        0.541492
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+edge                              1.000000      1.000000     1.000000    1.000000      1.000000
 
-RUN=seed_43
-N=1024
-
-PYTHONPATH=src python scripts/run_edge_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/edge_community_small.yaml \
-  --seed-id 43 \
-  --overwrite \
-  --run-id "$RUN" \
-  --device gpu
-
-PYTHONPATH=src python scripts/run_edge_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/edge_community_small.yaml \
-  --seed-id 43 \
-  --overwrite \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/edge/community_small/$RUN/generations/seed_43_n_${N}"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
+#Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-edge_to_test                        0.009483          0.667459      0.386973        0.256989        0.576161
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+edge_to_test                        0.009483          0.667459      0.386973        0.256989        0.576161      1.000000
 
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+edge                              1.000000      1.000000     1.000000    1.000000      1.000000
 
-RUN=seed_44
-N=1024
-
-PYTHONPATH=src python scripts/run_edge_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/edge_community_small.yaml \
-  --seed-id 44 \
-  --overwrite \
-  --run-id "$RUN" \
-  --device gpu
-
-PYTHONPATH=src python scripts/run_edge_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/edge_community_small.yaml \
-  --seed-id 44 \
-  --overwrite \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/edge/community_small/$RUN/generations/seed_44_n_${N}"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
+#Seed 44
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-edge_to_test                        0.013989          0.576906      0.405669        0.232067        0.507179
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+edge_to_test                        0.013989          0.576906      0.405669        0.232067        0.507179      1.000000
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+edge                              1.000000      1.000000     1.000000    1.000000      1.000000
 
 
-# Ego
+2. Ego
 
-RUN=seed_42
+
+export EDGE=/home/quang/EDGE
+export EDGE_PYTHON=/home/quang/miniconda3/envs/edge/bin/python
 N=1024
+DEVICE="gpu"
 
-PYTHONPATH=src python scripts/run_edge_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/edge_ego_small.yaml \
-  --seed-id 42 \
-  --overwrite \
-  --run-id "$RUN" \
-  --device gpu
+for SEED in {42..44}; do
+  echo "========================================"
+  echo "Running EDGE ego_small for SEED=$SEED"
+  echo "========================================"
 
-PYTHONPATH=src python scripts/run_edge_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/edge_ego_small.yaml \
-  --seed-id 42 \
-  --overwrite \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+  RUN="seed_${SEED}"
 
-GEN_DIR="outputs/baselines/edge/ego_small/$RUN/generations/seed_42_n_${N}"
+  # Train
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_edge_baseline.py \
+    --stage train \
+    --dataset ego_small \
+    --common-config configs/baselines/common_ego_small.yaml \
+    --wrapper-config configs/baselines/edge_ego_small.yaml \
+    --seed-id "$SEED" \
+    --overwrite \
+    --run-id "$RUN" \
+    --device "$DEVICE" || break
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  # Generate
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_edge_baseline.py \
+    --stage generate \
+    --dataset ego_small \
+    --common-config configs/baselines/common_ego_small.yaml \
+    --wrapper-config configs/baselines/edge_ego_small.yaml \
+    --seed-id "$SEED" \
+    --overwrite \
+    --run-id "$RUN" \
+    --num-samples "$N" \
+    --device "$DEVICE" || break
 
+  # Evaluate
+  GEN_DIR="outputs/baselines/edge/ego_small/$RUN/generations/seed_${SEED}_n_${N}"
+
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/ego_small_evaluation.yaml \
+    --generated-dir "$GEN_DIR" \
+    --output-dir "$GEN_DIR/evaluation_report" || break
+
+  echo "Completed SEED=$SEED"
+done
+
+echo "EDGE ego_small loop finished."
+
+#Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-edge_to_test                        0.019084          0.039872      0.005122        0.062032        0.010922
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+edge_to_test                        0.019084          0.039872      0.005122        0.062032        0.010922      0.688477
 
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+edge                              0.688477      0.688477     0.471680    0.689453      0.764648
 
-RUN=seed_43
-N=1024
-
-PYTHONPATH=src python scripts/run_edge_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/edge_ego_small.yaml \
-  --seed-id 43 \
-  --overwrite \
-  --run-id "$RUN" \
-  --device gpu
-
-PYTHONPATH=src python scripts/run_edge_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/edge_ego_small.yaml \
-  --seed-id 43 \
-  --overwrite \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/edge/ego_small/$RUN/generations/seed_43_n_${N}"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
+#Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-edge_to_test                        0.022383          0.038031      0.004929        0.057357        0.015818
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+edge_to_test                        0.022383          0.038031      0.004929        0.057357        0.015818      0.685547
 
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+edge                              0.685547      0.685547     0.466797    0.685547      0.758594
 
-RUN=seed_44
-N=1024
+#Seed 44
+Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+edge_to_test                        0.017476          0.032786      0.005750        0.057722        0.011422      0.696289
 
-PYTHONPATH=src python scripts/run_edge_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/edge_ego_small.yaml \
-  --seed-id 44 \
-  --overwrite \
-  --run-id "$RUN" \
-  --device gpu
-
-PYTHONPATH=src python scripts/run_edge_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/edge_ego_small.yaml \
-  --seed-id 44 \
-  --overwrite \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/edge/ego_small/$RUN/generations/seed_44_n_${N}"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-edge_to_test                        0.017476          0.032786      0.005750        0.057722        0.011422
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+edge                              0.696289      0.696289     0.486328    0.696289      0.769141

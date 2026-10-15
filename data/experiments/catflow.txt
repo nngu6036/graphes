@@ -3,150 +3,101 @@ CatFlow experiment commands and results
 1. CatFlow / Community-small
 ============================
 
-Dataset identifier in the baseline commands: community_small. Requested samples per run: 1024.
-
-Results overview
-----------------
-
-Each recorded train_to_test row is retained separately. Missing columns are marked Not reported; no cross-seed
-means or standard deviations have been calculated.
-
-Run label  Comparison       Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
----------  ---------------  ----------  --------------  ---------  ------------  ------------
-42         train_to_test      0.004733        0.009889   0.000399      0.006979      0.010610
-42         catflow_to_test    0.072821        0.823010   0.426084      0.367999      0.598952
-43         train_to_test      0.004733        0.009889   0.000399      0.006979      0.010610
-43         catflow_to_test    0.080028        0.831395   0.483119      0.379247      0.610999
-44         train_to_test      0.004733        0.009889   0.000399      0.006979      0.010610
-44         catflow_to_test    0.078349        0.813439   0.450069      0.361605      0.601397
-
 1.1 Seed 42
 -----------
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-RUN=seed_42
 N=1024
+DEVICE="gpu"
 
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/catflow_community_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --device gpu
+for SEED in {42..44}; do
+  echo "========================================"
+  echo "Running CatFlow community_small for SEED=$SEED"
+  echo "========================================"
 
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/catflow_community_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+  RUN="seed_${SEED}"
 
-GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_42_n_${N}"
+  # Train
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_catflow_baseline.py \
+    --stage train \
+    --dataset community_small \
+    --common-config configs/baselines/common_community_small.yaml \
+    --wrapper-config configs/baselines/catflow_community_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --device "$DEVICE" || break
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  # Generate
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_catflow_baseline.py \
+    --stage generate \
+    --dataset community_small \
+    --common-config configs/baselines/common_community_small.yaml \
+    --wrapper-config configs/baselines/catflow_community_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --num-samples "$N" \
+    --device "$DEVICE" || break
 
+  # Evaluate
+  GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_${SEED}_n_${N}"
+
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/community_small_evaluation.yaml \
+    --generated-dir "$GEN_DIR" \
+    --output-dir "$GEN_DIR/evaluation_report" || break
+
+  echo "Completed SEED=$SEED"
+done
+
+echo "CatFlow community_small loop finished."
+
+#Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+catflow_to_test                     0.072821          0.823010      0.426084        0.367999        0.598952      1.000000
 
-Comparison       Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
----------------  ----------  --------------  ---------  ------------  ------------
-train_to_test      0.004733        0.009889   0.000399      0.006979      0.010610
-catflow_to_test    0.072821        0.823010   0.426084      0.367999      0.598952
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+catflow                           1.000000      1.000000     1.000000    1.000000      1.000000
 
-1.2 Seed 43
------------
-
-export CATFLOW=/home/quang/CatFlow
-export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
-
-RUN=seed_43
-N=1024
-
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/catflow_community_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --device gpu
-
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/catflow_community_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_43_n_${N}"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-
+#Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+catflow_to_test                     0.080028          0.831395      0.483119        0.379247        0.610999      1.000000
 
-Comparison       Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
----------------  ----------  --------------  ---------  ------------  ------------
-train_to_test      0.004733        0.009889   0.000399      0.006979      0.010610
-catflow_to_test    0.080028        0.831395   0.483119      0.379247      0.610999
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+catflow                           1.000000      1.000000     1.000000    1.000000      1.000000
 
-1.3 Seed 44
------------
-
-export CATFLOW=/home/quang/CatFlow
-export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
-
-RUN=seed_44
-N=1024
-
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/catflow_community_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --device gpu
-
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/catflow_community_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/catflow/community_small/$RUN/generations/seed_44_n_${N}"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
+#Seed 44
 Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+catflow_to_test                     0.078349          0.813439      0.450069        0.361605        0.601397      1.000000
 
-Comparison       Degree MMD  Clustering MMD  Orbit MMD  Spectral MMD  Graphlet MMD
----------------  ----------  --------------  ---------  ------------  ------------
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-catflow_to_test                     0.078349          0.813439      0.450069        0.361605        0.601397
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+catflow                           1.000000      1.000000     1.000000    1.000000      1.000000
+
 
 2. CatFlow / Ego-small
 ======================
@@ -157,115 +108,95 @@ catflow_to_test                     0.078349          0.813439      0.450069    
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-RUN=seed_42
 N=1024
+DEVICE="gpu"
 
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/catflow_ego_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --device gpu
+for SEED in {42..44}; do
+  echo "========================================"
+  echo "Running CatFlow ego_small for SEED=$SEED"
+  echo "========================================"
 
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/catflow_ego_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+  RUN="seed_${SEED}"
 
-GEN_DIR="outputs/baselines/catflow/ego_small/$RUN/generations/seed_42_n_${N}"
+  # Train
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_catflow_baseline.py \
+    --stage train \
+    --dataset ego_small \
+    --common-config configs/baselines/common_ego_small.yaml \
+    --wrapper-config configs/baselines/catflow_ego_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --device "$DEVICE" || break
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  # Generate
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_catflow_baseline.py \
+    --stage generate \
+    --dataset ego_small \
+    --common-config configs/baselines/common_ego_small.yaml \
+    --wrapper-config configs/baselines/catflow_ego_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --num-samples "$N" \
+    --device "$DEVICE" || break
 
+  # Evaluate
+  GEN_DIR="outputs/baselines/catflow/ego_small/$RUN/generations/seed_${SEED}_n_${N}"
 
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/ego_small_evaluation.yaml \
+    --generated-dir "$GEN_DIR" \
+    --output-dir "$GEN_DIR/evaluation_report" || break
+
+  echo "Completed SEED=$SEED"
+done
+
+echo "CatFlow ego_small loop finished."
+
+#Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-catflow_to_test                     0.122425          0.079914      0.036366        0.185852        0.066582
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+catflow_to_test                     0.122425          0.079914      0.036366        0.185852        0.066582      0.879883
 
-2.2 Seed 43
------------
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+catflow                           0.879883      0.879883     0.618164    0.910156      0.878906
 
-RUN=seed_43
-N=1024
-
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/catflow_ego_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --device gpu
-
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/catflow_ego_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/catflow/ego_small/$RUN/generations/seed_43_n_${N}"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
+#Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-catflow_to_test                     0.127305          0.087133      0.036739        0.178619        0.076463
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+catflow_to_test                     0.127305          0.087133      0.036739        0.178619        0.076463      0.873047
 
-2.3 Seed 44
------------
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+catflow                           0.873047      0.873047     0.625000    0.897461      0.888477
 
-RUN=seed_44
-N=1024
-
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/catflow_ego_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --device gpu
-
-PYTHONPATH=src python scripts/run_catflow_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/catflow_ego_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/catflow/ego_small/$RUN/generations/seed_44_n_${N}"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
+#Seed 44
 Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+catflow_to_test                     0.141249          0.089677      0.038129        0.177758        0.082910      0.860352
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-catflow_to_test                     0.141249          0.089677      0.038129        0.177758        0.082910
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+catflow                           0.860352      0.860352     0.596680    0.904297      0.870703
+
 
 3. CatFlow / QM9
 ================

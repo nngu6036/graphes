@@ -1,311 +1,181 @@
-
-export GRAPHRNN=/home/quang/GraphRNN
-export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
-
-
 # ##############################################################################
 # DATASET 1/2: COMMUNITY-SMALL
 # ##############################################################################
 
-
-# ==============================================================================
-# Community-small — Seed 42
-# ==============================================================================
 export GRAPHRNN=/home/quang/GraphRNN
 export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-RUN=seed_42
 N=1024
+DEVICE="gpu"
 
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/graphrnn_community_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --device gpu
+for SEED in {42..44}; do
+  echo "========================================"
+  echo "Running GraphRNN for SEED=$SEED"
+  echo "========================================"
 
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/graphrnn_community_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+  RUN="seed_${SEED}"
 
-GEN_DIR="outputs/baselines/graphrnn/community_small/$RUN/generations/seed_42_n_${N}"
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_graphrnn_baseline.py \
+    --stage train \
+    --dataset community_small \
+    --common-config configs/baselines/common_community_small.yaml \
+    --wrapper-config configs/baselines/graphrnn_community_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --device "$DEVICE" || break
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_graphrnn_baseline.py \
+    --stage generate \
+    --dataset community_small \
+    --common-config configs/baselines/common_community_small.yaml \
+    --wrapper-config configs/baselines/graphrnn_community_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --num-samples "$N" \
+    --device "$DEVICE" || break
 
+  GEN_DIR="outputs/baselines/graphrnn/community_small/$RUN/generations/seed_${SEED}_n_${N}"
 
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/community_small_evaluation.yaml \
+    --generated-dir "$GEN_DIR" \
+    --output-dir "$GEN_DIR/evaluation_report" || break
+
+  echo "Completed SEED=$SEED"
+done
+
+#Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-graphrnn_to_test                    0.059348          0.127909      0.031255        0.097042        0.035285
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+graphrnn_to_test                    0.059348          0.127909      0.031255        0.097042        0.035285      1.000000
 
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+graphrnn                          1.000000      1.000000     1.000000    1.000000      1.000000
 
-# ==============================================================================
-# Community-small — Seed 43
-# ==============================================================================
-
-RUN=seed_43
-N=1024
-
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/graphrnn_community_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --device gpu
-
-# ------------------------------------------------------------------------------
-# 2. Generate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/graphrnn_community_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/graphrnn/community_small/$RUN/generations/seed_43_n_${N}"
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-# ------------------------------------------------------------------------------
-# Recorded result
-# ------------------------------------------------------------------------------
+#Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-graphrnn_to_test                    0.035003          0.129724      0.007959        0.050618        0.017993
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+graphrnn_to_test                    0.035003          0.129724      0.007959        0.050618        0.017993      1.000000
 
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+graphrnn                          1.000000      1.000000     0.989258    1.000000      1.000000
 
-# ==============================================================================
-# Community-small — Seed 44
-# ==============================================================================
+#Seed 44
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+graphrnn_to_test                    0.038002          0.119683      0.021371        0.077205        0.011782      1.000000
 
-RUN=seed_44
-N=1024
-
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/graphrnn_community_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --device gpu
-
-# ------------------------------------------------------------------------------
-# 2. Generate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/graphrnn_community_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/graphrnn/community_small/$RUN/generations/seed_44_n_${N}"
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-# ------------------------------------------------------------------------------
-# Recorded result
-# ------------------------------------------------------------------------------
-Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-graphrnn_to_test                    0.038002          0.119683      0.021371        0.077205        0.011782
-
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+graphrnn                          1.000000      1.000000     1.000000    1.000000      1.000000
 
 # ##############################################################################
 # DATASET 2/2: EGO-SMALL
 # ##############################################################################
 
-
-# ==============================================================================
-# Ego-small — Seed 42
-# ==============================================================================
-
-RUN=seed_42
+export GRAPHRNN=/home/quang/GraphRNN
+export GRAPHRNN_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 N=1024
+DEVICE="gpu"
 
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --device gpu
+for SEED in {42..44}; do
+  echo "========================================"
+  echo "Running GraphRNN ego_small for SEED=$SEED"
+  echo "========================================"
 
-# ------------------------------------------------------------------------------
-# 2. Generate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+  RUN="seed_${SEED}"
 
-GEN_DIR="outputs/baselines/graphrnn/ego_small/$RUN/generations/seed_42_n_${N}"
+  # Train
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_graphrnn_baseline.py \
+    --stage train \
+    --dataset ego_small \
+    --common-config configs/baselines/common_ego_small.yaml \
+    --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --device "$DEVICE" || break
 
-# ------------------------------------------------------------------------------
-# 3. Evaluate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  # Generate
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_graphrnn_baseline.py \
+    --stage generate \
+    --dataset ego_small \
+    --common-config configs/baselines/common_ego_small.yaml \
+    --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --num-samples "$N" \
+    --device "$DEVICE" || break
 
-# ------------------------------------------------------------------------------
-# Recorded result
-# ------------------------------------------------------------------------------
+  # Evaluate
+  GEN_DIR="outputs/baselines/graphrnn/ego_small/$RUN/generations/seed_${SEED}_n_${N}"
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-graphrnn_to_test                    0.189835          0.150187      0.363689        0.166763        0.164046
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/ego_small_evaluation.yaml \
+    --generated-dir "$GEN_DIR" \
+    --output-dir "$GEN_DIR/evaluation_report" || break
 
-# ==============================================================================
-# Ego-small — Seed 43
-# ==============================================================================
+  echo "Completed SEED=$SEED"
+done
 
-RUN=seed_43
-N=1024
-
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --device gpu
-
-# ------------------------------------------------------------------------------
-# 2. Generate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/graphrnn/ego_small/$RUN/generations/seed_43_n_${N}"
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-# ------------------------------------------------------------------------------
-# Recorded result
-# ------------------------------------------------------------------------------
+#Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-graphrnn_to_test                    0.304969          0.165889      0.793879        0.266080        0.167229
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+graphrnn_to_test                    0.189835          0.150187      0.363689        0.166763        0.164046      0.994141
 
-# ==============================================================================
-# Ego-small — Seed 44
-# ==============================================================================
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+graphrnn                          0.994141      0.994141     0.888672    0.994141      1.000000
 
-RUN=seed_44
-N=1024
+#Seed 43
+Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+graphrnn_to_test                    0.304969          0.165889      0.793879        0.266080        0.167229      0.998047
 
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --device gpu
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+graphrnn                          0.998047      0.998047     0.840820    0.998047      1.000000
 
-# ------------------------------------------------------------------------------
-# 2. Generate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_graphrnn_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/graphrnn_ego_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+#Seed 44
+Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+graphrnn_to_test                    0.311820          0.136056      0.802052        0.252045        0.142339      0.997070
 
-GEN_DIR="outputs/baselines/graphrnn/ego_small/$RUN/generations/seed_44_n_${N}"
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-# ------------------------------------------------------------------------------
-# Recorded result
-# ------------------------------------------------------------------------------
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-graphrnn_to_test                    0.311820          0.136056      0.802052        0.252045        0.142339
-
-# ==============================================================================
-# COMPLETE !!!
-# ==============================================================================
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+graphrnn                          0.997070      0.997070     0.730469    0.997070      0.999023

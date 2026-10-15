@@ -1,242 +1,198 @@
+1. Community-small 
+
 export HOGDIFF=/home/quang/HOG-Diff
 export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
 
-RUN=seed_42
 N=1024
+DEVICE="gpu"
 
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/hog_diff_community_small.yaml \
-  --seed-id 42 \
-  --overwrite \
-  --run-id "$RUN" \
-  --device gpu
+for SEED in {42..44}; do
+  echo "========================================"
+  echo "Running HoG-Diff community_small for SEED=$SEED"
+  echo "========================================"
 
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/hog_diff_community_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+  RUN="seed_${SEED}"
 
-GEN_DIR="outputs/baselines/hog_diff/community_small/$RUN/generations/seed_42_n_${N}"
+  # Train
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_hog_diff_baseline.py \
+    --stage train \
+    --dataset community_small \
+    --common-config configs/baselines/common_community_small.yaml \
+    --wrapper-config configs/baselines/hog_diff_community_small.yaml \
+    --seed-id "$SEED" \
+    --overwrite \
+    --run-id "$RUN" \
+    --device "$DEVICE" || break
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  # Generate
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_hog_diff_baseline.py \
+    --stage generate \
+    --dataset community_small \
+    --common-config configs/baselines/common_community_small.yaml \
+    --wrapper-config configs/baselines/hog_diff_community_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --num-samples "$N" \
+    --device "$DEVICE" || break
 
+  # Evaluate
+  GEN_DIR="outputs/baselines/hog_diff/community_small/$RUN/generations/seed_${SEED}_n_${N}"
+
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/community_small_evaluation.yaml \
+    --generated-dir "$GEN_DIR" \
+    --output-dir "$GEN_DIR/evaluation_report" || break
+
+  echo "Completed SEED=$SEED"
+done
+
+echo "HoG-Diff community_small loop finished."
+
+
+#Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-hog_diff_to_test                    0.090322          0.050404      0.085541        0.056613        0.042307
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+hog_diff_to_test                    0.090322          0.050404      0.085541        0.056613        0.042307      0.608398
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+hog_diff                          0.608398      0.608398     0.467773    0.631836      0.888672
 
 
-
-export HOGDIFF=/home/quang/HOG-Diff
-export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
-
-RUN=seed_43
-N=1024
-
-
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/hog_diff_community_small.yaml \
-  --seed-id 43 \
-  --overwrite \
-  --run-id "$RUN" \
-  --device gpu
-
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/hog_diff_community_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/hog_diff/community_small/$RUN/generations/seed_43_n_${N}"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-
+#Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-hog_diff_to_test                    0.041797          0.042747      0.062891        0.036617        0.019962
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+hog_diff_to_test                    0.041797          0.042747      0.062891        0.036617        0.019962      0.354492
 
-export HOGDIFF=/home/quang/HOG-Diff
-export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+hog_diff                          0.354492      0.354492     0.228516    0.376953      0.856250
 
-RUN=seed_44
-N=1024
-
-# Train
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/hog_diff_community_small.yaml \
-  --seed-id 44 \
-  --overwrite \
-  --run-id "$RUN" \
-  --device gpu
-
-# Generate
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/hog_diff_community_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-# Evaluate
-GEN_DIR="outputs/baselines/hog_diff/community_small/$RUN/generations/seed_44_n_${N}"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-  
+#Seed 44
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-hog_diff_to_test                    0.058418          0.101618      0.025655        0.046265        0.068755
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+hog_diff_to_test                    0.058418          0.101618      0.025655        0.046265        0.068755      0.645508
 
-# Ego-small
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+hog_diff                          0.645508      0.645508     0.561523    0.669922      0.927734
+
+
+2.  Ego-small
 export HOGDIFF=/home/quang/HOG-Diff
 export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
 
-RUN=seed_42
-N=1024
+\N=1024
+DEVICE="gpu"
 
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/hog_diff_ego_small.yaml \
-  --seed-id 42 \
-  --overwrite \
-  --run-id "$RUN" \
-  --device gpu
+for SEED in {42..44}; do
+  echo "========================================"
+  echo "Running HoG-Diff ego_small for SEED=$SEED"
+  echo "========================================"
 
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/hog_diff_ego_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+  RUN="seed_${SEED}"
 
-GEN_DIR="outputs/baselines/hog_diff/ego_small/$RUN/generations/seed_42_n_${N}"
+  # Train
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_hog_diff_baseline.py \
+    --stage train \
+    --dataset ego_small \
+    --common-config configs/baselines/common_ego_small.yaml \
+    --wrapper-config configs/baselines/hog_diff_ego_small.yaml \
+    --seed-id "$SEED" \
+    --overwrite \
+    --run-id "$RUN" \
+    --device "$DEVICE" || break
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  # Generate
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_hog_diff_baseline.py \
+    --stage generate \
+    --dataset ego_small \
+    --common-config configs/baselines/common_ego_small.yaml \
+    --wrapper-config configs/baselines/hog_diff_ego_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --num-samples "$N" \
+    --device "$DEVICE" || break
 
+  # Evaluate
+  GEN_DIR="outputs/baselines/hog_diff/ego_small/$RUN/generations/seed_${SEED}_n_${N}"
 
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/ego_small_evaluation.yaml \
+    --generated-dir "$GEN_DIR" \
+    --output-dir "$GEN_DIR/evaluation_report" || break
+
+  echo "Completed SEED=$SEED"
+done
+
+echo "HoG-Diff ego_small loop finished."
+
+#Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-hog_diff_to_test                    0.054285          0.070947      0.012225        0.035082        0.037189
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+hog_diff_to_test                    0.054285          0.070947      0.012225        0.035082        0.037189      0.208984
 
-export HOGDIFF=/home/quang/HOG-Diff
-export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+hog_diff                          0.208984      0.208984     0.124023    0.434570      0.658789
 
-RUN=seed_43
-N=1024
-
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/hog_diff_ego_small.yaml \
-  --seed-id 43 \
-  --overwrite \
-  --run-id "$RUN" \
-  --device gpu
-
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/hog_diff_ego_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/hog_diff/ego_small/$RUN/generations/seed_43_n_${N}"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
+#Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-hog_diff_to_test                    0.058216          0.066587      0.011769        0.030797        0.026243
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+hog_diff_to_test                    0.058216          0.066587      0.011769        0.030797        0.026243      0.188477
 
-export HOGDIFF=/home/quang/HOG-Diff
-export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
-
-RUN=seed_44
-N=1024
-
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/hog_diff_ego_small.yaml \
-  --seed-id 44 \
-  --overwrite \
-  --run-id "$RUN" \
-  --device gpu
-
-PYTHONPATH=src python scripts/run_hog_diff_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/hog_diff_ego_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/hog_diff/ego_small/$RUN/generations/seed_44_n_${N}"
-
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+hog_diff                          0.188477      0.188477     0.104492    0.409180      0.664844
 
 
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-hog_diff_to_test                    0.036673          0.049233      0.010289        0.032708        0.024643
+#Seed 44
+Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+hog_diff_to_test                    0.036673          0.049233      0.010289        0.032708        0.024643      0.166992
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+hog_diff                          0.166992      0.166992     0.113281    0.372070      0.648828
 
 
-# QM9
+3.  QM9
 export HOGDIFF=/home/quang/HOG-Diff
 export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
 
@@ -564,7 +520,7 @@ Molecular evaluation
 }
 
 
- ## ZINC 
+4.  ZINC 
 export HOGDIFF=/home/quang/HOG-Diff
 export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
 

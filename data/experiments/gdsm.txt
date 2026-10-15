@@ -1,309 +1,193 @@
+# ##############################################################################
+# DATASET 1/2: COMMUNITY-SMALL
+# ##############################################################################
 
-
-# ==============================================================================
-# Community-small — Seed 42
-# ==============================================================================
 
 export GDSM=/home/quang/GDSM
 export GDSM_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
-RUN=seed_42
 N=1024
+DEVICE="gpu"
 
-PYTHONPATH=src python scripts/run_gdsm_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/gdsm_community_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --device gpu
+for SEED in {42..44}; do
+  echo "========================================"
+  echo "Running GDSM community_small for SEED=$SEED"
+  echo "========================================"
 
-PYTHONPATH=src python scripts/run_gdsm_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/gdsm_community_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+  RUN="seed_${SEED}"
 
-GEN_DIR="outputs/baselines/gdsm/community_small/$RUN/generations/seed_42_n_${N}"
+  # Train
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_gdsm_baseline.py \
+    --stage train \
+    --dataset community_small \
+    --common-config configs/baselines/common_community_small.yaml \
+    --wrapper-config configs/baselines/gdsm_community_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --device "$DEVICE" || break
 
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  # Generate
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_gdsm_baseline.py \
+    --stage generate \
+    --dataset community_small \
+    --common-config configs/baselines/common_community_small.yaml \
+    --wrapper-config configs/baselines/gdsm_community_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --num-samples "$N" \
+    --device "$DEVICE" || break
 
+  # Evaluate
+  GEN_DIR="outputs/baselines/gdsm/community_small/$RUN/generations/seed_${SEED}_n_${N}"
 
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/community_small_evaluation.yaml \
+    --generated-dir "$GEN_DIR" \
+    --output-dir "$GEN_DIR/evaluation_report" || break
+
+  echo "Completed SEED=$SEED"
+done
+
+echo "GDSM community_small loop finished."
+
+#Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-gdsm_to_test                        0.018339          0.017282      0.007639        0.009210        0.018920
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+gdsm_to_test                        0.018339          0.017282      0.007639        0.009210        0.018920      0.136719
 
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+gdsm                              0.136719      0.136719     0.145508    0.218750      0.855078
 
-# ==============================================================================
-# Community-small — Seed 43
-# ==============================================================================
-
-RUN=seed_43
-N=1024
-
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_gdsm_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/gdsm_community_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --device gpu
-
-# ------------------------------------------------------------------------------
-# 2. Generate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_gdsm_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/gdsm_community_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/gdsm/community_small/$RUN/generations/seed_43_n_${N}"
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-# ------------------------------------------------------------------------------
-# Recorded result
-# ------------------------------------------------------------------------------
+#Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-gdsm_to_test                        0.007689          0.010017      0.000697        0.008798        0.017881
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+gdsm_to_test                        0.007689          0.010017      0.000697        0.008798        0.017881      0.083008
 
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+gdsm                              0.083008      0.083008     0.089844    0.127930      0.804102
 
-# ==============================================================================
-# Community-small — Seed 44
-# ==============================================================================
+#Seed 44
+Graph-distribution MMD against held-out test graphs (lower is better)
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
+gdsm_to_test                        0.005802          0.007935      0.000416        0.006345        0.010500      0.022461
 
-RUN=seed_44
-N=1024
-
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_gdsm_baseline.py \
-  --stage train \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/gdsm_community_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --device gpu
-
-# ------------------------------------------------------------------------------
-# 2. Generate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_gdsm_baseline.py \
-  --stage generate \
-  --dataset community_small \
-  --common-config configs/baselines/common_community_small.yaml \
-  --wrapper-config configs/baselines/gdsm_community_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/gdsm/community_small/$RUN/generations/seed_44_n_${N}"
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/community_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-# ------------------------------------------------------------------------------
-# Recorded result
-# ------------------------------------------------------------------------------
-
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610
-gdsm_to_test                        0.005802          0.007935      0.000416        0.006345        0.010500
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+gdsm                              0.022461      0.022461     0.058594    0.087891      0.800391
 
 # ##############################################################################
 # DATASET 2/2: EGO-SMALL
 # ##############################################################################
 
-
-# ==============================================================================
-# Ego-small — Seed 42
-# ==============================================================================
-
-RUN=seed_42
+export GDSM=/home/quang/GDSM
+export GDSM_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 N=1024
+DEVICE="gpu"
 
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_gdsm_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/gdsm_ego_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --device gpu
+for SEED in {42..44}; do
+  echo "========================================"
+  echo "Running GDSM ego_small for SEED=$SEED"
+  echo "========================================"
 
-# ------------------------------------------------------------------------------
-# 2. Generate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_gdsm_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/gdsm_ego_small.yaml \
-  --seed-id 42 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
+  RUN="seed_${SEED}"
 
-GEN_DIR="outputs/baselines/gdsm/ego_small/$RUN/generations/seed_42_n_${N}"
+  # Train
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_gdsm_baseline.py \
+    --stage train \
+    --dataset ego_small \
+    --common-config configs/baselines/common_ego_small.yaml \
+    --wrapper-config configs/baselines/gdsm_ego_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --device "$DEVICE" || break
 
-# ------------------------------------------------------------------------------
-# 3. Evaluate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
+  # Generate
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/run_gdsm_baseline.py \
+    --stage generate \
+    --dataset ego_small \
+    --common-config configs/baselines/common_ego_small.yaml \
+    --wrapper-config configs/baselines/gdsm_ego_small.yaml \
+    --seed-id "$SEED" \
+    --run-id "$RUN" \
+    --num-samples "$N" \
+    --device "$DEVICE" || break
 
-# ------------------------------------------------------------------------------
-# Recorded result
-# ------------------------------------------------------------------------------
+  # Evaluate
+  GEN_DIR="outputs/baselines/gdsm/ego_small/$RUN/generations/seed_${SEED}_n_${N}"
+
+  PYTHONHASHSEED="$SEED" PYTHONPATH=src \
+  python scripts/evaluate_graph_generation_report.py \
+    --config configs/experiments/baselines/ego_small_evaluation.yaml \
+    --generated-dir "$GEN_DIR" \
+    --output-dir "$GEN_DIR/evaluation_report" || break
+
+  echo "Completed SEED=$SEED"
+done
+
+echo "GDSM ego_small loop finished."
+
+#Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-gdsm_to_test                        0.010434          0.049010      0.005121        0.024016        0.004050
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+gdsm_to_test                        0.010434          0.049010      0.005121        0.024016        0.004050      0.206055
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+gdsm                              0.206055      0.206055     0.168945    0.386719      0.697070
 
 
-# ==============================================================================
-# Ego-small — Seed 43
-# ==============================================================================
-
-RUN=seed_43
-N=1024
-
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_gdsm_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/gdsm_ego_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --device gpu
-
-# ------------------------------------------------------------------------------
-# 2. Generate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_gdsm_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/gdsm_ego_small.yaml \
-  --seed-id 43 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/gdsm/ego_small/$RUN/generations/seed_43_n_${N}"
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-# ------------------------------------------------------------------------------
-# Recorded result
-# ------------------------------------------------------------------------------
-
+#Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-gdsm_to_test                        0.016231          0.081054      0.006538        0.035523        0.002637
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+gdsm_to_test                        0.016231          0.081054      0.006538        0.035523        0.002637      0.189453
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+gdsm                              0.189453      0.189453     0.180664    0.349609      0.744727
 
 
-# ==============================================================================
-# Ego-small — Seed 44
-# ==============================================================================
-
-RUN=seed_44
-N=1024
-
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_gdsm_baseline.py \
-  --stage train \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/gdsm_ego_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --device gpu
-
-# ------------------------------------------------------------------------------
-# 2. Generate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/run_gdsm_baseline.py \
-  --stage generate \
-  --dataset ego_small \
-  --common-config configs/baselines/common_ego_small.yaml \
-  --wrapper-config configs/baselines/gdsm_ego_small.yaml \
-  --seed-id 44 \
-  --run-id "$RUN" \
-  --num-samples "$N" \
-  --device gpu
-
-GEN_DIR="outputs/baselines/gdsm/ego_small/$RUN/generations/seed_44_n_${N}"
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate
-# ------------------------------------------------------------------------------
-PYTHONPATH=src python scripts/evaluate_graph_generation_report.py \
-  --config configs/experiments/baselines/ego_small_evaluation.yaml \
-  --generated-dir "$GEN_DIR" \
-  --output-dir "$GEN_DIR/evaluation_report"
-
-# ------------------------------------------------------------------------------
-# Recorded result
-# ------------------------------------------------------------------------------
-
+#Seed 44
 Graph-distribution MMD against held-out test graphs (lower is better)
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697
-gdsm_to_test                        0.015620          0.048295      0.004437        0.028515        0.003747
+WL novelty against the complete training split (candidate population only; higher is better)
+The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
+gdsm_to_test                        0.015620          0.048295      0.004437        0.028515        0.003747      0.165039
 
-
-# ==============================================================================
-# COMPLETE !!!
-# ==============================================================================
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+gdsm                              0.165039      0.165039     0.157227    0.359375      0.706445
