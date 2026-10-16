@@ -1,0 +1,16 @@
+# Generation-only GraphES eigenbasis perturbation ablation.
+# Reuses an existing trained generic GraphES checkpoint; no retraining required.
+grapher:
+  sample:
+    eigenbasis_perturbation:
+      enabled: true
+      stage: reverse
+      method: givens
+      pairing: adjacent
+      sigma: 0.005
+      num_rotations: 4
+      max_abs_angle: 0.25
+      seed_offset: 730001
+      preserve_zero_mode: true
+  graphlet_refinement:
+    enabled: false

@@ -219,3 +219,87 @@ def test_diversification_artifacts_use_semantic_stage_labels(tmp_path):
     )
     assert base_path == source_path
     assert base_stage == "grapher_spectral_pre_rewire"
+
+
+def test_graded_topology_distance_is_permutation_invariant_and_bounded():
+    graph = nx.path_graph(6)
+    relabelled = nx.relabel_nodes(graph, {node: f"v{5-node}" for node in graph.nodes()})
+    distance = report.graded_topology_distance(graph, relabelled, wl_iterations=3)
+    assert distance == pytest.approx(0.0, abs=1e-12)
+
+    modified = graph.copy()
+    modified.add_edge(0, 5)
+    modified_distance = report.graded_topology_distance(graph, modified, wl_iterations=3)
+    assert 0.0 < modified_distance <= 1.0
+
+
+def test_graded_diversity_exposes_near_copy_despite_exact_novelty():
+    train_graph = nx.path_graph(12)
+    near_copy = train_graph.copy()
+    near_copy.add_edge(0, 11)
+    heldout = nx.cycle_graph(10)
+
+    exact = report.exact_isomorphism_support_diagnostics(
+        {
+            "train": [train_graph],
+            "heldout_test": [heldout],
+            "generated": [near_copy],
+        },
+        reference_name="heldout_test",
+    )
+    exact_rows = {row["population"]: row for row in exact["population_metrics"]}
+    assert exact_rows["generated"]["exact_isomorphism_novelty_rate_against_train"] == pytest.approx(1.0)
+
+    graded = report.graded_diversity_diagnostics(
+        {
+            "train": [train_graph],
+            "heldout_test": [heldout],
+            "generated": [near_copy],
+        },
+        reference_name="heldout_test",
+        epsilons=(0.0, 0.05, 0.3),
+        wl_iterations=3,
+    )
+    graded_rows = {row["population"]: row for row in graded["population_metrics"]}
+    distance = graded_rows["generated"]["mean_nearest_train_structural_distance"]
+    assert 0.0 < distance < 0.5
+    curves = {
+        (row["population"], row["epsilon"]): row
+        for row in graded["epsilon_curve"]
+    }
+    assert curves[("generated", 0.0)]["epsilon_novelty_rate_against_train"] == pytest.approx(1.0)
+    # A sufficiently loose tolerance should correctly classify the one-edge
+    # perturbation as close to the training support rather than maximally novel.
+    assert curves[("generated", 0.3)]["epsilon_novelty_rate_against_train"] == pytest.approx(0.0)
+
+
+def test_graded_diversity_coverage_curve_uses_heldout_as_target():
+    train = [nx.path_graph(6)]
+    heldout = [nx.cycle_graph(6), nx.path_graph(7)]
+    generated = [nx.cycle_graph(6)]
+    diagnostics = report.graded_diversity_diagnostics(
+        {
+            "train": train,
+            "heldout_test": heldout,
+            "generated": generated,
+        },
+        reference_name="heldout_test",
+        epsilons=(0.0, 1.0),
+        wl_iterations=2,
+    )
+    curve = {
+        (row["population"], row["epsilon"]): row
+        for row in diagnostics["epsilon_curve"]
+    }
+    assert curve[("generated", 0.0)]["heldout_coverage_rate"] == pytest.approx(0.5)
+    assert curve[("generated", 1.0)]["heldout_coverage_rate"] == pytest.approx(1.0)
+    assert curve[("heldout_test", 0.0)]["heldout_coverage_rate"] == pytest.approx(1.0)
+
+
+def test_graded_distance_is_explicitly_a_pseudodistance_for_wl_collisions():
+    # Connected-component mass distinguishes this classic C6 vs 2*C3 WL
+    # collision, so the graded distance is positive even though the degree/WL
+    # layers alone would match.
+    cycle = nx.cycle_graph(6)
+    two_triangles = nx.disjoint_union(nx.cycle_graph(3), nx.cycle_graph(3))
+    assert report.graded_topology_distance(cycle, two_triangles, wl_iterations=3) > 0.0

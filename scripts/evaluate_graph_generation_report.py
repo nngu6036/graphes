@@ -7,7 +7,9 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import re
+import statistics
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -822,6 +824,395 @@ def exact_isomorphism_support_diagnostics(
     }
 
 
+
+
+def _stable_wl_digest(parts: Sequence[str]) -> str:
+    """Return a deterministic short digest for a WL neighborhood signature."""
+
+    payload = "\x1f".join(str(part) for part in parts)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+def _normalized_counter(counter: Counter[str] | Counter[int]) -> dict[str, float]:
+    """Normalize a counter to a probability mass function."""
+
+    total = float(sum(counter.values()))
+    if total <= 0.0:
+        return {}
+    return {str(key): float(value) / total for key, value in counter.items()}
+
+
+def _tv_histogram(left: Mapping[str, float], right: Mapping[str, float]) -> float:
+    """Total variation between two normalized sparse histograms."""
+
+    keys = set(left) | set(right)
+    return 0.5 * sum(abs(float(left.get(k, 0.0)) - float(right.get(k, 0.0))) for k in keys)
+
+
+def _component_size_histogram(graph: nx.Graph) -> dict[str, float]:
+    """Node-mass distribution over connected-component sizes."""
+
+    if graph.number_of_nodes() <= 0:
+        return {}
+    if graph.is_directed():
+        components = nx.weakly_connected_components(graph)
+    else:
+        components = nx.connected_components(graph)
+    counts: Counter[int] = Counter()
+    for component in components:
+        size = len(component)
+        counts[size] += size
+    return _normalized_counter(counts)
+
+
+def _wl_layer_histograms(graph: nx.Graph, *, iterations: int) -> list[dict[str, float]]:
+    """Compute comparable topology-only WL color histograms.
+
+    Colors are initialized from degree information and updated with deterministic
+    SHA-256 neighborhood signatures.  Because the same textual signature maps to
+    the same digest across graphs and processes, the sparse histograms can be
+    compared directly.  Attributes are intentionally ignored.
+    """
+
+    if iterations < 0:
+        raise ValueError("WL iterations must be non-negative.")
+    nodes = list(graph.nodes())
+    if not nodes:
+        return [{} for _ in range(iterations + 1)]
+
+    if graph.is_directed():
+        labels = {
+            node: f"io:{int(graph.in_degree(node))},{int(graph.out_degree(node))}"
+            for node in nodes
+        }
+    else:
+        labels = {node: f"d:{int(graph.degree(node))}" for node in nodes}
+
+    layers: list[dict[str, float]] = [_normalized_counter(Counter(labels.values()))]
+    for _ in range(iterations):
+        updated: dict[Any, str] = {}
+        for node in nodes:
+            if graph.is_directed():
+                incoming: list[str] = []
+                outgoing: list[str] = []
+                for nbr in graph.predecessors(node):
+                    multiplicity = (
+                        int(graph.number_of_edges(nbr, node)) if graph.is_multigraph() else 1
+                    )
+                    incoming.extend([labels[nbr]] * multiplicity)
+                for nbr in graph.successors(node):
+                    multiplicity = (
+                        int(graph.number_of_edges(node, nbr)) if graph.is_multigraph() else 1
+                    )
+                    outgoing.extend([labels[nbr]] * multiplicity)
+                signature = [
+                    "self", labels[node], "in", *sorted(incoming), "out", *sorted(outgoing)
+                ]
+            else:
+                neighbors: list[str] = []
+                for nbr in graph.neighbors(node):
+                    multiplicity = (
+                        int(graph.number_of_edges(node, nbr)) if graph.is_multigraph() else 1
+                    )
+                    neighbors.extend([labels[nbr]] * multiplicity)
+                signature = ["self", labels[node], "nbr", *sorted(neighbors)]
+            updated[node] = _stable_wl_digest(signature)
+        labels = updated
+        layers.append(_normalized_counter(Counter(labels.values())))
+    return layers
+
+
+def _graded_topology_profile(graph: nx.Graph, *, wl_iterations: int) -> dict[str, Any]:
+    """Cache the invariant features used by the graded novelty distance."""
+
+    return {
+        "num_nodes": int(graph.number_of_nodes()),
+        "num_edges": int(graph.number_of_edges()),
+        "component_histogram": _component_size_histogram(graph),
+        "wl_layers": _wl_layer_histograms(graph, iterations=wl_iterations),
+    }
+
+
+def graded_topology_distance(
+    left: nx.Graph | Mapping[str, Any],
+    right: nx.Graph | Mapping[str, Any],
+    *,
+    wl_iterations: int = 3,
+) -> float:
+    r"""Return a fast permutation-invariant graded structural pseudodistance.
+
+    Let :math:`p_G^{(h)}` be the normalized WL color histogram at iteration
+    :math:`h`, and let :math:`q_G` be the node-mass histogram of connected
+    component sizes.  We use
+
+    .. math::
+
+       d(G,H) = \frac{\delta_V + \delta_E + \operatorname{TV}(q_G,q_H)
+       + \sum_{h=0}^{L}\operatorname{TV}(p_G^{(h)},p_H^{(h)})}{L+4},
+
+    where :math:`\delta_V=|n_G-n_H|/\max(n_G,n_H,1)` and
+    :math:`\delta_E=|m_G-m_H|/\max(m_G,m_H,1)`.  The result lies in [0,1].
+
+    This is deliberately a scalable *pseudodistance*, not exact graph-edit
+    distance: exact isomorphism implies zero distance, but 1-WL-equivalent
+    non-isomorphic graphs can still have zero or very small distance.  Exact
+    novelty is therefore reported separately.
+    """
+
+    left_profile = (
+        _graded_topology_profile(left, wl_iterations=wl_iterations)
+        if isinstance(left, nx.Graph)
+        else dict(left)
+    )
+    right_profile = (
+        _graded_topology_profile(right, wl_iterations=wl_iterations)
+        if isinstance(right, nx.Graph)
+        else dict(right)
+    )
+    n_left = int(left_profile["num_nodes"])
+    n_right = int(right_profile["num_nodes"])
+    m_left = int(left_profile["num_edges"])
+    m_right = int(right_profile["num_edges"])
+    delta_nodes = abs(n_left - n_right) / max(n_left, n_right, 1)
+    delta_edges = abs(m_left - m_right) / max(m_left, m_right, 1)
+    component_tv = _tv_histogram(
+        left_profile["component_histogram"], right_profile["component_histogram"]
+    )
+    left_layers = list(left_profile["wl_layers"])
+    right_layers = list(right_profile["wl_layers"])
+    if len(left_layers) != len(right_layers):
+        raise ValueError("Graded topology profiles use different WL depths.")
+    wl_tvs = [_tv_histogram(a, b) for a, b in zip(left_layers, right_layers)]
+    terms = [delta_nodes, delta_edges, component_tv, *wl_tvs]
+    return float(sum(terms) / len(terms)) if terms else 0.0
+
+
+def _quantile(values: Sequence[float], q: float) -> float:
+    """Linear-interpolated empirical quantile without NumPy dependency."""
+
+    if not values:
+        return float("nan")
+    ordered = sorted(float(value) for value in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = min(max(float(q), 0.0), 1.0) * (len(ordered) - 1)
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def _nearest_profile_distances(
+    queries: Sequence[Mapping[str, Any]],
+    targets: Sequence[Mapping[str, Any]],
+    *,
+    wl_iterations: int,
+) -> list[float]:
+    if not queries:
+        return []
+    if not targets:
+        return [float("nan")] * len(queries)
+    distances: list[float] = []
+    for query in queries:
+        distances.append(min(
+            graded_topology_distance(query, target, wl_iterations=wl_iterations)
+            for target in targets
+        ))
+    return distances
+
+
+def graded_diversity_diagnostics(
+    populations: Mapping[str, Sequence[nx.Graph]],
+    *,
+    train_name: str = "train",
+    reference_name: str,
+    epsilons: Sequence[float] = (0.0, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.5),
+    wl_iterations: int = 3,
+) -> dict[str, Any]:
+    r"""Measure graded novelty and held-out coverage for generic graph sets.
+
+    For each graph :math:`G`, define its nearest-training distance
+    :math:`D_T(G)=\min_{H\in T} d(G,H)`.  Population-level graded novelty is
+    summarized by the mean/median/quantiles of :math:`D_T`.  For threshold
+    :math:`\epsilon`,
+
+    .. math::
+
+       N_\epsilon(P)=\frac{1}{|P|}\sum_{G\in P}1[D_T(G)>\epsilon]
+
+    is epsilon-novelty.  Held-out coverage of population :math:`P` is
+
+    .. math::
+
+       C_\epsilon(P;R)=\frac{1}{|R|}\sum_{R_i\in R}
+       1[\min_{G\in P}d(R_i,G)\le\epsilon].
+
+    The held-out reference's own nearest-training distance distribution is a
+    calibration target: a useful generator need not maximize distance from
+    training, but should ideally resemble legitimate held-out departure while
+    covering held-out structure.
+    """
+
+    if train_name not in populations:
+        raise KeyError(f"Missing training population {train_name!r}.")
+    if reference_name not in populations:
+        raise KeyError(f"Missing reference population {reference_name!r}.")
+    if wl_iterations < 0:
+        raise ValueError("wl_iterations must be non-negative.")
+    epsilon_values = sorted({float(value) for value in epsilons})
+    if not epsilon_values:
+        raise ValueError("At least one diversity epsilon is required.")
+    if any((not math.isfinite(value)) or value < 0.0 or value > 1.0 for value in epsilon_values):
+        raise ValueError("Diversity epsilons must be finite values in [0, 1].")
+
+    profiles: dict[str, list[dict[str, Any]]] = {
+        name: [_graded_topology_profile(graph, wl_iterations=wl_iterations) for graph in graphs]
+        for name, graphs in populations.items()
+    }
+    train_profiles = profiles[train_name]
+    reference_profiles = profiles[reference_name]
+
+    population_rows: list[dict[str, Any]] = []
+    curve_rows: list[dict[str, Any]] = []
+    nearest_train_by_population: dict[str, list[float]] = {}
+
+    for name, query_profiles in profiles.items():
+        nearest_train = _nearest_profile_distances(
+            query_profiles, train_profiles, wl_iterations=wl_iterations
+        )
+        nearest_train_by_population[name] = nearest_train
+        finite = [value for value in nearest_train if math.isfinite(value)]
+        coverage_distances = _nearest_profile_distances(
+            reference_profiles, query_profiles, wl_iterations=wl_iterations
+        )
+        finite_coverage = [value for value in coverage_distances if math.isfinite(value)]
+        population_rows.append({
+            "population": name,
+            "num_graphs": len(query_profiles),
+            "mean_nearest_train_structural_distance": (
+                statistics.fmean(finite) if finite else float("nan")
+            ),
+            "median_nearest_train_structural_distance": _quantile(finite, 0.5),
+            "q10_nearest_train_structural_distance": _quantile(finite, 0.1),
+            "q90_nearest_train_structural_distance": _quantile(finite, 0.9),
+            "mean_heldout_to_population_distance": (
+                statistics.fmean(finite_coverage) if finite_coverage else float("nan")
+            ),
+        })
+        for epsilon in epsilon_values:
+            epsilon_novelty = (
+                sum(value > epsilon for value in finite) / len(finite)
+                if finite else float("nan")
+            )
+            heldout_coverage = (
+                sum(value <= epsilon for value in finite_coverage) / len(finite_coverage)
+                if finite_coverage else float("nan")
+            )
+            curve_rows.append({
+                "population": name,
+                "epsilon": epsilon,
+                "epsilon_novelty_rate_against_train": epsilon_novelty,
+                "heldout_coverage_rate": heldout_coverage,
+            })
+
+    return {
+        "protocol": {
+            "topology_only": True,
+            "node_and_edge_attributes": False,
+            "distance_name": "wl_component_structural_pseudodistance_v1",
+            "wl_iterations": int(wl_iterations),
+            "distance_range": [0.0, 1.0],
+            "distance_terms": (
+                "relative node-count difference; relative edge-count difference; "
+                "component-size node-mass TV; normalized WL-color-histogram TV at "
+                f"iterations 0..{wl_iterations}, averaged equally"
+            ),
+            "caveat": (
+                "Permutation-invariant scalable pseudodistance, not exact graph-edit distance; "
+                "non-isomorphic 1-WL-equivalent graphs may have distance zero."
+            ),
+            "train_population": train_name,
+            "reference_population": reference_name,
+            "epsilons": epsilon_values,
+        },
+        "population_metrics": population_rows,
+        "epsilon_curve": curve_rows,
+        "nearest_train_distances": nearest_train_by_population,
+    }
+
+
+def _merge_generic_diversity_rows(
+    exact_rows: Sequence[Mapping[str, Any]],
+    graded_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge exact-support and graded-distance summaries by population."""
+
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for source in (exact_rows, graded_rows):
+        for row in source:
+            name = str(row["population"])
+            if name not in merged:
+                merged[name] = {"population": name}
+                order.append(name)
+            merged[name].update(dict(row))
+    return [merged[name] for name in order]
+
+
+def _print_generic_diversity_diagnostics(
+    rows: Sequence[Mapping[str, Any]],
+    curve_rows: Sequence[Mapping[str, Any]],
+) -> None:
+    """Print the four diversity quantities used by the paper-facing report."""
+
+    print("\nGeneric topology diversity diagnostics (attributes ignored)")
+    print(
+        f"{'Population':30s}"
+        f"{'Exact novel':>14s}"
+        f"{'Iso unique':>13s}"
+        f"{'Mean NN-train':>16s}"
+        f"{'Median NN-train':>18s}"
+    )
+    for row in rows:
+        print(
+            f"{str(row['population']):30s}"
+            f"{float(row.get('exact_isomorphism_novelty_rate_against_train', float('nan'))):14.6f}"
+            f"{float(row.get('exact_isomorphism_uniqueness_rate', float('nan'))):13.6f}"
+            f"{float(row.get('mean_nearest_train_structural_distance', float('nan'))):16.6f}"
+            f"{float(row.get('median_nearest_train_structural_distance', float('nan'))):18.6f}"
+        )
+    print(
+        "Exact novelty detects unseen isomorphism classes; iso uniqueness measures "
+        "distinct classes within a population; NN-train is a graded [0,1] structural "
+        "pseudodistance to the nearest training graph."
+    )
+
+    grouped: dict[float, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in curve_rows:
+        grouped[float(row["epsilon"])].append(row)
+    print("\nEpsilon-novelty / held-out coverage curve")
+    print(f"{'epsilon':>9s}{'Population':30s}{'eps novel':>13s}{'coverage':>13s}")
+    for epsilon in sorted(grouped):
+        for row in grouped[epsilon]:
+            print(
+                f"{epsilon:9.4f}{str(row['population']):30s}"
+                f"{float(row['epsilon_novelty_rate_against_train']):13.6f}"
+                f"{float(row['heldout_coverage_rate']):13.6f}"
+            )
+    print(
+        "Epsilon novelty = fraction farther than epsilon from every training graph; "
+        "coverage = fraction of held-out graphs within epsilon of at least one graph "
+        "from the population."
+    )
+
+
+def _write_generic_diversity_csv(
+    rows: Sequence[Mapping[str, Any]], path: Path,
+) -> None:
+    _write_isomorphism_support_csv(rows, path)
+
 def _write_isomorphism_support_csv(
     rows: Sequence[Mapping[str, Any]], path: Path,
 ) -> None:
@@ -1306,6 +1697,35 @@ def main() -> None:
             "default and use the complete training split."
         ),
     )
+    parser.add_argument(
+        "--skip-graded-diversity-diagnostics",
+        action="store_true",
+        help=(
+            "Skip nearest-training structural distance and epsilon-novelty/coverage "
+            "diagnostics for generic graphs. They are enabled by default."
+        ),
+    )
+    parser.add_argument(
+        "--diversity-wl-iterations",
+        type=int,
+        default=None,
+        help=(
+            "WL refinement depth for the graded structural pseudodistance. "
+            "Overrides evaluation.diversity_wl_iterations; default: 3."
+        ),
+    )
+    parser.add_argument(
+        "--diversity-epsilons",
+        type=float,
+        nargs="+",
+        default=None,
+        metavar="EPS",
+        help=(
+            "Thresholds in [0,1] for epsilon-novelty and held-out coverage. "
+            "Overrides evaluation.diversity_epsilons; default: "
+            "0 0.01 0.025 0.05 0.1 0.2 0.3 0.5."
+        ),
+    )
     parser.add_argument("--sample-seed", type=int, default=42, help=argparse.SUPPRESS)
     parser.add_argument("--layout-seed", type=int, default=42, help=argparse.SUPPRESS)
     parser.add_argument("--columns", type=int, default=4, help=argparse.SUPPRESS)
@@ -1347,6 +1767,28 @@ def main() -> None:
     generic_clustering_bins = int(
         evaluation_cfg.get("generic_clustering_bins", 100)
     )
+    diversity_wl_iterations = int(
+        args.diversity_wl_iterations
+        if args.diversity_wl_iterations is not None
+        else evaluation_cfg.get("diversity_wl_iterations", 3)
+    )
+    configured_diversity_epsilons = evaluation_cfg.get(
+        "diversity_epsilons", (0.0, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.5)
+    )
+    diversity_epsilons = (
+        list(args.diversity_epsilons)
+        if args.diversity_epsilons is not None
+        else [float(value) for value in configured_diversity_epsilons]
+    )
+    if diversity_wl_iterations < 0:
+        raise ValueError("diversity_wl_iterations must be non-negative.")
+    if not diversity_epsilons:
+        raise ValueError("diversity_epsilons must contain at least one threshold.")
+    if any(
+        (not math.isfinite(float(value))) or float(value) < 0.0 or float(value) > 1.0
+        for value in diversity_epsilons
+    ):
+        raise ValueError("All diversity_epsilons must be finite values in [0,1].")
     compute_orbit = bool(evaluation_cfg.get("compute_orbit", True))
     graphlet_backend = str(
         evaluation_cfg.get("graphlet_backend", "sampled")
@@ -1539,15 +1981,17 @@ def main() -> None:
     )
 
     isomorphism_diagnostics: dict[str, Any] | None = None
+    graded_diversity: dict[str, Any] | None = None
+    merged_diversity_rows: list[dict[str, Any]] = []
     isomorphism_support_csv_path = output_dir / "isomorphism_support_metrics.csv"
     isomorphism_class_csv_path = output_dir / "isomorphism_class_frequencies.csv"
-    if (
-        not molecular
-        and train_graphs
-        and not args.skip_exact_isomorphism_diagnostics
-    ):
-        reference_population_name = f"heldout_{reference_split}"
-        populations: dict[str, Sequence[nx.Graph]] = {
+    generic_diversity_csv_path = output_dir / "generic_diversity_metrics.csv"
+    generic_diversity_curve_csv_path = output_dir / "generic_diversity_curve.csv"
+
+    generic_populations: dict[str, Sequence[nx.Graph]] | None = None
+    reference_population_name = f"heldout_{reference_split}"
+    if not molecular and train_graphs:
+        generic_populations = {
             "train": train_graphs,
             reference_population_name: reference,
         }
@@ -1555,20 +1999,22 @@ def main() -> None:
             base_count = len(base_graphs)
             if args.max_graphs is not None:
                 base_count = min(base_count, int(args.max_graphs))
-            populations[str(base_stage)] = base_graphs[:base_count]
+            generic_populations[str(base_stage)] = base_graphs[:base_count]
         if enriched_base_graphs and not _same_artifact(enriched_base_path, generated_path):
             enriched_count = len(enriched_base_graphs)
             if args.max_graphs is not None:
                 enriched_count = min(enriched_count, int(args.max_graphs))
-            populations["enriched_base"] = enriched_base_graphs[:enriched_count]
-        populations[final_stage] = generated
+            generic_populations["enriched_base"] = enriched_base_graphs[:enriched_count]
+        generic_populations[final_stage] = generated
+
+    if generic_populations is not None and not args.skip_exact_isomorphism_diagnostics:
         print(
             "Computing exact-isomorphism support diagnostics with the complete "
             f"training split ({len(train_graphs)} graphs)...",
             flush=True,
         )
         isomorphism_diagnostics = exact_isomorphism_support_diagnostics(
-            populations,
+            generic_populations,
             train_name="train",
             reference_name=reference_population_name,
         )
@@ -1579,6 +2025,35 @@ def main() -> None:
         _write_isomorphism_support_csv(
             isomorphism_diagnostics["class_frequencies"],
             isomorphism_class_csv_path,
+        )
+
+    if generic_populations is not None and not args.skip_graded_diversity_diagnostics:
+        print(
+            "Computing graded topology diversity diagnostics "
+            f"(WL iterations={diversity_wl_iterations}, "
+            f"epsilons={sorted(set(diversity_epsilons))})...",
+            flush=True,
+        )
+        graded_diversity = graded_diversity_diagnostics(
+            generic_populations,
+            train_name="train",
+            reference_name=reference_population_name,
+            epsilons=diversity_epsilons,
+            wl_iterations=diversity_wl_iterations,
+        )
+        _write_generic_diversity_csv(
+            graded_diversity["epsilon_curve"],
+            generic_diversity_curve_csv_path,
+        )
+
+    if isomorphism_diagnostics is not None or graded_diversity is not None:
+        merged_diversity_rows = _merge_generic_diversity_rows(
+            (isomorphism_diagnostics or {}).get("population_metrics", []),
+            (graded_diversity or {}).get("population_metrics", []),
+        )
+        _write_generic_diversity_csv(
+            merged_diversity_rows,
+            generic_diversity_csv_path,
         )
 
     csv_path = output_dir / "graph_mmd_metrics.csv"
@@ -1630,7 +2105,7 @@ def main() -> None:
 
     save_json(
         {
-            "format": "graph_generation_evaluation_report_v9",
+            "format": "graph_generation_evaluation_report_v10",
             "reference_split": reference_split,
             "reference_split_sha256": provenance["split_sha256"][reference_split],
             "reference_graph_indices_zero_based": list(range(reference_count)),
@@ -1666,6 +2141,40 @@ def main() -> None:
             "generic_exact_isomorphism_class_frequency_csv": (
                 str(isomorphism_class_csv_path)
                 if isomorphism_diagnostics is not None else None
+            ),
+            "generic_diversity_diagnostics": (
+                {
+                    "protocol": (graded_diversity or {}).get("protocol"),
+                    "population_metrics": merged_diversity_rows,
+                    "epsilon_curve": (graded_diversity or {}).get("epsilon_curve", []),
+                    "four_quantities": {
+                        "exact_novelty": (
+                            "fraction of graphs not exactly isomorphic to any graph "
+                            "in the complete training split"
+                        ),
+                        "isomorphism_uniqueness": (
+                            "number of exact topology isomorphism classes divided by "
+                            "the number of graphs in the population"
+                        ),
+                        "nearest_training_distance": (
+                            "mean nearest-training wl_component_structural_"
+                            "pseudodistance_v1; lower means closer to training support"
+                        ),
+                        "epsilon_novelty_and_coverage": (
+                            "epsilon novelty is the fraction farther than epsilon from "
+                            "every training graph; held-out coverage is the fraction of "
+                            "held-out graphs within epsilon of at least one population graph"
+                        ),
+                    },
+                }
+                if merged_diversity_rows else None
+            ),
+            "generic_diversity_metrics_csv": (
+                str(generic_diversity_csv_path) if merged_diversity_rows else None
+            ),
+            "generic_diversity_curve_csv": (
+                str(generic_diversity_curve_csv_path)
+                if graded_diversity is not None else None
             ),
             "generic_spectral_descriptor": (
                 "normalized_laplacian_isolates_zero_stable_boundaries_v2"
@@ -1752,6 +2261,10 @@ def main() -> None:
         _print_isomorphism_support_diagnostics(
             isomorphism_diagnostics["population_metrics"]
         )
+    if isomorphism_diagnostics is not None and graded_diversity is not None:
+        _print_generic_diversity_diagnostics(
+            merged_diversity_rows, graded_diversity["epsilon_curve"]
+        )
     if degree_sequence_prior_metrics is not None:
         _print_degree_sequence_prior(
             degree_sequence_prior_metrics, reference_split=reference_split
@@ -1762,6 +2275,10 @@ def main() -> None:
     if isomorphism_diagnostics is not None:
         print(f"Saved support metrics: {isomorphism_support_csv_path}")
         print(f"Saved class frequencies: {isomorphism_class_csv_path}")
+    if merged_diversity_rows:
+        print(f"Saved diversity metrics: {generic_diversity_csv_path}")
+    if graded_diversity is not None:
+        print(f"Saved diversity curve: {generic_diversity_curve_csv_path}")
     if degree_sequence_prior_metrics is not None:
         print(f"Saved metrics: {degree_sequence_csv_path}")
     if molecular_metrics is not None:

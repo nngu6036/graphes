@@ -1,4 +1,3 @@
-# Shared GraphER report; molecular FCD/NSPDK use evaluate_generated_molecules.py.
 benchmark: ego_small
 seed: 42
 dataset:
@@ -21,6 +20,16 @@ evaluation:
   graphlet_num_samples: 8192
   generic_mmd_protocol: graphrnn
   generic_clustering_bins: 100
+  diversity_wl_iterations: 3
+  diversity_epsilons:
+  - 0.0
+  - 0.01
+  - 0.025
+  - 0.05
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.5
 protocol:
   evaluation_seeds:
   - 42

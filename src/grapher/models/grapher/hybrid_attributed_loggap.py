@@ -63,13 +63,14 @@ from .attribute_decoding import (
 )
 from .categorical.noise import MarginalNoise, cosine_alpha_bar, draw_categories
 from .typed_degree_summary import TypedDegreeHistogramBasis
-from . import attributed_diversification
+from . import attributed_diversification, eigenbasis_perturbation
 from .vanilla_gsdm import (
     _EMA,
     _fit_laplacian_log_gap_stats,
     _laplacian_eigh_padded,
     _make_sdes,
     _operator_eigenvalues_to_spectral_state,
+    _operator_to_adjacency_state,
     _resolve_device,
     _seed_everything,
     _sha256,
@@ -114,6 +115,9 @@ def default_options() -> dict[str, Any]:
     options["attributed_diversification"] = copy.deepcopy(
         attributed_diversification.DEFAULT_ATTRIBUTED_DIVERSIFICATION
     )
+    options.setdefault("sample", {})["eigenbasis_perturbation"] = (
+        eigenbasis_perturbation.default_config()
+    )
     # Mask corruption belongs to the previous decoder and is intentionally not
     # part of this model.  The final endpoint policy remains configurable.
     options["attributed"].pop("corruption", None)
@@ -153,6 +157,7 @@ def validate_options(options: Mapping[str, Any]) -> None:
         },
     )
     hierarchical.validate_options(hierarchical_options)
+    eigenbasis_perturbation.resolve_config(dict(options.get("sample", {}) or {}))
 
     cfg = dict(options.get("attribute_diffusion", {}) or {})
     allowed = {
@@ -1445,6 +1450,11 @@ def generate(
     sde_x, sde_lam = _make_sdes({"sde": state["sde"]}, device)
     sample_cfg = copy.deepcopy(dict(state["sample"]))
     sample_cfg.update(dict(options.get("sample", {})))
+    basis_perturbation_cfg = eigenbasis_perturbation.resolve_config(sample_cfg)
+    basis_perturbation_enabled = eigenbasis_perturbation.enabled(basis_perturbation_cfg)
+    basis_perturbation_rng = np.random.default_rng(
+        int(request.generation_seed) + int(basis_perturbation_cfg.get("seed_offset", 730001))
+    )
     separate_rng = bool(sample_cfg.get("separate_attribute_rng", True))
     rng, topology_generator, attribute_generator, attribute_seed = (
         hierarchical._generation_rngs(
@@ -1493,6 +1503,7 @@ def generate(
     attribute_rows: list[dict[str, Any]] = []
     topology_hashes: list[str] = []
     trajectories: list[list[dict[str, Any]]] = []
+    basis_perturbation_rows: list[dict[str, Any]] = []
     started = time.monotonic()
 
     with torch.no_grad():
@@ -1501,6 +1512,23 @@ def generate(
             indices = rng.integers(0, len(basis_adj), size=b)
             donor_adj = basis_adj[indices]
             donor_n = basis_n[indices]
+            eigenbasis_override = None
+            base_u = None
+            batch_basis_rows: list[dict[str, Any]] = []
+            if basis_perturbation_enabled:
+                donor_adj_device = donor_adj.to(device)
+                donor_n_device = donor_n.to(device)
+                base_u = _laplacian_eigh_padded(donor_adj_device, donor_n_device)[1]
+                if str(basis_perturbation_cfg["stage"]) == "reverse":
+                    eigenbasis_override, batch_basis_rows = eigenbasis_perturbation.perturb_laplacian_basis(
+                        base_u,
+                        donor_n_device,
+                        config=basis_perturbation_cfg,
+                        rng=basis_perturbation_rng,
+                    )
+                else:
+                    eigenbasis_override = base_u
+
             sample_x, soft, lam, u = sample_batch(
                 model_x,
                 model_lam,
@@ -1514,8 +1542,28 @@ def generate(
                 spectral_transform=spectral_transform,
                 device=device,
                 generator=topology_generator,
+                eigenbasis_override=eigenbasis_override,
             )
             soft = 0.5 * (soft + soft.transpose(-1, -2))
+            if basis_perturbation_enabled and str(basis_perturbation_cfg["stage"]) == "decode":
+                if base_u is None:
+                    raise AssertionError("decode-only eigenbasis perturbation requires the original donor basis")
+                u, batch_basis_rows = eigenbasis_perturbation.perturb_laplacian_basis(
+                    base_u,
+                    donor_n.to(device),
+                    config=basis_perturbation_cfg,
+                    rng=basis_perturbation_rng,
+                )
+                decoded_operator = reconstruct_adjacency(u, lam)
+                soft = _operator_to_adjacency_state(
+                    decoded_operator,
+                    (
+                        torch.arange(decoded_operator.size(1), device=device).unsqueeze(0)
+                        < donor_n.to(device).unsqueeze(1)
+                    ).float(),
+                    "combinatorial_laplacian",
+                )
+                soft = 0.5 * (soft + soft.transpose(-1, -2))
             nmax = soft.size(1)
             flags = (
                 torch.arange(nmax, device=device).unsqueeze(0)
@@ -1657,6 +1705,14 @@ def generate(
                 continuous.append(matrix)
                 spectra.append(lam[row].cpu().numpy().astype(np.float64))
                 basis_indices.append(index)
+                if basis_perturbation_enabled:
+                    basis_row = dict(batch_basis_rows[row])
+                    basis_row.update({
+                        "graph_index": graph_index,
+                        "basis_index": index,
+                        "stage": str(basis_perturbation_cfg["stage"]),
+                    })
+                    basis_perturbation_rows.append(basis_row)
                 topology_hashes.append(state_hashes[row])
                 attribute_rows.append(diagnostic)
                 if bool(diffusion_cfg.get("save_trajectory", False)):
@@ -1881,6 +1937,18 @@ def generate(
     ):
         aggregate[key] = int(sum(int(row.get(key, 0)) for row in attribute_rows))
 
+    basis_perturbation_aggregate = eigenbasis_perturbation.aggregate_diagnostics(
+        basis_perturbation_cfg, basis_perturbation_rows
+    )
+    aggregate["eigenbasis_perturbation_enabled"] = basis_perturbation_enabled
+    aggregate["eigenbasis_perturbation_stage"] = (
+        str(basis_perturbation_cfg.get("stage")) if basis_perturbation_enabled else None
+    )
+    aggregate["eigenbasis_perturbation_mean_active_frobenius_change"] = (
+        basis_perturbation_aggregate.get("mean_active_frobenius_basis_change")
+        if basis_perturbation_enabled else None
+    )
+
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
         tempfile.mkdtemp(prefix=".gdsm_hybrid_attr_generate_", dir=target.parent)
@@ -1965,6 +2033,20 @@ def generate(
             "path": diagnostics_path.name,
             "sha256": _sha256(diagnostics_path),
         }
+        if basis_perturbation_enabled:
+            basis_perturbation_path = staging / "eigenbasis_perturbation_diagnostics.json"
+            _write_json(
+                basis_perturbation_path,
+                {
+                    "format": "grapher_eigenbasis_perturbation_v1",
+                    "aggregate": basis_perturbation_aggregate,
+                    "per_graph": basis_perturbation_rows,
+                },
+            )
+            files["eigenbasis_perturbation_diagnostics"] = {
+                "path": basis_perturbation_path.name,
+                "sha256": _sha256(basis_perturbation_path),
+            }
         if diversification_rows:
             diversification_path = staging / "attributed_diversification_diagnostics.json"
             _write_json(
@@ -2013,6 +2095,7 @@ def generate(
                 "sampling": {
                     "factorization": "p(A) p(X,R|A)",
                     "topology": "Laplacian_log_gap_reverse_diffusion",
+                    "eigenbasis_perturbation": basis_perturbation_aggregate,
                     "topology_auxiliary_supervision": [
                         "topology_only_connected_induced_graphlets_"
                         + "_".join(
@@ -2078,6 +2161,10 @@ def generate(
                     ),
                     "separate_attribute_rng": separate_rng,
                     "topology_seed": request.generation_seed,
+                    "eigenbasis_perturbation_seed": (
+                        int(request.generation_seed) + int(basis_perturbation_cfg.get("seed_offset", 730001))
+                        if basis_perturbation_enabled else None
+                    ),
                     "attribute_seed": attribute_seed,
                     "generation_batch_size": batch_size,
                     "topology_preserved_during_attribute_diffusion": True,

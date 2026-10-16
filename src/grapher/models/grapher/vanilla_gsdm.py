@@ -78,6 +78,7 @@ from grapher.models.dhvae_hh.degree_vae import (
 from grapher.models.artifacts import ArtifactLayout
 from grapher.models.base import GenerateRequest, GenerationArtifacts, TrainRequest, TrainingArtifacts
 from grapher.models.errors import ArtifactCollisionError
+from grapher.models.grapher import eigenbasis_perturbation
 from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 
 
@@ -273,6 +274,7 @@ def default_vanilla_options() -> dict[str, Any]:
             "eps": 1.0e-4,
             "threshold": 0.5,
             "use_ema": False,
+            "eigenbasis_perturbation": eigenbasis_perturbation.default_config(),
         },
         "graphlet_refinement": {"enabled": False},
         "graphlet_summary": {"enabled": False},  # legacy graphlet-only alias
@@ -637,6 +639,11 @@ def validate_options(options: Mapping[str, Any]) -> None:
         raise ValueError("vanilla GSDM supports corrector=langevin or none")
     if bool(sample.get("probability_flow", False)):
         raise ValueError("probability_flow=true is not implemented in this vanilla path")
+    basis_perturbation_cfg = eigenbasis_perturbation.resolve_config(sample)
+    if eigenbasis_perturbation.enabled(basis_perturbation_cfg) and operator != "combinatorial_laplacian":
+        raise ValueError(
+            "sample.eigenbasis_perturbation is supported only for combinatorial-Laplacian variants"
+        )
 
 
 class DenseGCNConv(nn.Module):
@@ -3409,6 +3416,7 @@ def sample_batch(
     spectral_transform: Mapping[str, Any] | None = None,
     device: torch.device,
     generator: torch.Generator,
+    eigenbasis_override: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     donor_adjacencies = donor_adjacencies.to(device)
     donor_sizes = donor_sizes.to(device)
@@ -3417,7 +3425,13 @@ def sample_batch(
         torch.arange(nmax, device=device).unsqueeze(0)
         < donor_sizes.unsqueeze(1)
     ).to(torch.float32)
-    if spectral_operator == "adjacency":
+    if eigenbasis_override is not None:
+        if eigenbasis_override.shape != donor_adjacencies.shape:
+            raise ValueError(
+                "eigenbasis_override must have the same padded [B,N,N] shape as donor_adjacencies"
+            )
+        u = eigenbasis_override.to(device=device, dtype=donor_adjacencies.dtype)
+    elif spectral_operator == "adjacency":
         _, u = torch.linalg.eigh(donor_adjacencies)
     elif spectral_operator == "combinatorial_laplacian":
         _, u = _laplacian_eigh_padded(donor_adjacencies, donor_sizes)
@@ -3543,6 +3557,15 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
         state.get("spectral_operator", spectral_operator_for_variant(variant))
     )
     spectral_transform = dict(state.get("spectral_transform", {"kind": "direct_eigenvalues"}) or {})
+    basis_perturbation_cfg = eigenbasis_perturbation.resolve_config(sample_cfg)
+    basis_perturbation_enabled = eigenbasis_perturbation.enabled(basis_perturbation_cfg)
+    if basis_perturbation_enabled and spectral_operator != "combinatorial_laplacian":
+        raise ValueError(
+            "Eigenbasis perturbation is implemented only for combinatorial-Laplacian generation"
+        )
+    basis_perturbation_rng = np.random.default_rng(
+        int(request.generation_seed) + int(basis_perturbation_cfg.get("seed_offset", 730001))
+    )
     degree_payload = state.get("degree_prior", {})
     degree_prior_enabled = bool(
         isinstance(degree_payload, Mapping) and degree_payload.get("enabled", False)
@@ -3556,6 +3579,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     basis_indices: list[int] = []
     joint_graphlet_predictions: list[dict[str, Any]] = []
     joint_structure_predictions: list[dict[str, Any]] = []
+    basis_perturbation_rows: list[dict[str, Any]] = []
     start = time.monotonic()
     with torch.no_grad():
         while len(graphs) < request.num_graphs:
@@ -3563,7 +3587,24 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             indices = rng.integers(0, len(basis_adj), size=b)
             donor_adj = basis_adj[indices]
             donor_n = basis_n[indices]
-            sample_x, soft, lam, sampled_u = sample_batch(
+            eigenbasis_override = None
+            base_u = None
+            batch_basis_rows: list[dict[str, Any]] = []
+            if basis_perturbation_enabled:
+                donor_adj_device = donor_adj.to(device)
+                donor_n_device = donor_n.to(device)
+                base_u = _laplacian_eigh_padded(donor_adj_device, donor_n_device)[1]
+                if str(basis_perturbation_cfg["stage"]) == "reverse":
+                    eigenbasis_override, batch_basis_rows = eigenbasis_perturbation.perturb_laplacian_basis(
+                        base_u,
+                        donor_n_device,
+                        config=basis_perturbation_cfg,
+                        rng=basis_perturbation_rng,
+                    )
+                else:
+                    eigenbasis_override = base_u
+
+            sample_x, trajectory_soft, lam, sampled_u = sample_batch(
                 model_x, model_lam,
                 donor_adjacencies=donor_adj,
                 donor_sizes=donor_n,
@@ -3573,14 +3614,18 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 spectral_operator=spectral_operator,
                 spectral_transform=spectral_transform,
                 device=device, generator=generator,
+                eigenbasis_override=eigenbasis_override,
             )
-            soft = 0.5 * (soft + soft.transpose(-1, -2))
-            operator_batch = reconstruct_adjacency(sampled_u, lam)
+            trajectory_soft = 0.5 * (trajectory_soft + trajectory_soft.transpose(-1, -2))
+
+            # Structural predictions belong to the reverse trajectory.  In the
+            # decode-only ablation they therefore remain exactly those of the
+            # unperturbed reverse process; only the final realization changes.
             batch_structure_summary = None
             if variant in LAPLACIAN_LOGGAP_GRAPHLET_AUX_VARIANTS:
                 if not _is_joint_graphlet_score(model_lam):
                     raise AssertionError("log-gap graphlet generation requires joint summary head")
-                nmax = soft.size(1)
+                nmax = trajectory_soft.size(1)
                 flags = (
                     torch.arange(nmax, device=device).unsqueeze(0)
                     < donor_n.to(device).unsqueeze(1)
@@ -3592,7 +3637,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     spectral_transform=spectral_transform,
                 )
                 summary_outputs = model_lam.forward_all(
-                    sample_x, soft, flags, sampled_u, state_for_summary
+                    sample_x, trajectory_soft, flags, sampled_u, state_for_summary
                 )
                 if hasattr(model_lam, "structure_means_from_outputs"):
                     batch_structure_summary = model_lam.structure_means_from_outputs(summary_outputs)
@@ -3602,6 +3647,29 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                         "graphlet_histogram": gh,
                         "graphlet_mass": gm,
                     }
+
+            decode_u = sampled_u
+            soft = trajectory_soft
+            if basis_perturbation_enabled and str(basis_perturbation_cfg["stage"]) == "decode":
+                if base_u is None:
+                    raise AssertionError("decode-only eigenbasis perturbation requires the original donor basis")
+                decode_u, batch_basis_rows = eigenbasis_perturbation.perturb_laplacian_basis(
+                    base_u,
+                    donor_n.to(device),
+                    config=basis_perturbation_cfg,
+                    rng=basis_perturbation_rng,
+                )
+                decode_operator = reconstruct_adjacency(decode_u, lam)
+                soft = _operator_to_adjacency_state(
+                    decode_operator,
+                    (
+                        torch.arange(decode_operator.size(1), device=device).unsqueeze(0)
+                        < donor_n.to(device).unsqueeze(1)
+                    ).to(torch.float32),
+                    spectral_operator,
+                )
+                soft = 0.5 * (soft + soft.transpose(-1, -2))
+            operator_batch = reconstruct_adjacency(decode_u, lam)
             for row, idx in enumerate(indices.tolist()):
                 n = int(donor_n[row].item())
                 matrix = soft[row, :n, :n].detach().cpu().numpy().astype(np.float64)
@@ -3620,6 +3688,14 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     continuous_laplacians.append(lap)
                 spectra.append(lam[row, :].detach().cpu().numpy().astype(np.float64))
                 basis_indices.append(int(idx))
+                if basis_perturbation_enabled:
+                    basis_row = dict(batch_basis_rows[row])
+                    basis_row.update({
+                        "graph_index": len(graphs) - 1,
+                        "basis_index": int(idx),
+                        "stage": str(basis_perturbation_cfg["stage"]),
+                    })
+                    basis_perturbation_rows.append(basis_row)
                 if batch_structure_summary is not None:
                     structure_row: dict[str, Any] = {"graph_index": len(graphs) - 1}
                     for key, value in batch_structure_summary.items():
@@ -3950,6 +4026,21 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 },
             )
 
+        basis_perturbation_aggregate = eigenbasis_perturbation.aggregate_diagnostics(
+            basis_perturbation_cfg, basis_perturbation_rows
+        )
+        basis_perturbation_path = None
+        if basis_perturbation_enabled:
+            basis_perturbation_path = staging / "eigenbasis_perturbation_diagnostics.json"
+            _write_json(
+                basis_perturbation_path,
+                {
+                    "format": "grapher_eigenbasis_perturbation_v1",
+                    "aggregate": basis_perturbation_aggregate,
+                    "per_graph": basis_perturbation_rows,
+                },
+            )
+
         _write_json(staging / "manifest.json", {
             "format": GENERATION_FORMAT,
             "model_id": wrapper.model_id,
@@ -4020,6 +4111,13 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "path": "sampled_basis_indices.pkl", "sha256": _sha256(index_path),
                 "role": "uniform indices into training-only adjacency/eigenbasis bank",
             },
+            "eigenbasis_perturbation_diagnostics": (
+                {
+                    "path": "eigenbasis_perturbation_diagnostics.json",
+                    "sha256": _sha256(basis_perturbation_path),
+                }
+                if basis_perturbation_path is not None else None
+            ),
             "sampled_degree_sequences": (
                 {
                     "path": "sampled_degree_sequences.pkl",
@@ -4043,10 +4141,15 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "spectral_operator": spectral_operator,
                 "spectral_parameterization": str(spectral_transform.get("kind", "direct_eigenvalues")),
                 "eigenvectors": (
-                    "training_split_empirical_laplacian_eigenbasis"
+                    (
+                        "training_split_empirical_laplacian_eigenbasis_plus_generation_only_orthogonal_perturbation"
+                        if basis_perturbation_enabled
+                        else "training_split_empirical_laplacian_eigenbasis"
+                    )
                     if spectral_operator == "combinatorial_laplacian"
                     else "training_split_empirical"
                 ),
+                "eigenbasis_perturbation": basis_perturbation_aggregate,
                 "reverse_process": "coupled_VP_spectral_predictor_corrector",
                 "threshold": threshold,
                 "threshold_semantics": (
@@ -4116,6 +4219,14 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             "diagnostics": {
                 "connectedness_rate": float(np.mean(connected)),
                 "mean_degree_sum": float(np.mean(degree_sums)),
+                "eigenbasis_perturbation_enabled": basis_perturbation_enabled,
+                "eigenbasis_perturbation_stage": (
+                    str(basis_perturbation_cfg.get("stage")) if basis_perturbation_enabled else None
+                ),
+                "eigenbasis_perturbation_mean_active_frobenius_change": (
+                    basis_perturbation_aggregate.get("mean_active_frobenius_basis_change")
+                    if basis_perturbation_enabled else None
+                ),
                 **laplacian_diagnostics,
                 **graphlet_aggregate,
             },

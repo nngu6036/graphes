@@ -85,7 +85,7 @@ Use the validation split while selecting settings, then freeze the design and ev
 
 ### Generic graphs
 
-The generic commands evaluate both the spectral graph before rewiring and the final diversified graph in one report. Metrics include degree, clustering, orbit, spectral and graphlet MMD, WL novelty, exact-isomorphism novelty, isomorphism uniqueness, and support-frequency TV distances.
+The generic commands evaluate both the spectral graph before rewiring and the final diversified graph in one report. In addition to degree, clustering, orbit, spectral, and graphlet MMD, the evaluator now reports four complementary diversity quantities: (1) exact-isomorphism novelty against the complete training split, (2) exact isomorphism-class uniqueness, (3) mean/median nearest-training graded structural distance, and (4) an epsilon-novelty / held-out-coverage curve. The graded distance is a permutation-invariant WL/component structural pseudodistance in [0,1], intended to distinguish near-copies from genuinely larger departures; it is not exact graph-edit distance. Legacy WL-hash novelty and exact class-frequency TV diagnostics are retained for backward comparison.
 
 ### Molecular graphs
 
@@ -124,3 +124,64 @@ configs/experiments/grapher_final/
   qm9_seed_{41..45}.yaml
   zinc_seed_{41..45}.yaml
 ```
+
+## Generation-only eigenbasis perturbation ablation
+
+GraphES can now perturb the sampled training Laplacian eigenbasis without
+retraining.  The perturbation is a product of small Givens rotations acting
+only on non-constant Laplacian modes; the constant zero mode is fixed and
+orthogonality is preserved up to floating-point error.
+
+Two variants are available under `sample.eigenbasis_perturbation.stage`:
+
+- `reverse`: perturb the basis before reverse diffusion and retain that basis
+  throughout the complete reverse trajectory;
+- `decode`: run the complete reverse process in the original sampled basis,
+  then perturb the basis only for final continuous-Laplacian reconstruction
+  and thresholding.
+
+Example generation-only override:
+
+```yaml
+grapher:
+  sample:
+    eigenbasis_perturbation:
+      enabled: true
+      stage: decode       # reverse or decode
+      method: givens
+      pairing: adjacent
+      sigma: 0.025
+      num_rotations: 4
+      max_abs_angle: 0.25
+      seed_offset: 730001
+      preserve_zero_mode: true
+  graphlet_refinement:
+    enabled: false
+```
+
+The perturbation uses a dedicated RNG stream, so the `decode` variant with the
+same generation seed retains the same donor-basis indices, diffusion noise and
+generated eigenvalues as the unperturbed run.  This makes it a paired test of
+spectral realization alone.  The `reverse` variant uses the same donor choices
+and base diffusion-noise stream but changes the matrix-valued reverse states, so
+its denoised spectrum may also change.
+
+Each perturbed generation writes
+`eigenbasis_perturbation_diagnostics.json`, including the Givens pairs and
+angles for every graph, Frobenius basis change, orthogonality error and
+constant-zero-mode error.  The continuous eigenvalue multiset is unchanged by
+`decode` perturbation before thresholding; the spectrum of the final binary
+graph can still change because thresholding is nonlinear.
+
+A validation sweep for generic graphs is provided by:
+
+```bash
+DATASET=community_small SEED=42 RUN=<existing-trained-run> \
+  bash commands/eigenbasis_perturbation_generic.sh
+```
+
+The script evaluates both stages over `sigma` in
+`{0.005, 0.01, 0.025, 0.05, 0.1}` using the existing MMD and graded diversity
+report.  For QM9/ZINC, use `commands/eigenbasis_perturbation_molecular.sh`;
+molecular rewiring is explicitly disabled so the experiment isolates basis
+perturbation.

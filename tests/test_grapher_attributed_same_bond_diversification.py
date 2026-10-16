@@ -284,5 +284,5 @@ def test_explicit_qm9_same_bond_configs_enable_generation_only_diversification(t
         assert div["verify_bond_valence_preservation"] is True
         assert div["preserve_connectivity"] is True
         assert div["random_steps"]["min_steps"] == 0
-        assert div["random_steps"]["max_steps"] == 4
+        assert div["random_steps"]["max_steps"] == 2
         assert options["attribute_summary"]["typed_graphlet"]["orders"] == [3, 4, 5]

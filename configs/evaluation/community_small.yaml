@@ -21,6 +21,16 @@ evaluation:
   generic_mmd_protocol: graphrnn
   generic_clustering_bins: 100
   graphlet_topology_filter: all
+  diversity_wl_iterations: 3
+  diversity_epsilons:
+  - 0.0
+  - 0.01
+  - 0.025
+  - 0.05
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.5
 protocol:
   evaluation_seeds:
   - 41

@@ -222,6 +222,35 @@ def test_hybrid_train_generate_smoke(tmp_path):
         assert all(data["atomic_num"] in {6, 7, 8, 9} for _, data in molecule.nodes(data=True))
         assert all(data["bond_type"] in {1, 2, 3} for _, _, data in molecule.edges(data=True))
 
+    # The same trained checkpoint supports both generation-only basis
+    # perturbation stages without retraining.
+    perturbed = wrapper.generate(
+        GenerateRequest(
+            run,
+            artifacts.checkpoint_path,
+            4,
+            99,
+            generation_id="sample_decode_basis",
+            options={
+                "sample": {
+                    "eigenbasis_perturbation": {
+                        "enabled": True,
+                        "stage": "decode",
+                        "sigma": 0.05,
+                        "num_rotations": 2,
+                        "pairing": "adjacent",
+                    }
+                },
+                "attributed_diversification": {"enabled": False},
+            },
+        )
+    )
+    perturb_manifest = json.loads(perturbed.manifest_path.read_text())
+    assert perturb_manifest["sampling"]["eigenbasis_perturbation"]["enabled"] is True
+    assert perturb_manifest["sampling"]["eigenbasis_perturbation"]["stage"] == "decode"
+    assert perturb_manifest["sampling"]["rewiring"] is False
+    assert (perturbed.generation_dir / "eigenbasis_perturbation_diagnostics.json").is_file()
+
 
 def test_explicit_qm9_configs_select_hybrid_model(tmp_path):
     root = Path(__file__).resolve().parents[1]
