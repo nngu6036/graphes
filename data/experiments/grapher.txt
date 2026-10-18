@@ -846,656 +846,154 @@ Molecular evaluation
 # ##############################################################################
 # DATASET 4/4: ZINC
 # ##############################################################################
+#seed41, after rewiring 
 
-# ==============================================================================
-# ZINC — SEED 41
-# ==============================================================================
 
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=41 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage train \
-  --dataset zinc \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_41.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset zinc \
-  --output-root outputs/baselines \
-  --seed-id 41 \
-  --run-id seed_41_gdsm_final_g345 \
-  --device cuda:0
-
-# ------------------------------------------------------------------------------
-# 2. Generate 10,000 molecules
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=41 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage generate \
-  --dataset zinc \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_41.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset zinc \
-  --output-root outputs/baselines \
-  --seed-id 41 \
-  --generation-seed 41 \
-  --run-id seed_41_gdsm_final_g345 \
-  --generation-id seed_41_n_10000 \
-  --num-samples 10000 \
-  --device cuda:0
-
-# Shared generation directory used by both evaluation commands.
-GEN=outputs/baselines/gdsm_simple/zinc/seed_41_gdsm_final_g345/generations/seed_41_n_10000
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate molecular generation metrics
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=41 PYTHONPATH=src \
-python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN/molecular_graphs.pkl" \
-  --dataset-root outputs/datasets \
-  --dataset zinc \
-  --reference-split test \
-  --train-split train \
-  --metric-molecule-source raw_valid \
-  --nspdk-backend eden \
-  --nspdk-complexity 4 \
-  --nspdk-bond-label-mode hogdiff \
-  --require-fcd \
-  --fcd-device cuda:0 \
-  --output-dir "$GEN/evaluation_molecules"
-
-# ------------------------------------------------------------------------------
-# 4. Evaluate QED research metrics
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=41 PYTHONPATH=src \
-python scripts/evaluate_qed_research.py \
-  --generated-graphs "$GEN/molecular_graphs.pkl" \
-  --reference-graphs outputs/datasets/zinc/test.pkl \
-  --molecular-report "$GEN/evaluation_molecules/molecular_evaluation_metrics.json" \
-  --evaluator scripts/evaluate_generated_molecules.py \
-  --expected-num-generated 10000 \
-  --thresholds 0.5 0.7 \
-  --output-dir "$GEN/evaluation_qed"
-
-# ------------------------------------------------------------------------------
-# Recorded result — ZINC, seed 41
-# ------------------------------------------------------------------------------
+#seed41, before rewiring 
 Molecular evaluation
-  validity: 0.912
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.9566
-  validity_without_correction: 0.912
-  fcd: 9.756835721175214
+  validity: 0.9334
+  validity_with_correction: 0.9957
+  validity_with_projected_formal_charges: 0.99
+  validity_without_correction: 0.9334
+  fcd: 0.36929469976107043
   num_generated_graphs: 10000
-  num_valid_generated_molecules: 9120
-  num_invalid_generated_molecules: 880
-  num_valid_generated_molecules_with_projected_formal_charges: 9566
-  num_invalid_generated_molecules_after_projected_formal_charges: 434
-  num_raw_invalid_resolved_by_projected_formal_charges: 446
-  projected_formal_charge_success_rate_on_raw_invalid: 0.5068181818181818
-  num_valid_generated_molecules_with_correction: 10000
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 880
-  correction_success_rate_on_raw_invalid: 1.0
+  num_valid_generated_molecules: 9334
+  num_invalid_generated_molecules: 666
+  num_valid_generated_molecules_with_projected_formal_charges: 9900
+  num_invalid_generated_molecules_after_projected_formal_charges: 100
+  num_raw_invalid_resolved_by_projected_formal_charges: 566
+  projected_formal_charge_success_rate_on_raw_invalid: 0.8498498498498499
+  num_valid_generated_molecules_with_correction: 9957
+  num_invalid_generated_molecules_after_correction: 43
+  num_molecules_corrected_to_valid: 623
+  correction_success_rate_on_raw_invalid: 0.9354354354354354
   metric_molecule_source: raw_valid
   hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 1.0
-  unique_valid_count: 9120
-  novelty_rate: 1.0
-  novel_unique_valid_count: 9120
-  nspdk_mmd: 0.0022733264936372465
-  nspdk_mmd_valid_only: 0.0022733264936372465
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.00015359602807047312
-  nspdk_proxy_mmd_metric_source: 0.00015318315608811052
-  fcd_num_reference_molecules: 23728
-  fcd_num_valid_generated_molecules: 9120
-  fcd_generated_smiles_source: raw_valid
-
-
-{
-  "num_generated_graphs": 10000,
-  "num_raw_valid": 9120,
-  "validity_without_correction": 0.912,
-  "qed_mean": 0.7364720365056453,
-  "qed_std_within_run": 0.11678122784867977,
-  "qed_median": 0.755818588912359,
-  "qed_q10": 0.5793084457676226,
-  "qed_q90": 0.8667494843668593,
-  "qed_unique_valid_mean": 0.7364720365056453,
-  "num_unique_raw_valid": 9120,
-  "qed_yield": 0.6716624972931448,
-  "num_raw_valid_single_component": 8121,
-  "valid_single_component_yield": 0.8121,
-  "qed_single_component_mean": 0.735659451746276,
-  "qed_ge_0p5_fraction_valid": 0.9532894736842106,
-  "qed_ge_0p5_yield_all": 0.8694,
-  "qed_ge_0p7_fraction_valid": 0.6867324561403508,
-  "qed_ge_0p7_yield_all": 0.6263,
-  "reference_num_graphs": 24887,
-  "reference_num_raw_valid": 23728,
-  "reference_qed_mean": 0.7512321466819076,
-  "qed_mean_minus_reference": -0.014760110176262331,
-  "qed_wasserstein_1": 0.020442781640206412
-}
-
-
-# ==============================================================================
-# ZINC — SEED 42
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage train \
-  --dataset zinc \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_42.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset zinc \
-  --output-root outputs/baselines \
-  --seed-id 42 \
-  --run-id seed_42_gdsm_final_g345 \
-  --device cuda:0
-
-# ------------------------------------------------------------------------------
-# 2. Generate 10,000 molecules
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=42 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage generate \
-  --dataset zinc \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_42.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset zinc \
-  --output-root outputs/baselines \
-  --seed-id 42 \
-  --generation-seed 42 \
-  --run-id seed_42_gdsm_final_g345 \
-  --generation-id seed_42_n_10000 \
-  --num-samples 10000 \
-  --device cuda:0
-
-# Shared generation directory used by both evaluation commands.
-GEN=outputs/baselines/gdsm_simple/zinc/seed_42_gdsm_final_g345/generations/seed_42_n_10000
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate molecular generation metrics
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=42 PYTHONPATH=src \
-python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN/molecular_graphs.pkl" \
-  --dataset-root outputs/datasets \
-  --dataset zinc \
-  --reference-split test \
-  --train-split train \
-  --metric-molecule-source raw_valid \
-  --nspdk-backend eden \
-  --nspdk-complexity 4 \
-  --nspdk-bond-label-mode hogdiff \
-  --require-fcd \
-  --fcd-device cuda:0 \
-  --output-dir "$GEN/evaluation_molecules"
-
-# ------------------------------------------------------------------------------
-# 4. Evaluate QED research metrics
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=42 PYTHONPATH=src \
-python scripts/evaluate_qed_research.py \
-  --generated-graphs "$GEN/molecular_graphs.pkl" \
-  --reference-graphs outputs/datasets/zinc/test.pkl \
-  --molecular-report "$GEN/evaluation_molecules/molecular_evaluation_metrics.json" \
-  --evaluator scripts/evaluate_generated_molecules.py \
-  --expected-num-generated 10000 \
-  --thresholds 0.5 0.7 \
-  --output-dir "$GEN/evaluation_qed"
-
-# ------------------------------------------------------------------------------
-# Recorded result — ZINC, seed 42
-# ------------------------------------------------------------------------------
-Molecular evaluation
-  validity: 0.9337
-  validity_with_correction: 0.9967
-  validity_with_projected_formal_charges: 0.9916
-  validity_without_correction: 0.9337
-  fcd: 0.43261765892935955
-  num_generated_graphs: 10000
-  num_valid_generated_molecules: 9337
-  num_invalid_generated_molecules: 663
-  num_valid_generated_molecules_with_projected_formal_charges: 9916
-  num_invalid_generated_molecules_after_projected_formal_charges: 84
-  num_raw_invalid_resolved_by_projected_formal_charges: 579
-  projected_formal_charge_success_rate_on_raw_invalid: 0.8733031674208145
-  num_valid_generated_molecules_with_correction: 9967
-  num_invalid_generated_molecules_after_correction: 33
-  num_molecules_corrected_to_valid: 630
-  correction_success_rate_on_raw_invalid: 0.9502262443438914
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 0.9995715968726572
-  unique_valid_count: 9333
-  novelty_rate: 0.9712846887388835
-  novel_unique_valid_count: 9065
-  nspdk_mmd: 0.0004001724630942848
-  nspdk_mmd_valid_only: 0.0004001724630942848
-  graphlet_histogram_mmd: 0.0004438777184907483
+  uniqueness_rate: 0.9996785943861153
+  unique_valid_count: 9331
+  novelty_rate: 0.9742792841067409
+  novel_unique_valid_count: 9091
+  nspdk_mmd: 0.0003037704665882929
+  nspdk_mmd_valid_only: 0.0003037704665882929
+  graphlet_histogram_mmd: 2.2111473442665286e-05
   graphlet_selected_mass_mmd: 0.0
-  graphlet_histogram_mmd_by_order: {'3': 0.0003955395901646952, '4': 0.0004251617645438799, '5': 0.0004478864633423729}
+  graphlet_histogram_mmd_by_order: {'3': 3.289909937231883e-05, '4': 2.6853198053622407e-05, '5': 2.108588826077451e-05}
   graphlet_selected_mass_mmd_by_order: {'3': 0.0, '4': 0.0, '5': 0.0}
-  nspdk_proxy_mmd_all_generated: 3.273139576739256e-06
-  nspdk_proxy_mmd_metric_source: 2.9587290678235403e-06
+  nspdk_proxy_mmd_all_generated: 1.6979273072841719e-06
+  nspdk_proxy_mmd_metric_source: 2.401622341984763e-06
   fcd_num_reference_molecules: 23728
-  fcd_num_valid_generated_molecules: 9337
+  fcd_num_valid_generated_molecules: 9334
   fcd_generated_smiles_source: raw_valid
-
-
 
 {
   "num_generated_graphs": 10000,
-  "num_raw_valid": 9296,
-  "validity_without_correction": 0.9296,
-  "qed_mean": 0.7338981062878628,
-  "qed_std_within_run": 0.11481193210871538,
-  "qed_median": 0.7486015291175925,
-  "qed_q10": 0.5816474140615395,
-  "qed_q90": 0.8638519412936334,
-  "qed_unique_valid_mean": 0.7338981062878628,
-  "num_unique_raw_valid": 9296,
-  "qed_yield": 0.6822316796051994,
-  "num_raw_valid_single_component": 8565,
-  "valid_single_component_yield": 0.8565,
-  "qed_single_component_mean": 0.7338632617626112,
-  "qed_ge_0p5_fraction_valid": 0.9547117039586919,
-  "qed_ge_0p5_yield_all": 0.8875,
-  "qed_ge_0p7_fraction_valid": 0.6764199655765921,
-  "qed_ge_0p7_yield_all": 0.6288,
+  "num_raw_valid": 9334,
+  "validity_without_correction": 0.9334,
+  "qed_mean": 0.752877837256438,
+  "qed_std_within_run": 0.1263073447658367,
+  "qed_median": 0.7819694662459106,
+  "qed_q10": 0.5656985339948163,
+  "qed_q90": 0.8920879700440199,
+  "qed_unique_valid_mean": 0.7528768154821056,
+  "num_unique_raw_valid": 9331,
+  "qed_yield": 0.7027361732951605,
+  "num_raw_valid_single_component": 9332,
+  "valid_single_component_yield": 0.9332,
+  "qed_single_component_mean": 0.7529021054867961,
+  "qed_ge_0p5_fraction_valid": 0.950182129847868,
+  "qed_ge_0p5_yield_all": 0.8869,
+  "qed_ge_0p7_fraction_valid": 0.7195200342832655,
+  "qed_ge_0p7_yield_all": 0.6716,
   "reference_num_graphs": 24887,
   "reference_num_raw_valid": 23728,
   "reference_qed_mean": 0.7512321466819076,
-  "qed_mean_minus_reference": -0.017334040394044847,
-  "qed_wasserstein_1": 0.023655691846975774
+  "qed_mean_minus_reference": 0.0016456905745303452,
+  "qed_wasserstein_1": 0.002746282780604531
 }
-# ==============================================================================
-# ZINC — SEED 43
-# ==============================================================================
 
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage train \
-  --dataset zinc \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_43.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset zinc \
-  --output-root outputs/baselines \
-  --seed-id 43 \
-  --run-id seed_43_gdsm_final_g345 \
-  --device cuda:0
 
-# ------------------------------------------------------------------------------
-# 2. Generate 10,000 molecules
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=43 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage generate \
-  --dataset zinc \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_43.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset zinc \
-  --output-root outputs/baselines \
-  --seed-id 43 \
-  --generation-seed 43 \
-  --run-id seed_43_gdsm_final_g345 \
-  --generation-id seed_43_n_10000 \
-  --num-samples 10000 \
-  --device cuda:0
+#seed42, after rewiring 
 
-# Shared generation directory used by both evaluation commands.
-GEN=outputs/baselines/gdsm_simple/zinc/seed_43_gdsm_final_g345/generations/seed_43_n_10000
 
-# ------------------------------------------------------------------------------
-# 3. Evaluate molecular generation metrics
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=43 PYTHONPATH=src \
-python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN/molecular_graphs.pkl" \
-  --dataset-root outputs/datasets \
-  --dataset zinc \
-  --reference-split test \
-  --train-split train \
-  --metric-molecule-source raw_valid \
-  --nspdk-backend eden \
-  --nspdk-complexity 4 \
-  --nspdk-bond-label-mode hogdiff \
-  --require-fcd \
-  --fcd-device cuda:0 \
-  --output-dir "$GEN/evaluation_molecules"
+#seed42, before rewiring 
 
-# ------------------------------------------------------------------------------
-# 4. Evaluate QED research metrics
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=43 PYTHONPATH=src \
-python scripts/evaluate_qed_research.py \
-  --generated-graphs "$GEN/molecular_graphs.pkl" \
-  --reference-graphs outputs/datasets/zinc/test.pkl \
-  --molecular-report "$GEN/evaluation_molecules/molecular_evaluation_metrics.json" \
-  --evaluator scripts/evaluate_generated_molecules.py \
-  --expected-num-generated 10000 \
-  --thresholds 0.5 0.7 \
-  --output-dir "$GEN/evaluation_qed"
 
-# ------------------------------------------------------------------------------
-# Recorded result — ZINC, seed 43
-# ------------------------------------------------------------------------------
+
+#seed43, after rewiring 
+
+
+#seed43, before rewiring 
+
+
+
+#seed44, after rewiring 
+
+
+#seed44, before rewiring 
 Molecular evaluation
-  validity: 0.9289
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.942
-  validity_without_correction: 0.9289
-  fcd: 4.793306060475892
+  validity: 0.9507
+  validity_with_correction: 0.9963
+  validity_with_projected_formal_charges: 0.9924
+  validity_without_correction: 0.9507
+  fcd: 0.4274239156921169
   num_generated_graphs: 10000
-  num_valid_generated_molecules: 9289
-  num_invalid_generated_molecules: 711
-  num_valid_generated_molecules_with_projected_formal_charges: 9420
-  num_invalid_generated_molecules_after_projected_formal_charges: 580
-  num_raw_invalid_resolved_by_projected_formal_charges: 131
-  projected_formal_charge_success_rate_on_raw_invalid: 0.18424753867791843
-  num_valid_generated_molecules_with_correction: 10000
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 711
-  correction_success_rate_on_raw_invalid: 1.0
+  num_valid_generated_molecules: 9507
+  num_invalid_generated_molecules: 493
+  num_valid_generated_molecules_with_projected_formal_charges: 9924
+  num_invalid_generated_molecules_after_projected_formal_charges: 76
+  num_raw_invalid_resolved_by_projected_formal_charges: 417
+  projected_formal_charge_success_rate_on_raw_invalid: 0.845841784989858
+  num_valid_generated_molecules_with_correction: 9963
+  num_invalid_generated_molecules_after_correction: 37
+  num_molecules_corrected_to_valid: 456
+  correction_success_rate_on_raw_invalid: 0.9249492900608519
   metric_molecule_source: raw_valid
   hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 0.999784691570675
-  unique_valid_count: 9287
-  novelty_rate: 1.0
-  novel_unique_valid_count: 9287
-  nspdk_mmd: 0.00303097840836843
-  nspdk_mmd_valid_only: 0.00303097840836843
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 1.6922913567661677e-05
-  nspdk_proxy_mmd_metric_source: 1.7546408802925567e-05
-  fcd_num_reference_molecules: 1000
-  fcd_num_valid_generated_molecules: 9289
-  fcd_generated_smiles_source: raw_valid
-
-{
-  "num_generated_graphs": 10000,
-  "num_raw_valid": 9289,
-  "validity_without_correction": 0.9289,
-  "qed_mean": 0.7338255184737279,
-  "qed_std_within_run": 0.13918415063650927,
-  "qed_median": 0.7650872805613761,
-  "qed_q10": 0.5317453204680606,
-  "qed_q90": 0.885752634838345,
-  "qed_unique_valid_mean": 0.7338011414091935,
-  "num_unique_raw_valid": 9287,
-  "qed_yield": 0.6816505241102471,
-  "num_raw_valid_single_component": 7710,
-  "valid_single_component_yield": 0.771,
-  "qed_single_component_mean": 0.7394973062891376,
-  "qed_ge_0p5_fraction_valid": 0.9251803208095597,
-  "qed_ge_0p5_yield_all": 0.8594,
-  "qed_ge_0p7_fraction_valid": 0.6662719345462375,
-  "qed_ge_0p7_yield_all": 0.6189,
-  "reference_num_graphs": 1000,
-  "reference_num_raw_valid": 1000,
-  "reference_qed_mean": 0.7351596889447009,
-  "qed_mean_minus_reference": -0.0013341704709729507,
-  "qed_wasserstein_1": 0.00580952886679463
-}
-
-# ==============================================================================
-# ZINC — SEED 44
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage train \
-  --dataset zinc \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_44.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset zinc \
-  --output-root outputs/baselines \
-  --seed-id 44 \
-  --run-id seed_44_gdsm_final_g345 \
-  --device cuda:0
-
-# ------------------------------------------------------------------------------
-# 2. Generate 10,000 molecules
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=44 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage generate \
-  --dataset zinc \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_44.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset zinc \
-  --output-root outputs/baselines \
-  --seed-id 44 \
-  --generation-seed 44 \
-  --run-id seed_44_gdsm_final_g345 \
-  --generation-id seed_44_n_10000 \
-  --num-samples 10000 \
-  --device cuda:0
-
-# Shared generation directory used by both evaluation commands.
-GEN=outputs/baselines/gdsm_simple/zinc/seed_44_gdsm_final_g345/generations/seed_44_n_10000
-
-# ------------------------------------------------------------------------------
-# 3. Evaluate molecular generation metrics
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=44 PYTHONPATH=src \
-python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN/molecular_graphs.pkl" \
-  --dataset-root outputs/datasets \
-  --dataset zinc \
-  --reference-split test \
-  --train-split train \
-  --metric-molecule-source raw_valid \
-  --nspdk-backend eden \
-  --nspdk-complexity 4 \
-  --nspdk-bond-label-mode hogdiff \
-  --require-fcd \
-  --fcd-device cuda:0 \
-  --output-dir "$GEN/evaluation_molecules"
-
-# ------------------------------------------------------------------------------
-# 4. Evaluate QED research metrics
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=44 PYTHONPATH=src \
-python scripts/evaluate_qed_research.py \
-  --generated-graphs "$GEN/molecular_graphs.pkl" \
-  --reference-graphs outputs/datasets/zinc/test.pkl \
-  --molecular-report "$GEN/evaluation_molecules/molecular_evaluation_metrics.json" \
-  --evaluator scripts/evaluate_generated_molecules.py \
-  --expected-num-generated 10000 \
-  --thresholds 0.5 0.7 \
-  --output-dir "$GEN/evaluation_qed"
-
-# ------------------------------------------------------------------------------
-# Recorded result — ZINC, seed 44
-# ------------------------------------------------------------------------------
-Molecular evaluation
-  validity: 0.9121
-  validity_with_correction: 1.0
-  validity_with_projected_formal_charges: 0.9688
-  validity_without_correction: 0.9121
-  fcd: 10.556372324880499
-  num_generated_graphs: 10000
-  num_valid_generated_molecules: 9121
-  num_invalid_generated_molecules: 879
-  num_valid_generated_molecules_with_projected_formal_charges: 9688
-  num_invalid_generated_molecules_after_projected_formal_charges: 312
-  num_raw_invalid_resolved_by_projected_formal_charges: 567
-  projected_formal_charge_success_rate_on_raw_invalid: 0.6450511945392492
-  num_valid_generated_molecules_with_correction: 10000
-  num_invalid_generated_molecules_after_correction: 0
-  num_molecules_corrected_to_valid: 879
-  correction_success_rate_on_raw_invalid: 1.0
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 1.0
-  unique_valid_count: 9121
-  novelty_rate: 1.0
-  novel_unique_valid_count: 9121
-  nspdk_mmd: 0.0025956529030952157
-  nspdk_mmd_valid_only: 0.0025956529030952157
-  graphlet_histogram_mmd: None
-  graphlet_selected_mass_mmd: None
-  graphlet_histogram_mmd_by_order: {}
-  graphlet_selected_mass_mmd_by_order: {}
-  nspdk_proxy_mmd_all_generated: 0.00017092095783300475
-  nspdk_proxy_mmd_metric_source: 0.00017219716654590824
+  uniqueness_rate: 0.9996844430419691
+  unique_valid_count: 9504
+  novelty_rate: 0.9779040404040404
+  novel_unique_valid_count: 9294
+  nspdk_mmd: 0.0006878455393541607
+  nspdk_mmd_valid_only: 0.0006878455393541607
+  graphlet_histogram_mmd: 0.0005378658080694709
+  graphlet_selected_mass_mmd: 0.0
+  graphlet_histogram_mmd_by_order: {'3': 0.0007127132879281017, '4': 0.0005903696360696209, '5': 0.0005249233252491159}
+  graphlet_selected_mass_mmd_by_order: {'3': 0.0, '4': 0.0, '5': 0.0}
+  nspdk_proxy_mmd_all_generated: 6.6321396580092505e-06
+  nspdk_proxy_mmd_metric_source: 7.853247048366811e-06
   fcd_num_reference_molecules: 23728
-  fcd_num_valid_generated_molecules: 9121
+  fcd_num_valid_generated_molecules: 9507
   fcd_generated_smiles_source: raw_valid
 
 
 {
   "num_generated_graphs": 10000,
-  "num_raw_valid": 9121,
-  "validity_without_correction": 0.9121,
-  "qed_mean": 0.7345445037971594,
-  "qed_std_within_run": 0.11533721079206652,
-  "qed_median": 0.7494578462564886,
-  "qed_q10": 0.5828418006208324,
-  "qed_q90": 0.8647075914004636,
-  "qed_unique_valid_mean": 0.7345445037971594,
-  "num_unique_raw_valid": 9121,
-  "qed_yield": 0.6699780419133928,
-  "num_raw_valid_single_component": 8173,
-  "valid_single_component_yield": 0.8173,
-  "qed_single_component_mean": 0.7346197114629187,
-  "qed_ge_0p5_fraction_valid": 0.9551584256112269,
-  "qed_ge_0p5_yield_all": 0.8712,
-  "qed_ge_0p7_fraction_valid": 0.6784343821949348,
-  "qed_ge_0p7_yield_all": 0.6188,
+  "num_raw_valid": 9507,
+  "validity_without_correction": 0.9507,
+  "qed_mean": 0.7448467689265938,
+  "qed_std_within_run": 0.13097376045728681,
+  "qed_median": 0.7741996240116341,
+  "qed_q10": 0.5566870925179178,
+  "qed_q90": 0.8881238275818235,
+  "qed_unique_valid_mean": 0.7448379901876016,
+  "num_unique_raw_valid": 9504,
+  "qed_yield": 0.7081258232185149,
+  "num_raw_valid_single_component": 9498,
+  "valid_single_component_yield": 0.9498,
+  "qed_single_component_mean": 0.7450426221460068,
+  "qed_ge_0p5_fraction_valid": 0.9393078784053855,
+  "qed_ge_0p5_yield_all": 0.893,
+  "qed_ge_0p7_fraction_valid": 0.6968549489849585,
+  "qed_ge_0p7_yield_all": 0.6625,
   "reference_num_graphs": 24887,
   "reference_num_raw_valid": 23728,
   "reference_qed_mean": 0.7512321466819076,
-  "qed_mean_minus_reference": -0.01668764288474822,
-  "qed_wasserstein_1": 0.023039643791735148
+  "qed_mean_minus_reference": -0.006385377755313781,
+  "qed_wasserstein_1": 0.006403667380083118
 }
-# ==============================================================================
-# ZINC — SEED 45
-# ==============================================================================
 
-# ------------------------------------------------------------------------------
-# 1. Train
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=45 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage train \
-  --dataset zinc \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_45.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset zinc \
-  --output-root outputs/baselines \
-  --seed-id 45 \
-  --run-id seed_45_gdsm_final_g345 \
-  --device cuda:0
 
-# ------------------------------------------------------------------------------
-# 2. Generate 10,000 molecules
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=45 GDSM_EIGH_BACKEND=cpu PYTHONPATH=src \
-python scripts/run_gdsm_simple_baseline.py \
-  --stage generate \
-  --dataset zinc \
-  --no-common-config \
-  --wrapper-config configs/experiments/gdsm_final_explicit/zinc_seed_45.yaml \
-  --dataset-root outputs/datasets \
-  --serialized-dataset zinc \
-  --output-root outputs/baselines \
-  --seed-id 45 \
-  --generation-seed 45 \
-  --run-id seed_45_gdsm_final_g345 \
-  --generation-id seed_45_n_10000 \
-  --num-samples 10000 \
-  --device cuda:0
+#seed45, after rewiring 
 
-# Shared generation directory used by both evaluation commands.
-GEN=outputs/baselines/gdsm_simple/zinc/seed_45_gdsm_final_g345/generations/seed_45_n_10000
 
-# ------------------------------------------------------------------------------
-# 3. Evaluate molecular generation metrics
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=45 PYTHONPATH=src \
-python scripts/evaluate_generated_molecules.py \
-  --generated-graphs "$GEN/molecular_graphs.pkl" \
-  --dataset-root outputs/datasets \
-  --dataset zinc \
-  --reference-split test \
-  --train-split train \
-  --metric-molecule-source raw_valid \
-  --nspdk-backend eden \
-  --nspdk-complexity 4 \
-  --nspdk-bond-label-mode hogdiff \
-  --require-fcd \
-  --fcd-device cuda:0 \
-  --output-dir "$GEN/evaluation_molecules"
-
-# ------------------------------------------------------------------------------
-# 4. Evaluate QED research metrics
-# ------------------------------------------------------------------------------
-PYTHONHASHSEED=45 PYTHONPATH=src \
-python scripts/evaluate_qed_research.py \
-  --generated-graphs "$GEN/molecular_graphs.pkl" \
-  --reference-graphs outputs/datasets/zinc/test.pkl \
-  --molecular-report "$GEN/evaluation_molecules/molecular_evaluation_metrics.json" \
-  --evaluator scripts/evaluate_generated_molecules.py \
-  --expected-num-generated 10000 \
-  --thresholds 0.5 0.7 \
-  --output-dir "$GEN/evaluation_qed"
-
-# ------------------------------------------------------------------------------
-# Recorded result — ZINC, seed 45
-# ------------------------------------------------------------------------------
-{
-  "num_generated_graphs": 10000,
-  "num_raw_valid": 9233,
-  "validity_without_correction": 0.9233,
-  "qed_mean": 0.7357701511954587,
-  "qed_std_within_run": 0.11433404645337965,
-  "qed_median": 0.7511030310575707,
-  "qed_q10": 0.586140547059345,
-  "qed_q90": 0.8667904756356265,
-  "qed_unique_valid_mean": 0.7357701511954587,
-  "num_unique_raw_valid": 9233,
-  "qed_yield": 0.6793365805987664,
-  "num_raw_valid_single_component": 8384,
-  "valid_single_component_yield": 0.8384,
-  "qed_single_component_mean": 0.7362043450754738,
-  "qed_ge_0p5_fraction_valid": 0.958518358063468,
-  "qed_ge_0p5_yield_all": 0.885,
-  "qed_ge_0p7_fraction_valid": 0.6760532871222787,
-  "qed_ge_0p7_yield_all": 0.6242,
-  "reference_num_graphs": 24887,
-  "reference_num_raw_valid": 23728,
-  "reference_qed_mean": 0.7512321466819076,
-  "qed_mean_minus_reference": -0.015461995486448887,
-  "qed_wasserstein_1": 0.023031008687063106
-}
+#seed45, before rewiring 
