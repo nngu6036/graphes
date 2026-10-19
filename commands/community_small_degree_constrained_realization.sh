@@ -5,7 +5,7 @@ DEVICE="${DEVICE:-cuda:0}"
 REFERENCE_SPLIT="test"
 SEED=41
 
-TAUS=(0p20 0p30 0p50)
+TAUS=(0p60 0p70 0p80 0p90 1p00  )
 
 # Use the checkpoint you already trained.
 # If you trained with the new degree-constrained experiment command:
