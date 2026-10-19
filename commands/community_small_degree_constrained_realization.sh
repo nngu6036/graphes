@@ -2,7 +2,7 @@
 
 N="${N:-1024}"
 DEVICE="${DEVICE:-cuda:0}"
-REFERENCE_SPLIT="val"
+REFERENCE_SPLIT="test"
 SEED=41
 
 TAUS=(0p20 0p30 0p50)
