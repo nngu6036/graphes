@@ -498,10 +498,20 @@ def _semantic_graph_stage(
     )
     model_id = _baseline_model_id(graph_path, generation_manifest) or "generated"
 
+    realization = (
+        isinstance(sampling, dict)
+        and isinstance(sampling.get("degree_constrained_realization"), dict)
+        and bool(sampling["degree_constrained_realization"].get("enabled", False))
+    )
+
+    if name == "pre_realization_graphs.pkl":
+        return f"{model_id}_threshold_control"
     if name == "pre_refinement_graphs.pkl":
         return f"{model_id}_spectral_pre_rewire"
     if name == "base_graphs.pkl" and stochastic:
         return f"{model_id}_diversified"
+    if name == "base_graphs.pkl" and realization:
+        return f"{model_id}_degree_constrained_realization"
     return None
 
 
@@ -551,9 +561,11 @@ def resolve_base_graph_path(
     """Resolve a semantically meaningful source stage for paired evaluation.
 
     For stochastic structural diversification, ``pre_refinement_graphs.pkl``
-    is the actual spectral source and ``base_graphs.pkl`` is the diversified
-    endpoint.  Prefer the former automatically so report labels cannot invert
-    the two populations merely because the final file is named ``base_graphs``.
+    is the spectral source.  For degree-constrained spectral realization,
+    ``pre_realization_graphs.pkl`` is the deterministic threshold control.
+    Prefer these paired sources automatically so report labels cannot invert
+    the source and final populations merely because the endpoint is named
+    ``base_graphs.pkl``.
     """
 
     if base_graphs is not None and coarse_graphs is not None:
@@ -573,6 +585,11 @@ def resolve_base_graph_path(
     if pre_refinement.is_file():
         candidates.append(
             (pre_refinement, _semantic_graph_stage(pre_refinement, generation_manifest))
+        )
+    pre_realization = generated_dir / "pre_realization_graphs.pkl"
+    if pre_realization.is_file():
+        candidates.append(
+            (pre_realization, _semantic_graph_stage(pre_realization, generation_manifest))
         )
     candidates.extend((
         (generated_dir / "defog_base_graphs.pkl", "defog_base"),

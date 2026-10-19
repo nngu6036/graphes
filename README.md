@@ -185,3 +185,38 @@ The script evaluates both stages over `sigma` in
 report.  For QM9/ZINC, use `commands/eigenbasis_perturbation_molecular.sh`;
 molecular rewiring is explicitly disabled so the experiment isolates basis
 perturbation.
+
+## Stochastic degree-constrained spectral realization
+
+The generic Laplacian model now supports a generation-time alternative to hard
+thresholding under `sample.degree_constrained_realization`. The decoder
+projects the generated Laplacian diagonal to an indexed graphical degree
+sequence, then solves a Gumbel-perturbed maximum-weight binary realization
+problem under exact degree constraints. Optional connectivity is enforced by
+iterative cut generation. This stage is part of topology decoding and does not
+use post-generation rewiring.
+
+The paired outputs are:
+
+```text
+pre_realization_graphs.pkl                 deterministic threshold control
+base_graphs.pkl                            stochastic exact-degree realization
+projected_realization_degree_sequences.pkl indexed degree targets
+degree_constrained_realization_diagnostics.json
+```
+
+Community-small configs and the end-to-end command are:
+
+```text
+configs/experiments/grapher_degree_constrained_realization/
+commands/community_small_degree_constrained_realization.sh
+```
+
+Run validation first:
+
+```bash
+REFERENCE_SPLIT=val commands/community_small_degree_constrained_realization.sh
+```
+
+See `STOCHASTIC_DEGREE_CONSTRAINED_SPECTRAL_REALIZATION.md` for the objective,
+constraints, limitations, and diagnostics.

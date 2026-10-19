@@ -916,8 +916,66 @@ Molecular evaluation
 
 
 #seed42, before rewiring 
+Molecular evaluation
+  validity: 0.9261
+  validity_with_correction: 0.9928
+  validity_with_projected_formal_charges: 0.9852
+  validity_without_correction: 0.9261
+  fcd: 0.39766944774277135
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9261
+  num_invalid_generated_molecules: 739
+  num_valid_generated_molecules_with_projected_formal_charges: 9852
+  num_invalid_generated_molecules_after_projected_formal_charges: 148
+  num_raw_invalid_resolved_by_projected_formal_charges: 591
+  projected_formal_charge_success_rate_on_raw_invalid: 0.7997293640054127
+  num_valid_generated_molecules_with_correction: 9928
+  num_invalid_generated_molecules_after_correction: 72
+  num_molecules_corrected_to_valid: 667
+  correction_success_rate_on_raw_invalid: 0.9025710419485792
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9991361624014685
+  unique_valid_count: 9253
+  novelty_rate: 0.9719010050794337
+  novel_unique_valid_count: 8993
+  nspdk_mmd: 0.0003385020467024741
+  nspdk_mmd_valid_only: 0.0003385020467024741
+  graphlet_histogram_mmd: 0.0004968027044454093
+  graphlet_selected_mass_mmd: 0.0
+  graphlet_histogram_mmd_by_order: {'3': 0.0005321870443353305, '4': 0.0005097367179183188, '5': 0.000493650519167943}
+  graphlet_selected_mass_mmd_by_order: {'3': 0.0, '4': 0.0, '5': 0.0}
+  nspdk_proxy_mmd_all_generated: 4.314898531062484e-06
+  nspdk_proxy_mmd_metric_source: 3.833976107649089e-06
+  fcd_num_reference_molecules: 23728
+  fcd_num_valid_generated_molecules: 9261
+  fcd_generated_smiles_source: raw_valid
 
-
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9261,
+  "validity_without_correction": 0.9261,
+  "qed_mean": 0.748890259400873,
+  "qed_std_within_run": 0.1301063519355242,
+  "qed_median": 0.7777459077056909,
+  "qed_q10": 0.5605653501874228,
+  "qed_q90": 0.8923115293362363,
+  "qed_unique_valid_mean": 0.7488990030046936,
+  "num_unique_raw_valid": 9253,
+  "qed_yield": 0.6935472692311466,
+  "num_raw_valid_single_component": 9241,
+  "valid_single_component_yield": 0.9241,
+  "qed_single_component_mean": 0.7496303188198625,
+  "qed_ge_0p5_fraction_valid": 0.9437425763956376,
+  "qed_ge_0p5_yield_all": 0.874,
+  "qed_ge_0p7_fraction_valid": 0.7059712773998488,
+  "qed_ge_0p7_yield_all": 0.6538,
+  "reference_num_graphs": 24887,
+  "reference_num_raw_valid": 23728,
+  "reference_qed_mean": 0.7512321466819076,
+  "qed_mean_minus_reference": -0.0023418872810346825,
+  "qed_wasserstein_1": 0.0028528494779224756
+}
 
 #seed43, after rewiring 
 

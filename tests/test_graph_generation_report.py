@@ -303,3 +303,40 @@ def test_graded_distance_is_explicitly_a_pseudodistance_for_wl_collisions():
     cycle = nx.cycle_graph(6)
     two_triangles = nx.disjoint_union(nx.cycle_graph(3), nx.cycle_graph(3))
     assert report.graded_topology_distance(cycle, two_triangles, wl_iterations=3) > 0.0
+
+
+def test_degree_constrained_realization_artifacts_use_semantic_stage_labels(tmp_path):
+    import pickle
+
+    generated_dir = tmp_path / "generations" / "seed_42_n_4"
+    generated_dir.mkdir(parents=True)
+    final_path = generated_dir / "base_graphs.pkl"
+    control_path = generated_dir / "pre_realization_graphs.pkl"
+    graphs = [nx.path_graph(4)]
+    for path in (final_path, control_path):
+        with path.open("wb") as handle:
+            pickle.dump(graphs, handle)
+
+    manifest = {
+        "model_id": "grapher",
+        "sampling": {
+            "degree_constrained_realization": {
+                "enabled": True,
+                "method": "gumbel_milp",
+            }
+        },
+    }
+    assert report.resolve_generated_stage(
+        {}, final_path, generation_manifest=manifest
+    ) == "grapher_degree_constrained_realization"
+    assert report.resolve_generated_stage(
+        {}, control_path, generation_manifest=manifest
+    ) == "grapher_threshold_control"
+
+    base_path, base_stage = report.resolve_base_graph_path(
+        generated_dir,
+        generated_path=final_path,
+        generation_manifest=manifest,
+    )
+    assert base_path == control_path
+    assert base_stage == "grapher_threshold_control"

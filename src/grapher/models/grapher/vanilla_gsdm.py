@@ -78,7 +78,7 @@ from grapher.models.dhvae_hh.degree_vae import (
 from grapher.models.artifacts import ArtifactLayout
 from grapher.models.base import GenerateRequest, GenerationArtifacts, TrainRequest, TrainingArtifacts
 from grapher.models.errors import ArtifactCollisionError
-from grapher.models.grapher import eigenbasis_perturbation
+from grapher.models.grapher import degree_constrained_realization, eigenbasis_perturbation
 from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 
 
@@ -275,6 +275,7 @@ def default_vanilla_options() -> dict[str, Any]:
             "threshold": 0.5,
             "use_ema": False,
             "eigenbasis_perturbation": eigenbasis_perturbation.default_config(),
+            "degree_constrained_realization": degree_constrained_realization.default_config(),
         },
         "graphlet_refinement": {"enabled": False},
         "graphlet_summary": {"enabled": False},  # legacy graphlet-only alias
@@ -643,6 +644,12 @@ def validate_options(options: Mapping[str, Any]) -> None:
     if eigenbasis_perturbation.enabled(basis_perturbation_cfg) and operator != "combinatorial_laplacian":
         raise ValueError(
             "sample.eigenbasis_perturbation is supported only for combinatorial-Laplacian variants"
+        )
+    realization_cfg = degree_constrained_realization.resolve_config(sample)
+    if degree_constrained_realization.enabled(realization_cfg) and operator != "combinatorial_laplacian":
+        raise ValueError(
+            "sample.degree_constrained_realization is supported only for "
+            "combinatorial-Laplacian variants"
         )
 
 
@@ -3566,6 +3573,16 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     basis_perturbation_rng = np.random.default_rng(
         int(request.generation_seed) + int(basis_perturbation_cfg.get("seed_offset", 730001))
     )
+    realization_cfg = degree_constrained_realization.resolve_config(sample_cfg)
+    realization_enabled = degree_constrained_realization.enabled(realization_cfg)
+    if realization_enabled and spectral_operator != "combinatorial_laplacian":
+        raise ValueError(
+            "Degree-constrained spectral realization is implemented only for "
+            "combinatorial-Laplacian generation"
+        )
+    realization_rng = np.random.default_rng(
+        int(request.generation_seed) + int(realization_cfg.get("seed_offset", 810001))
+    )
     degree_payload = state.get("degree_prior", {})
     degree_prior_enabled = bool(
         isinstance(degree_payload, Mapping) and degree_payload.get("enabled", False)
@@ -3580,6 +3597,9 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     joint_graphlet_predictions: list[dict[str, Any]] = []
     joint_structure_predictions: list[dict[str, Any]] = []
     basis_perturbation_rows: list[dict[str, Any]] = []
+    pre_realization_graphs: list[nx.Graph] = []
+    projected_realization_degrees: list[list[int]] = []
+    realization_rows: list[dict[str, Any]] = []
     start = time.monotonic()
     with torch.no_grad():
         while len(graphs) < request.num_graphs:
@@ -3676,9 +3696,11 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 np.fill_diagonal(matrix, 0.0)
                 discrete = matrix > threshold
                 np.fill_diagonal(discrete, False)
-                graph = nx.from_numpy_array(discrete.astype(np.int8), create_using=nx.Graph)
-                graphs.append(graph)
-                continuous.append(matrix)
+                threshold_graph = nx.from_numpy_array(
+                    discrete.astype(np.int8), create_using=nx.Graph
+                )
+
+                lap = None
                 if spectral_operator == "combinatorial_laplacian":
                     lap = (
                         operator_batch[row, :n, :n]
@@ -3686,6 +3708,34 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     )
                     lap = 0.5 * (lap + lap.T)
                     continuous_laplacians.append(lap)
+
+                if realization_enabled:
+                    if lap is None:
+                        raise AssertionError(
+                            "degree-constrained realization requires a Laplacian endpoint"
+                        )
+                    graph, threshold_control, projected_degree, realization_row = (
+                        degree_constrained_realization.realize_graph(
+                            lap,
+                            matrix,
+                            threshold=threshold,
+                            rng=realization_rng,
+                            config=realization_cfg,
+                        )
+                    )
+                    if bool(realization_cfg.get("save_threshold_control", True)):
+                        pre_realization_graphs.append(threshold_control)
+                    projected_realization_degrees.append(projected_degree)
+                    realization_row.update({
+                        "graph_index": len(graphs),
+                        "basis_index": int(idx),
+                    })
+                    realization_rows.append(realization_row)
+                else:
+                    graph = threshold_graph
+
+                graphs.append(graph)
+                continuous.append(matrix)
                 spectra.append(lam[row, :].detach().cpu().numpy().astype(np.float64))
                 basis_indices.append(int(idx))
                 if basis_perturbation_enabled:
@@ -3857,6 +3907,41 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             graphlet_predictions_path = staging / "graphlet_prediction_traces.pkl"
             with graphlet_predictions_path.open("wb") as handle:
                 pickle.dump(graphlet_prediction_traces, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+        pre_realization_path = None
+        projected_realization_degree_path = None
+        realization_diagnostics_path = None
+        realization_aggregate = degree_constrained_realization.aggregate_diagnostics(
+            realization_cfg, realization_rows
+        )
+        if realization_enabled:
+            if pre_realization_graphs:
+                pre_realization_path = staging / "pre_realization_graphs.pkl"
+                with pre_realization_path.open("wb") as handle:
+                    pickle.dump(
+                        pre_realization_graphs, handle, protocol=pickle.HIGHEST_PROTOCOL
+                    )
+            projected_realization_degree_path = (
+                staging / "projected_realization_degree_sequences.pkl"
+            )
+            with projected_realization_degree_path.open("wb") as handle:
+                pickle.dump(
+                    projected_realization_degrees,
+                    handle,
+                    protocol=pickle.HIGHEST_PROTOCOL,
+                )
+            realization_diagnostics_path = (
+                staging / "degree_constrained_realization_diagnostics.json"
+            )
+            _write_json(
+                realization_diagnostics_path,
+                {
+                    "format": degree_constrained_realization.FORMAT,
+                    "aggregate": realization_aggregate,
+                    "per_graph": realization_rows,
+                },
+            )
+
         soft_path = staging / "continuous_adjacencies.pkl"
         with soft_path.open("wb") as handle:
             pickle.dump(continuous, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -4051,7 +4136,43 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             "num_requested": request.num_graphs,
             "num_generated": len(graphs),
             "duration_seconds": time.monotonic() - start,
-            "base_graphs": {"path": "base_graphs.pkl", "sha256": graph_hash, "role": "final_graphs_after_optional_graphlet_refinement"},
+            "base_graphs": {
+                "path": "base_graphs.pkl",
+                "sha256": graph_hash,
+                "role": (
+                    "final_graphs_after_optional_graphlet_refinement"
+                    if fixed_structure_refinement_enabled or variant in GRAPHLET_REFINEMENT_VARIANTS
+                    else (
+                        "final_degree_constrained_spectral_realizations"
+                        if realization_enabled
+                        else "final_threshold_decoded_graphs"
+                    )
+                ),
+            },
+            "pre_realization_graphs": (
+                {
+                    "path": "pre_realization_graphs.pkl",
+                    "sha256": _sha256(pre_realization_path),
+                    "role": "deterministic_threshold_control_before_degree_constrained_realization",
+                }
+                if pre_realization_path is not None else None
+            ),
+            "projected_realization_degree_sequences": (
+                {
+                    "path": "projected_realization_degree_sequences.pkl",
+                    "sha256": _sha256(projected_realization_degree_path),
+                    "count": len(projected_realization_degrees),
+                    "role": "indexed_graphical_degree_targets_used_by_the_realization_decoder",
+                }
+                if projected_realization_degree_path is not None else None
+            ),
+            "degree_constrained_realization_diagnostics": (
+                {
+                    "path": "degree_constrained_realization_diagnostics.json",
+                    "sha256": _sha256(realization_diagnostics_path),
+                }
+                if realization_diagnostics_path is not None else None
+            ),
             "vanilla_graphs": (
                 {"path": "vanilla_graphs.pkl", "sha256": _sha256(vanilla_graph_path), "role": "unmodified_thresholded_vanilla_gsdm_sources"}
                 if vanilla_graph_path is not None else None
@@ -4084,7 +4205,15 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 {"path": "rewiring_diagnostics.json", "sha256": _sha256(staging / "rewiring_diagnostics.json")}
                 if graphlet_refinement_diagnostics else None
             ),
-            "continuous_adjacencies": {"path": "continuous_adjacencies.pkl", "sha256": _sha256(soft_path), "role": "pre_refinement_continuous_adjacency_scores"},
+            "continuous_adjacencies": {
+                "path": "continuous_adjacencies.pkl",
+                "sha256": _sha256(soft_path),
+                "role": (
+                    "spectral_edge_scores_used_by_degree_constrained_realization"
+                    if realization_enabled
+                    else "pre_refinement_continuous_adjacency_scores"
+                ),
+            },
             "continuous_laplacians": (
                 {"path": "continuous_laplacians.pkl", "sha256": _sha256(laplacian_path)}
                 if laplacian_path is not None else None
@@ -4151,11 +4280,24 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 ),
                 "eigenbasis_perturbation": basis_perturbation_aggregate,
                 "reverse_process": "coupled_VP_spectral_predictor_corrector",
+                "topology_decoder": (
+                    "stochastic_degree_constrained_spectral_realization"
+                    if realization_enabled
+                    else "fixed_threshold"
+                ),
+                "degree_constrained_realization": realization_aggregate,
                 "threshold": threshold,
                 "threshold_semantics": (
-                    "edge iff -L_ij > threshold for i!=j"
-                    if spectral_operator == "combinatorial_laplacian"
-                    else "edge iff reconstructed_A_ij > threshold"
+                    (
+                        "paired deterministic control and configured failure fallback; "
+                        "final edges are selected by the exact-degree stochastic MILP decoder"
+                    )
+                    if realization_enabled
+                    else (
+                        "edge iff -L_ij > threshold for i!=j"
+                        if spectral_operator == "combinatorial_laplacian"
+                        else "edge iff reconstructed_A_ij > threshold"
+                    )
                 ),
                 "auxiliary_degree_prior": "DH-VAE" if degree_prior_enabled else "none",
                 "degree_sequences_sampled": len(degree_sequences),
@@ -4180,9 +4322,13 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     )
                 ),
                 "degree_constraint": (
-                    "indexed_degree_vector_frozen_from_final_pre_refinement_graph"
-                    if fixed_structure_refinement_enabled or variant in GRAPHLET_REFINEMENT_VARIANTS
-                    else False
+                    "indexed_graphical_sequence_projected_from_generated_laplacian_diagonal"
+                    if realization_enabled
+                    else (
+                        "indexed_degree_vector_frozen_from_final_pre_refinement_graph"
+                        if fixed_structure_refinement_enabled or variant in GRAPHLET_REFINEMENT_VARIANTS
+                        else False
+                    )
                 ),
                 "structural_guidance": (
                     "fixed_joint_degree_graphlet_orbit_summary_with_random_length_stochastic_rewiring"
@@ -4226,6 +4372,17 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "eigenbasis_perturbation_mean_active_frobenius_change": (
                     basis_perturbation_aggregate.get("mean_active_frobenius_basis_change")
                     if basis_perturbation_enabled else None
+                ),
+                "degree_constrained_realization_enabled": realization_enabled,
+                "degree_constrained_realization_success_rate": (
+                    realization_aggregate.get("success_rate") if realization_enabled else None
+                ),
+                "degree_constrained_realization_degree_exact_rate": (
+                    realization_aggregate.get("degree_exact_rate") if realization_enabled else None
+                ),
+                "degree_constrained_realization_changed_from_threshold_rate": (
+                    realization_aggregate.get("changed_from_threshold_rate")
+                    if realization_enabled else None
                 ),
                 **laplacian_diagnostics,
                 **graphlet_aggregate,
