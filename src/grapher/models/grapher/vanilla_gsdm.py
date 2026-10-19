@@ -3575,6 +3575,17 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     )
     realization_cfg = degree_constrained_realization.resolve_config(sample_cfg)
     realization_enabled = degree_constrained_realization.enabled(realization_cfg)
+    realization_candidate_selection_enabled = bool(
+        realization_enabled
+        and (realization_cfg.get("candidate_selection", {}) or {}).get("enabled", False)
+    )
+    if realization_candidate_selection_enabled and not bool(
+        structure_summary_payload.get("enabled", False)
+    ):
+        raise RuntimeError(
+            "degree-constrained summary candidate selection requires a checkpoint "
+            "trained with structure_summary.enabled=true"
+        )
     if realization_enabled and spectral_operator != "combinatorial_laplacian":
         raise ValueError(
             "Degree-constrained spectral realization is implemented only for "
@@ -3709,6 +3720,13 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     lap = 0.5 * (lap + lap.T)
                     continuous_laplacians.append(lap)
 
+                summary_target_row = None
+                if batch_structure_summary is not None:
+                    summary_target_row = {
+                        key: value[row].detach().cpu().numpy().astype(np.float64)
+                        for key, value in batch_structure_summary.items()
+                    }
+
                 if realization_enabled:
                     if lap is None:
                         raise AssertionError(
@@ -3721,6 +3739,8 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                             threshold=threshold,
                             rng=realization_rng,
                             config=realization_cfg,
+                            summary_target=summary_target_row,
+                            summary_meta=structure_summary_payload,
                         )
                     )
                     if bool(realization_cfg.get("save_threshold_control", True)):
@@ -3746,10 +3766,11 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                         "stage": str(basis_perturbation_cfg["stage"]),
                     })
                     basis_perturbation_rows.append(basis_row)
-                if batch_structure_summary is not None:
-                    structure_row: dict[str, Any] = {"graph_index": len(graphs) - 1}
-                    for key, value in batch_structure_summary.items():
-                        structure_row[key] = value[row].detach().cpu().numpy().astype(np.float64)
+                if summary_target_row is not None:
+                    structure_row: dict[str, Any] = {
+                        "graph_index": len(graphs) - 1,
+                        **summary_target_row,
+                    }
                     joint_structure_predictions.append(structure_row)
                     joint_graphlet_predictions.append(
                         {
@@ -4281,16 +4302,25 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "eigenbasis_perturbation": basis_perturbation_aggregate,
                 "reverse_process": "coupled_VP_spectral_predictor_corrector",
                 "topology_decoder": (
-                    "stochastic_degree_constrained_spectral_realization"
-                    if realization_enabled
-                    else "fixed_threshold"
+                    "stochastic_degree_constrained_summary_selected_realization"
+                    if realization_candidate_selection_enabled
+                    else (
+                        "stochastic_degree_constrained_spectral_realization"
+                        if realization_enabled
+                        else "fixed_threshold"
+                    )
                 ),
                 "degree_constrained_realization": realization_aggregate,
                 "threshold": threshold,
                 "threshold_semantics": (
                     (
                         "paired deterministic control and configured failure fallback; "
-                        "final edges are selected by the exact-degree stochastic MILP decoder"
+                        + (
+                            "multiple exact-degree stochastic MILP realizations are generated and "
+                            "selected against the frozen predicted structural summaries"
+                            if realization_candidate_selection_enabled
+                            else "final edges are selected by the exact-degree stochastic MILP decoder"
+                        )
                     )
                     if realization_enabled
                     else (
@@ -4331,6 +4361,9 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     )
                 ),
                 "structural_guidance": (
+                    "joint_auxiliary_summary_selection_over_stochastic_exact_degree_realizations"
+                    if realization_candidate_selection_enabled
+                    else (
                     "fixed_joint_degree_graphlet_orbit_summary_with_random_length_stochastic_rewiring"
                     if stochastic_diversification_enabled
                     else (
@@ -4343,6 +4376,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                             "learned_connected_induced_graphlet_summary_k3_k4_k5"
                             if variant in GRAPHLET_REFINEMENT_VARIANTS else False
                         )
+                    )
                     )
                     )
                 ),
@@ -4383,6 +4417,15 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 "degree_constrained_realization_changed_from_threshold_rate": (
                     realization_aggregate.get("changed_from_threshold_rate")
                     if realization_enabled else None
+                ),
+                "degree_constrained_summary_candidate_selection_enabled": (
+                    realization_candidate_selection_enabled
+                ),
+                "degree_constrained_candidate_selection_mean_selected_summary_energy": (
+                    realization_aggregate.get(
+                        "candidate_selection_mean_selected_summary_energy"
+                    )
+                    if realization_candidate_selection_enabled else None
                 ),
                 **laplacian_diagnostics,
                 **graphlet_aggregate,

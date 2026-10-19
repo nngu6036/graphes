@@ -29,6 +29,12 @@ from typing import Any
 import networkx as nx
 import numpy as np
 
+from grapher.rewiring_mlp.generic.basis import TopologyGraphletBasis
+from grapher.rewiring_mlp.generic.graphlets import (
+    extract_topology_graphlet_counts,
+    topology_structural_discrepancy_from_counts,
+)
+
 try:  # Imported lazily by the generation path, but explicit here for tests.
     from scipy.optimize import Bounds, LinearConstraint, milp
     from scipy.sparse import coo_matrix, csr_matrix, vstack
@@ -72,6 +78,16 @@ def default_config() -> dict[str, Any]:
         "seed_offset": 810001,
         "failure_policy": "error",
         "save_threshold_control": True,
+        "candidate_selection": {
+            "enabled": False,
+            "num_candidates": 8,
+            "selection": "best",
+            "selection_temperature": 0.10,
+            "graphlet_weight": 1.0,
+            "graphlet_mass_weight": 0.25,
+            "clustering_weight": 0.0,
+            "orbit_weight": 0.25,
+        },
     }
 
 
@@ -160,6 +176,33 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "threshold",
     }:
         raise ValueError("failure_policy must be error or threshold")
+
+    selection = config.get("candidate_selection", {}) or {}
+    if not isinstance(selection, Mapping):
+        raise TypeError("degree_constrained_realization.candidate_selection must be a mapping")
+    if bool(selection.get("enabled", False)):
+        num_candidates = int(selection.get("num_candidates", 8))
+        if num_candidates < 2:
+            raise ValueError("candidate_selection.num_candidates must be >= 2 when enabled")
+        mode = str(selection.get("selection", "best")).lower()
+        if mode not in {"best", "softmax"}:
+            raise ValueError("candidate_selection.selection must be best or softmax")
+        selection_temperature = float(selection.get("selection_temperature", 0.10))
+        if not math.isfinite(selection_temperature) or selection_temperature <= 0.0:
+            raise ValueError("candidate_selection.selection_temperature must be positive and finite")
+        weights = []
+        for name, default in (
+            ("graphlet_weight", 1.0),
+            ("graphlet_mass_weight", 0.25),
+            ("clustering_weight", 0.0),
+            ("orbit_weight", 0.25),
+        ):
+            value = float(selection.get(name, default))
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"candidate_selection.{name} must be finite and non-negative")
+            weights.append(value)
+        if not any(value > 0.0 for value in weights):
+            raise ValueError("candidate_selection requires at least one positive structural weight")
 
 
 def _edge_index(n: int) -> tuple[np.ndarray, np.ndarray]:
@@ -598,6 +641,176 @@ def _solve_exact_degree_realization(
     }
 
 
+def _candidate_selection_enabled(config: Mapping[str, Any]) -> bool:
+    raw = config.get("candidate_selection", {}) or {}
+    return isinstance(raw, Mapping) and bool(raw.get("enabled", False))
+
+
+def _candidate_summary_score(
+    graph: nx.Graph,
+    *,
+    summary_target: Mapping[str, Any],
+    summary_meta: Mapping[str, Any],
+    selection_config: Mapping[str, Any],
+) -> dict[str, float]:
+    if not bool(summary_meta.get("enabled", False)):
+        raise RuntimeError(
+            "summary candidate selection requires a checkpoint with structure_summary.enabled=true"
+        )
+    basis_payload = summary_meta.get("graphlet_basis")
+    if not isinstance(basis_payload, Mapping):
+        raise RuntimeError("structure-summary checkpoint is missing graphlet_basis metadata")
+    basis = TopologyGraphletBasis.from_dict(dict(basis_payload))
+    counts = extract_topology_graphlet_counts(graph, graphlet_basis=basis)
+
+    graphlet_target = np.asarray(
+        summary_target.get("graphlet_histogram", []), dtype=np.float64
+    ).reshape(-1)
+    mass_target = np.asarray(
+        summary_target.get("graphlet_mass", []), dtype=np.float64
+    ).reshape(-1)
+    clustering_target = np.asarray(
+        summary_target.get("clustering_histogram", []), dtype=np.float64
+    ).reshape(-1)
+    orbit_target = np.asarray(
+        summary_target.get("orbit_mean_counts", []), dtype=np.float64
+    ).reshape(-1)
+
+    if graphlet_target.size != basis.width:
+        raise ValueError(
+            f"summary candidate selection expected graphlet width {basis.width}, "
+            f"got {graphlet_target.size}"
+        )
+    if mass_target.size != len(basis.sizes):
+        raise ValueError(
+            f"summary candidate selection expected graphlet mass width {len(basis.sizes)}, "
+            f"got {mass_target.size}"
+        )
+
+    clustering_weight = float(selection_config.get("clustering_weight", 0.0))
+    orbit_weight = float(selection_config.get("orbit_weight", 0.25))
+    if clustering_weight > 0.0 and clustering_target.size == 0:
+        raise ValueError(
+            "candidate_selection.clustering_weight is positive but the checkpoint has no "
+            "clustering summary prediction"
+        )
+    if orbit_weight > 0.0 and orbit_target.size == 0:
+        raise ValueError(
+            "candidate_selection.orbit_weight is positive but the checkpoint has no orbit "
+            "summary prediction"
+        )
+
+    return topology_structural_discrepancy_from_counts(
+        graph,
+        counts,
+        graphlet_target=graphlet_target,
+        graphlet_mass_target=mass_target,
+        clustering_target=clustering_target,
+        orbit_target=orbit_target,
+        graphlet_basis=basis,
+        graphlet_weight=float(selection_config.get("graphlet_weight", 1.0)),
+        graphlet_mass_weight=float(selection_config.get("graphlet_mass_weight", 0.25)),
+        clustering_weight=clustering_weight,
+        orbit_weight=orbit_weight,
+    )
+
+
+def _candidate_edge_signature(graph: nx.Graph) -> tuple[tuple[int, int], ...]:
+    return tuple(sorted((min(int(u), int(v)), max(int(u), int(v))) for u, v in graph.edges()))
+
+
+def _candidate_isomorphism_unique_count(graphs: list[nx.Graph]) -> int:
+    representatives: list[nx.Graph] = []
+    for graph in graphs:
+        if not any(nx.is_isomorphic(graph, representative) for representative in representatives):
+            representatives.append(graph)
+    return len(representatives)
+
+
+def _generate_and_select_candidates(
+    degree: np.ndarray,
+    normalized_scores: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    config: Mapping[str, Any],
+    summary_target: Mapping[str, Any],
+    summary_meta: Mapping[str, Any],
+) -> tuple[nx.Graph, dict[str, Any], dict[str, Any]]:
+    selection_config = dict(config.get("candidate_selection", {}) or {})
+    num_candidates = int(selection_config.get("num_candidates", 8))
+    candidates: list[nx.Graph] = []
+    solver_rows: list[dict[str, Any]] = []
+    score_rows: list[dict[str, float]] = []
+
+    for candidate_index in range(num_candidates):
+        graph, solver = _solve_exact_degree_realization(
+            degree, normalized_scores, rng=rng, config=config
+        )
+        score = _candidate_summary_score(
+            graph,
+            summary_target=summary_target,
+            summary_meta=summary_meta,
+            selection_config=selection_config,
+        )
+        candidates.append(graph)
+        solver_rows.append(solver)
+        score_rows.append(score)
+
+    energies = np.asarray([row["total"] for row in score_rows], dtype=np.float64)
+    mode = str(selection_config.get("selection", "best")).lower()
+    probabilities: np.ndarray | None = None
+    if mode == "softmax":
+        temperature = float(selection_config.get("selection_temperature", 0.10))
+        logits = -(energies - float(energies.min())) / temperature
+        logits -= float(logits.max())
+        probabilities = np.exp(logits)
+        probabilities /= float(probabilities.sum())
+        selected = int(rng.choice(num_candidates, p=probabilities))
+    else:
+        selected = int(np.argmin(energies))
+
+    selected_solver = dict(solver_rows[selected])
+    selected_solver["candidate_selection_applied"] = True
+    selected_solver["selected_candidate_index"] = selected
+
+    selection_diagnostics: dict[str, Any] = {
+        "enabled": True,
+        "num_candidates": num_candidates,
+        "selection": mode,
+        "selection_temperature": float(selection_config.get("selection_temperature", 0.10)),
+        "selected_candidate_index": selected,
+        "selected_is_best": bool(selected == int(np.argmin(energies))),
+        "selected_summary_energy": float(energies[selected]),
+        "best_summary_energy": float(energies.min()),
+        "mean_summary_energy": float(energies.mean()),
+        "max_summary_energy": float(energies.max()),
+        "candidate_edge_unique_count": len({_candidate_edge_signature(graph) for graph in candidates}),
+        "candidate_isomorphism_unique_count": _candidate_isomorphism_unique_count(candidates),
+        "selection_probabilities": probabilities.tolist() if probabilities is not None else None,
+        "weights": {
+            "graphlet": float(selection_config.get("graphlet_weight", 1.0)),
+            "graphlet_mass": float(selection_config.get("graphlet_mass_weight", 0.25)),
+            "clustering": float(selection_config.get("clustering_weight", 0.0)),
+            "orbit": float(selection_config.get("orbit_weight", 0.25)),
+        },
+        "candidates": [
+            {
+                "candidate_index": index,
+                "summary": {key: float(value) for key, value in score.items()},
+                "solver_objective": _finite_float_or_none(solver.get("objective")),
+                "selected_spectral_score_mean": _finite_float_or_none(
+                    solver.get("selected_spectral_score_mean")
+                ),
+                "selected_gumbel_mean": _finite_float_or_none(
+                    solver.get("selected_gumbel_mean")
+                ),
+            }
+            for index, (score, solver) in enumerate(zip(score_rows, solver_rows))
+        ],
+    }
+    return candidates[selected], selected_solver, selection_diagnostics
+
+
 def realize_graph(
     laplacian: np.ndarray,
     adjacency_scores: np.ndarray,
@@ -605,6 +818,8 @@ def realize_graph(
     threshold: float,
     rng: np.random.Generator,
     config: Mapping[str, Any],
+    summary_target: Mapping[str, Any] | None = None,
+    summary_meta: Mapping[str, Any] | None = None,
 ) -> tuple[nx.Graph, nx.Graph, list[int], dict[str, Any]]:
     """Return final graph, threshold control, target degrees, and diagnostics."""
     validate_config(config)
@@ -654,12 +869,27 @@ def realize_graph(
             normalized_scores,
             config=config,
         )
-        graph, solver = _solve_exact_degree_realization(
-            projected_degree,
-            normalized_scores,
-            rng=rng,
-            config=config,
-        )
+        candidate_selection = {"enabled": False}
+        if _candidate_selection_enabled(config):
+            if summary_target is None or summary_meta is None:
+                raise RuntimeError(
+                    "degree-constrained candidate selection requires summary_target and summary_meta"
+                )
+            graph, solver, candidate_selection = _generate_and_select_candidates(
+                projected_degree,
+                normalized_scores,
+                rng=rng,
+                config=config,
+                summary_target=summary_target,
+                summary_meta=summary_meta,
+            )
+        else:
+            graph, solver = _solve_exact_degree_realization(
+                projected_degree,
+                normalized_scores,
+                rng=rng,
+                config=config,
+            )
     except Exception as exc:
         if str(config.get("failure_policy", "error")).lower() != "threshold":
             raise
@@ -676,6 +906,11 @@ def realize_graph(
             "objective": None,
             "mip_gap": None,
             "mip_node_count": None,
+        }
+        candidate_selection = {
+            "enabled": bool(_candidate_selection_enabled(config)),
+            "failed": True,
+            "failure_reason": failure_reason,
         }
         solver = {
             "solver_status": None,
@@ -710,6 +945,7 @@ def realize_graph(
         "projection_method": projection.get("method"),
         "projection": projection,
         "realization_solver": solver,
+        "candidate_selection": candidate_selection,
         "connected": bool(n <= 1 or nx.is_connected(graph)),
         "require_connected": bool(config.get("require_connected", True)),
         "fallback_used": fallback,
@@ -762,6 +998,17 @@ def aggregate_diagnostics(
         int((row.get("realization_solver", {}) or {}).get("connectivity_cut_rounds", 0))
         for row in rows
     ]
+    selection_cfg = dict(config.get("candidate_selection", {}) or {})
+    selection_rows = [
+        dict(row.get("candidate_selection", {}) or {})
+        for row in rows
+        if bool((row.get("candidate_selection", {}) or {}).get("enabled", False))
+    ]
+
+    def selection_mean(key: str) -> float | None:
+        values = [float(row[key]) for row in selection_rows if row.get(key) is not None]
+        return float(np.mean(values)) if values else None
+
     return {
         "enabled": True,
         "format": FORMAT,
@@ -772,6 +1019,18 @@ def aggregate_diagnostics(
         "score_transform": str(config.get("score_transform", "zscore")),
         "spectral_weight": float(config.get("spectral_weight", 1.0)),
         "gumbel_temperature": float(config.get("gumbel_temperature", 0.15)),
+        "candidate_selection_enabled": bool(selection_cfg.get("enabled", False)),
+        "candidate_selection_num_candidates": int(selection_cfg.get("num_candidates", 8)),
+        "candidate_selection_mode": str(selection_cfg.get("selection", "best")),
+        "candidate_selection_mean_selected_summary_energy": selection_mean("selected_summary_energy"),
+        "candidate_selection_mean_best_summary_energy": selection_mean("best_summary_energy"),
+        "candidate_selection_mean_candidate_summary_energy": selection_mean("mean_summary_energy"),
+        "candidate_selection_mean_edge_unique_count": selection_mean("candidate_edge_unique_count"),
+        "candidate_selection_mean_isomorphism_unique_count": selection_mean("candidate_isomorphism_unique_count"),
+        "candidate_selection_selected_best_rate": (
+            float(np.mean([bool(row.get("selected_is_best", False)) for row in selection_rows]))
+            if selection_rows else None
+        ),
         "num_graphs": len(rows),
         "success_rate": float(np.mean([not bool(row.get("fallback_used", False)) for row in rows])),
         "fallback_rate": mean_bool("fallback_used"),

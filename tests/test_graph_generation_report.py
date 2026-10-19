@@ -52,6 +52,37 @@ def test_generic_novelty_uses_training_topology_and_counts_duplicates():
     assert metrics["novelty_rate"] == pytest.approx(2 / 3)
 
 
+def test_reference_row_novelty_uses_heldout_population_against_training():
+    train = [nx.path_graph(5)]
+    heldout = [nx.cycle_graph(5)]
+
+    # MMD semantics for the reference row remain heldout-vs-train, while the
+    # novelty cell must describe the held-out population relative to train.
+    metrics = report._paper_mmd(
+        heldout,
+        train,
+        train=train,
+        novelty_candidate=heldout,
+        compute_orbit=False,
+    )
+
+    assert metrics["novelty_rate"] == pytest.approx(1.0)
+
+
+def test_generated_row_novelty_still_uses_generated_population_by_default():
+    train = [nx.path_graph(5)]
+    generated = [nx.path_graph(5), nx.cycle_graph(5)]
+
+    metrics = report._paper_mmd(
+        [nx.cycle_graph(5)],
+        generated,
+        train=train,
+        compute_orbit=False,
+    )
+
+    assert metrics["novelty_rate"] == pytest.approx(0.5)
+
+
 @pytest.mark.parametrize("train", [None, []])
 def test_generic_novelty_without_training_is_unavailable(train):
     import math
@@ -340,3 +371,33 @@ def test_degree_constrained_realization_artifacts_use_semantic_stage_labels(tmp_
     )
     assert base_path == control_path
     assert base_stage == "grapher_threshold_control"
+
+
+def test_summary_selected_degree_realization_uses_distinct_semantic_stage_label(tmp_path):
+    import pickle
+
+    generated_dir = tmp_path / "generations" / "summary_selected"
+    generated_dir.mkdir(parents=True)
+    final_path = generated_dir / "base_graphs.pkl"
+    control_path = generated_dir / "pre_realization_graphs.pkl"
+    graphs = [nx.path_graph(4)]
+    for path in (final_path, control_path):
+        with path.open("wb") as handle:
+            pickle.dump(graphs, handle)
+
+    manifest = {
+        "model_id": "grapher",
+        "sampling": {
+            "degree_constrained_realization": {
+                "enabled": True,
+                "method": "gumbel_milp",
+                "candidate_selection_enabled": True,
+            }
+        },
+    }
+    assert report.resolve_generated_stage(
+        {}, final_path, generation_manifest=manifest
+    ) == "grapher_degree_constrained_summary_selected_realization"
+    assert report.resolve_generated_stage(
+        {}, control_path, generation_manifest=manifest
+    ) == "grapher_threshold_control"

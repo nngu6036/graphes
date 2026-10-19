@@ -503,6 +503,12 @@ def _semantic_graph_stage(
         and isinstance(sampling.get("degree_constrained_realization"), dict)
         and bool(sampling["degree_constrained_realization"].get("enabled", False))
     )
+    summary_selected_realization = bool(
+        realization
+        and (sampling.get("degree_constrained_realization", {}) or {}).get(
+            "candidate_selection_enabled", False
+        )
+    )
 
     if name == "pre_realization_graphs.pkl":
         return f"{model_id}_threshold_control"
@@ -510,6 +516,8 @@ def _semantic_graph_stage(
         return f"{model_id}_spectral_pre_rewire"
     if name == "base_graphs.pkl" and stochastic:
         return f"{model_id}_diversified"
+    if name == "base_graphs.pkl" and summary_selected_realization:
+        return f"{model_id}_degree_constrained_summary_selected_realization"
     if name == "base_graphs.pkl" and realization:
         return f"{model_id}_degree_constrained_realization"
     return None
@@ -1280,6 +1288,7 @@ def _paper_mmd(
     include_generic_metrics: bool = True,
     graphlet_options: dict[str, Any] | None = None,
     train: Sequence[nx.Graph] | None = None,
+    novelty_candidate: Sequence[nx.Graph] | None = None,
     progress: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, float]:
     """Evaluate generic graph statistics under a declared metric protocol.
@@ -1298,8 +1307,12 @@ def _paper_mmd(
     Additional generic metrics use the existing evaluation conventions:
     20-bin normalized-Laplacian spectral histograms with adaptive Gaussian
     EMD, and graphlet-composition MMD (connected orders 3--5 by default).
-    Novelty is the fraction of candidate topology WL hashes absent from the
-    complete training split; it is unavailable when training graphs are absent.
+    Novelty is the fraction of topology WL hashes in ``novelty_candidate``
+    absent from the complete training split.  By default ``novelty_candidate``
+    is the MMD candidate population.  This override is used for the
+    ``train_to_<split>`` reference row: its MMD compares train against held-out,
+    while its novelty must describe the held-out population against train.
+    Novelty is unavailable when training graphs are absent.
     """
 
     protocol = str(metric_protocol).strip().lower().replace("-", "_")
@@ -1322,8 +1335,11 @@ def _paper_mmd(
     metrics = {}
     if include_generic_metrics:
         announce("novelty", 0)
+        novelty_population = (
+            candidate if novelty_candidate is None else novelty_candidate
+        )
         metrics["novelty_rate"] = (
-            wl_novelty_rate(candidate, train) if train else float("nan")
+            wl_novelty_rate(novelty_population, train) if train else float("nan")
         )
         announce("novelty", 1)
         announce("spectral MMD", 0)
@@ -1580,8 +1596,8 @@ def validate_report_reference_split(output_dir: Path, reference_split: str) -> N
 def _print_table(rows: Sequence[dict[str, Any]], *, reference_split: str = "test") -> None:
     print(f"Graph-distribution MMD against held-out {reference_split} graphs (lower is better)")
     if any("novelty_rate" in row for row in rows):
-        print("WL novelty against the complete training split (candidate population only; higher is better)")
-        print("The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.")
+        print("WL novelty against the complete training split (evaluated population; higher is better)")
+        print("For train_to_* rows, novelty is held-out-vs-training; for model rows, novelty is generated-vs-training.")
     columns = {
         "degree_mmd": ("Degree MMD", 14),
         "clustering_mmd": ("Clustering MMD", 18),
@@ -1968,7 +1984,11 @@ def main() -> None:
     if train_graphs:
         rows.append(
             _evaluate_comparison(
-                reference, train_graphs, f"train_to_{reference_split}", **metric_options,
+                reference,
+                train_graphs,
+                f"train_to_{reference_split}",
+                novelty_candidate=reference,
+                **metric_options,
             )
         )
     if base_graphs:
@@ -2135,7 +2155,11 @@ def main() -> None:
             "generic_spectral_bins": 20 if not molecular else None,
             "generic_novelty_protocol": (
                 {
-                    "definition": "candidate graphs with WL topology hashes absent from the complete training split / candidate graphs",
+                    "definition": "evaluated graphs with WL topology hashes absent from the complete training split / evaluated graphs",
+                    "row_semantics": {
+                        "train_to_<split>": "held-out split evaluated against complete training support",
+                        "model_to_<split>": "generated model population evaluated against complete training support",
+                    },
                     "reference_split": "train",
                     "num_training_graphs": len(train_graphs),
                     "node_and_edge_attributes": False,

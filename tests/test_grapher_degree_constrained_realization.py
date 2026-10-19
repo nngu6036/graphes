@@ -254,3 +254,59 @@ def test_generation_writes_paired_threshold_control_and_realization_diagnostics(
     )
     assert manifest["sampling"]["degree_constrained_realization"]["enabled"] is True
     assert manifest["sampling"]["rewiring"] is False
+
+
+def test_generation_can_select_among_multiple_stochastic_realizations_with_summary_heads(tmp_path: Path) -> None:
+    torch.set_num_threads(1)
+    dataset = _write_dataset(tmp_path)
+    options = _options()
+    options["sample"]["degree_constrained_realization"]["candidate_selection"] = {
+        "enabled": True,
+        "num_candidates": 3,
+        "selection": "best",
+        "selection_temperature": 0.10,
+        "graphlet_weight": 1.0,
+        "graphlet_mass_weight": 0.25,
+        "clustering_weight": 0.0,
+        "orbit_weight": 0.25,
+    }
+
+    wrapper = GraphERWrapper()
+    run = RunSpec("grapher", "community_small", "summary-selection", 42, tmp_path / "runs")
+    trained = wrapper.train(TrainRequest(run, dataset, options=options))
+    generated = wrapper.generate(
+        GenerateRequest(
+            run,
+            trained.checkpoint_path,
+            3,
+            123,
+            generation_id="summary-selected-realization",
+            options={"graphlet_refinement": {"enabled": False}},
+        )
+    )
+
+    report = json.loads(
+        (generated.generation_dir / "degree_constrained_realization_diagnostics.json").read_text()
+    )
+    aggregate = report["aggregate"]
+    assert aggregate["candidate_selection_enabled"] is True
+    assert aggregate["candidate_selection_num_candidates"] == 3
+    assert aggregate["candidate_selection_mode"] == "best"
+    assert aggregate["candidate_selection_selected_best_rate"] == 1.0
+    assert aggregate["candidate_selection_mean_selected_summary_energy"] is not None
+    assert len(report["per_graph"]) == 3
+    for row in report["per_graph"]:
+        selection = row["candidate_selection"]
+        assert selection["enabled"] is True
+        assert selection["num_candidates"] == 3
+        assert selection["selected_is_best"] is True
+        assert len(selection["candidates"]) == 3
+
+    manifest = json.loads(generated.manifest_path.read_text())
+    assert manifest["sampling"]["topology_decoder"] == (
+        "stochastic_degree_constrained_summary_selected_realization"
+    )
+    assert manifest["sampling"]["degree_constrained_realization"][
+        "candidate_selection_enabled"
+    ] is True
+    assert manifest["sampling"]["rewiring"] is False
