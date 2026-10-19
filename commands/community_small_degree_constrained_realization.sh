@@ -1,5 +1,3 @@
-cd /home/quang/graphes
-
 N="${N:-1024}"
 DEVICE="${DEVICE:-cuda:0}"
 REFERENCE_SPLIT="${REFERENCE_SPLIT:-val}"
