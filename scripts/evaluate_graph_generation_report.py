@@ -513,7 +513,13 @@ def _semantic_graph_stage(
     if name == "pre_realization_graphs.pkl":
         return f"{model_id}_threshold_control"
     if name == "pre_refinement_graphs.pkl":
+        if realization:
+            return f"{model_id}_degree_constrained_pre_rewire"
         return f"{model_id}_spectral_pre_rewire"
+    if name == "base_graphs.pkl" and stochastic and summary_selected_realization:
+        return f"{model_id}_degree_constrained_summary_selected_rewired"
+    if name == "base_graphs.pkl" and stochastic and realization:
+        return f"{model_id}_degree_constrained_rewired"
     if name == "base_graphs.pkl" and stochastic:
         return f"{model_id}_diversified"
     if name == "base_graphs.pkl" and summary_selected_realization:
@@ -618,6 +624,45 @@ def resolve_base_graph_path(
         model_id = _baseline_model_id(path, generation_manifest)
         return path, f"{model_id}_base" if model_id else "base"
     return None, None
+
+
+def resolve_additional_managed_stage_paths(
+    generated_dir: Path,
+    *,
+    generated_path: Path | None = None,
+    generation_manifest: dict[str, Any] | None = None,
+    primary_base_path: Path | None = None,
+) -> list[tuple[Path, str]]:
+    """Return extra managed intermediate stages that should be reported.
+
+    Most pipelines have only one useful paired source stage, which is returned
+    by :func:`resolve_base_graph_path`.  The combined degree-constrained +
+    rewiring pipeline has two meaningful controls:
+
+    ``pre_realization_graphs.pkl``
+        deterministic threshold decoding before stochastic exact-degree
+        realization;
+    ``pre_refinement_graphs.pkl``
+        stochastic exact-degree realization before rewiring.
+
+    When the latter is the primary paired source, this helper exposes the
+    threshold control as an additional row instead of silently dropping it.
+    """
+
+    rows: list[tuple[Path, str]] = []
+    for name in ("pre_realization_graphs.pkl", "pre_refinement_graphs.pkl"):
+        path = generated_dir / name
+        if not path.is_file():
+            continue
+        if generated_path is not None and _same_artifact(path, generated_path):
+            continue
+        if primary_base_path is not None and _same_artifact(path, primary_base_path):
+            continue
+        stage = _semantic_graph_stage(path, generation_manifest)
+        if stage is None:
+            continue
+        rows.append((path, stage))
+    return rows
 
 
 
@@ -1787,6 +1832,16 @@ def main() -> None:
     # Do not evaluate the same artifact twice as both the source and final row.
     if _same_artifact(base_path, generated_path):
         base_path, base_stage = None, None
+    additional_managed_stage_paths = (
+        []
+        if args.base_graphs is not None or args.coarse_graphs is not None
+        else resolve_additional_managed_stage_paths(
+            generated_dir,
+            generated_path=generated_path,
+            generation_manifest=generation_manifest,
+            primary_base_path=base_path,
+        )
+    )
     default_output_name = "evaluation_report" if reference_split == "test" else "evaluation_report_val"
     output_dir = ensure_dir(args.output_dir or generated_dir / default_output_name)
     validate_report_reference_split(output_dir, reference_split)
@@ -1895,6 +1950,10 @@ def main() -> None:
         if base_path is not None and base_path.is_file()
         else []
     )
+    additional_managed_stages = [
+        (stage, _load_graph_list(path), path)
+        for path, stage in additional_managed_stage_paths
+    ]
     enriched_base_path = generated_dir / "enriched_base_graphs.pkl"
     enriched_base_graphs = (
         _load_graph_list(enriched_base_path)
@@ -1991,6 +2050,18 @@ def main() -> None:
                 **metric_options,
             )
         )
+    for stage, stage_graphs, _stage_path in additional_managed_stages:
+        stage_count = len(stage_graphs)
+        if args.max_graphs is not None:
+            stage_count = min(stage_count, int(args.max_graphs))
+        rows.append(
+            _evaluate_comparison(
+                reference,
+                stage_graphs[:stage_count],
+                f"{stage}_to_{reference_split}",
+                **metric_options,
+            )
+        )
     if base_graphs:
         base_count = len(base_graphs)
         if args.max_graphs is not None:
@@ -2032,6 +2103,11 @@ def main() -> None:
             "train": train_graphs,
             reference_population_name: reference,
         }
+        for stage, stage_graphs, _stage_path in additional_managed_stages:
+            stage_count = len(stage_graphs)
+            if args.max_graphs is not None:
+                stage_count = min(stage_count, int(args.max_graphs))
+            generic_populations[str(stage)] = stage_graphs[:stage_count]
         if base_graphs:
             base_count = len(base_graphs)
             if args.max_graphs is not None:
@@ -2248,6 +2324,10 @@ def main() -> None:
             ),
             "base_graphs": str(base_path) if base_path is not None else None,
             "base_stage": base_stage,
+            "additional_managed_stages": [
+                {"stage": stage, "path": str(path)}
+                for path, stage in additional_managed_stage_paths
+            ],
             "num_graphs_evaluated": len(generated),
             "num_reference_graphs": len(reference),
             "num_generated_graphs_evaluated": len(generated),

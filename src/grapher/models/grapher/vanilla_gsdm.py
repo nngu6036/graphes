@@ -4203,9 +4203,13 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     "path": "pre_refinement_graphs.pkl",
                     "sha256": _sha256(pre_refinement_graph_path),
                     "role": (
-                        "unmodified_thresholded_laplacian_loggap_sources"
-                        if fixed_structure_refinement_enabled
-                        else "unmodified_thresholded_vanilla_gdsm_sources"
+                        "degree_constrained_realizations_before_optional_rewiring"
+                        if realization_enabled and fixed_structure_refinement_enabled
+                        else (
+                            "unmodified_thresholded_laplacian_loggap_sources"
+                            if fixed_structure_refinement_enabled
+                            else "unmodified_thresholded_vanilla_gdsm_sources"
+                        )
                     ),
                 }
                 if pre_refinement_graph_path is not None else None
@@ -4364,20 +4368,24 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     "joint_auxiliary_summary_selection_over_stochastic_exact_degree_realizations"
                     if realization_candidate_selection_enabled
                     else (
-                    "fixed_joint_degree_graphlet_orbit_summary_with_random_length_stochastic_rewiring"
-                    if stochastic_diversification_enabled
-                    else (
-                        "fixed_joint_graphlet_clustering_orbit_summary_with_softmax_safe_rewiring"
-                        if soft_structure_refinement_enabled
+                        "fixed_joint_degree_graphlet_orbit_summary_after_stochastic_exact_degree_realization"
+                        if realization_enabled and stochastic_diversification_enabled
                         else (
-                        "fixed_joint_auxiliary_graphlet_summary_k3_k4_k5"
-                        if fixed_structure_refinement_enabled
-                        else (
-                            "learned_connected_induced_graphlet_summary_k3_k4_k5"
-                            if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                            "fixed_joint_degree_graphlet_orbit_summary_with_random_length_stochastic_rewiring"
+                            if stochastic_diversification_enabled
+                            else (
+                                "fixed_joint_graphlet_clustering_orbit_summary_with_softmax_safe_rewiring"
+                                if soft_structure_refinement_enabled
+                                else (
+                                    "fixed_joint_auxiliary_graphlet_summary_k3_k4_k5"
+                                    if fixed_structure_refinement_enabled
+                                    else (
+                                        "learned_connected_induced_graphlet_summary_k3_k4_k5"
+                                        if variant in GRAPHLET_REFINEMENT_VARIANTS else False
+                                    )
+                                )
+                            )
                         )
-                    )
-                    )
                     )
                 ),
                 "soft_rewiring": (
@@ -4394,6 +4402,25 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                         "structural_summary_preservation": "source_anchored_target_trust_region",
                     }
                     if stochastic_diversification_enabled else None
+                ),
+                "combined_degree_constrained_rewiring": (
+                    {
+                        "enabled": True,
+                        "order": [
+                            "stochastic_degree_constrained_spectral_realization",
+                            "stochastic_degree_preserving_rewiring",
+                        ],
+                        "gumbel_temperature": float(
+                            realization_cfg.get("gumbel_temperature", 0.0)
+                        ),
+                        "random_steps": _jsonable(
+                            refinement_options.get("random_steps", {})
+                        ),
+                        "final_degree_sequence_source": "projected_laplacian_diagonal",
+                        "degree_preserved_through_rewiring": True,
+                    }
+                    if realization_enabled and stochastic_diversification_enabled
+                    else None
                 ),
             },
             "diagnostics": {

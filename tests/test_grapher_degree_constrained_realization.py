@@ -310,3 +310,115 @@ def test_generation_can_select_among_multiple_stochastic_realizations_with_summa
         "candidate_selection_enabled"
     ] is True
     assert manifest["sampling"]["rewiring"] is False
+
+
+def test_degree_constrained_realization_can_feed_stochastic_rewiring(tmp_path: Path) -> None:
+    torch.set_num_threads(1)
+    dataset = _write_dataset(tmp_path)
+    options = _options()
+    options["sample"]["degree_constrained_realization"]["gumbel_temperature"] = 0.4
+
+    wrapper = GraphERWrapper()
+    run = RunSpec("grapher", "community_small", "degree-realization-rewire", 42, tmp_path / "runs")
+    trained = wrapper.train(TrainRequest(run, dataset, options=options))
+
+    refiner = {
+        "enabled": True,
+        "mode": "stochastic_diversification",
+        "target_source": "joint_structure_summary_head",
+        "random_steps": {
+            "enabled": True,
+            "distribution": "uniform_integer",
+            "min_steps": 1,
+            "max_steps": 2,
+            "mean_steps": 1.5,
+        },
+        "graphlet_k_min": 3,
+        "graphlet_k_max": 5,
+        "graphlet_connected_only": True,
+        "graphlet_topology_filter": "all",
+        "refiner": {
+            "steps": 2,
+            "proposal_budget": 16,
+            "valid_candidate_budget": 8,
+            "preserve_connectivity": True,
+            "selection": "softmax_safe",
+            "temperature": 0.5,
+            "soft_selection": {
+                "temperature_start": 0.75,
+                "temperature_end": 0.25,
+                "temperature_schedule": "linear",
+                "score_normalization": "std",
+                "stop_action": False,
+                "max_target_worsening": 0.05,
+                "max_relative_target_worsening": 0.50,
+            },
+            "target_trust_region": {
+                "enabled": True,
+                "absolute_worsening": 0.05,
+                "relative_worsening": 0.50,
+            },
+            "graphlet_weight": 1.0,
+            "graphlet_mass_weight": 0.1,
+            "clustering_weight": 0.0,
+            "orbit_weight": 0.25,
+            "accept_only_improving": False,
+            "min_improvement": 1e-8,
+            "min_relative_improvement": 0.0,
+            "relative_improvement_epsilon": 1e-12,
+            "sample_graphlet": False,
+            "refresh_prediction_every": 2,
+            "refresh_on_plateau": False,
+            "reject_revisited_states": True,
+            "motif_guard": {
+                "enabled": False,
+                "max_destroyed_triangles": -1,
+                "max_destroyed_cycles": {"4": -1, "5": -1},
+            },
+        },
+        "disconnected_source_policy": "skip",
+        "save_prediction_trace": True,
+    }
+
+    generated = wrapper.generate(
+        GenerateRequest(
+            run,
+            trained.checkpoint_path,
+            3,
+            222,
+            generation_id="degree-realization-rewire",
+            options={"graphlet_refinement": refiner},
+        )
+    )
+
+    threshold = _load_pickle(generated.generation_dir / "pre_realization_graphs.pkl")
+    realized = _load_pickle(generated.generation_dir / "pre_refinement_graphs.pkl")
+    final = _load_pickle(generated.generation_dir / "base_graphs.pkl")
+    projected = _load_pickle(
+        generated.generation_dir / "projected_realization_degree_sequences.pkl"
+    )
+    assert len(threshold) == len(realized) == len(final) == len(projected) == 3
+
+    for before_rewire, after_rewire, degree in zip(realized, final, projected):
+        assert [before_rewire.degree(i) for i in range(before_rewire.number_of_nodes())] == degree
+        assert [after_rewire.degree(i) for i in range(after_rewire.number_of_nodes())] == degree
+        assert nx.is_connected(before_rewire)
+        assert nx.is_connected(after_rewire)
+
+    manifest = json.loads(generated.manifest_path.read_text())
+    assert manifest["sampling"]["topology_decoder"] == (
+        "stochastic_degree_constrained_spectral_realization"
+    )
+    assert manifest["sampling"]["rewiring"] == (
+        "random_length_structural_summary_guided_degree_preserving_double_edge_swaps"
+    )
+    combined = manifest["sampling"]["combined_degree_constrained_rewiring"]
+    assert combined["enabled"] is True
+    assert combined["gumbel_temperature"] == 0.4
+    assert combined["random_steps"]["min_steps"] == 1
+    assert combined["random_steps"]["max_steps"] == 2
+    assert manifest["pre_refinement_graphs"]["role"] == (
+        "degree_constrained_realizations_before_optional_rewiring"
+    )
+    assert manifest["diagnostics"]["degree_constrained_realization_degree_exact_rate"] == 1.0
+    assert manifest["diagnostics"]["degree_preservation_rate"] == 1.0

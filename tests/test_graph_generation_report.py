@@ -401,3 +401,61 @@ def test_summary_selected_degree_realization_uses_distinct_semantic_stage_label(
     assert report.resolve_generated_stage(
         {}, control_path, generation_manifest=manifest
     ) == "grapher_threshold_control"
+
+
+def test_combined_degree_realization_and_rewiring_exposes_all_semantic_stages(tmp_path):
+    import pickle
+
+    generated_dir = tmp_path / "generations" / "combined"
+    generated_dir.mkdir(parents=True)
+    final_path = generated_dir / "base_graphs.pkl"
+    threshold_path = generated_dir / "pre_realization_graphs.pkl"
+    realized_path = generated_dir / "pre_refinement_graphs.pkl"
+    graphs = [nx.path_graph(4)]
+    for path in (final_path, threshold_path, realized_path):
+        with path.open("wb") as handle:
+            pickle.dump(graphs, handle)
+
+    manifest = {
+        "model_id": "grapher",
+        "sampling": {
+            "degree_constrained_realization": {
+                "enabled": True,
+                "method": "gumbel_milp",
+            },
+            "stochastic_diversification": {
+                "random_steps": {
+                    "enabled": True,
+                    "distribution": "uniform_integer",
+                    "min_steps": 1,
+                    "max_steps": 4,
+                }
+            },
+        },
+    }
+
+    assert report.resolve_generated_stage(
+        {}, final_path, generation_manifest=manifest
+    ) == "grapher_degree_constrained_rewired"
+    assert report.resolve_generated_stage(
+        {}, realized_path, generation_manifest=manifest
+    ) == "grapher_degree_constrained_pre_rewire"
+    assert report.resolve_generated_stage(
+        {}, threshold_path, generation_manifest=manifest
+    ) == "grapher_threshold_control"
+
+    base_path, base_stage = report.resolve_base_graph_path(
+        generated_dir,
+        generated_path=final_path,
+        generation_manifest=manifest,
+    )
+    assert base_path == realized_path
+    assert base_stage == "grapher_degree_constrained_pre_rewire"
+
+    extra = report.resolve_additional_managed_stage_paths(
+        generated_dir,
+        generated_path=final_path,
+        generation_manifest=manifest,
+        primary_base_path=base_path,
+    )
+    assert extra == [(threshold_path, "grapher_threshold_control")]
