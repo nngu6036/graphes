@@ -2,58 +2,72 @@
 
 N="${N:-1024}"
 DEVICE="${DEVICE:-cuda:0}"
-REFERENCE_SPLIT="test"
-SEED=41
+REFERENCE_SPLIT="${REFERENCE_SPLIT:-val}"
+ORCA_EXEC="${ORCA_EXEC:-/home/quang/orca/orca.out}"
 
-TAUS=(0p60 0p70 0p80 0p90 1p00  )
+SEEDS=(41 42 43 44 45)
+SETTINGS=(B1 B0to1 B1to2 B0to2)
 
-# Use the checkpoint you already trained.
-# If you trained with the new degree-constrained experiment command:
-RUN="seed_${SEED}_community_small_degree_constrained_realization_g345_v1"
+for BSETTING in "${SETTINGS[@]}"; do
+  for SEED in "${SEEDS[@]}"; do
 
-# If instead you are reusing the old final GraphES checkpoint, use:
-# RUN="seed_${SEED}_community_small_grapher_final_g345_v1"
+    CFG="configs/experiments/grapher_degree_constrained_rewiring/community_small_seed_${SEED}_${BSETTING}.yaml"
 
-for TAG in "${TAUS[@]}"; do
+    # Reuse the checkpoint already trained for the tau=0.4 + rewiring run.
+    RUN="seed_${SEED}_community_small_dcr_tau0p4_rewire1to4_g345_v1"
 
-  CFG="configs/experiments/grapher_degree_constrained_realization/community_small_seed_${SEED}_tau_${TAG}.yaml"
+    GEN_ID="dcr_tau0p4_${BSETTING}_seed_${SEED}_n_${N}"
 
-  GEN_ID="degree_constrained_tau_${TAG}_seed_${SEED}_n_${N}"
+    echo "============================================================"
+    echo "Community-small DCR + rewiring"
+    echo "seed=${SEED}"
+    echo "tau=0.4"
+    echo "rewiring=${BSETTING}"
+    echo "split=${REFERENCE_SPLIT}"
+    echo "============================================================"
 
-  echo "============================================================"
-  echo "Degree-constrained realization"
-  echo "seed=${SEED}, tau=${TAG}"
-  echo "============================================================"
+    # ----------------------------------------------------------
+    # Generation only -- NO RETRAINING
+    # ----------------------------------------------------------
+    PYTHONHASHSEED="$SEED" \
+    GRAPHER_EIGH_BACKEND=cpu \
+    PYTHONPATH=src \
+    python scripts/run_grapher_baseline.py \
+      --stage generate \
+      --dataset community_small \
+      --no-common-config \
+      --wrapper-config "$CFG" \
+      --dataset-root outputs/datasets \
+      --serialized-dataset sbm \
+      --output-root outputs/baselines \
+      --seed-id "$SEED" \
+      --generation-seed "$SEED" \
+      --run-id "$RUN" \
+      --generation-id "$GEN_ID" \
+      --num-samples "$N" \
+      --device "$DEVICE"
 
-  PYTHONHASHSEED="$SEED" \
-  GRAPHER_EIGH_BACKEND=cpu \
-  PYTHONPATH=src \
-  python scripts/run_grapher_baseline.py \
-    --stage generate \
-    --dataset community_small \
-    --no-common-config \
-    --wrapper-config "$CFG" \
-    --dataset-root outputs/datasets \
-    --serialized-dataset sbm \
-    --output-root outputs/baselines \
-    --seed-id "$SEED" \
-    --generation-seed "$SEED" \
-    --run-id "$RUN" \
-    --generation-id "$GEN_ID" \
-    --num-samples "$N" \
-    --device "$DEVICE"
+    GEN="outputs/baselines/grapher/community_small/$RUN/generations/$GEN_ID"
 
-  GEN="outputs/baselines/grapher/community_small/$RUN/generations/$GEN_ID"
+    if [[ ! -f "$GEN/base_graphs.pkl" ]]; then
+      echo "ERROR: generation failed:"
+      echo "  $GEN/base_graphs.pkl not found"
+      exit 1
+    fi
 
-  PYTHONHASHSEED="$SEED" \
-  ORCA_EXEC="${ORCA_EXEC:-/home/quang/orca/orca.out}" \
-  PYTHONPATH=src \
-  python scripts/evaluate_graph_generation_report.py \
-    --config configs/evaluation/community_small.yaml \
-    --reference-split "$REFERENCE_SPLIT" \
-    --generic-mmd-protocol graphrnn \
-    --generated-dir "$GEN" \
-    --generated-graphs "$GEN/base_graphs.pkl" \
-    --output-dir "$GEN/evaluation_${REFERENCE_SPLIT}_paired"
+    # ----------------------------------------------------------
+    # Evaluation
+    # ----------------------------------------------------------
+    PYTHONHASHSEED="$SEED" \
+    ORCA_EXEC="$ORCA_EXEC" \
+    PYTHONPATH=src \
+    python scripts/evaluate_graph_generation_report.py \
+      --config configs/evaluation/community_small.yaml \
+      --reference-split "$REFERENCE_SPLIT" \
+      --generic-mmd-protocol graphrnn \
+      --generated-dir "$GEN" \
+      --generated-graphs "$GEN/base_graphs.pkl" \
+      --output-dir "$GEN/evaluation_${REFERENCE_SPLIT}_paired"
 
+  done
 done
