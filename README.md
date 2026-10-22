@@ -1,12 +1,13 @@
-# GraphER
+# GraphES
 
-GraphER is the final spectral graph generator in this repository. The implementation combines:
+GraphES is the final spectral graph generator in this repository. The main generic-graph profile combines:
 
 - full Laplacian log-gap spectral diffusion;
 - learned structural summaries (degree, connected induced graphlets of orders 3--5, and orbit summaries);
-- random-length constraint-preserving rewiring;
-- fixed-topology categorical atom/bond diffusion for molecular datasets; and
-- strict same-bond-type stochastic rewiring for attributed graphs, additionally preserving each node's neighbor-atom-type-by-bond-type signature and per-node weighted bond valence.
+- stochastic exact-degree spectral realization with Gumbel temperature `tau=0.4`; and
+- degree-preserving structure-guided rewiring with `B ~ Uniform{1,2,3,4}` (`B1to4`).
+
+For molecular datasets, GraphES retains the fixed-topology categorical atom/bond generator and uses the matching strict `B1to4` same-bond diversification profile. The generic exact-degree MILP decoder is not enabled in the attributed pipeline. Strict molecular swaps additionally preserve each node's neighbor-atom-type-by-bond-type signature and per-node weighted bond valence.
 
 The final workflow uses five independent seeds: **41, 42, 43, 44, and 45**.
 
@@ -21,7 +22,7 @@ scripts/run_grapher_baseline.py   training/generation entry point
 scripts/evaluate_graph_generation_report.py
 scripts/evaluate_generated_molecules.py
 scripts/evaluate_qed.py
-src/grapher/models/grapher/       GraphER implementation
+src/grapher/models/grapher/       GraphES implementation
 ```
 
 ## Environment
@@ -59,7 +60,7 @@ PYTHONPATH=src python scripts/prepare_zinc_dataset.py \
 
 ## Train, generate, and evaluate
 
-Each command trains, generates, and evaluates seeds 41--45.
+Each command trains, generates, and evaluates seeds 41--45 using the finalized main profile. Set `DO_TRAIN=0` to reuse checkpoints created under the corresponding updated run IDs.
 
 ```bash
 commands/community_small.sh
@@ -78,6 +79,7 @@ Useful overrides:
 
 ```bash
 DEVICE=cuda:1 REFERENCE_SPLIT=val commands/community_small.sh
+DO_TRAIN=0 N=1024 REFERENCE_SPLIT=test commands/ego_small.sh
 N=10000 REFERENCE_SPLIT=test commands/qm9.sh
 ```
 
@@ -85,13 +87,13 @@ Use the validation split while selecting settings, then freeze the design and ev
 
 ### Generic graphs
 
-The generic commands evaluate both the spectral graph before rewiring and the final diversified graph in one report. In addition to degree, clustering, orbit, spectral, and graphlet MMD, the evaluator now reports four complementary diversity quantities: (1) exact-isomorphism novelty against the complete training split, (2) exact isomorphism-class uniqueness, (3) mean/median nearest-training graded structural distance, and (4) an epsilon-novelty / held-out-coverage curve. The graded distance is a permutation-invariant WL/component structural pseudodistance in [0,1], intended to distinguish near-copies from genuinely larger departures; it is not exact graph-edit distance. Legacy WL-hash novelty and exact class-frequency TV diagnostics are retained for backward comparison.
+The generic commands use stochastic exact-degree realization at `tau=0.4`, followed by `B1to4` degree-preserving rewiring. They evaluate the deterministic threshold control, the exact-degree graph before rewiring, and the final diversified graph in one report. In addition to degree, clustering, orbit, spectral, and graphlet MMD, the evaluator now reports four complementary diversity quantities: (1) exact-isomorphism novelty against the complete training split, (2) exact isomorphism-class uniqueness, (3) mean/median nearest-training graded structural distance, and (4) an epsilon-novelty / held-out-coverage curve. The graded distance is a permutation-invariant WL/component structural pseudodistance in [0,1], intended to distinguish near-copies from genuinely larger departures; it is not exact graph-edit distance. Legacy WL-hash novelty and exact class-frequency TV diagnostics are retained for backward comparison.
 
 ### Molecular graphs
 
 The molecular diversification stage is stricter than ordinary same-bond rewiring.  A candidate swap is accepted only when it preserves, for every node, the multiset of `(neighbor atom type, bond type)` incidences.  Because the swap also uses the same bond type on both removed and inserted edges, ordinary degree, typed degree, bond-type counts, and the per-node weighted bond-valence vector are exact invariants.  With `rdkit_candidate_filter: true`, every changed candidate must also pass RDKit sanitization; a raw-valid source therefore cannot become invalid through rewiring.
 
-The QM9 and ZINC commands evaluate both `pre_refinement_graphs.pkl` and final `base_graphs.pkl`. Each population receives:
+The QM9 and ZINC commands use strict `B1to4` same-bond diversification and evaluate both `pre_refinement_graphs.pkl` and final `base_graphs.pkl`. Each population receives:
 
 - validity, uniqueness, novelty, NSPDK, FCD, and attributed graphlet MMD; and
 - RDKit QED statistics, QED yield, threshold yields, and Wasserstein distance to the selected reference split.
@@ -109,8 +111,9 @@ outputs/baselines/grapher/<dataset>/<run-id>/
 The generated population uses:
 
 ```text
-pre_refinement_graphs.pkl   graph before random rewiring
-base_graphs.pkl             final diversified graph
+pre_realization_graphs.pkl  deterministic threshold control (generic DCR runs)
+pre_refinement_graphs.pkl   exact-degree or attributed graph before rewiring
+base_graphs.pkl             final B1to4 diversified graph
 ```
 
 ## Final configs

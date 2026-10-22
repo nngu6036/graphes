@@ -2,28 +2,34 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Convenience continuation script for ZINC seeds 44 and 45 using the same
+# strict B1to4 main attributed-diversification profile as commands/zinc.sh.
 N="${N:-10000}"
 DEVICE="${DEVICE:-cuda:0}"
 REFERENCE_SPLIT="${REFERENCE_SPLIT:-test}"
+DO_TRAIN="${DO_TRAIN:-1}"
 SEEDS=(44 45)
+MAIN_PROFILE="B1to4"
 
 for SEED in "${SEEDS[@]}"; do
   CFG="configs/experiments/grapher_final/zinc_seed_${SEED}.yaml"
-  RUN="seed_${SEED}_zinc_grapher_final_g345_v1"
-  GEN_ID="seed_${SEED}_n_${N}"
+  RUN="seed_${SEED}_zinc_grapher_final_${MAIN_PROFILE}_g345_v2"
+  GEN_ID="${MAIN_PROFILE}_seed_${SEED}_n_${N}"
 
-  PYTHONHASHSEED="$SEED" GRAPHER_EIGH_BACKEND=cpu PYTHONPATH=src \
-  python scripts/run_grapher_baseline.py \
-    --stage train \
-    --dataset zinc \
-    --no-common-config \
-    --wrapper-config "$CFG" \
-    --dataset-root outputs/datasets \
-    --serialized-dataset zinc \
-    --output-root outputs/baselines \
-    --seed-id "$SEED" \
-    --run-id "$RUN" \
-    --device "$DEVICE"
+  if [[ "$DO_TRAIN" == "1" ]]; then
+    PYTHONHASHSEED="$SEED" GRAPHER_EIGH_BACKEND=cpu PYTHONPATH=src \
+    python scripts/run_grapher_baseline.py \
+      --stage train \
+      --dataset zinc \
+      --no-common-config \
+      --wrapper-config "$CFG" \
+      --dataset-root outputs/datasets \
+      --serialized-dataset zinc \
+      --output-root outputs/baselines \
+      --seed-id "$SEED" \
+      --run-id "$RUN" \
+      --device "$DEVICE"
+  fi
 
   PYTHONHASHSEED="$SEED" GRAPHER_EIGH_BACKEND=cpu PYTHONPATH=src \
   python scripts/run_grapher_baseline.py \
@@ -42,7 +48,6 @@ for SEED in "${SEEDS[@]}"; do
     --device "$DEVICE"
 
   GEN="outputs/baselines/grapher/zinc/$RUN/generations/$GEN_ID"
-
   for STAGE in diversified pre_rewire; do
     if [[ "$STAGE" == "diversified" ]]; then
       GRAPHS="$GEN/base_graphs.pkl"
@@ -83,5 +88,4 @@ for SEED in "${SEEDS[@]}"; do
       --expected-num-generated "$N" \
       --output-dir "$OUT/qed"
   done
-
 done

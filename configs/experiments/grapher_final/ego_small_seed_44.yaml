@@ -1,7 +1,8 @@
-experiment: ego_small_grapher_final_seed_44
+experiment: ego_small_grapher_final_tau0p4_B1to4_seed_44
 seed: 44
-description: Full Laplacian log-gap spectral diffusion with degree, topology graphlet
-  (3-5), orbit summaries, and stochastic degree-preserving rewiring.
+description: Laplacian log-gap spectral diffusion with structural-summary supervision,
+  stochastic exact-degree spectral realization (Gumbel temperature 0.4), and 1-4 degree-preserving
+  structure-guided double-edge swaps.
 grapher:
   variant: vanilla_laplacian_loggap_graphlet
   train:
@@ -45,6 +46,30 @@ grapher:
     eps: 0.0001
     threshold: 0.5
     use_ema: false
+    eigenbasis_perturbation:
+      enabled: false
+    degree_constrained_realization:
+      enabled: true
+      method: gumbel_milp
+      degree_source: laplacian_diagonal
+      edge_count_source: spectral_trace
+      edge_count_rounding: nearest
+      require_connected: true
+      score_transform: zscore
+      score_clip: 8.0
+      spectral_weight: 1.0
+      gumbel_temperature: 0.4
+      projection_degree_l1_weight: 1.0
+      projection_spectral_tiebreak_weight: 0.0001
+      projection_graphicality_check: true
+      max_connectivity_cut_rounds: 16
+      solver_time_limit_seconds: 5.0
+      solver_mip_rel_gap: 0.0
+      seed_offset: 810001
+      failure_policy: error
+      save_threshold_control: true
+      candidate_selection:
+        enabled: false
   structural_features:
     enabled: true
     binarize_threshold: 0.5
@@ -64,14 +89,14 @@ grapher:
       enabled: true
       distribution: uniform_integer
       min_steps: 1
-      max_steps: 8
-      mean_steps: 4.0
+      max_steps: 4
+      mean_steps: 2.5
     graphlet_k_min: 3
     graphlet_k_max: 5
     graphlet_connected_only: true
     graphlet_topology_filter: all
     refiner:
-      steps: 8
+      steps: 4
       proposal_budget: 256
       valid_candidate_budget: 128
       preserve_connectivity: true

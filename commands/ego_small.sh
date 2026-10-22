@@ -5,25 +5,38 @@ cd "$(dirname "$0")/.."
 N="${N:-1024}"
 DEVICE="${DEVICE:-cuda:0}"
 REFERENCE_SPLIT="${REFERENCE_SPLIT:-test}"
+DO_TRAIN="${DO_TRAIN:-1}"
+ORCA_EXEC="${ORCA_EXEC:-/home/quang/orca/orca.out}"
 SEEDS=(41 42 43 44 45)
+
+# Main generic GraphES profile:
+#   stochastic exact-degree realization: tau=0.4
+#   degree-preserving rewiring: B ~ Uniform{1,2,3,4}
+MAIN_PROFILE="tau0p4_B1to4"
 
 for SEED in "${SEEDS[@]}"; do
   CFG="configs/experiments/grapher_final/ego_small_seed_${SEED}.yaml"
-  RUN="seed_${SEED}_ego_small_grapher_final_g345_v1"
-  GEN_ID="seed_${SEED}_n_${N}"
+  RUN="seed_${SEED}_ego_small_grapher_final_${MAIN_PROFILE}_g345_v2"
+  GEN_ID="${MAIN_PROFILE}_seed_${SEED}_n_${N}"
 
-  PYTHONHASHSEED="$SEED" GRAPHER_EIGH_BACKEND=cpu PYTHONPATH=src \
-  python scripts/run_grapher_baseline.py \
-    --stage train \
-    --dataset ego_small \
-    --no-common-config \
-    --wrapper-config "$CFG" \
-    --dataset-root outputs/datasets \
-    --serialized-dataset ego_small \
-    --output-root outputs/baselines \
-    --seed-id "$SEED" \
-    --run-id "$RUN" \
-    --device "$DEVICE"
+  echo "============================================================"
+  echo "Ego-small | seed=${SEED} | ${MAIN_PROFILE}"
+  echo "============================================================"
+
+  if [[ "$DO_TRAIN" == "1" ]]; then
+    PYTHONHASHSEED="$SEED" GRAPHER_EIGH_BACKEND=cpu PYTHONPATH=src \
+    python scripts/run_grapher_baseline.py \
+      --stage train \
+      --dataset ego_small \
+      --no-common-config \
+      --wrapper-config "$CFG" \
+      --dataset-root outputs/datasets \
+      --serialized-dataset ego_small \
+      --output-root outputs/baselines \
+      --seed-id "$SEED" \
+      --run-id "$RUN" \
+      --device "$DEVICE"
+  fi
 
   PYTHONHASHSEED="$SEED" GRAPHER_EIGH_BACKEND=cpu PYTHONPATH=src \
   python scripts/run_grapher_baseline.py \
@@ -42,7 +55,7 @@ for SEED in "${SEEDS[@]}"; do
     --device "$DEVICE"
 
   GEN="outputs/baselines/grapher/ego_small/$RUN/generations/$GEN_ID"
-  PYTHONHASHSEED="$SEED" ORCA_EXEC="${ORCA_EXEC:-/home/quang/orca/orca.out}" PYTHONPATH=src \
+  PYTHONHASHSEED="$SEED" ORCA_EXEC="$ORCA_EXEC" PYTHONPATH=src \
   python scripts/evaluate_graph_generation_report.py \
     --config configs/evaluation/ego_small.yaml \
     --reference-split "$REFERENCE_SPLIT" \

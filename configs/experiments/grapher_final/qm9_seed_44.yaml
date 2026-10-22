@@ -1,7 +1,9 @@
-experiment: qm9_grapher_final_seed_44
+experiment: qm9_grapher_final_B1to4_seed_44
 seed: 44
-description: Topology-first Laplacian spectral diffusion, topology/typed graphlet
-  summaries, fixed-topology categorical attributes, and stochastic same-bond rewiring.
+description: QM9 topology-first Laplacian log-gap spectral diffusion with fixed-topology
+  categorical attributes and strict same-bond attributed diversification using 1-4
+  degree-preserving swaps. Stochastic exact-degree realization is not enabled because
+  the attributed generator has a separate fixed-topology decoding path.
 grapher:
   variant: vanilla_laplacian_loggap_hybrid_categorical_attributed_ppgn
   train:
@@ -155,9 +157,9 @@ grapher:
     mode: stochastic_same_bond_diversification
     random_steps:
       distribution: uniform_integer
-      min_steps: 0
-      max_steps: 2
-      mean_steps: 2.0
+      min_steps: 1
+      max_steps: 4
+      mean_steps: 2.5
     proposal_budget: 128
     valid_candidate_budget: 48
     preserve_connectivity: true

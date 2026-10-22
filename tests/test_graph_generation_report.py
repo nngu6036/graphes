@@ -31,17 +31,23 @@ def test_generic_metrics_distinguish_graphs_and_reach_outputs(protocol, tmp_path
     assert set(stored) == {"comparison", *report.GENERIC_REPORT_METRICS}
     assert float(stored["spectral_mmd"]) == different["spectral_mmd"]
     assert float(stored["graphlet_history_mmd"]) == different["graphlet_history_mmd"]
+    assert identical["validity_rate"] == different["validity_rate"] == 1.0
+    assert identical["uniqueness_rate"] == different["uniqueness_rate"] == 1.0
+    assert float(stored["validity_rate"]) == different["validity_rate"]
+    assert float(stored["uniqueness_rate"]) == different["uniqueness_rate"]
     assert identical["novelty_rate"] == 0.0
     assert float(stored["novelty_rate"]) == different["novelty_rate"] == 1.0
     report._print_table(rows)
     output = capsys.readouterr().out
     assert "Spectral MMD" in output
     assert "Graphlet MMD" in output
+    assert "Validity" in output
+    assert "Uniqueness" in output
     assert "Novelty" in output
     assert "higher is better" in output
 
 
-def test_generic_novelty_uses_training_topology_and_counts_duplicates():
+def test_generic_vun_uses_training_topology_and_counts_duplicates():
     train = [nx.path_graph(5)]
     relabelled = nx.relabel_nodes(train[0], lambda node: f"node_{node}")
     nx.set_node_attributes(relabelled, "ignored", "label")
@@ -49,15 +55,36 @@ def test_generic_novelty_uses_training_topology_and_counts_duplicates():
     metrics = report._paper_mmd(
         [nx.cycle_graph(5)], candidate, train=train, compute_orbit=False,
     )
+    assert metrics["validity_rate"] == 1.0
+    assert metrics["uniqueness_rate"] == pytest.approx(2 / 3)
     assert metrics["novelty_rate"] == pytest.approx(2 / 3)
 
 
-def test_reference_row_novelty_uses_heldout_population_against_training():
-    train = [nx.path_graph(5)]
-    heldout = [nx.cycle_graph(5)]
+def test_generic_vun_counts_self_loops_as_invalid_without_filtering(monkeypatch):
+    # Graphlet extraction requires simple inputs; isolate V/U/N's denominator
+    # while the other descriptors continue to run on the complete population.
+    monkeypatch.setattr(report, "mmd_graphlet_statistics", lambda *a, **kw: (0.0, 0.0))
+    graph = nx.path_graph(5)
+    looped = graph.copy()
+    looped.add_edge(0, 0)
+
+    metrics = report._paper_mmd(
+        [graph], [graph, looped, looped], train=[graph], compute_orbit=False,
+    )
+
+    assert metrics["validity_rate"] == pytest.approx(1 / 3)
+    assert metrics["uniqueness_rate"] == pytest.approx(2 / 3)
+    assert metrics["novelty_rate"] == pytest.approx(2 / 3)
+
+
+def test_reference_row_vun_uses_heldout_population_against_training(monkeypatch):
+    monkeypatch.setattr(report, "mmd_graphlet_statistics", lambda *a, **kw: (0.0, 0.0))
+    train = [nx.path_graph(5), nx.path_graph(5)]
+    heldout = [nx.cycle_graph(5), nx.complete_graph(5)]
+    heldout[1].add_edge(0, 0)
 
     # MMD semantics for the reference row remain heldout-vs-train, while the
-    # novelty cell must describe the held-out population relative to train.
+    # V/U/N cells must all describe the held-out population relative to train.
     metrics = report._paper_mmd(
         heldout,
         train,
@@ -66,6 +93,8 @@ def test_reference_row_novelty_uses_heldout_population_against_training():
         compute_orbit=False,
     )
 
+    assert metrics["validity_rate"] == pytest.approx(0.5)
+    assert metrics["uniqueness_rate"] == pytest.approx(1.0)
     assert metrics["novelty_rate"] == pytest.approx(1.0)
 
 
@@ -89,6 +118,8 @@ def test_generic_novelty_without_training_is_unavailable(train):
 
     graphs = [nx.path_graph(4)]
     metrics = report._paper_mmd(graphs, graphs, train=train, compute_orbit=False)
+    assert metrics["validity_rate"] == 1.0
+    assert metrics["uniqueness_rate"] == 1.0
     assert math.isnan(metrics["novelty_rate"])
 
 
@@ -98,12 +129,84 @@ def test_molecular_report_keeps_existing_metrics(monkeypatch):
 
     monkeypatch.setattr(report, "mmd_graphlet_statistics", unexpected)
     monkeypatch.setattr(report, "spectral_histogram", unexpected)
+    monkeypatch.setattr(report, "simple_graph_validity_rate", unexpected)
+    monkeypatch.setattr(report, "wl_uniqueness_rate", unexpected)
+    monkeypatch.setattr(report, "wl_novelty_rate", unexpected)
     graphs = [nx.path_graph(4)]
     metrics = report._paper_mmd(
         graphs, graphs, compute_orbit=False, include_generic_metrics=False,
     )
     assert set(metrics) == set(report.REPORT_METRICS)
     assert report._report_metrics([metrics]) == report.REPORT_METRICS
+
+
+def test_generic_report_main_saves_vun_for_evaluated_graphs(tmp_path, monkeypatch):
+    import json
+    import pickle
+    import sys
+
+    dataset_root = tmp_path / "datasets"
+    dataset_dir = dataset_root / "tiny_generic"
+    dataset_dir.mkdir(parents=True)
+    splits = {
+        "train": [
+            nx.path_graph(5), nx.star_graph(4), nx.path_graph(4), nx.cycle_graph(5),
+        ],
+        "val": [nx.star_graph(3)],
+        "test": [nx.cycle_graph(5), nx.complete_graph(5)],
+    }
+    for split, graphs in splits.items():
+        with (dataset_dir / f"{split}.pkl").open("wb") as handle:
+            pickle.dump(graphs, handle)
+    generated_dir = tmp_path / "generated"
+    generated_dir.mkdir()
+    generated_path = generated_dir / "graphs.pkl"
+    with generated_path.open("wb") as handle:
+        pickle.dump([
+            nx.path_graph(5), nx.cycle_graph(5), nx.cycle_graph(5),
+            nx.complete_graph(5),
+        ], handle)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "dataset:\n"
+        "  name: tiny_generic\n"
+        f"  root: {dataset_root.as_posix()}\n"
+        "evaluation:\n"
+        "  compute_orbit: false\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "report"
+    monkeypatch.setattr(sys, "argv", [
+        str(SCRIPT), "--config", str(config_path),
+        "--generated-dir", str(generated_dir),
+        "--generated-graphs", str(generated_path),
+        "--generated-stage", "generated",
+        "--output-dir", str(output_dir), "--max-graphs", "3",
+    ])
+
+    report.main()
+
+    saved = json.loads((output_dir / "graph_evaluation_report.json").read_text())
+    rows = {row["comparison"]: row for row in saved["metrics"]}
+    expected = {
+        "train_to_test": (1.0, 1.0, 0.5),
+        "generated_to_test": (1.0, 2 / 3, 0.0),
+    }
+    with (output_dir / "graph_mmd_metrics.csv").open(newline="") as handle:
+        csv_rows = {row["comparison"]: row for row in csv.DictReader(handle)}
+    for comparison, rates in expected.items():
+        for key, rate in zip(
+            ("validity_rate", "uniqueness_rate", "novelty_rate"), rates,
+        ):
+            assert rows[comparison][key] == pytest.approx(rate)
+            assert float(csv_rows[comparison][key]) == pytest.approx(rate)
+    assert saved["num_generated_graphs_evaluated"] == 3
+    assert saved["num_reference_graphs"] == 2
+    assert saved["format"] == "graph_generation_evaluation_report_v11"
+    protocol = saved["generic_vun_protocol"]
+    assert all(key in protocol for key in (
+        "validity_rate", "uniqueness_rate", "novelty_rate", "row_semantics",
+    ))
 
 
 def test_spectral_mmd_ignores_node_order():

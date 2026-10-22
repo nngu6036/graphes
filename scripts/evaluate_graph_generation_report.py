@@ -24,7 +24,9 @@ from grapher.rewiring_mlp.evaluation.metrics import (
     mmd_graphlet_statistics,
     mmd_orbit,
     mmd_orbit_graphrnn,
+    simple_graph_validity_rate,
     wl_novelty_rate,
+    wl_uniqueness_rate,
 )
 from grapher.rewiring_mlp.evaluation.degree_sequences import evaluate_degree_sequence_sets
 from grapher.rewiring_mlp.molecular.graph_io import nx_to_rdkit_mol, require_rdkit
@@ -38,7 +40,8 @@ from grapher.utils.io import ensure_dir, load_pickle, load_yaml, save_json
 
 REPORT_METRICS = ("degree_mmd", "clustering_mmd", "orbit_mmd")
 GENERIC_REPORT_METRICS = (
-    *REPORT_METRICS, "spectral_mmd", "graphlet_history_mmd", "novelty_rate",
+    *REPORT_METRICS, "spectral_mmd", "graphlet_history_mmd",
+    "validity_rate", "uniqueness_rate", "novelty_rate",
 )
 
 
@@ -1352,12 +1355,15 @@ def _paper_mmd(
     Additional generic metrics use the existing evaluation conventions:
     20-bin normalized-Laplacian spectral histograms with adaptive Gaussian
     EMD, and graphlet-composition MMD (connected orders 3--5 by default).
-    Novelty is the fraction of topology WL hashes in ``novelty_candidate``
-    absent from the complete training split.  By default ``novelty_candidate``
-    is the MMD candidate population.  This override is used for the
-    ``train_to_<split>`` reference row: its MMD compares train against held-out,
-    while its novelty must describe the held-out population against train.
-    Novelty is unavailable when training graphs are absent.
+    V.U.N. uses the project's simple-graph validity and attribute-free WL
+    uniqueness/novelty definitions. Validity is the fraction of undirected
+    non-multigraphs without self-loops. Uniqueness is distinct WL hashes divided
+    by population size; novelty is the fraction of hashes absent from the
+    complete training split, counting repeated candidate graphs individually.
+    All three describe ``novelty_candidate`` when supplied, otherwise the MMD
+    candidate population. This override lets the ``train_to_<split>`` reference
+    row describe held-out quality while its MMD compares train against held-out.
+    Only novelty is unavailable when training graphs are absent.
     """
 
     protocol = str(metric_protocol).strip().lower().replace("-", "_")
@@ -1379,14 +1385,16 @@ def _paper_mmd(
 
     metrics = {}
     if include_generic_metrics:
-        announce("novelty", 0)
-        novelty_population = (
+        announce("V.U.N.", 0)
+        quality_population = (
             candidate if novelty_candidate is None else novelty_candidate
         )
+        metrics["validity_rate"] = simple_graph_validity_rate(quality_population)
+        metrics["uniqueness_rate"] = wl_uniqueness_rate(quality_population)
         metrics["novelty_rate"] = (
-            wl_novelty_rate(novelty_population, train) if train else float("nan")
+            wl_novelty_rate(quality_population, train) if train else float("nan")
         )
-        announce("novelty", 1)
+        announce("V.U.N.", 1)
         announce("spectral MMD", 0)
         spectral_reference = descriptor_matrix(reference, spectral_histogram)
         spectral_candidate = descriptor_matrix(candidate, spectral_histogram)
@@ -1641,14 +1649,19 @@ def validate_report_reference_split(output_dir: Path, reference_split: str) -> N
 def _print_table(rows: Sequence[dict[str, Any]], *, reference_split: str = "test") -> None:
     print(f"Graph-distribution MMD against held-out {reference_split} graphs (lower is better)")
     if any("novelty_rate" in row for row in rows):
-        print("WL novelty against the complete training split (evaluated population; higher is better)")
-        print("For train_to_* rows, novelty is held-out-vs-training; for model rows, novelty is generated-vs-training.")
+        print("Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)")
+        print(
+            "V.U.N. describes held-out graphs for train_to_* rows and candidate "
+            "graphs for model rows; novelty uses the complete training split."
+        )
     columns = {
         "degree_mmd": ("Degree MMD", 14),
         "clustering_mmd": ("Clustering MMD", 18),
         "orbit_mmd": ("Orbit MMD", 14),
         "spectral_mmd": ("Spectral MMD", 16),
         "graphlet_history_mmd": ("Graphlet MMD", 16),
+        "validity_rate": ("Validity", 14),
+        "uniqueness_rate": ("Uniqueness", 14),
         "novelty_rate": ("Novelty", 14),
     }
     metrics = _report_metrics(rows)
@@ -1688,7 +1701,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Evaluate saved generated graphs with degree and clustering MMD, "
-            "spectral and graphlet MMD for generic graphs, and optional "
+            "spectral and graphlet MMD plus validity, uniqueness, and novelty "
+            "for generic graphs, and optional "
             "four-node ORCA orbit MMD. Save CSV and JSON metric reports."
         )
     )
@@ -2218,7 +2232,7 @@ def main() -> None:
 
     save_json(
         {
-            "format": "graph_generation_evaluation_report_v10",
+            "format": "graph_generation_evaluation_report_v11",
             "reference_split": reference_split,
             "reference_split_sha256": provenance["split_sha256"][reference_split],
             "reference_graph_indices_zero_based": list(range(reference_count)),
@@ -2229,6 +2243,27 @@ def main() -> None:
             "graphlet_backend": graphlet_backend,
             "generic_graphlet_options": graphlet_options if not molecular else None,
             "generic_spectral_bins": 20 if not molecular else None,
+            "generic_vun_protocol": (
+                {
+                    "validity_rate": (
+                        "undirected non-multigraphs without self-loops / evaluated graphs"
+                    ),
+                    "uniqueness_rate": "distinct WL topology hashes / evaluated graphs",
+                    "novelty_rate": (
+                        "evaluated graphs with WL topology hashes absent from "
+                        "the complete training split / evaluated graphs"
+                    ),
+                    "row_semantics": {
+                        "train_to_<split>": "held-out population",
+                        "model_to_<split>": "candidate model population",
+                    },
+                    "range": [0.0, 1.0],
+                    "higher_is_better": True,
+                    "node_and_edge_attributes": False,
+                    "isomorphism_test": "approximate Weisfeiler-Lehman hash comparison",
+                }
+                if not molecular else None
+            ),
             "generic_novelty_protocol": (
                 {
                     "definition": "evaluated graphs with WL topology hashes absent from the complete training split / evaluated graphs",
