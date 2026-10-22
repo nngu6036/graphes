@@ -58,46 +58,153 @@ echo "CatFlow community_small loop finished."
 
 #Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-WL novelty against the complete training split (candidate population only; higher is better)
-The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
-catflow_to_test                     0.072821          0.823010      0.426084        0.367999        0.598952      1.000000
+Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      1.000000      0.800000      0.600000
+catflow_to_test                     0.072821          0.823010      0.426084        0.367999        0.598952      1.000000      1.000000      1.000000
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.640625    0.000000      0.803125
 heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
 catflow                           1.000000      1.000000     1.000000    1.000000      1.000000
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.640625        0.000000          0.000000
+heldout_test                        0.600000     0.800000        0.208778          0.257440
+catflow                             1.000000     1.000000        0.469917          0.465658
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.400000
+   0.0000heldout_test                       0.600000     1.000000
+   0.0000catflow                            1.000000     0.000000
+   0.0100train                              0.000000     0.400000
+   0.0100heldout_test                       0.600000     1.000000
+   0.0100catflow                            1.000000     0.000000
+   0.0250train                              0.000000     0.400000
+   0.0250heldout_test                       0.600000     1.000000
+   0.0250catflow                            1.000000     0.000000
+   0.0500train                              0.000000     0.400000
+   0.0500heldout_test                       0.600000     1.000000
+   0.0500catflow                            1.000000     0.000000
+   0.1000train                              0.000000     0.400000
+   0.1000heldout_test                       0.600000     1.000000
+   0.1000catflow                            1.000000     0.000000
+   0.2000train                              0.000000     0.500000
+   0.2000heldout_test                       0.500000     1.000000
+   0.2000catflow                            1.000000     0.000000
+   0.3000train                              0.000000     0.500000
+   0.3000heldout_test                       0.500000     1.000000
+   0.3000catflow                            1.000000     0.000000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000catflow                            0.079102     1.000000
+
 
 #Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-WL novelty against the complete training split (candidate population only; higher is better)
-The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
-catflow_to_test                     0.080028          0.831395      0.483119        0.379247        0.610999      1.000000
+Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      1.000000      0.800000      0.600000
+catflow_to_test                     0.080028          0.831395      0.483119        0.379247        0.610999      1.000000      1.000000      1.000000
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.640625    0.000000      0.803125
 heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
 catflow                           1.000000      1.000000     1.000000    1.000000      1.000000
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.640625        0.000000          0.000000
+heldout_test                        0.600000     0.800000        0.208778          0.257440
+catflow                             1.000000     1.000000        0.467990          0.464028
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.400000
+   0.0000heldout_test                       0.600000     1.000000
+   0.0000catflow                            1.000000     0.000000
+   0.0100train                              0.000000     0.400000
+   0.0100heldout_test                       0.600000     1.000000
+   0.0100catflow                            1.000000     0.000000
+   0.0250train                              0.000000     0.400000
+   0.0250heldout_test                       0.600000     1.000000
+   0.0250catflow                            1.000000     0.000000
+   0.0500train                              0.000000     0.400000
+   0.0500heldout_test                       0.600000     1.000000
+   0.0500catflow                            1.000000     0.000000
+   0.1000train                              0.000000     0.400000
+   0.1000heldout_test                       0.600000     1.000000
+   0.1000catflow                            1.000000     0.000000
+   0.2000train                              0.000000     0.500000
+   0.2000heldout_test                       0.500000     1.000000
+   0.2000catflow                            1.000000     0.000000
+   0.3000train                              0.000000     0.500000
+   0.3000heldout_test                       0.500000     1.000000
+   0.3000catflow                            1.000000     0.000000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000catflow                            0.073242     1.000000
+
 
 #Seed 44
+
 Graph-distribution MMD against held-out test graphs (lower is better)
-WL novelty against the complete training split (candidate population only; higher is better)
-The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
-catflow_to_test                     0.078349          0.813439      0.450069        0.361605        0.601397      1.000000
+Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      1.000000      0.800000      0.600000
+catflow_to_test                     0.078349          0.813439      0.450069        0.361605        0.601397      1.000000      1.000000      1.000000
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.640625    0.000000      0.803125
 heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
 catflow                           1.000000      1.000000     1.000000    1.000000      1.000000
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
 
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.640625        0.000000          0.000000
+heldout_test                        0.600000     0.800000        0.208778          0.257440
+catflow                             1.000000     1.000000        0.470900          0.465920
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.400000
+   0.0000heldout_test                       0.600000     1.000000
+   0.0000catflow                            1.000000     0.000000
+   0.0100train                              0.000000     0.400000
+   0.0100heldout_test                       0.600000     1.000000
+   0.0100catflow                            1.000000     0.000000
+   0.0250train                              0.000000     0.400000
+   0.0250heldout_test                       0.600000     1.000000
+   0.0250catflow                            1.000000     0.000000
+   0.0500train                              0.000000     0.400000
+   0.0500heldout_test                       0.600000     1.000000
+   0.0500catflow                            1.000000     0.000000
+   0.1000train                              0.000000     0.400000
+   0.1000heldout_test                       0.600000     1.000000
+   0.1000catflow                            1.000000     0.000000
+   0.2000train                              0.000000     0.500000
+   0.2000heldout_test                       0.500000     1.000000
+   0.2000catflow                            1.000000     0.000000
+   0.3000train                              0.000000     0.500000
+   0.3000heldout_test                       0.500000     1.000000
+   0.3000catflow                            1.000000     0.000000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000catflow                            0.083008     1.000000
 
 2. CatFlow / Ego-small
 ======================
@@ -157,46 +264,151 @@ echo "CatFlow ego_small loop finished."
 
 #Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-WL novelty against the complete training split (candidate population only; higher is better)
-The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
-catflow_to_test                     0.122425          0.079914      0.036366        0.185852        0.066582      0.879883
+Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000
+catflow_to_test                     0.122425          0.079914      0.036366        0.185852        0.066582      1.000000      0.617188      0.879883
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.546875    0.000000      0.614062
 heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
 catflow                           0.879883      0.879883     0.618164    0.910156      0.878906
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.546875        0.000000          0.000000
+heldout_test                        0.375000     0.700000        0.162295          0.000000
+catflow                             0.879883     0.618164        0.450041          0.493094
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.625000
+   0.0000heldout_test                       0.375000     1.000000
+   0.0000catflow                            0.879883     0.475000
+   0.0100train                              0.000000     0.625000
+   0.0100heldout_test                       0.375000     1.000000
+   0.0100catflow                            0.879883     0.475000
+   0.0250train                              0.000000     0.625000
+   0.0250heldout_test                       0.375000     1.000000
+   0.0250catflow                            0.879883     0.475000
+   0.0500train                              0.000000     0.625000
+   0.0500heldout_test                       0.375000     1.000000
+   0.0500catflow                            0.879883     0.475000
+   0.1000train                              0.000000     0.625000
+   0.1000heldout_test                       0.375000     1.000000
+   0.1000catflow                            0.879883     0.475000
+   0.2000train                              0.000000     0.625000
+   0.2000heldout_test                       0.375000     1.000000
+   0.2000catflow                            0.860352     0.475000
+   0.3000train                              0.000000     0.625000
+   0.3000heldout_test                       0.375000     1.000000
+   0.3000catflow                            0.855469     0.475000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000catflow                            0.399414     0.900000
 
 #Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-WL novelty against the complete training split (candidate population only; higher is better)
-The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
-catflow_to_test                     0.127305          0.087133      0.036739        0.178619        0.076463      0.873047
+Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000
+catflow_to_test                     0.127305          0.087133      0.036739        0.178619        0.076463      1.000000      0.625000      0.873047
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.546875    0.000000      0.614062
 heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
 catflow                           0.873047      0.873047     0.625000    0.897461      0.888477
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.546875        0.000000          0.000000
+heldout_test                        0.375000     0.700000        0.162295          0.000000
+catflow                             0.873047     0.625000        0.449093          0.493283
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.625000
+   0.0000heldout_test                       0.375000     1.000000
+   0.0000catflow                            0.873047     0.325000
+   0.0100train                              0.000000     0.625000
+   0.0100heldout_test                       0.375000     1.000000
+   0.0100catflow                            0.873047     0.325000
+   0.0250train                              0.000000     0.625000
+   0.0250heldout_test                       0.375000     1.000000
+   0.0250catflow                            0.873047     0.325000
+   0.0500train                              0.000000     0.625000
+   0.0500heldout_test                       0.375000     1.000000
+   0.0500catflow                            0.873047     0.325000
+   0.1000train                              0.000000     0.625000
+   0.1000heldout_test                       0.375000     1.000000
+   0.1000catflow                            0.873047     0.325000
+   0.2000train                              0.000000     0.625000
+   0.2000heldout_test                       0.375000     1.000000
+   0.2000catflow                            0.862305     0.325000
+   0.3000train                              0.000000     0.625000
+   0.3000heldout_test                       0.375000     1.000000
+   0.3000catflow                            0.859375     0.325000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000catflow                            0.428711     0.950000
+
 
 #Seed 44
 Graph-distribution MMD against held-out test graphs (lower is better)
-WL novelty against the complete training split (candidate population only; higher is better)
-The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
-catflow_to_test                     0.141249          0.089677      0.038129        0.177758        0.082910      0.860352
+Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000
+catflow_to_test                     0.141249          0.089677      0.038129        0.177758        0.082910      1.000000      0.596680      0.860352
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.546875    0.000000      0.614062
 heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
 catflow                           0.860352      0.860352     0.596680    0.904297      0.870703
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
 
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.546875        0.000000          0.000000
+heldout_test                        0.375000     0.700000        0.162295          0.000000
+catflow                             0.860352     0.596680        0.436188          0.489796
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.625000
+   0.0000heldout_test                       0.375000     1.000000
+   0.0000catflow                            0.860352     0.400000
+   0.0100train                              0.000000     0.625000
+   0.0100heldout_test                       0.375000     1.000000
+   0.0100catflow                            0.860352     0.400000
+   0.0250train                              0.000000     0.625000
+   0.0250heldout_test                       0.375000     1.000000
+   0.0250catflow                            0.860352     0.400000
+   0.0500train                              0.000000     0.625000
+   0.0500heldout_test                       0.375000     1.000000
+   0.0500catflow                            0.860352     0.400000
+   0.1000train                              0.000000     0.625000
+   0.1000heldout_test                       0.375000     1.000000
+   0.1000catflow                            0.860352     0.400000
+   0.2000train                              0.000000     0.625000
+   0.2000heldout_test                       0.375000     1.000000
+   0.2000catflow                            0.839844     0.400000
+   0.3000train                              0.000000     0.625000
+   0.3000heldout_test                       0.375000     1.000000
+   0.3000catflow                            0.838867     0.400000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000catflow                            0.361328     0.925000
 
 3. CatFlow / QM9
 ================
