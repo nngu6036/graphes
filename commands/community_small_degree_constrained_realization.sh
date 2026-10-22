@@ -1,4 +1,4 @@
-cd /home/quang/graphes
+s
 
 N="${N:-1024}"
 DEVICE="${DEVICE:-cuda:0}"
