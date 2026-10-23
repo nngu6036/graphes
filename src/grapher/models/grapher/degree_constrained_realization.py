@@ -548,6 +548,68 @@ def project_degree_sequence(
     )
 
 
+def _solve_connected_realization_with_flow(
+    degree: np.ndarray,
+    edge_u: np.ndarray,
+    edge_v: np.ndarray,
+    objective: np.ndarray,
+    *,
+    config: Mapping[str, Any],
+):
+    """Exact connected b-matching MILP under the original perturbed objective.
+
+    Undirected binary edge x_e carries two nonnegative directed flows. One
+    selected root sends n-1 units, every other vertex consumes one unit.
+    Capacity f_uv <= (n-1)*x_e makes disconnected solutions infeasible.
+    """
+    n = int(degree.size)
+    m = int(edge_u.size)
+    if n <= 1:
+        raise ValueError("flow formulation requires at least two vertices")
+    if not nx.is_graphical(degree.tolist(), method="eg") or np.any(degree == 0) or int(degree.sum()) < 2 * (n - 1):
+        raise RuntimeError("projected degree sequence has no connected simple realization")
+
+    count = 3 * m
+    rows: list[int] = []
+    cols: list[int] = []
+    values: list[float] = []
+    # Rows [0,n): exact degree. [n,2n): flow balance.
+    # Rows [2n,2n+2m): directed edge-flow capacities.
+    for e, (u0, v0) in enumerate(zip(edge_u, edge_v)):
+        u, v = int(u0), int(v0)
+        for vertex in (u, v):
+            rows.append(vertex); cols.append(e); values.append(1.0)
+        # f_uv and f_vu; flow balance = incoming - outgoing.
+        for flow_idx, source, target in ((m + e, u, v), (2 * m + e, v, u)):
+            for vertex, coefficient in ((source, -1.0), (target, 1.0)):
+                rows.append(n + vertex); cols.append(flow_idx); values.append(coefficient)
+        for offset, flow_idx in enumerate((m + e, 2 * m + e)):
+            cap_row = 2 * n + 2 * e + offset
+            rows.extend((cap_row, cap_row))
+            cols.extend((e, flow_idx))
+            values.extend((-(n - 1.0), 1.0))
+    matrix = coo_matrix((values, (rows, cols)), shape=(2 * n + 2 * m, count)).tocsr()
+    balance = np.ones(n, dtype=np.float64)
+    balance[0] = -(n - 1.0)
+    constraint_lb = np.concatenate((degree.astype(np.float64), balance, np.full(2 * m, -np.inf)))
+    constraint_ub = np.concatenate((degree.astype(np.float64), balance, np.zeros(2 * m)))
+    full_objective = np.concatenate((objective, np.zeros(2 * m)))
+    integer = np.concatenate((np.ones(m, dtype=np.int8), np.zeros(2 * m, dtype=np.int8)))
+    lower = np.zeros(count)
+    upper = np.concatenate((np.ones(m), np.full(2 * m, float(n - 1))))
+    result = _solve_milp(
+        full_objective, integer, lower, upper, matrix, constraint_lb, constraint_ub,
+        config=config,
+    )
+    if result.x is None or not bool(result.success):
+        raise RuntimeError(
+            "connected degree-constrained flow MILP failed: "
+            f"status={getattr(result, 'status', None)} "
+            f"message={getattr(result, 'message', '')}"
+        )
+    return result
+
+
 def _solve_exact_degree_realization(
     degree: np.ndarray,
     normalized_scores: np.ndarray,
@@ -582,6 +644,7 @@ def _solve_exact_degree_realization(
 
     cut_rows: list[csr_matrix] = []
     cut_rounds = 0
+    flow_fallback_used = False
     result = None
     graph = None
     require_connected = bool(config.get("require_connected", True)) and n > 1
@@ -613,10 +676,16 @@ def _solve_exact_degree_realization(
         if not require_connected or nx.is_connected(graph):
             break
         if cut_rounds >= max_rounds:
-            raise RuntimeError(
-                "degree-constrained realization remained disconnected after "
-                f"{max_rounds} connectivity-cut rounds"
+            # Re-solve the same perturb-and-MAP objective with exact connectivity,
+            # rather than abandoning generation or changing the indexed degrees.
+            result = _solve_connected_realization_with_flow(
+                degree, edge_u, edge_v, objective, config=config
             )
+            graph = _solution_graph(n, edge_u, edge_v, np.asarray(result.x))
+            if not nx.is_connected(graph):
+                raise RuntimeError("flow MILP returned disconnected graph")
+            flow_fallback_used = True
+            break
         new_rows = _connectivity_cut_rows(graph, edge_u, edge_v, edge_count)
         if not new_rows:
             raise RuntimeError("failed to construct connectivity cuts")
@@ -633,6 +702,7 @@ def _solve_exact_degree_realization(
         "mip_node_count": int(getattr(result, "mip_node_count", 0) or 0),
         "connectivity_cut_rounds": int(cut_rounds),
         "connectivity_cuts": int(len(cut_rows)),
+        "connectivity_flow_fallback_used": bool(flow_fallback_used),
         "selected_spectral_score_mean": (
             float(normalized_scores[chosen].mean()) if bool(chosen.any()) else 0.0
         ),
