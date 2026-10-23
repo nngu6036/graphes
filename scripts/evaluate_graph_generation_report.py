@@ -42,6 +42,7 @@ REPORT_METRICS = ("degree_mmd", "clustering_mmd", "orbit_mmd")
 GENERIC_REPORT_METRICS = (
     *REPORT_METRICS, "spectral_mmd", "graphlet_history_mmd",
     "validity_rate", "uniqueness_rate", "novelty_rate",
+    "joint_vun_percent",
 )
 
 
@@ -741,6 +742,85 @@ class _ExactTopologyClassIndex:
         return class_id
 
 
+def _is_simple_topology_valid(graph: nx.Graph) -> bool:
+    """Use exactly the generic validity predicate of ``simple_graph_validity_rate``.
+
+    The graph is valid if it is an undirected, loop-free, non-multigraph.
+    Connectedness is deliberately *not* imposed by this metric. Node and
+    edge attributes are ignored, as in the project's generic V/U/N protocol.
+    """
+
+    return (
+        isinstance(graph, nx.Graph)
+        and not graph.is_directed()
+        and not graph.is_multigraph()
+        and nx.number_of_selfloops(graph) == 0
+    )
+
+
+def _joint_vun_from_assignments(
+    graphs: Sequence[nx.Graph],
+    class_ids: Sequence[int],
+    train_class_ids: set[int],
+) -> dict[str, int | float]:
+    """Calculate *joint* V.U.N., not the product of marginal V, U and N.
+
+    Exactly one valid graph per new (relative to the complete training
+    split) isomorphism class contributes to the numerator. A graph invalid
+    under the project's declared generic validity predicate contributes
+    nothing. Repetitions and invalid samples still count in the denominator.
+    """
+
+    if len(graphs) != len(class_ids):
+        raise ValueError("Class IDs must correspond one-to-one to generated graphs.")
+    total = len(graphs)
+    valid_ids = [
+        int(class_id)
+        for graph, class_id in zip(graphs, class_ids)
+        if _is_simple_topology_valid(graph)
+    ]
+    distinct_valid = set(valid_ids)
+    distinct_novel_valid = distinct_valid.difference(train_class_ids)
+    novel_valid_graphs = sum(
+        class_id not in train_class_ids for class_id in valid_ids
+    )
+    numerator = len(distinct_novel_valid)
+    rate = numerator / total if total else float("nan")
+    return {
+        "num_graphs": total,
+        "num_valid_graphs": len(valid_ids),
+        "num_distinct_valid_isomorphism_classes": len(distinct_valid),
+        "num_novel_valid_graphs": novel_valid_graphs,
+        "num_distinct_valid_novel_isomorphism_classes": numerator,
+        "joint_vun_rate": rate,
+        "joint_vun_percent": 100.0 * rate,
+    }
+
+
+def exact_joint_vun_metrics(
+    generated: Sequence[nx.Graph],
+    train: Sequence[nx.Graph],
+) -> dict[str, int | float]:
+    """Evaluate joint V.U.N. with exact, attribute-free graph isomorphism.
+
+    NetworkX WL hashes, degree sequences, connected-component signatures and
+    triangle counts are used only as necessary prefilters; equivalence is
+    verified with ``nx.is_isomorphic``. The complete training population is
+    indexed before any generated graph, so there is no test-set leakage.
+    The metric is ``100 * distinct valid, novel generated classes / M``.
+    """
+
+    if not train:
+        raise ValueError("Joint V.U.N. requires the complete nonempty training split.")
+    if not generated:
+        raise ValueError("Joint V.U.N. requires at least one generated graph.")
+    index = _ExactTopologyClassIndex()
+    train_ids = {index.classify(graph) for graph in train}
+    generated_ids = [index.classify(graph) for graph in generated]
+    metrics = _joint_vun_from_assignments(generated, generated_ids, train_ids)
+    return {**metrics, "num_training_graphs": len(train)}
+
+
 def _frequency_tv(
     left: Counter[int],
     right: Counter[int],
@@ -781,6 +861,8 @@ def exact_isomorphism_support_diagnostics(
     * WL-hash novelty against the complete training split;
     * exact-isomorphism novelty against training;
     * exact-isomorphism uniqueness;
+    * joint valid, unique and novel percentage (one valid graph per novel
+      isomorphism class, divided by all candidate graphs);
     * coverage of training isomorphism classes; and
     * total-variation/overlap of class frequencies versus training and the
       held-out reference population.
@@ -827,8 +909,12 @@ def exact_isomorphism_support_diagnostics(
             if train_graphs and total > 0
             else float("nan")
         )
+        joint_vun = _joint_vun_from_assignments(
+            populations[name], assignments[name], train_classes
+        )
         summary_rows.append({
             "population": name,
+            **joint_vun,
             "num_graphs": total,
             "num_exact_isomorphism_classes": len(classes),
             "exact_isomorphism_uniqueness_rate": (
@@ -885,6 +971,13 @@ def exact_isomorphism_support_diagnostics(
             "node_and_edge_attributes": False,
             "wl_hash_role": "safe prefilter only; never accepted as proof of isomorphism",
             "exact_test": "networkx.is_isomorphic",
+            "joint_vun_definition": (
+                "100 * number of distinct valid generated topology isomorphism "
+                "classes absent from the complete training split / number "
+                "of evaluated graphs, including invalid and duplicate samples"
+            ),
+            "validity_definition": "undirected, loop-free, non-multigraph",
+            "joint_vun_unit": "percent",
             "frequency_distance": "total variation over jointly constructed exact-isomorphism classes",
             "train_population": train_name,
             "reference_population": reference_name,
@@ -1309,6 +1402,7 @@ def _print_isomorphism_support_diagnostics(
         f"{'WL novel':>12s}"
         f"{'Exact novel':>14s}"
         f"{'Iso unique':>13s}"
+        f"{'Joint VUN%':>13s}"
         f"{'TV->train':>12s}"
         f"{'TV->heldout':>14s}"
     )
@@ -1318,12 +1412,13 @@ def _print_isomorphism_support_diagnostics(
             f"{float(row['wl_novelty_rate_against_train']):12.6f}"
             f"{float(row['exact_isomorphism_novelty_rate_against_train']):14.6f}"
             f"{float(row['exact_isomorphism_uniqueness_rate']):13.6f}"
+            f"{float(row['joint_vun_percent']):13.3f}"
             f"{float(row['class_frequency_tv_to_train']):12.6f}"
             f"{float(row['class_frequency_tv_to_reference']):14.6f}"
         )
     print(
-        "Exact novelty = fraction of graphs not isomorphic to any training graph; "
-        "TV=0 means identical empirical isomorphism-class frequencies."
+        "Joint VUN% = 100 * distinct valid novel isomorphism classes / "
+        "all evaluated graphs; TV=0 means identical empirical class frequencies."
     )
 
 def _paper_mmd(
@@ -1355,15 +1450,15 @@ def _paper_mmd(
     Additional generic metrics use the existing evaluation conventions:
     20-bin normalized-Laplacian spectral histograms with adaptive Gaussian
     EMD, and graphlet-composition MMD (connected orders 3--5 by default).
-    V.U.N. uses the project's simple-graph validity and attribute-free WL
-    uniqueness/novelty definitions. Validity is the fraction of undirected
-    non-multigraphs without self-loops. Uniqueness is distinct WL hashes divided
-    by population size; novelty is the fraction of hashes absent from the
-    complete training split, counting repeated candidate graphs individually.
-    All three describe ``novelty_candidate`` when supplied, otherwise the MMD
-    candidate population. This override lets the ``train_to_<split>`` reference
-    row describe held-out quality while its MMD compares train against held-out.
-    Only novelty is unavailable when training graphs are absent.
+    The three existing *marginal* V/U/N rates use the project's simple-graph
+    validity and attribute-free WL uniqueness/novelty definitions. Their
+    separate meanings are unchanged. ``joint_vun_percent`` instead counts
+    distinct valid topology isomorphism classes absent from the *complete*
+    training split, using an exact NetworkX isomorphism test, and divides by
+    all evaluated graphs. It must not be calculated as V * U * N.
+    All diversity metrics describe ``novelty_candidate`` when supplied;
+    otherwise they describe the MMD candidate. Without training graphs,
+    novelty and joint VUN are unavailable (NaN).
     """
 
     protocol = str(metric_protocol).strip().lower().replace("-", "_")
@@ -1393,6 +1488,10 @@ def _paper_mmd(
         metrics["uniqueness_rate"] = wl_uniqueness_rate(quality_population)
         metrics["novelty_rate"] = (
             wl_novelty_rate(quality_population, train) if train else float("nan")
+        )
+        metrics["joint_vun_percent"] = (
+            float(exact_joint_vun_metrics(quality_population, train)["joint_vun_percent"])
+            if train else float("nan")
         )
         announce("V.U.N.", 1)
         announce("spectral MMD", 0)
@@ -1649,10 +1748,14 @@ def validate_report_reference_split(output_dir: Path, reference_split: str) -> N
 def _print_table(rows: Sequence[dict[str, Any]], *, reference_split: str = "test") -> None:
     print(f"Graph-distribution MMD against held-out {reference_split} graphs (lower is better)")
     if any("novelty_rate" in row for row in rows):
-        print("Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)")
         print(
-            "V.U.N. describes held-out graphs for train_to_* rows and candidate "
-            "graphs for model rows; novelty uses the complete training split."
+            "Generic graph diversity: marginal WL V/U/N rates (0-1); "
+            "joint exact-isomorphism VUN (%) (higher is better)"
+        )
+        print(
+            "Marginal V/U/N describe held-out graphs for train_to_* rows "
+            "and candidates for model rows. Joint VUN is omitted for the "
+            "unequally-sized reference row; all novelty uses full training support."
         )
     columns = {
         "degree_mmd": ("Degree MMD", 14),
@@ -1663,15 +1766,21 @@ def _print_table(rows: Sequence[dict[str, Any]], *, reference_split: str = "test
         "validity_rate": ("Validity", 14),
         "uniqueness_rate": ("Uniqueness", 14),
         "novelty_rate": ("Novelty", 14),
+        "joint_vun_percent": ("Joint VUN (%)", 16),
     }
     metrics = _report_metrics(rows)
     print(f"{'Comparison':30s}" + "".join(
         f"{columns[key][0]:>{columns[key][1]}s}" for key in metrics
     ))
     for row in rows:
+        def cell(key: str) -> str:
+            value = float(row.get(key, float("nan")))
+            if key == "joint_vun_percent" and math.isnan(value):
+                return f"{'--':>{columns[key][1]}s}"
+            return f"{value:{columns[key][1]}.6f}"
+
         print(f"{str(row['comparison']):30s}" + "".join(
-            f"{float(row.get(key, float('nan'))):{columns[key][1]}.6f}"
-            for key in metrics
+            cell(key) for key in metrics
         ))
 
 
@@ -1784,9 +1893,8 @@ def main() -> None:
         "--skip-exact-isomorphism-diagnostics",
         action="store_true",
         help=(
-            "Skip topology-only exact-isomorphism novelty and isomorphism-class "
-            "frequency diagnostics for generic graphs. They are enabled by "
-            "default and use the complete training split."
+            "Skip extended exact-isomorphism support tables and class-frequency "
+            "diagnostics. Joint VUN is still evaluated in the main metric report."
         ),
     )
     parser.add_argument(
@@ -2055,15 +2163,18 @@ def main() -> None:
     }
     rows: list[dict[str, Any]] = []
     if train_graphs:
-        rows.append(
-            _evaluate_comparison(
-                reference,
-                train_graphs,
-                f"train_to_{reference_split}",
-                novelty_candidate=reference,
-                **metric_options,
-            )
+        train_row = _evaluate_comparison(
+            reference,
+            train_graphs,
+            f"train_to_{reference_split}",
+            novelty_candidate=reference,
+            **metric_options,
         )
+        # The reference has far fewer graphs than the 1024-sample model batch;
+        # its joint-VUN percentage is not a comparable baseline in main tables.
+        if not molecular:
+            train_row["joint_vun_percent"] = float("nan")
+        rows.append(train_row)
     for stage, stage_graphs, _stage_path in additional_managed_stages:
         stage_count = len(stage_graphs)
         if args.max_graphs is not None:
@@ -2145,6 +2256,27 @@ def main() -> None:
             train_name="train",
             reference_name=reference_population_name,
         )
+        support_by_name = {
+            str(metric["population"]): metric
+            for metric in isomorphism_diagnostics["population_metrics"]
+        }
+        for metric in rows:
+            comparison = str(metric["comparison"])
+            if comparison == f"train_to_{reference_split}":
+                continue
+            suffix = f"_to_{reference_split}"
+            if comparison.endswith(suffix):
+                stage = comparison[:-len(suffix)]
+                support = support_by_name.get(stage)
+                if support is not None and not math.isclose(
+                    float(metric["joint_vun_percent"]),
+                    float(support["joint_vun_percent"]),
+                    abs_tol=1e-10,
+                ):
+                    raise AssertionError(
+                        f"Joint VUN mismatch for {comparison}: "
+                        "per-row evaluator differs from exact support diagnostics."
+                    )
         _write_isomorphism_support_csv(
             isomorphism_diagnostics["population_metrics"],
             isomorphism_support_csv_path,
@@ -2232,7 +2364,7 @@ def main() -> None:
 
     save_json(
         {
-            "format": "graph_generation_evaluation_report_v11",
+            "format": "graph_generation_evaluation_report_v12",
             "reference_split": reference_split,
             "reference_split_sha256": provenance["split_sha256"][reference_split],
             "reference_graph_indices_zero_based": list(range(reference_count)),
@@ -2253,14 +2385,30 @@ def main() -> None:
                         "evaluated graphs with WL topology hashes absent from "
                         "the complete training split / evaluated graphs"
                     ),
+                    "joint_vun_percent": (
+                        "100 * number of distinct valid, exact-isomorphism "
+                        "topology classes absent from complete training split / "
+                        "number of evaluated graphs, counting invalid and duplicates"
+                    ),
+                    "joint_vun_validity": "undirected non-multigraphs without self-loops",
+                    "joint_vun_isomorphism": (
+                        "WL/invariant prefilter plus networkx.is_isomorphic confirmation"
+                    ),
+                    "joint_vun_reference_row": "not reported due to unmatched sample counts",
                     "row_semantics": {
                         "train_to_<split>": "held-out population",
                         "model_to_<split>": "candidate model population",
                     },
-                    "range": [0.0, 1.0],
+                    "range": {
+                        "marginal_rates": [0.0, 1.0],
+                        "joint_vun_percent": [0.0, 100.0],
+                    },
                     "higher_is_better": True,
                     "node_and_edge_attributes": False,
-                    "isomorphism_test": "approximate Weisfeiler-Lehman hash comparison",
+                    "isomorphism_test": (
+                        "marginal uniqueness/novelty: approximate WL; "
+                        "joint VUN: exact networkx.is_isomorphic"
+                    ),
                 }
                 if not molecular else None
             ),
