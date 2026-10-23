@@ -548,6 +548,80 @@ def project_degree_sequence(
     )
 
 
+def _valid_exact_degree_solution(graph: nx.Graph, degree: np.ndarray, *, connected: bool) -> bool:
+    """Validate solver incumbents before using a non-optimal MILP result."""
+    n = int(degree.size)
+    return (
+        graph.number_of_nodes() == n
+        and all(graph.degree(i) == int(degree[i]) for i in range(n))
+        and nx.number_of_selfloops(graph) == 0
+        and (not connected or nx.is_connected(graph))
+    )
+
+
+def _connect_degree_exact_by_switches(
+    graph: nx.Graph,
+    degree: np.ndarray,
+    edge_u: np.ndarray,
+    edge_v: np.ndarray,
+    objective: np.ndarray,
+) -> tuple[nx.Graph, int]:
+    """Make a graphical, connected-realizable degree sequence connected.
+
+    Each 2-switch consumes a non-bridge edge in one component and an edge in
+    another component. Both cross edges are new. Exactly one fewer component
+    remains; exact indexed degrees are preserved. Pick the cheapest valid
+    orientation according to the original perturb-and-MAP objective.
+    """
+    graph = graph.copy()
+    n = graph.number_of_nodes()
+    cost = {(int(u), int(v)): float(c) for u, v, c in zip(edge_u, edge_v, objective)}
+
+    def edge_cost(u: int, v: int) -> float:
+        return cost[(min(u, v), max(u, v))]
+
+    count = 0
+    while not nx.is_connected(graph):
+        components = [set(nodes) for nodes in nx.connected_components(graph)]
+        bridges = {frozenset(e) for e in nx.bridges(graph)}
+        choice = None
+        # A connected realization exists precisely when the positive graphical
+        # sequence has >= n-1 edges, ensuring some cyclic component when needed.
+        for comp_idx, comp in enumerate(components):
+            cycle_edges = [
+                (int(u), int(v)) for u, v in graph.subgraph(comp).edges()
+                if frozenset((u, v)) not in bridges
+            ]
+            if not cycle_edges:
+                continue
+            for other_idx, other in enumerate(components):
+                if other_idx == comp_idx:
+                    continue
+                other_edges = list(graph.subgraph(other).edges())
+                for u, v in cycle_edges:
+                    for x0, y0 in other_edges:
+                        x, y = int(x0), int(y0)
+                        original_cost = edge_cost(u, v) + edge_cost(x, y)
+                        for new_edges in (((u, x), (v, y)), ((u, y), (v, x))):
+                            delta = sum(edge_cost(a, b) for a, b in new_edges) - original_cost
+                            candidate = (float(delta), (u, v), (x, y), new_edges)
+                            if choice is None or candidate < choice:
+                                choice = candidate
+        if choice is None:
+            raise RuntimeError("no progress 2-switch found; degree sequence may not be connected-realizable")
+        _, (u, v), (x, y), new_edges = choice
+        before = len(components)
+        graph.remove_edge(u, v)
+        graph.remove_edge(x, y)
+        graph.add_edges_from(new_edges)
+        count += 1
+        if nx.number_connected_components(graph) != before - 1:
+            raise AssertionError("connectivity repair failed to reduce component count")
+    if not _valid_exact_degree_solution(graph, degree, connected=True):
+        raise AssertionError("connectivity repair altered the required degree sequence")
+    return graph, count
+
+
 def _solve_connected_realization_with_flow(
     degree: np.ndarray,
     edge_u: np.ndarray,
@@ -601,12 +675,8 @@ def _solve_connected_realization_with_flow(
         full_objective, integer, lower, upper, matrix, constraint_lb, constraint_ub,
         config=config,
     )
-    if result.x is None or not bool(result.success):
-        raise RuntimeError(
-            "connected degree-constrained flow MILP failed: "
-            f"status={getattr(result, 'status', None)} "
-            f"message={getattr(result, 'message', '')}"
-        )
+    # HiGHS can return a valid incumbent with status=1 (time limit).
+    # The caller validates integrality, degrees, and connectedness.
     return result
 
 
@@ -645,6 +715,8 @@ def _solve_exact_degree_realization(
     cut_rows: list[csr_matrix] = []
     cut_rounds = 0
     flow_fallback_used = False
+    flow_timeout_repair_used = False
+    connectivity_repair_switches = 0
     result = None
     graph = None
     require_connected = bool(config.get("require_connected", True)) and n > 1
@@ -678,13 +750,27 @@ def _solve_exact_degree_realization(
         if cut_rounds >= max_rounds:
             # Re-solve the same perturb-and-MAP objective with exact connectivity,
             # rather than abandoning generation or changing the indexed degrees.
-            result = _solve_connected_realization_with_flow(
+            flow_result = _solve_connected_realization_with_flow(
                 degree, edge_u, edge_v, objective, config=config
             )
-            graph = _solution_graph(n, edge_u, edge_v, np.asarray(result.x))
-            if not nx.is_connected(graph):
-                raise RuntimeError("flow MILP returned disconnected graph")
             flow_fallback_used = True
+            incumbent = None
+            if flow_result.x is not None:
+                values = np.asarray(flow_result.x[:edge_count], dtype=np.float64)
+                if (np.all(np.isfinite(values)) and
+                    np.all(np.minimum(np.abs(values), np.abs(values - 1.0)) <= 1e-5)):
+                    candidate = _solution_graph(n, edge_u, edge_v, values)
+                    if _valid_exact_degree_solution(candidate, degree, connected=True):
+                        incumbent = candidate
+            if incumbent is not None:
+                graph, result = incumbent, flow_result
+            else:
+                # The previous cut-MILP output is a valid exact-degree graph.
+                # A best-delta 2-switch connects it without modifying degrees.
+                graph, connectivity_repair_switches = _connect_degree_exact_by_switches(
+                    graph, degree, edge_u, edge_v, objective
+                )
+                flow_timeout_repair_used = True
             break
         new_rows = _connectivity_cut_rows(graph, edge_u, edge_v, edge_count)
         if not new_rows:
@@ -693,16 +779,22 @@ def _solve_exact_degree_realization(
         cut_rounds += 1
 
     assert graph is not None and result is not None
-    chosen = np.asarray(result.x[:edge_count]) > 0.5
+    if not _valid_exact_degree_solution(graph, degree, connected=require_connected):
+        raise AssertionError("final realization violates exact degrees or connectivity")
+    chosen = np.array([graph.has_edge(int(u), int(v)) for u, v in zip(edge_u, edge_v)], dtype=bool)
+    actual_objective = float(np.dot(objective, chosen.astype(np.float64)))
     return graph, {
         "solver_status": int(result.status),
         "solver_message": str(result.message),
-        "objective": float(result.fun),
-        "mip_gap": _finite_float_or_none(getattr(result, "mip_gap", None)),
+        "objective": actual_objective,
+        "mip_gap": _finite_float_or_none(getattr(result, "mip_gap", None)) if not flow_timeout_repair_used else None,
         "mip_node_count": int(getattr(result, "mip_node_count", 0) or 0),
         "connectivity_cut_rounds": int(cut_rounds),
         "connectivity_cuts": int(len(cut_rows)),
         "connectivity_flow_fallback_used": bool(flow_fallback_used),
+        "connectivity_flow_timeout_repair_used": bool(flow_timeout_repair_used),
+        "connectivity_repair_switches": int(connectivity_repair_switches),
+        "realization_optimality_certified": bool(result.success) and not flow_timeout_repair_used,
         "selected_spectral_score_mean": (
             float(normalized_scores[chosen].mean()) if bool(chosen.any()) else 0.0
         ),

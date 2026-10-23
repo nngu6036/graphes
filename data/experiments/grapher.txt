@@ -181,55 +181,153 @@ Epsilon-novelty / held-out coverage curve
    0.5000grapher_threshold_control          0.000000     1.000000
    0.5000grapher_degree_constrained_pre_rewire     0.000000     1.000000
    0.5000grapher_degree_constrained_rewired     0.000000     1.000000
-   
+
 # Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-WL novelty against the complete training split (candidate population only; higher is better)
-The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
-grapher_spectral_pre_rewire_to_test      0.005467          0.011144      0.000287        0.007214        0.010950      0.000000
-grapher_diversified_to_test         0.005467          0.036915      0.000498        0.011333        0.018961      0.826172
+Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      1.000000      0.800000      0.600000
+grapher_threshold_control_to_test      0.005467          0.011144      0.000287        0.007214        0.010950      1.000000      0.040039      0.000000
+grapher_degree_constrained_pre_rewire_to_test      0.005537          0.011698      0.001970        0.008248        0.011374      1.000000      0.145508      0.106445
+grapher_degree_constrained_rewired_to_test      0.005537          0.029249      0.000598        0.010419        0.020570      1.000000      0.621094      0.815430
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.640625    0.000000      0.803125
 heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
-grapher_spectral_pre_rewire       0.000000      0.000000     0.040039    0.061523      0.793359
-grapher_diversified               0.826172      0.826172     0.630859    0.827148      0.928516
+grapher_threshold_control         0.000000      0.000000     0.040039    0.061523      0.793359
+grapher_degree_constrained_pre_rewire    0.106445      0.106445     0.145508    0.139648      0.796289
+grapher_degree_constrained_rewired    0.815430      0.815430     0.621094    0.817383      0.929492
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.640625        0.000000          0.000000
+heldout_test                        0.600000     0.800000        0.208778          0.257440
+grapher_threshold_control           0.000000     0.040039        0.000000          0.000000
+grapher_degree_constrained_pre_rewire      0.106445     0.145508        0.030757          0.000000
+grapher_degree_constrained_rewired      0.815430     0.621094        0.226591          0.261905
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.400000
+   0.0000heldout_test                       0.600000     1.000000
+   0.0000grapher_threshold_control          0.000000     0.400000
+   0.0000grapher_degree_constrained_pre_rewire     0.106445     0.400000
+   0.0000grapher_degree_constrained_rewired     0.815430     0.400000
+   0.0100train                              0.000000     0.400000
+   0.0100heldout_test                       0.600000     1.000000
+   0.0100grapher_threshold_control          0.000000     0.400000
+   0.0100grapher_degree_constrained_pre_rewire     0.106445     0.400000
+   0.0100grapher_degree_constrained_rewired     0.815430     0.400000
+   0.0250train                              0.000000     0.400000
+   0.0250heldout_test                       0.600000     1.000000
+   0.0250grapher_threshold_control          0.000000     0.400000
+   0.0250grapher_degree_constrained_pre_rewire     0.106445     0.400000
+   0.0250grapher_degree_constrained_rewired     0.815430     0.400000
+   0.0500train                              0.000000     0.400000
+   0.0500heldout_test                       0.600000     1.000000
+   0.0500grapher_threshold_control          0.000000     0.400000
+   0.0500grapher_degree_constrained_pre_rewire     0.106445     0.400000
+   0.0500grapher_degree_constrained_rewired     0.815430     0.400000
+   0.1000train                              0.000000     0.400000
+   0.1000heldout_test                       0.600000     1.000000
+   0.1000grapher_threshold_control          0.000000     0.400000
+   0.1000grapher_degree_constrained_pre_rewire     0.106445     0.400000
+   0.1000grapher_degree_constrained_rewired     0.812500     0.450000
+   0.2000train                              0.000000     0.500000
+   0.2000heldout_test                       0.500000     1.000000
+   0.2000grapher_threshold_control          0.000000     0.500000
+   0.2000grapher_degree_constrained_pre_rewire     0.098633     0.500000
+   0.2000grapher_degree_constrained_rewired     0.666016     0.500000
+   0.3000train                              0.000000     0.500000
+   0.3000heldout_test                       0.500000     1.000000
+   0.3000grapher_threshold_control          0.000000     0.500000
+   0.3000grapher_degree_constrained_pre_rewire     0.057617     0.500000
+   0.3000grapher_degree_constrained_rewired     0.373047     0.500000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000grapher_threshold_control          0.000000     1.000000
+   0.5000grapher_degree_constrained_pre_rewire     0.000000     1.000000
+   0.5000grapher_degree_constrained_rewired     0.000000     1.000000
+
+
 
 # Seed 44
 Graph-distribution MMD against held-out test graphs (lower is better)
-WL novelty against the complete training split (candidate population only; higher is better)
-The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
-grapher_spectral_pre_rewire_to_test      0.003172          0.007285      0.000372        0.005428        0.009799      0.000000
-grapher_diversified_to_test         0.003172          0.046852      0.000655        0.010022        0.016076      0.840820
+Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      1.000000      0.800000      0.600000
+grapher_threshold_control_to_test      0.003172          0.007285      0.000372        0.005428        0.009799      1.000000      0.040039      0.000000
+grapher_degree_constrained_pre_rewire_to_test      0.003172          0.006419      0.001745        0.005502        0.008526      1.000000      0.114258      0.074219
+grapher_degree_constrained_rewired_to_test      0.003172          0.034761      0.000613        0.008184        0.016748      1.000000      0.648438      0.822266
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.640625    0.000000      0.803125
 heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
-grapher_spectral_pre_rewire       0.000000      0.000000     0.040039    0.070312      0.792383
-grapher_diversified               0.840820      0.840820     0.679688    0.850586      0.943164
+grapher_threshold_control         0.000000      0.000000     0.040039    0.070312      0.792383
+grapher_degree_constrained_pre_rewire    0.074219      0.074219     0.114258    0.114258      0.795313
+grapher_degree_constrained_rewired    0.822266      0.822266     0.648438    0.833008      0.932422
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
 
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.640625        0.000000          0.000000
+heldout_test                        0.600000     0.800000        0.208778          0.257440
+grapher_threshold_control           0.000000     0.040039        0.000000          0.000000
+grapher_degree_constrained_pre_rewire      0.074219     0.114258        0.021598          0.000000
+grapher_degree_constrained_rewired      0.822266     0.648438        0.231641          0.265306
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.400000
+   0.0000heldout_test                       0.600000     1.000000
+   0.0000grapher_threshold_control          0.000000     0.400000
+   0.0000grapher_degree_constrained_pre_rewire     0.074219     0.400000
+   0.0000grapher_degree_constrained_rewired     0.822266     0.400000
+   0.0100train                              0.000000     0.400000
+   0.0100heldout_test                       0.600000     1.000000
+   0.0100grapher_threshold_control          0.000000     0.400000
+   0.0100grapher_degree_constrained_pre_rewire     0.074219     0.400000
+   0.0100grapher_degree_constrained_rewired     0.822266     0.400000
+   0.0250train                              0.000000     0.400000
+   0.0250heldout_test                       0.600000     1.000000
+   0.0250grapher_threshold_control          0.000000     0.400000
+   0.0250grapher_degree_constrained_pre_rewire     0.074219     0.400000
+   0.0250grapher_degree_constrained_rewired     0.822266     0.400000
+   0.0500train                              0.000000     0.400000
+   0.0500heldout_test                       0.600000     1.000000
+   0.0500grapher_threshold_control          0.000000     0.400000
+   0.0500grapher_degree_constrained_pre_rewire     0.074219     0.400000
+   0.0500grapher_degree_constrained_rewired     0.822266     0.400000
+   0.1000train                              0.000000     0.400000
+   0.1000heldout_test                       0.600000     1.000000
+   0.1000grapher_threshold_control          0.000000     0.400000
+   0.1000grapher_degree_constrained_pre_rewire     0.073242     0.400000
+   0.1000grapher_degree_constrained_rewired     0.822266     0.400000
+   0.2000train                              0.000000     0.500000
+   0.2000heldout_test                       0.500000     1.000000
+   0.2000grapher_threshold_control          0.000000     0.500000
+   0.2000grapher_degree_constrained_pre_rewire     0.071289     0.500000
+   0.2000grapher_degree_constrained_rewired     0.699219     0.500000
+   0.3000train                              0.000000     0.500000
+   0.3000heldout_test                       0.500000     1.000000
+   0.3000grapher_threshold_control          0.000000     0.500000
+   0.3000grapher_degree_constrained_pre_rewire     0.042969     0.500000
+   0.3000grapher_degree_constrained_rewired     0.413086     0.500000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000grapher_threshold_control          0.000000     1.000000
+   0.5000grapher_degree_constrained_pre_rewire     0.000000     1.000000
+   0.5000grapher_degree_constrained_rewired     0.000000     1.000000
+
+   
 # Seed 45
-Graph-distribution MMD against held-out test graphs (lower is better)
-WL novelty against the complete training split (candidate population only; higher is better)
-The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
-train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      0.000000
-grapher_spectral_pre_rewire_to_test      0.005873          0.009975      0.000489        0.009179        0.012819      0.000000
-grapher_diversified_to_test         0.005873          0.038515      0.000746        0.014422        0.016307      0.833008
-
-Exact topology-support diagnostics (attributes ignored)
-Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
-train                             0.000000      0.000000     0.640625    0.000000      0.803125
-heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
-grapher_spectral_pre_rewire       0.000000      0.000000     0.040039    0.071289      0.808008
-grapher_diversified               0.833008      0.833008     0.658203    0.840820      0.931445
-
 
 
 # ##############################################################################
@@ -238,52 +336,217 @@ grapher_diversified               0.833008      0.833008     0.658203    0.84082
 
 # Seed 41
 Graph-distribution MMD against held-out test graphs (lower is better)
-WL novelty against the complete training split (candidate population only; higher is better)
-The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
-grapher_spectral_pre_rewire_to_test      0.021801          0.060825      0.010177        0.027987        0.006472      0.107422
-grapher_diversified_to_test         0.021801          0.062265      0.010181        0.031087        0.006605      0.296875
+Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000
+grapher_threshold_control_to_test      0.021801          0.060825      0.010177        0.027987        0.006472      1.000000      0.121094      0.107422
+grapher_degree_constrained_pre_rewire_to_test      0.020325          0.034163      0.006353        0.041891        0.015546      1.000000      0.365234      0.483398
+grapher_degree_constrained_rewired_to_test      0.020325          0.041759      0.005850        0.043227        0.016715      1.000000      0.381836      0.541992
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.546875    0.000000      0.614062
 heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
-grapher_spectral_pre_rewire       0.107422      0.107422     0.121094    0.279297      0.679883
-grapher_diversified               0.296875      0.296875     0.212891    0.433594      0.679883
+grapher_threshold_control         0.107422      0.107422     0.121094    0.279297      0.679883
+grapher_degree_constrained_pre_rewire    0.483398      0.483398     0.365234    0.514648      0.749219
+grapher_degree_constrained_rewired    0.541992      0.541992     0.381836    0.572266      0.749219
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.546875        0.000000          0.000000
+heldout_test                        0.375000     0.700000        0.162295          0.000000
+grapher_threshold_control           0.107422     0.121094        0.059438          0.000000
+grapher_degree_constrained_pre_rewire      0.483398     0.365234        0.222563          0.000000
+grapher_degree_constrained_rewired      0.541992     0.381836        0.241359          0.318394
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.625000
+   0.0000heldout_test                       0.375000     1.000000
+   0.0000grapher_threshold_control          0.107422     0.675000
+   0.0000grapher_degree_constrained_pre_rewire     0.483398     0.650000
+   0.0000grapher_degree_constrained_rewired     0.541992     0.650000
+   0.0100train                              0.000000     0.625000
+   0.0100heldout_test                       0.375000     1.000000
+   0.0100grapher_threshold_control          0.107422     0.675000
+   0.0100grapher_degree_constrained_pre_rewire     0.483398     0.650000
+   0.0100grapher_degree_constrained_rewired     0.541992     0.650000
+   0.0250train                              0.000000     0.625000
+   0.0250heldout_test                       0.375000     1.000000
+   0.0250grapher_threshold_control          0.107422     0.675000
+   0.0250grapher_degree_constrained_pre_rewire     0.483398     0.650000
+   0.0250grapher_degree_constrained_rewired     0.541992     0.650000
+   0.0500train                              0.000000     0.625000
+   0.0500heldout_test                       0.375000     1.000000
+   0.0500grapher_threshold_control          0.107422     0.675000
+   0.0500grapher_degree_constrained_pre_rewire     0.483398     0.650000
+   0.0500grapher_degree_constrained_rewired     0.541992     0.650000
+   0.1000train                              0.000000     0.625000
+   0.1000heldout_test                       0.375000     1.000000
+   0.1000grapher_threshold_control          0.107422     0.675000
+   0.1000grapher_degree_constrained_pre_rewire     0.483398     0.650000
+   0.1000grapher_degree_constrained_rewired     0.541992     0.650000
+   0.2000train                              0.000000     0.625000
+   0.2000heldout_test                       0.375000     1.000000
+   0.2000grapher_threshold_control          0.107422     0.675000
+   0.2000grapher_degree_constrained_pre_rewire     0.483398     0.650000
+   0.2000grapher_degree_constrained_rewired     0.541992     0.650000
+   0.3000train                              0.000000     0.625000
+   0.3000heldout_test                       0.375000     1.000000
+   0.3000grapher_threshold_control          0.107422     0.675000
+   0.3000grapher_degree_constrained_pre_rewire     0.481445     0.650000
+   0.3000grapher_degree_constrained_rewired     0.516602     0.650000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000grapher_threshold_control          0.047852     1.000000
+   0.5000grapher_degree_constrained_pre_rewire     0.039062     1.000000
+   0.5000grapher_degree_constrained_rewired     0.039062     1.000000
 
 # Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-WL novelty against the complete training split (candidate population only; higher is better)
-The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
-grapher_spectral_pre_rewire_to_test      0.016321          0.027498      0.004179        0.015607        0.008123      0.099609
-grapher_diversified_to_test         0.016321          0.028864      0.004160        0.016357        0.008235      0.250977
+Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000
+grapher_threshold_control_to_test      0.016321          0.027498      0.004179        0.015607        0.008123      1.000000      0.109375      0.099609
+grapher_degree_constrained_pre_rewire_to_test      0.008959          0.030034      0.002841        0.019311        0.003905      1.000000      0.280273      0.330078
+grapher_degree_constrained_rewired_to_test      0.008959          0.030903      0.002518        0.019390        0.004435      1.000000      0.298828      0.374023
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.546875    0.000000      0.614062
 heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
-grapher_spectral_pre_rewire       0.099609      0.099609     0.109375    0.210938      0.642383
-grapher_diversified               0.250977      0.250977     0.185547    0.339844      0.642383
+grapher_threshold_control         0.099609      0.099609     0.109375    0.210938      0.642383
+grapher_degree_constrained_pre_rewire    0.330078      0.330078     0.280273    0.384766      0.674609
+grapher_degree_constrained_rewired    0.374023      0.374023     0.298828    0.428711      0.674609
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
 
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.546875        0.000000          0.000000
+heldout_test                        0.375000     0.700000        0.162295          0.000000
+grapher_threshold_control           0.099609     0.109375        0.066146          0.000000
+grapher_degree_constrained_pre_rewire      0.330078     0.280273        0.151234          0.000000
+grapher_degree_constrained_rewired      0.374023     0.298828        0.164935          0.000000
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.625000
+   0.0000heldout_test                       0.375000     1.000000
+   0.0000grapher_threshold_control          0.099609     0.650000
+   0.0000grapher_degree_constrained_pre_rewire     0.330078     0.625000
+   0.0000grapher_degree_constrained_rewired     0.374023     0.625000
+   0.0100train                              0.000000     0.625000
+   0.0100heldout_test                       0.375000     1.000000
+   0.0100grapher_threshold_control          0.099609     0.650000
+   0.0100grapher_degree_constrained_pre_rewire     0.330078     0.625000
+   0.0100grapher_degree_constrained_rewired     0.374023     0.625000
+   0.0250train                              0.000000     0.625000
+   0.0250heldout_test                       0.375000     1.000000
+   0.0250grapher_threshold_control          0.099609     0.650000
+   0.0250grapher_degree_constrained_pre_rewire     0.330078     0.625000
+   0.0250grapher_degree_constrained_rewired     0.374023     0.625000
+   0.0500train                              0.000000     0.625000
+   0.0500heldout_test                       0.375000     1.000000
+   0.0500grapher_threshold_control          0.099609     0.650000
+   0.0500grapher_degree_constrained_pre_rewire     0.330078     0.625000
+   0.0500grapher_degree_constrained_rewired     0.374023     0.625000
+   0.1000train                              0.000000     0.625000
+   0.1000heldout_test                       0.375000     1.000000
+   0.1000grapher_threshold_control          0.099609     0.650000
+   0.1000grapher_degree_constrained_pre_rewire     0.330078     0.625000
+   0.1000grapher_degree_constrained_rewired     0.374023     0.625000
+   0.2000train                              0.000000     0.625000
+   0.2000heldout_test                       0.375000     1.000000
+   0.2000grapher_threshold_control          0.099609     0.650000
+   0.2000grapher_degree_constrained_pre_rewire     0.330078     0.625000
+   0.2000grapher_degree_constrained_rewired     0.374023     0.625000
+   0.3000train                              0.000000     0.625000
+   0.3000heldout_test                       0.375000     1.000000
+   0.3000grapher_threshold_control          0.099609     0.650000
+   0.3000grapher_degree_constrained_pre_rewire     0.330078     0.625000
+   0.3000grapher_degree_constrained_rewired     0.350586     0.625000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000grapher_threshold_control          0.067383     1.000000
+   0.5000grapher_degree_constrained_pre_rewire     0.043945     1.000000
+   0.5000grapher_degree_constrained_rewired     0.043945     1.000000
 
 # Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-WL novelty against the complete training split (candidate population only; higher is better)
-The train_to_* row is training-vs-training for this column; held-out novelty is reported below by the support diagnostics.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD       Novelty
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      0.000000
-grapher_spectral_pre_rewire_to_test      0.017870          0.027044      0.008078        0.018780        0.007001      0.099609
-grapher_diversified_to_test         0.017870          0.027551      0.007978        0.020670        0.007166      0.245117
+Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000
+grapher_threshold_control_to_test      0.017870          0.027044      0.008078        0.018780        0.007001      1.000000      0.097656      0.099609
+grapher_degree_constrained_pre_rewire_to_test      0.010597          0.042195      0.005445        0.022992        0.004487      1.000000      0.262695      0.341797
+grapher_degree_constrained_rewired_to_test      0.010597          0.041352      0.004914        0.023967        0.004879      1.000000      0.277344      0.376953
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.546875    0.000000      0.614062
 heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
-grapher_spectral_pre_rewire       0.099609      0.099609     0.097656    0.235352      0.674023
-grapher_diversified               0.245117      0.245117     0.178711    0.367188      0.674023
+grapher_threshold_control         0.099609      0.099609     0.097656    0.235352      0.674023
+grapher_degree_constrained_pre_rewire    0.341797      0.341797     0.262695    0.425781      0.702344
+grapher_degree_constrained_rewired    0.376953      0.376953     0.277344    0.460938      0.702344
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.546875        0.000000          0.000000
+heldout_test                        0.375000     0.700000        0.162295          0.000000
+grapher_threshold_control           0.099609     0.097656        0.059072          0.000000
+grapher_degree_constrained_pre_rewire      0.341797     0.262695        0.155834          0.000000
+grapher_degree_constrained_rewired      0.376953     0.277344        0.167764          0.000000
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.625000
+   0.0000heldout_test                       0.375000     1.000000
+   0.0000grapher_threshold_control          0.099609     0.625000
+   0.0000grapher_degree_constrained_pre_rewire     0.341797     0.600000
+   0.0000grapher_degree_constrained_rewired     0.376953     0.600000
+   0.0100train                              0.000000     0.625000
+   0.0100heldout_test                       0.375000     1.000000
+   0.0100grapher_threshold_control          0.099609     0.625000
+   0.0100grapher_degree_constrained_pre_rewire     0.341797     0.600000
+   0.0100grapher_degree_constrained_rewired     0.376953     0.600000
+   0.0250train                              0.000000     0.625000
+   0.0250heldout_test                       0.375000     1.000000
+   0.0250grapher_threshold_control          0.099609     0.625000
+   0.0250grapher_degree_constrained_pre_rewire     0.341797     0.600000
+   0.0250grapher_degree_constrained_rewired     0.376953     0.600000
+   0.0500train                              0.000000     0.625000
+   0.0500heldout_test                       0.375000     1.000000
+   0.0500grapher_threshold_control          0.099609     0.625000
+   0.0500grapher_degree_constrained_pre_rewire     0.341797     0.600000
+   0.0500grapher_degree_constrained_rewired     0.376953     0.600000
+   0.1000train                              0.000000     0.625000
+   0.1000heldout_test                       0.375000     1.000000
+   0.1000grapher_threshold_control          0.099609     0.625000
+   0.1000grapher_degree_constrained_pre_rewire     0.341797     0.600000
+   0.1000grapher_degree_constrained_rewired     0.376953     0.600000
+   0.2000train                              0.000000     0.625000
+   0.2000heldout_test                       0.375000     1.000000
+   0.2000grapher_threshold_control          0.099609     0.625000
+   0.2000grapher_degree_constrained_pre_rewire     0.341797     0.600000
+   0.2000grapher_degree_constrained_rewired     0.376953     0.600000
+   0.3000train                              0.000000     0.625000
+   0.3000heldout_test                       0.375000     1.000000
+   0.3000grapher_threshold_control          0.099609     0.625000
+   0.3000grapher_degree_constrained_pre_rewire     0.340820     0.600000
+   0.3000grapher_degree_constrained_rewired     0.365234     0.600000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000grapher_threshold_control          0.047852     1.000000
+   0.5000grapher_degree_constrained_pre_rewire     0.041016     1.000000
+   0.5000grapher_degree_constrained_rewired     0.041016     1.000000
+
 
 # Seed 44
 Graph-distribution MMD against held-out test graphs (lower is better)
@@ -955,237 +1218,16 @@ Molecular evaluation
 # ##############################################################################
 # DATASET 4/4: ZINC
 # ##############################################################################
-#seed41, after rewiring 
+#seed41
 
 
-#seed41, before rewiring 
-Molecular evaluation
-  validity: 0.9334
-  validity_with_correction: 0.9957
-  validity_with_projected_formal_charges: 0.99
-  validity_without_correction: 0.9334
-  fcd: 0.36929469976107043
-  num_generated_graphs: 10000
-  num_valid_generated_molecules: 9334
-  num_invalid_generated_molecules: 666
-  num_valid_generated_molecules_with_projected_formal_charges: 9900
-  num_invalid_generated_molecules_after_projected_formal_charges: 100
-  num_raw_invalid_resolved_by_projected_formal_charges: 566
-  projected_formal_charge_success_rate_on_raw_invalid: 0.8498498498498499
-  num_valid_generated_molecules_with_correction: 9957
-  num_invalid_generated_molecules_after_correction: 43
-  num_molecules_corrected_to_valid: 623
-  correction_success_rate_on_raw_invalid: 0.9354354354354354
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 0.9996785943861153
-  unique_valid_count: 9331
-  novelty_rate: 0.9742792841067409
-  novel_unique_valid_count: 9091
-  nspdk_mmd: 0.0003037704665882929
-  nspdk_mmd_valid_only: 0.0003037704665882929
-  graphlet_histogram_mmd: 2.2111473442665286e-05
-  graphlet_selected_mass_mmd: 0.0
-  graphlet_histogram_mmd_by_order: {'3': 3.289909937231883e-05, '4': 2.6853198053622407e-05, '5': 2.108588826077451e-05}
-  graphlet_selected_mass_mmd_by_order: {'3': 0.0, '4': 0.0, '5': 0.0}
-  nspdk_proxy_mmd_all_generated: 1.6979273072841719e-06
-  nspdk_proxy_mmd_metric_source: 2.401622341984763e-06
-  fcd_num_reference_molecules: 23728
-  fcd_num_valid_generated_molecules: 9334
-  fcd_generated_smiles_source: raw_valid
+#seed42
 
-{
-  "num_generated_graphs": 10000,
-  "num_raw_valid": 9334,
-  "validity_without_correction": 0.9334,
-  "qed_mean": 0.752877837256438,
-  "qed_std_within_run": 0.1263073447658367,
-  "qed_median": 0.7819694662459106,
-  "qed_q10": 0.5656985339948163,
-  "qed_q90": 0.8920879700440199,
-  "qed_unique_valid_mean": 0.7528768154821056,
-  "num_unique_raw_valid": 9331,
-  "qed_yield": 0.7027361732951605,
-  "num_raw_valid_single_component": 9332,
-  "valid_single_component_yield": 0.9332,
-  "qed_single_component_mean": 0.7529021054867961,
-  "qed_ge_0p5_fraction_valid": 0.950182129847868,
-  "qed_ge_0p5_yield_all": 0.8869,
-  "qed_ge_0p7_fraction_valid": 0.7195200342832655,
-  "qed_ge_0p7_yield_all": 0.6716,
-  "reference_num_graphs": 24887,
-  "reference_num_raw_valid": 23728,
-  "reference_qed_mean": 0.7512321466819076,
-  "qed_mean_minus_reference": 0.0016456905745303452,
-  "qed_wasserstein_1": 0.002746282780604531
-}
-
-
-#seed42, after rewiring 
-
-
-#seed42, before rewiring 
-Molecular evaluation
-  validity: 0.9261
-  validity_with_correction: 0.9928
-  validity_with_projected_formal_charges: 0.9852
-  validity_without_correction: 0.9261
-  fcd: 0.39766944774277135
-  num_generated_graphs: 10000
-  num_valid_generated_molecules: 9261
-  num_invalid_generated_molecules: 739
-  num_valid_generated_molecules_with_projected_formal_charges: 9852
-  num_invalid_generated_molecules_after_projected_formal_charges: 148
-  num_raw_invalid_resolved_by_projected_formal_charges: 591
-  projected_formal_charge_success_rate_on_raw_invalid: 0.7997293640054127
-  num_valid_generated_molecules_with_correction: 9928
-  num_invalid_generated_molecules_after_correction: 72
-  num_molecules_corrected_to_valid: 667
-  correction_success_rate_on_raw_invalid: 0.9025710419485792
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 0.9991361624014685
-  unique_valid_count: 9253
-  novelty_rate: 0.9719010050794337
-  novel_unique_valid_count: 8993
-  nspdk_mmd: 0.0003385020467024741
-  nspdk_mmd_valid_only: 0.0003385020467024741
-  graphlet_histogram_mmd: 0.0004968027044454093
-  graphlet_selected_mass_mmd: 0.0
-  graphlet_histogram_mmd_by_order: {'3': 0.0005321870443353305, '4': 0.0005097367179183188, '5': 0.000493650519167943}
-  graphlet_selected_mass_mmd_by_order: {'3': 0.0, '4': 0.0, '5': 0.0}
-  nspdk_proxy_mmd_all_generated: 4.314898531062484e-06
-  nspdk_proxy_mmd_metric_source: 3.833976107649089e-06
-  fcd_num_reference_molecules: 23728
-  fcd_num_valid_generated_molecules: 9261
-  fcd_generated_smiles_source: raw_valid
-
-{
-  "num_generated_graphs": 10000,
-  "num_raw_valid": 9261,
-  "validity_without_correction": 0.9261,
-  "qed_mean": 0.748890259400873,
-  "qed_std_within_run": 0.1301063519355242,
-  "qed_median": 0.7777459077056909,
-  "qed_q10": 0.5605653501874228,
-  "qed_q90": 0.8923115293362363,
-  "qed_unique_valid_mean": 0.7488990030046936,
-  "num_unique_raw_valid": 9253,
-  "qed_yield": 0.6935472692311466,
-  "num_raw_valid_single_component": 9241,
-  "valid_single_component_yield": 0.9241,
-  "qed_single_component_mean": 0.7496303188198625,
-  "qed_ge_0p5_fraction_valid": 0.9437425763956376,
-  "qed_ge_0p5_yield_all": 0.874,
-  "qed_ge_0p7_fraction_valid": 0.7059712773998488,
-  "qed_ge_0p7_yield_all": 0.6538,
-  "reference_num_graphs": 24887,
-  "reference_num_raw_valid": 23728,
-  "reference_qed_mean": 0.7512321466819076,
-  "qed_mean_minus_reference": -0.0023418872810346825,
-  "qed_wasserstein_1": 0.0028528494779224756
-}
-
-#seed43, after rewiring 
-
-
-#seed43, before rewiring 
+#seed43
 
 
 
-#seed44, after rewiring 
+#seed44
 
-
-#seed44, before rewiring 
-Molecular evaluation
-  validity: 0.9507
-  validity_with_correction: 0.9963
-  validity_with_projected_formal_charges: 0.9924
-  validity_without_correction: 0.9507
-  fcd: 0.4274239156921169
-  num_generated_graphs: 10000
-  num_valid_generated_molecules: 9507
-  num_invalid_generated_molecules: 493
-  num_valid_generated_molecules_with_projected_formal_charges: 9924
-  num_invalid_generated_molecules_after_projected_formal_charges: 76
-  num_raw_invalid_resolved_by_projected_formal_charges: 417
-  projected_formal_charge_success_rate_on_raw_invalid: 0.845841784989858
-  num_valid_generated_molecules_with_correction: 9963
-  num_invalid_generated_molecules_after_correction: 37
-  num_molecules_corrected_to_valid: 456
-  correction_success_rate_on_raw_invalid: 0.9249492900608519
-  metric_molecule_source: raw_valid
-  hogdiff_compatible_distribution_metrics: False
-  uniqueness_rate: 0.9996844430419691
-  unique_valid_count: 9504
-  novelty_rate: 0.9779040404040404
-  novel_unique_valid_count: 9294
-  nspdk_mmd: 0.0006878455393541607
-  nspdk_mmd_valid_only: 0.0006878455393541607
-  graphlet_histogram_mmd: 0.0005378658080694709
-  graphlet_selected_mass_mmd: 0.0
-  graphlet_histogram_mmd_by_order: {'3': 0.0007127132879281017, '4': 0.0005903696360696209, '5': 0.0005249233252491159}
-  graphlet_selected_mass_mmd_by_order: {'3': 0.0, '4': 0.0, '5': 0.0}
-  nspdk_proxy_mmd_all_generated: 6.6321396580092505e-06
-  nspdk_proxy_mmd_metric_source: 7.853247048366811e-06
-  fcd_num_reference_molecules: 23728
-  fcd_num_valid_generated_molecules: 9507
-  fcd_generated_smiles_source: raw_valid
-
-
-{
-  "num_generated_graphs": 10000,
-  "num_raw_valid": 9507,
-  "validity_without_correction": 0.9507,
-  "qed_mean": 0.7448467689265938,
-  "qed_std_within_run": 0.13097376045728681,
-  "qed_median": 0.7741996240116341,
-  "qed_q10": 0.5566870925179178,
-  "qed_q90": 0.8881238275818235,
-  "qed_unique_valid_mean": 0.7448379901876016,
-  "num_unique_raw_valid": 9504,
-  "qed_yield": 0.7081258232185149,
-  "num_raw_valid_single_component": 9498,
-  "valid_single_component_yield": 0.9498,
-  "qed_single_component_mean": 0.7450426221460068,
-  "qed_ge_0p5_fraction_valid": 0.9393078784053855,
-  "qed_ge_0p5_yield_all": 0.893,
-  "qed_ge_0p7_fraction_valid": 0.6968549489849585,
-  "qed_ge_0p7_yield_all": 0.6625,
-  "reference_num_graphs": 24887,
-  "reference_num_raw_valid": 23728,
-  "reference_qed_mean": 0.7512321466819076,
-  "qed_mean_minus_reference": -0.006385377755313781,
-  "qed_wasserstein_1": 0.006403667380083118
-}
-
-
-#seed45, after rewiring 
-
-
-#seed45, before rewiring 
-{
-  "num_generated_graphs": 10000,
-  "num_raw_valid": 9371,
-  "validity_without_correction": 0.9371,
-  "qed_mean": 0.7490805192816494,
-  "qed_std_within_run": 0.12949486308325672,
-  "qed_median": 0.7788247178871583,
-  "qed_q10": 0.5654956536103649,
-  "qed_q90": 0.8901516602243538,
-  "qed_unique_valid_mean": 0.749055010113542,
-  "num_unique_raw_valid": 9369,
-  "qed_yield": 0.7019633546188355,
-  "num_raw_valid_single_component": 9345,
-  "valid_single_component_yield": 0.9345,
-  "qed_single_component_mean": 0.7497349266577709,
-  "qed_ge_0p5_fraction_valid": 0.9435492476790097,
-  "qed_ge_0p5_yield_all": 0.8842,
-  "qed_ge_0p7_fraction_valid": 0.7100629601963504,
-  "qed_ge_0p7_yield_all": 0.6654,
-  "reference_num_graphs": 24887,
-  "reference_num_raw_valid": 23728,
-  "reference_qed_mean": 0.7512321466819076,
-  "qed_mean_minus_reference": -0.0021516274002582048,
-  "qed_wasserstein_1": 0.0028083991196445647
+#seed45
 }
