@@ -5,7 +5,7 @@ description: Full Laplacian log-gap spectral diffusion with degree, topology gra
 grapher:
   variant: vanilla_laplacian_loggap_graphlet
   train:
-    epochs: 10000
+    epochs: 200
     batch_size: 128
     lr: 0.01
     node_lr: 0.01
@@ -13,7 +13,7 @@ grapher:
     weight_decay: 0.0001
     grad_norm: 1.0
     lr_schedule: true
-    lr_decay: 0.9999799901935271
+    lr_decay: 0.999
     ema: 0.999
     validation_every: 1
     log_every: 10
