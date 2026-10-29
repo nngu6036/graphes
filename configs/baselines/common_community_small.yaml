@@ -34,15 +34,16 @@ baseline_common:
     sample_eta: 0.0
     model_layers: 8
   policy:
-    role: shared_training_exposure_target
+    role: shared_training_exposure_upper_bound
     raw_epoch_counts_cross_model_comparable: false
-    training_budget_rule: matched_training_graph_exposure_per_dataset
+    training_budget_rule: min(common_target_train_passes, upstream_native_budget)
     merge_precedence:
     - upstream_defaults
     - common_reference_fallback
     - model_specific_config
     - explicit_cli
     budget_selection_uses_test_split: false
+    native_budget_cap_applied_per_wrapper: true
     target_train_passes: 10000
   protocol:
     fixed_prepared_splits: true

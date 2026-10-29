@@ -2,23 +2,25 @@ comparison:
   model: catflow
   dataset: ego_small
   common_config: common_ego_small.yaml
-  status: graphes_exposure_matched_adaptation
+  status: native_budget_capped_adaptation
   budget:
-    basis: graphes_controlled_comparison
+    basis: common_target_capped_by_native_budget
     unit: train_set_passes
-    target_train_passes: 10000
-    epochs: 10000
-  fairness_note: Matches training graph exposure, not compute or optimizer updates.
-    Select checkpoints and tune only on validation.
+    common_target_train_passes: 10000
+    target_train_passes: 1000
+    epochs: 1000
+    cap_applied: true
+    cap_source: comparison.native_budget
+  fairness_note: Uses the common training budget only as an upper bound. The effective budget is capped at the smaller upstream CatFlow CLI-default budget (the release has no generic-graph profile); checkpoint selection and tuning use validation only.
   native_budget:
-    basis: adapter_budget_requires_validation_check
+    basis: upstream_cli_default_fallback
     unit: epochs
-    source: GraphER adapter; uploaded CatFlow README has no Ego profile
+    source: main.py --epochs default; no released generic-graph profile
     epochs: 1000
     batch_size: 128
 catflow:
   train:
-    epochs: 10000
+    epochs: 1000
     batch_size: 128
     lr: 0.0002
     ema: 0.999
