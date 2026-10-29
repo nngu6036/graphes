@@ -3,17 +3,23 @@ comparison:
   model: hog_diff
   dataset: qm9
   common_config: common_qm9.yaml
-  status: graphes_exposure_matched_adaptation
+  status: native_budget_guarded_adaptation
   budget:
-    basis: graphes_controlled_comparison
+    basis: common_target_capped_by_native_budget
     unit: train_set_passes
+    common_target_train_passes: 200
     target_train_passes: 200
     stage_exposure_weights:
       higher_order: 2944000
       ou: 52224000
     resolution: wrapper_from_actual_prepared_train_split
-  fairness_note: Matches training graph exposure, not compute or optimizer updates.
-    Select checkpoints and tune only on validation.
+    native_total_graph_exposures: 55168000
+    native_equivalent_train_passes: 527.091196
+    prepared_train_graphs_for_native_equivalent: 104665
+    cap_applied: false
+    cap_source: comparison.native_budget
+  fairness_note: Uses the common training budget only as an upper bound. The effective budget is min(common target, 
+    declared native/reference budget); checkpoint selection and tuning use validation only.
   native_budget:
     basis: upstream_released_two_stage_budget
     unit: stage_iterations
@@ -34,7 +40,7 @@ hog_diff:
   runtime:
     device: auto
     cuda_visible_devices: '0'
-    timeout_seconds: null
+    timeout_seconds:
     progress:
       enabled: true
       stream_output: true

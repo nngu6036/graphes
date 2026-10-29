@@ -11,7 +11,8 @@ comparison:
     epochs: 30
     cap_applied: true
     cap_source: comparison.native_budget
-  fairness_note: Uses the common training budget only as an upper bound. The effective budget is capped at the smaller upstream native budget; checkpoint selection and tuning use validation only.
+  fairness_note: Uses the common training budget only as an upper bound. The effective budget is capped at the smaller 
+    upstream native budget; checkpoint selection and tuning use validation only.
   native_budget:
     basis: upstream_released_profile
     unit: epochs
