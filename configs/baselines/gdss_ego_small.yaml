@@ -2,14 +2,16 @@ comparison:
   model: gdss
   dataset: ego_small
   common_config: common_ego_small.yaml
-  status: graphes_exposure_matched_adaptation
+  status: native_budget_capped_adaptation
   budget:
-    basis: graphes_controlled_comparison
+    basis: common_target_capped_by_native_budget
     unit: train_set_passes
-    target_train_passes: 10000
-    epochs: 10000
-  fairness_note: Matches training graph exposure, not compute or optimizer updates.
-    Select checkpoints and tune only on validation.
+    common_target_train_passes: 10000
+    target_train_passes: 5000
+    epochs: 5000
+    cap_applied: true
+    cap_source: comparison.native_budget
+  fairness_note: Uses the common training budget only as an upper bound. The effective budget is capped at the smaller upstream native budget; checkpoint selection and tuning use validation only.
   native_budget:
     basis: upstream_released_profile
     unit: epochs
@@ -40,13 +42,13 @@ gdss:
       generation_batch_interval: 1
   batch_size: 128
   train:
-    num_epochs: 10000
+    num_epochs: 5000
     lr: 0.01
     lr_schedule: true
     ema: 0.999
     weight_decay: 0.0001
     grad_norm: 1.0
-    lr_decay: 0.999499874937461
+    lr_decay: 0.999
     eps: 1.0e-05
   sample:
     use_ema: false

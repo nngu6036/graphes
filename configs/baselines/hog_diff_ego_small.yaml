@@ -3,17 +3,21 @@ comparison:
   model: hog_diff
   dataset: ego_small
   common_config: common_ego_small.yaml
-  status: graphes_exposure_matched_adaptation
+  status: native_budget_capped_adaptation
   budget:
-    basis: graphes_controlled_comparison
+    basis: common_target_capped_by_native_budget
     unit: train_set_passes
-    target_train_passes: 10000
+    common_target_train_passes: 10000
+    target_train_passes: 5500
     stage_exposure_weights:
       higher_order: 448000
       ou: 256000
     resolution: wrapper_from_actual_prepared_train_split
-  fairness_note: Matches training graph exposure, not compute or optimizer updates.
-    Select checkpoints and tune only on validation.
+    native_equivalent_train_passes: 5500
+    native_total_graph_exposures: 704000
+    cap_applied: true
+    cap_source: comparison.native_budget stage iterations
+  fairness_note: Uses the common training budget only as an upper bound. The effective budget is capped at the smaller released two-stage HOG-Diff budget; checkpoint selection and tuning use validation only.
   native_budget:
     basis: upstream_released_two_stage_budget
     unit: stage_iterations
