@@ -42,6 +42,17 @@ REPORT_METRICS = ("degree_mmd", "clustering_mmd", "orbit_mmd")
 GENERIC_REPORT_METRICS = (
     *REPORT_METRICS, "spectral_mmd", "graphlet_history_mmd",
     "validity_rate", "uniqueness_rate", "novelty_rate",
+    "valid_unique_novel_rate",
+)
+
+GENERIC_VUN_FIELDS = (
+    "validity_rate",
+    "uniqueness_rate",
+    "novelty_rate",
+    "valid_unique_rate",
+    "valid_novel_rate",
+    "unique_novel_rate",
+    "valid_unique_novel_rate",
 )
 
 
@@ -741,6 +752,65 @@ class _ExactTopologyClassIndex:
         return class_id
 
 
+def _generic_graph_is_valid(
+    graph: nx.Graph,
+    *,
+    require_connected: bool,
+    reject_zero_degree: bool,
+) -> bool:
+    """GraphES generic-benchmark validity predicate.
+
+    Generic V.U.N. validity follows the prepared-dataset contract rather than
+    a dataset-name heuristic.  Every graph must be a non-empty simple,
+    undirected graph without self-loops.  Dataset filters can additionally
+    require connectedness and reject isolated nodes.  Community-small and
+    Ego-small both enable those two filters in their pinned dataset configs.
+    """
+
+    if not isinstance(graph, nx.Graph):
+        return False
+    if graph.number_of_nodes() <= 0:
+        return False
+    if graph.is_directed() or graph.is_multigraph():
+        return False
+    if nx.number_of_selfloops(graph) != 0:
+        return False
+    if require_connected and not nx.is_connected(graph):
+        return False
+    if reject_zero_degree and any(int(degree) == 0 for _, degree in graph.degree()):
+        return False
+    return True
+
+
+def _resolve_generic_validity_protocol(
+    dataset_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Resolve generic validity rules from the pinned dataset configuration."""
+
+    filters: Mapping[str, Any] = {}
+    config_path_value = dataset_config.get("config_path")
+    config_path: Path | None = None
+    if config_path_value:
+        candidate = Path(str(config_path_value))
+        if not candidate.is_file():
+            candidate = Path(__file__).resolve().parents[1] / candidate
+        if candidate.is_file():
+            raw = load_yaml(candidate)
+            filters = raw.get("filters", {}) or {}
+            config_path = candidate
+
+    return {
+        "mode": "prepared_dataset_contract",
+        "dataset_config_path": str(config_path) if config_path is not None else None,
+        "nonempty": True,
+        "undirected": True,
+        "simple_graph": True,
+        "self_loops_allowed": False,
+        "require_connected": bool(filters.get("require_connected", False)),
+        "reject_zero_degree": bool(filters.get("reject_zero_degree", False)),
+    }
+
+
 def _frequency_tv(
     left: Counter[int],
     right: Counter[int],
@@ -766,6 +836,7 @@ def exact_isomorphism_support_diagnostics(
     *,
     train_name: str = "train",
     reference_name: str,
+    validity_fn: Callable[[nx.Graph], bool] | None = None,
 ) -> dict[str, Any]:
     """Measure exact topology novelty and isomorphism-class frequency matching.
 
@@ -781,6 +852,8 @@ def exact_isomorphism_support_diagnostics(
     * WL-hash novelty against the complete training split;
     * exact-isomorphism novelty against training;
     * exact-isomorphism uniqueness;
+    * exact Valid / Unique / Novel rates and their intersections, including
+      the combined Valid-Unique-Novel (VUN) rate;
     * coverage of training isomorphism classes; and
     * total-variation/overlap of class frequencies versus training and the
       held-out reference population.
@@ -812,13 +885,43 @@ def exact_isomorphism_support_diagnostics(
     num_train_classes = len(train_classes)
     train_graphs = list(populations[train_name])
 
+    if validity_fn is None:
+        validity_fn = lambda graph: _generic_graph_is_valid(
+            graph,
+            require_connected=False,
+            reject_zero_degree=False,
+        )
+
     summary_rows: list[dict[str, Any]] = []
     for name in ordered_names:
+        graphs = list(populations[name])
+        ids = assignments[name]
+        valid_flags = [bool(validity_fn(graph)) for graph in graphs]
         counts = class_counts[name]
         total = int(sum(counts.values()))
         classes = set(counts)
         novel_classes = classes - train_classes
         novel_graphs = int(sum(counts[class_id] for class_id in novel_classes))
+        valid_graphs = int(sum(valid_flags))
+
+        class_validity: dict[int, bool] = {}
+        for class_id, is_valid in zip(ids, valid_flags):
+            # The validity predicate used by this evaluator is topology-only,
+            # so all members of an exact isomorphism class should agree.  Use
+            # logical AND defensively if a custom predicate ever disagrees.
+            if class_id in class_validity:
+                class_validity[class_id] = class_validity[class_id] and is_valid
+            else:
+                class_validity[class_id] = is_valid
+
+        valid_unique_classes = {
+            class_id for class_id in classes if class_validity.get(class_id, False)
+        }
+        valid_novel_graphs = int(sum(
+            is_valid and class_id in novel_classes
+            for class_id, is_valid in zip(ids, valid_flags)
+        ))
+        valid_unique_novel_classes = valid_unique_classes & novel_classes
         represented_train_classes = classes & train_classes
         tv_train = _frequency_tv(counts, train_counts)
         tv_reference = _frequency_tv(counts, reference_counts)
@@ -830,6 +933,32 @@ def exact_isomorphism_support_diagnostics(
         summary_rows.append({
             "population": name,
             "num_graphs": total,
+            "validity_rate": (
+                valid_graphs / total if total > 0 else float("nan")
+            ),
+            "uniqueness_rate": (
+                len(classes) / total if total > 0 else float("nan")
+            ),
+            "novelty_rate": (
+                novel_graphs / total if total > 0 else float("nan")
+            ),
+            "valid_unique_rate": (
+                len(valid_unique_classes) / total if total > 0 else float("nan")
+            ),
+            "valid_novel_rate": (
+                valid_novel_graphs / total if total > 0 else float("nan")
+            ),
+            "unique_novel_rate": (
+                len(novel_classes) / total if total > 0 else float("nan")
+            ),
+            "valid_unique_novel_rate": (
+                len(valid_unique_novel_classes) / total
+                if total > 0 else float("nan")
+            ),
+            "num_valid_graphs": valid_graphs,
+            "num_unique_isomorphism_classes": len(classes),
+            "num_novel_graphs_against_train": novel_graphs,
+            "num_valid_unique_novel_classes": len(valid_unique_novel_classes),
             "num_exact_isomorphism_classes": len(classes),
             "exact_isomorphism_uniqueness_rate": (
                 len(classes) / total if total > 0 else float("nan")
@@ -885,6 +1014,12 @@ def exact_isomorphism_support_diagnostics(
             "node_and_edge_attributes": False,
             "wl_hash_role": "safe prefilter only; never accepted as proof of isomorphism",
             "exact_test": "networkx.is_isomorphic",
+            "vun_denominator": "all evaluated graphs",
+            "vun_definition": (
+                "valid_unique_novel_rate = number of distinct exact topology "
+                "isomorphism classes that are valid and absent from the complete "
+                "training split / number of evaluated graphs"
+            ),
             "frequency_distance": "total variation over jointly constructed exact-isomorphism classes",
             "train_population": train_name,
             "reference_population": reference_name,
@@ -1300,6 +1435,66 @@ def _write_isomorphism_support_csv(
         writer.writerows(rows)
 
 
+def _write_generic_vun_csv(
+    rows: Sequence[Mapping[str, Any]], path: Path,
+) -> None:
+    """Write the exact generic Valid-Unique-Novel summary."""
+
+    fields = (
+        "population",
+        "num_graphs",
+        *GENERIC_VUN_FIELDS,
+        "num_valid_graphs",
+        "num_unique_isomorphism_classes",
+        "num_novel_graphs_against_train",
+        "num_valid_unique_novel_classes",
+    )
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key) for key in fields})
+
+
+def _merge_exact_vun_into_report_rows(
+    report_rows: Sequence[dict[str, Any]],
+    population_rows: Sequence[Mapping[str, Any]],
+    *,
+    reference_split: str,
+    reference_population_name: str,
+) -> None:
+    """Replace legacy WL V/U/N columns with exact-isomorphism V.U.N. values."""
+
+    by_population = {
+        str(row["population"]): row for row in population_rows
+    }
+    suffix = f"_to_{reference_split}"
+    for row in report_rows:
+        comparison = str(row.get("comparison", ""))
+        if comparison == f"train_to_{reference_split}":
+            population = reference_population_name
+        elif comparison.endswith(suffix):
+            population = comparison[: -len(suffix)]
+        else:
+            continue
+        exact = by_population.get(population)
+        if exact is None:
+            continue
+
+        # Preserve the previous inexpensive WL estimates as explicitly named
+        # legacy diagnostics before exposing exact V.U.N. in the paper-facing
+        # columns.
+        if "uniqueness_rate" in row:
+            row["wl_uniqueness_rate"] = row["uniqueness_rate"]
+        if "novelty_rate" in row:
+            row["wl_novelty_rate"] = row["novelty_rate"]
+        if "validity_rate" in row:
+            row["simple_graph_validity_rate"] = row["validity_rate"]
+
+        for key in GENERIC_VUN_FIELDS:
+            row[key] = exact.get(key, float("nan"))
+
+
 def _print_isomorphism_support_diagnostics(
     rows: Sequence[Mapping[str, Any]],
 ) -> None:
@@ -1355,15 +1550,12 @@ def _paper_mmd(
     Additional generic metrics use the existing evaluation conventions:
     20-bin normalized-Laplacian spectral histograms with adaptive Gaussian
     EMD, and graphlet-composition MMD (connected orders 3--5 by default).
-    V.U.N. uses the project's simple-graph validity and attribute-free WL
-    uniqueness/novelty definitions. Validity is the fraction of undirected
-    non-multigraphs without self-loops. Uniqueness is distinct WL hashes divided
-    by population size; novelty is the fraction of hashes absent from the
-    complete training split, counting repeated candidate graphs individually.
-    All three describe ``novelty_candidate`` when supplied, otherwise the MMD
-    candidate population. This override lets the ``train_to_<split>`` reference
-    row describe held-out quality while its MMD compares train against held-out.
-    Only novelty is unavailable when training graphs are absent.
+    This per-comparison pass records inexpensive simple/WL diversity estimates.
+    For generic graphs, the paper-facing V.U.N. columns are replaced later by
+    exact-isomorphism values computed jointly across training, held-out, and
+    generated populations.  ``novelty_candidate`` lets the provisional
+    ``train_to_<split>`` row describe held-out quality while its MMD compares
+    train against held-out.
     """
 
     protocol = str(metric_protocol).strip().lower().replace("-", "_")
@@ -1592,6 +1784,7 @@ def _write_csv(rows: Sequence[dict[str, Any]], path: Path) -> None:
         writer = csv.DictWriter(
             handle,
             fieldnames=("comparison", *_report_metrics(rows)),
+            extrasaction="ignore",
         )
         writer.writeheader()
         writer.writerows(rows)
@@ -1649,10 +1842,14 @@ def validate_report_reference_split(output_dir: Path, reference_split: str) -> N
 def _print_table(rows: Sequence[dict[str, Any]], *, reference_split: str = "test") -> None:
     print(f"Graph-distribution MMD against held-out {reference_split} graphs (lower is better)")
     if any("novelty_rate" in row for row in rows):
-        print("Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)")
+        print(
+            "Generic graph V.U.N.: benchmark validity, exact-isomorphism "
+            "uniqueness/novelty, and combined VUN (higher is better)"
+        )
         print(
             "V.U.N. describes held-out graphs for train_to_* rows and candidate "
-            "graphs for model rows; novelty uses the complete training split."
+            "graphs for model rows; novelty uses the complete training split and "
+            "VUN is the fraction simultaneously valid, unique, and novel."
         )
     columns = {
         "degree_mmd": ("Degree MMD", 14),
@@ -1663,6 +1860,7 @@ def _print_table(rows: Sequence[dict[str, Any]], *, reference_split: str = "test
         "validity_rate": ("Validity", 14),
         "uniqueness_rate": ("Uniqueness", 14),
         "novelty_rate": ("Novelty", 14),
+        "valid_unique_novel_rate": ("VUN", 12),
     }
     metrics = _report_metrics(rows)
     print(f"{'Comparison':30s}" + "".join(
@@ -1784,9 +1982,9 @@ def main() -> None:
         "--skip-exact-isomorphism-diagnostics",
         action="store_true",
         help=(
-            "Skip topology-only exact-isomorphism novelty and isomorphism-class "
-            "frequency diagnostics for generic graphs. They are enabled by "
-            "default and use the complete training split."
+            "Skip supplementary topology-support/class-frequency outputs for "
+            "generic graphs. Exact isomorphism is still computed because the "
+            "paper-facing V.U.N. metrics require exact uniqueness and novelty."
         ),
     )
     parser.add_argument(
@@ -2014,6 +2212,20 @@ def main() -> None:
             "used_for_graph_generation": False,
         }
     molecular = is_molecular_evaluation(dataset_cfg, generated_graphs)
+    generic_validity_protocol = (
+        _resolve_generic_validity_protocol(dataset_cfg) if not molecular else None
+    )
+    generic_validity_fn = None
+    if generic_validity_protocol is not None:
+        generic_validity_fn = lambda graph: _generic_graph_is_valid(
+            graph,
+            require_connected=bool(
+                generic_validity_protocol["require_connected"]
+            ),
+            reject_zero_degree=bool(
+                generic_validity_protocol["reject_zero_degree"]
+            ),
+        )
     graphlet_options = {
         "k_min": int(evaluation_cfg.get("graphlet_k_min", 3)),
         "k_max": int(evaluation_cfg.get("graphlet_k_max", 5)),
@@ -2107,6 +2319,7 @@ def main() -> None:
     merged_diversity_rows: list[dict[str, Any]] = []
     isomorphism_support_csv_path = output_dir / "isomorphism_support_metrics.csv"
     isomorphism_class_csv_path = output_dir / "isomorphism_class_frequencies.csv"
+    generic_vun_csv_path = output_dir / "generic_vun_metrics.csv"
     generic_diversity_csv_path = output_dir / "generic_diversity_metrics.csv"
     generic_diversity_curve_csv_path = output_dir / "generic_diversity_curve.csv"
 
@@ -2134,9 +2347,9 @@ def main() -> None:
             generic_populations["enriched_base"] = enriched_base_graphs[:enriched_count]
         generic_populations[final_stage] = generated
 
-    if generic_populations is not None and not args.skip_exact_isomorphism_diagnostics:
+    if generic_populations is not None:
         print(
-            "Computing exact-isomorphism support diagnostics with the complete "
+            "Computing exact generic V.U.N. with the complete "
             f"training split ({len(train_graphs)} graphs)...",
             flush=True,
         )
@@ -2144,15 +2357,27 @@ def main() -> None:
             generic_populations,
             train_name="train",
             reference_name=reference_population_name,
+            validity_fn=generic_validity_fn,
         )
-        _write_isomorphism_support_csv(
+        _write_generic_vun_csv(
             isomorphism_diagnostics["population_metrics"],
-            isomorphism_support_csv_path,
+            generic_vun_csv_path,
         )
-        _write_isomorphism_support_csv(
-            isomorphism_diagnostics["class_frequencies"],
-            isomorphism_class_csv_path,
+        _merge_exact_vun_into_report_rows(
+            rows,
+            isomorphism_diagnostics["population_metrics"],
+            reference_split=reference_split,
+            reference_population_name=reference_population_name,
         )
+        if not args.skip_exact_isomorphism_diagnostics:
+            _write_isomorphism_support_csv(
+                isomorphism_diagnostics["population_metrics"],
+                isomorphism_support_csv_path,
+            )
+            _write_isomorphism_support_csv(
+                isomorphism_diagnostics["class_frequencies"],
+                isomorphism_class_csv_path,
+            )
 
     if generic_populations is not None and not args.skip_graded_diversity_diagnostics:
         print(
@@ -2173,9 +2398,14 @@ def main() -> None:
             generic_diversity_curve_csv_path,
         )
 
-    if isomorphism_diagnostics is not None or graded_diversity is not None:
+    exact_rows_for_diversity = (
+        (isomorphism_diagnostics or {}).get("population_metrics", [])
+        if not args.skip_exact_isomorphism_diagnostics
+        else []
+    )
+    if exact_rows_for_diversity or graded_diversity is not None:
         merged_diversity_rows = _merge_generic_diversity_rows(
-            (isomorphism_diagnostics or {}).get("population_metrics", []),
+            exact_rows_for_diversity,
             (graded_diversity or {}).get("population_metrics", []),
         )
         _write_generic_diversity_csv(
@@ -2232,7 +2462,7 @@ def main() -> None:
 
     save_json(
         {
-            "format": "graph_generation_evaluation_report_v11",
+            "format": "graph_generation_evaluation_report_v12",
             "reference_split": reference_split,
             "reference_split_sha256": provenance["split_sha256"][reference_split],
             "reference_graph_indices_zero_based": list(range(reference_count)),
@@ -2245,13 +2475,16 @@ def main() -> None:
             "generic_spectral_bins": 20 if not molecular else None,
             "generic_vun_protocol": (
                 {
-                    "validity_rate": (
-                        "undirected non-multigraphs without self-loops / evaluated graphs"
-                    ),
-                    "uniqueness_rate": "distinct WL topology hashes / evaluated graphs",
+                    "validity_rate": "graphs satisfying the prepared-dataset validity contract / evaluated graphs",
+                    "validity_contract": generic_validity_protocol,
+                    "uniqueness_rate": "distinct exact topology isomorphism classes / evaluated graphs",
                     "novelty_rate": (
-                        "evaluated graphs with WL topology hashes absent from "
+                        "evaluated graphs not exactly isomorphic to any graph in "
                         "the complete training split / evaluated graphs"
+                    ),
+                    "valid_unique_novel_rate": (
+                        "distinct exact topology isomorphism classes that are valid "
+                        "and absent from the complete training split / evaluated graphs"
                     ),
                     "row_semantics": {
                         "train_to_<split>": "held-out population",
@@ -2260,13 +2493,25 @@ def main() -> None:
                     "range": [0.0, 1.0],
                     "higher_is_better": True,
                     "node_and_edge_attributes": False,
-                    "isomorphism_test": "approximate Weisfeiler-Lehman hash comparison",
+                    "isomorphism_test": "networkx.is_isomorphic with invariant/WL prefilters",
+                    "legacy_wl_metrics": (
+                        "wl_uniqueness_rate and wl_novelty_rate are retained only as "
+                        "backward diagnostics in in-memory/main metric rows"
+                    ),
                 }
                 if not molecular else None
             ),
+            "generic_vun_metrics": (
+                (isomorphism_diagnostics or {}).get("population_metrics")
+                if not molecular else None
+            ),
+            "generic_vun_metrics_csv": (
+                str(generic_vun_csv_path)
+                if isomorphism_diagnostics is not None else None
+            ),
             "generic_novelty_protocol": (
                 {
-                    "definition": "evaluated graphs with WL topology hashes absent from the complete training split / evaluated graphs",
+                    "definition": "evaluated graphs not exactly isomorphic to any graph in the complete training split / evaluated graphs",
                     "row_semantics": {
                         "train_to_<split>": "held-out split evaluated against complete training support",
                         "model_to_<split>": "generated model population evaluated against complete training support",
@@ -2274,7 +2519,7 @@ def main() -> None:
                     "reference_split": "train",
                     "num_training_graphs": len(train_graphs),
                     "node_and_edge_attributes": False,
-                    "isomorphism_test": "approximate Weisfeiler-Lehman hash comparison",
+                    "isomorphism_test": "networkx.is_isomorphic with invariant/WL prefilters",
                 }
                 if not molecular else None
             ),
@@ -2288,11 +2533,13 @@ def main() -> None:
             ),
             "generic_exact_isomorphism_support_csv": (
                 str(isomorphism_support_csv_path)
-                if isomorphism_diagnostics is not None else None
+                if isomorphism_diagnostics is not None
+                and not args.skip_exact_isomorphism_diagnostics else None
             ),
             "generic_exact_isomorphism_class_frequency_csv": (
                 str(isomorphism_class_csv_path)
-                if isomorphism_diagnostics is not None else None
+                if isomorphism_diagnostics is not None
+                and not args.skip_exact_isomorphism_diagnostics else None
             ),
             "generic_diversity_diagnostics": (
                 {
@@ -2413,11 +2660,15 @@ def main() -> None:
         json_path,
     )
     _print_table(rows, reference_split=reference_split)
-    if isomorphism_diagnostics is not None:
+    if isomorphism_diagnostics is not None and not args.skip_exact_isomorphism_diagnostics:
         _print_isomorphism_support_diagnostics(
             isomorphism_diagnostics["population_metrics"]
         )
-    if isomorphism_diagnostics is not None and graded_diversity is not None:
+    if (
+        isomorphism_diagnostics is not None
+        and not args.skip_exact_isomorphism_diagnostics
+        and graded_diversity is not None
+    ):
         _print_generic_diversity_diagnostics(
             merged_diversity_rows, graded_diversity["epsilon_curve"]
         )
@@ -2429,6 +2680,8 @@ def main() -> None:
         _print_molecular_metrics(molecular_stage_rows)
     print(f"Saved metrics: {csv_path}")
     if isomorphism_diagnostics is not None:
+        print(f"Saved generic V.U.N.: {generic_vun_csv_path}")
+    if isomorphism_diagnostics is not None and not args.skip_exact_isomorphism_diagnostics:
         print(f"Saved support metrics: {isomorphism_support_csv_path}")
         print(f"Saved class frequencies: {isomorphism_class_csv_path}")
     if merged_diversity_rows:
