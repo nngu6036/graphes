@@ -213,7 +213,7 @@ Epsilon-novelty / held-out coverage curve
 export HOGDIFF=/home/quang/HOG-Diff
 export HOGDIFF_PYTHON=/home/quang/miniconda3/envs/hogdiff/bin/python
 
-\N=1024
+N=1024
 DEVICE="gpu"
 
 for SEED in {42..44}; do
@@ -263,156 +263,156 @@ echo "HoG-Diff ego_small loop finished."
 
 #Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
-Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
-V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000
-hog_diff_to_test                    0.054285          0.070947      0.012225        0.035082        0.037189      1.000000      0.124023      0.208984
+Generic graph V.U.N.: benchmark validity, exact-isomorphism uniqueness/novelty, and combined VUN (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split and VUN is the fraction simultaneously valid, unique, and novel.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty         VUN
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000    0.325000
+hog_diff_to_test                    0.043434          0.059843      0.010826        0.024819        0.027190      0.987305      0.123047      0.182617    0.072266
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.546875    0.000000      0.614062
 heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
-hog_diff                          0.208984      0.208984     0.124023    0.434570      0.658789
+hog_diff                          0.182617      0.182617     0.123047    0.421875      0.667383
 Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
 
 Generic topology diversity diagnostics (attributes ignored)
 Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
 train                               0.000000     0.546875        0.000000          0.000000
 heldout_test                        0.375000     0.700000        0.162295          0.000000
-hog_diff                            0.208984     0.124023        0.106691          0.000000
+hog_diff                            0.182617     0.123047        0.093107          0.000000
 Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
 
 Epsilon-novelty / held-out coverage curve
   epsilonPopulation                        eps novel     coverage
    0.0000train                              0.000000     0.625000
    0.0000heldout_test                       0.375000     1.000000
-   0.0000hog_diff                           0.208984     0.575000
+   0.0000hog_diff                           0.182617     0.650000
    0.0100train                              0.000000     0.625000
    0.0100heldout_test                       0.375000     1.000000
-   0.0100hog_diff                           0.208984     0.575000
+   0.0100hog_diff                           0.182617     0.650000
    0.0250train                              0.000000     0.625000
    0.0250heldout_test                       0.375000     1.000000
-   0.0250hog_diff                           0.208984     0.575000
+   0.0250hog_diff                           0.182617     0.650000
    0.0500train                              0.000000     0.625000
    0.0500heldout_test                       0.375000     1.000000
-   0.0500hog_diff                           0.208984     0.575000
+   0.0500hog_diff                           0.182617     0.650000
    0.1000train                              0.000000     0.625000
    0.1000heldout_test                       0.375000     1.000000
-   0.1000hog_diff                           0.208984     0.575000
+   0.1000hog_diff                           0.182617     0.650000
    0.2000train                              0.000000     0.625000
    0.2000heldout_test                       0.375000     1.000000
-   0.2000hog_diff                           0.208984     0.575000
+   0.2000hog_diff                           0.182617     0.650000
    0.3000train                              0.000000     0.625000
    0.3000heldout_test                       0.375000     1.000000
-   0.3000hog_diff                           0.208984     0.575000
+   0.3000hog_diff                           0.182617     0.650000
    0.5000train                              0.000000     1.000000
    0.5000heldout_test                       0.000000     1.000000
-   0.5000hog_diff                           0.059570     0.975000
+   0.5000hog_diff                           0.052734     1.000000
 
 
 
 
 #Seed 43
 Graph-distribution MMD against held-out test graphs (lower is better)
-Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
-V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000
-hog_diff_to_test                    0.058216          0.066587      0.011769        0.030797        0.026243      1.000000      0.104492      0.188477
+Generic graph V.U.N.: benchmark validity, exact-isomorphism uniqueness/novelty, and combined VUN (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split and VUN is the fraction simultaneously valid, unique, and novel.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty         VUN
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000    0.325000
+hog_diff_to_test                    0.039564          0.054955      0.010664        0.022961        0.023882      0.981445      0.119141      0.178711    0.069336
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.546875    0.000000      0.614062
 heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
-hog_diff                          0.188477      0.188477     0.104492    0.409180      0.664844
+hog_diff                          0.178711      0.178711     0.119141    0.412109      0.664258
 Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
 
 Generic topology diversity diagnostics (attributes ignored)
 Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
 train                               0.000000     0.546875        0.000000          0.000000
 heldout_test                        0.375000     0.700000        0.162295          0.000000
-hog_diff                            0.188477     0.104492        0.095674          0.000000
+hog_diff                            0.178711     0.119141        0.091880          0.000000
 Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
 
 Epsilon-novelty / held-out coverage curve
   epsilonPopulation                        eps novel     coverage
    0.0000train                              0.000000     0.625000
    0.0000heldout_test                       0.375000     1.000000
-   0.0000hog_diff                           0.188477     0.625000
+   0.0000hog_diff                           0.178711     0.650000
    0.0100train                              0.000000     0.625000
    0.0100heldout_test                       0.375000     1.000000
-   0.0100hog_diff                           0.188477     0.625000
+   0.0100hog_diff                           0.178711     0.650000
    0.0250train                              0.000000     0.625000
    0.0250heldout_test                       0.375000     1.000000
-   0.0250hog_diff                           0.188477     0.625000
+   0.0250hog_diff                           0.178711     0.650000
    0.0500train                              0.000000     0.625000
    0.0500heldout_test                       0.375000     1.000000
-   0.0500hog_diff                           0.188477     0.625000
+   0.0500hog_diff                           0.178711     0.650000
    0.1000train                              0.000000     0.625000
    0.1000heldout_test                       0.375000     1.000000
-   0.1000hog_diff                           0.188477     0.625000
+   0.1000hog_diff                           0.178711     0.650000
    0.2000train                              0.000000     0.625000
    0.2000heldout_test                       0.375000     1.000000
-   0.2000hog_diff                           0.188477     0.625000
+   0.2000hog_diff                           0.178711     0.650000
    0.3000train                              0.000000     0.625000
    0.3000heldout_test                       0.375000     1.000000
-   0.3000hog_diff                           0.188477     0.625000
+   0.3000hog_diff                           0.178711     0.650000
    0.5000train                              0.000000     1.000000
    0.5000heldout_test                       0.000000     1.000000
-   0.5000hog_diff                           0.049805     0.975000
+   0.5000hog_diff                           0.049805     1.000000
 
 
 
 
 #Seed 44
 Graph-distribution MMD against held-out test graphs (lower is better)
-Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
-V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split.
-Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty
-train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000
-hog_diff_to_test                    0.036673          0.049233      0.010289        0.032708        0.024643      1.000000      0.113281      0.166992
+Generic graph V.U.N.: benchmark validity, exact-isomorphism uniqueness/novelty, and combined VUN (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split and VUN is the fraction simultaneously valid, unique, and novel.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty         VUN
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000    0.325000
+hog_diff_to_test                    0.042461          0.062482      0.010783        0.030390        0.029465      0.988281      0.115234      0.154297    0.063477
 
 Exact topology-support diagnostics (attributes ignored)
 Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
 train                             0.000000      0.000000     0.546875    0.000000      0.614062
 heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
-hog_diff                          0.166992      0.166992     0.113281    0.372070      0.648828
+hog_diff                          0.154297      0.154297     0.115234    0.379883      0.671289
 Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
 
 Generic topology diversity diagnostics (attributes ignored)
 Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
 train                               0.000000     0.546875        0.000000          0.000000
 heldout_test                        0.375000     0.700000        0.162295          0.000000
-hog_diff                            0.166992     0.113281        0.080649          0.000000
+hog_diff                            0.154297     0.115234        0.076208          0.000000
 Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
 
 Epsilon-novelty / held-out coverage curve
   epsilonPopulation                        eps novel     coverage
    0.0000train                              0.000000     0.625000
    0.0000heldout_test                       0.375000     1.000000
-   0.0000hog_diff                           0.166992     0.675000
+   0.0000hog_diff                           0.154297     0.600000
    0.0100train                              0.000000     0.625000
    0.0100heldout_test                       0.375000     1.000000
-   0.0100hog_diff                           0.166992     0.675000
+   0.0100hog_diff                           0.154297     0.600000
    0.0250train                              0.000000     0.625000
    0.0250heldout_test                       0.375000     1.000000
-   0.0250hog_diff                           0.166992     0.675000
+   0.0250hog_diff                           0.154297     0.600000
    0.0500train                              0.000000     0.625000
    0.0500heldout_test                       0.375000     1.000000
-   0.0500hog_diff                           0.166992     0.675000
+   0.0500hog_diff                           0.154297     0.600000
    0.1000train                              0.000000     0.625000
    0.1000heldout_test                       0.375000     1.000000
-   0.1000hog_diff                           0.166992     0.675000
+   0.1000hog_diff                           0.154297     0.600000
    0.2000train                              0.000000     0.625000
    0.2000heldout_test                       0.375000     1.000000
-   0.2000hog_diff                           0.166992     0.675000
+   0.2000hog_diff                           0.154297     0.600000
    0.3000train                              0.000000     0.625000
    0.3000heldout_test                       0.375000     1.000000
-   0.3000hog_diff                           0.166992     0.675000
+   0.3000hog_diff                           0.153320     0.600000
    0.5000train                              0.000000     1.000000
    0.5000heldout_test                       0.000000     1.000000
-   0.5000hog_diff                           0.042969     1.000000
+   0.5000hog_diff                           0.042969     0.975000
 
 
 
@@ -1075,3 +1075,9 @@ Molecular evaluation
   "qed_mean_minus_reference": -0.02336233651642905,
   "qed_wasserstein_1": 0.023382196448089622
 }
+
+
+### ABLATION STUDY
+
+A. Evaluate the contributions of exact-degree realization and stochastic rewiring
+bash commands/ablations/community_small/primary.sh
