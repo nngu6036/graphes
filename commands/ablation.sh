@@ -71,6 +71,7 @@ done
 for seed in "${SEED_VALUES[@]}"; do
   [[ "$seed" =~ ^(41|42|43|44|45)$ ]] || { echo "Provided configs cover training seeds 41--45" >&2; exit 2; }
 done
+[[ -z "${TRAIN_EPOCHS:-}" ]] || { echo "Unset TRAIN_EPOCHS: ablations require the configured 200-epoch training budget." >&2; exit 2; }
 OVERWRITE_ARGS=()
 [[ "$OVERWRITE" == 0 ]] || OVERWRITE_ARGS=(--overwrite)
 SUMMARY_ARGS=()
@@ -292,18 +293,13 @@ for DATASET in "${DATASETS[@]}"; do
   [[ "$NUM_REQUESTED" =~ ^[1-9][0-9]*$ ]] || { echo "N must be positive" >&2; exit 2; }
   SEED_DIR_ARGS=()
   for SEED in "${SEED_VALUES[@]}"; do
-    # Reuse the verified training-run names already present on the user's server.
-    # Keep these distinct from GENERATION_TAG: the paper ablation creates new
-    # generations from an existing checkpoint and never needs to retrain it.
+    # Use the same configured 200-epoch run names as the current main commands.
+    # Legacy g345_v1 checkpoints may have a different training budget and must
+    # not be substituted for these reference runs.
     if [[ -n "${RUN_TEMPLATE:-}" ]]; then
       RUN="$RUN_TEMPLATE"
     else
-      case "$DATASET" in
-        community_small|ego_small|zinc)
-          RUN='seed_{seed}_{dataset}_grapher_final_g345_v1' ;;
-        qm9)
-          RUN='seed_{seed}_{dataset}_grapher_final_B1to4_g345_v2' ;;
-      esac
+      RUN='seed_{seed}_{dataset}_grapher_final_{profile}_g345_v2'
     fi
     RUN="${RUN//\{seed\}/$SEED}"
     RUN="${RUN//\{dataset\}/$DATASET}"

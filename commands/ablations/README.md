@@ -78,25 +78,53 @@ Existing `DATASET_ROOT`, `OUTPUT_ROOT`, `REPORT_ROOT`, `ORCA_EXEC`, `N`, `DEVICE
 containing spaces are supported. Verified reuse uses the Linux `flock` utility
 to serialize preparation of shared generations and checkpoints.
 
-## Reference checkpoints already trained on the experiment server
+## Reference checkpoints for the 200-epoch protocol
 
-The default training run ID is selected **per dataset** from the checkpoint
-locations reported for seeds 41--45:
+The final and ablation YAMLs require **200 training epochs**, including the
+separately trained S0 control. The default run IDs match the current main
+commands for seeds 41--45:
 
 | Dataset | Reference training run ID (`{seed}` is the seed) |
 |---|---|
-| `community_small` | `seed_{seed}_community_small_grapher_final_g345_v1` |
-| `ego_small` | `seed_{seed}_ego_small_grapher_final_g345_v1` |
+| `community_small` | `seed_{seed}_community_small_grapher_final_tau0p4_B1to4_g345_v2` |
+| `ego_small` | `seed_{seed}_ego_small_grapher_final_tau0p4_B1to4_g345_v2` |
 | `qm9` | `seed_{seed}_qm9_grapher_final_B1to4_g345_v2` |
-| `zinc` | `seed_{seed}_zinc_grapher_final_g345_v1` |
+| `zinc` | `seed_{seed}_zinc_grapher_final_B1to4_g345_v2` |
 
-The user confirmed that `train/checkpoints/grapher.pt` exists for each run.
-Checkpoint **compatibility** has not been verified here: the experiment server's
-prepared datasets and original training manifests are not in this source
-snapshot. At runtime the verifier requires a matching `train/manifest.json`,
-training configuration, final epoch and train/validation/test split fingerprints.
-If a versioned checkpoint differs from the current ablation model, it is
-rejected without retraining or modifying the existing run.
+The earlier Community-small `*_grapher_final_g345_v1` runs recorded 10,000
+training epochs. Selecting those runs produces
+`training.train.epochs: expected 200, recorded 10000`. A final checkpoint trained
+for 10,000 epochs cannot be reused as the required 200-epoch checkpoint. The
+verifier continues to reject that mismatch and leaves the existing artifacts
+untouched. `TRAIN_EPOCHS` is unsupported; a nonempty value is rejected. Clear a
+previously exported value before rerunning:
+
+```bash
+unset TRAIN_EPOCHS
+```
+
+When the current 200-epoch runs are absent, create them under the v2 names with:
+
+```bash
+DO_TRAIN=1 bash commands/ablations/community_small/primary.sh
+```
+
+This creates missing reference checkpoints in separate runs from the old v1
+artifacts and reuses compatible completed v2 runs. Training runs for the full
+200 epochs; the recorded final checkpoint epoch must also equal 200. If an
+existing v2 run is incompatible, select an unused `RUN_TEMPLATE` to create a
+separate 200-epoch run:
+
+```bash
+RUN_TEMPLATE='seed_{seed}_{dataset}_grapher_final_{profile}_g345_v3_200epochs' \
+  DO_TRAIN=1 bash commands/ablations/community_small/primary.sh
+```
+
+The verifier also requires a matching training configuration, dataset identity,
+train/validation/test split fingerprints, and artifact hashes. `DO_TRAIN=1` and
+`OVERWRITE=1` do not bypass those checks for incompatible saved runs under
+verified reuse. The YAML budgets, saved manifests and existing checkpoints are
+not rewritten to make an incompatible run pass.
 
 The new sampled population uses the independent generation ID
 `paper_ablation_v1_seed_<seed>_n_<N>` beneath the selected existing run.
