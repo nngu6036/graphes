@@ -20,6 +20,8 @@ import yaml
 
 RECEIPT = "ablation_reuse_receipt.json"
 FORMAT = "graphes_ablation_reuse_receipt_v1"
+MATCHED_INDEX = "matched_ablation_manifest.json"
+POSITIONAL_IDS = "hash_anchored_parent_list_order"
 GENERATION_ONLY = {"sample", "graphlet_refinement", "attributed_diversification", "generation_batch_size", "runtime"}
 
 
@@ -93,7 +95,8 @@ def graph_population(path: Path, count: int, ids: list[str], *, allow_unlabelled
     for graph, sample_id in zip(graphs, ids):
         require(isinstance(graph, nx.Graph), f"Non-graph object in {path}")
         actual = graph.graph.get("sample_id")
-        require((actual is None and allow_unlabelled) or str(actual) == sample_id, f"Saved graph ID/order differs: {path}: {sample_id}")
+        require((actual is None and allow_unlabelled) or str(actual) == sample_id,
+                f"Saved graph ID/order differs: {path}: expected {sample_id!r}, recorded {actual!r}")
 
 
 def training(args, cfg: dict, *, missing_ok: bool = False) -> tuple[dict, dict]:
@@ -143,33 +146,87 @@ def invocation_context(args, cfg: dict) -> tuple[dict, dict]:
     return trained, context
 
 
+def generation_identity(args, cfg: dict, context: dict) -> dict:
+    generation = read_json(args.generation_dir / "manifest.json")
+    require(generation.get("model_id") == "grapher", "Generation model_id is not grapher")
+    for key, value in (("run_id", args.run_dir.name), ("generation_id", args.generation_dir.name), ("generation_seed", args.seed), ("num_requested", args.num_samples), ("num_generated", args.num_samples)):
+        require(generation.get(key) == value, f"Generation {key} differs: expected {value!r}")
+    require(generation.get("checkpoint", {}).get("sha256") == context["checkpoint_sha256"], "Generation uses a different checkpoint from the current managed run")
+    require(generation.get("variant") == cfg.get("variant"), "Generation variant differs")
+    return generation
+
+
+def matched_index(args, generation: dict, context: dict) -> tuple[dict, bool]:
+    """Verify a native index or a separately exported, hash-bound population."""
+    record = generation.get("matched_ablation", {}) or {}
+    if record.get("enabled") is True:
+        path = artifact(args.generation_dir, record, "matched ablation index")
+        common = read_json(path)
+        positional = False
+    else:
+        path = args.generation_dir / MATCHED_INDEX
+        require(path.is_file(), "Matched population export is missing. Resume the ablation command to export the saved endpoints using its original generation intent; do not regenerate them.")
+        common = read_json(path)
+        require(common.get("format") == "graphes_matched_ablation_export_v1", "Unrecognized matched export format")
+        provenance = common.get("provenance", {})
+        require(provenance.get("identity_scheme") == POSITIONAL_IDS, "Matched export has no hash-anchored identity mapping")
+        require(provenance.get("source_generation_manifest_sha256") == sha256(args.generation_dir / "manifest.json"), "Matched export source generation manifest changed")
+        subset(context, provenance, "matched.export_context")
+        sources = provenance.get("source_artifacts")
+        require(isinstance(sources, dict) and bool(sources), "Matched export source artifact records are missing")
+        for name, source in sources.items():
+            recorded = generation.get(name)
+            require(isinstance(source, dict) and isinstance(recorded, dict) and source.get("path") == recorded.get("path") and source.get("sha256") == recorded.get("sha256"), f"Matched export source differs from generation: {name}")
+            artifact(args.generation_dir, source, f"matched source {name}")
+        for name in ("base_graphs", "pre_realization_graphs", "pre_refinement_graphs", "sampled_basis_indices"):
+            require(name in sources, f"Matched export source is unrecorded: {name}")
+        positional = True
+    require(common.get("sample_ids") == expected_ids(args), "Shared requested sample IDs differ")
+    require(common.get("generation_seed") == args.seed and common.get("num_requested") == args.num_samples, "Shared generation seed/count differs")
+    require(common.get("provenance", {}).get("checkpoint_sha256") == context["checkpoint_sha256"], "Shared-index checkpoint differs")
+    return common, positional
+
+
+def prepare_matched(args, cfg: dict) -> None:
+    """Complete the branch protocol from saved endpoints, without resampling."""
+    require(args.kind == "matched", "prepare is supported only for generic matched populations")
+    trained, context = invocation_context(args, cfg)
+    intent_path = args.generation_dir.parent / f"{args.generation_dir.name}.ablation_generation_intent.json"
+    require(intent_path.is_file(), "Cannot recover missing sampler provenance without the original generation intent; existing outputs are retained")
+    intent = read_json(intent_path)
+    require(intent.get("context") == context, "Original generation intent configuration/checkpoint/training provenance differs")
+    require(intent.get("config_file_sha256") == sha256(args.config), "Original generation intent configuration file changed")
+    generation = generation_identity(args, cfg, context)
+    sampling = generation.get("sampling", {})
+    require(sampling.get("spectral_operator") == "combinatorial_laplacian", "Matched export requires saved Laplacian endpoints")
+    subset(cfg.get("sample", {}).get("threshold"), sampling.get("threshold"), "generation.threshold")
+    require(sampling.get("degree_constrained_realization", {}).get("enabled") is True, "Saved generation did not use exact-degree decoding")
+    refinement = cfg.get("graphlet_refinement", {})
+    actual = sampling.get("stochastic_diversification", {}) or {}
+    for key in ("random_steps", "refiner", "target_source"):
+        subset(refinement.get(key), actual.get(key), f"generation.refinement.{key}")
+    from grapher.models.grapher.matched_ablation import export_matched
+    checkpoint = artifact(args.run_dir / "train", trained.get("checkpoint"), "training checkpoint")
+    export_matched(args.generation_dir, cfg, context, checkpoint)
+
+
 def verify_generation(args, cfg: dict, *, allow_unsealed: bool = False) -> tuple[dict, dict, dict]:
     directory = args.generation_dir
     if not directory.exists():
         raise Absent(f"Generation is absent: {directory}")
     trained, context = invocation_context(args, cfg)
-    generation = read_json(directory / "manifest.json")
-    require(generation.get("model_id") == "grapher", "Generation model_id is not grapher")
-    for key, value in (("run_id", args.run_dir.name), ("generation_id", directory.name), ("generation_seed", args.seed), ("num_requested", args.num_samples), ("num_generated", args.num_samples)):
-        require(generation.get(key) == value, f"Generation {key} differs: expected {value!r}")
-    require(generation.get("checkpoint", {}).get("sha256") == context["checkpoint_sha256"], "Generation uses a different checkpoint from the current managed run")
-    require(generation.get("variant") == cfg.get("variant"), "Generation variant differs")
+    generation = generation_identity(args, cfg, context)
+    common, positional = matched_index(args, generation, context) if args.kind == "matched" else ({}, False)
     base = artifact(directory, generation.get("base_graphs"), "generation base_graphs")
-    graph_population(base, args.num_samples, expected_ids(args), allow_unlabelled=args.kind == "s0")
+    graph_population(base, args.num_samples, expected_ids(args), allow_unlabelled=positional or args.kind == "s0")
     artifact(directory, generation.get("sampled_basis_indices"), "sampled basis indices")
     sampling = generation.get("sampling", {})
     if args.kind in {"matched", "s0"}:
-        subset(cfg["sample"], generation.get("effective_sample_config"), "effective_sample_config")
-        subset(cfg["sde"], generation.get("sde"), "generation.sde")
-        require(generation.get("generation_batch_size") == cfg.get("generation_batch_size"), "Generation batch size differs")
+        provenance = common.get("provenance", {})
+        subset(cfg["sample"], generation.get("effective_sample_config", provenance.get("sample_config")), "effective_sample_config")
+        subset(cfg["sde"], generation.get("sde", provenance.get("sde")), "generation.sde")
+        require(generation.get("generation_batch_size", provenance.get("generation_batch_size")) == cfg.get("generation_batch_size"), "Generation batch size differs")
         if args.kind == "matched":
-            require(generation.get("matched_ablation", {}).get("enabled") is True, "Generation has no matched decoder population")
-            common_path = artifact(directory, generation.get("matched_ablation"), "matched ablation index")
-            common = read_json(common_path)
-            require(common.get("sample_ids") == expected_ids(args), "Shared requested sample IDs differ")
-            require(common.get("generation_seed") == args.seed and common.get("num_requested") == args.num_samples, "Shared generation seed/count differs")
-            provenance = common.get("provenance", {})
-            require(provenance.get("checkpoint_sha256") == context["checkpoint_sha256"], "Shared-index checkpoint differs")
             subset(cfg["sample"], provenance.get("sample_config"), "shared.sample_config")
             subset(cfg["sde"], provenance.get("sde"), "shared.sde")
             require(provenance.get("generation_batch_size") == cfg.get("generation_batch_size"), "Shared-index batch size differs")
@@ -199,6 +256,9 @@ def verify_generation(args, cfg: dict, *, allow_unsealed: bool = False) -> tuple
     if receipt is not None:
         require(receipt.get("context") == context, "Reuse receipt configuration/checkpoint/training provenance differs")
         require(receipt.get("generation_manifest_sha256") == sha256(directory / "manifest.json"), "Generation manifest changed after the reuse receipt")
+        if positional:
+            require(receipt.get("matched_ablation_manifest_sha256") == sha256(directory / MATCHED_INDEX), "Matched index changed after the reuse receipt")
+            require(receipt.get("ablation_manifest_sha256") == sha256(directory / "ablations" / "ablation_manifest.json"), "Branch index changed after the reuse receipt")
     elif args.kind == "molecular" and not allow_unsealed:
         raise ValueError("Legacy molecular manifest does not record the full continuous sampler and has no fresh-generation receipt. Existing output is retained; explicitly choose a new GENERATION_TAG to generate a verifiable population.")
     return generation, context, receipt or {}
@@ -207,6 +267,12 @@ def verify_generation(args, cfg: dict, *, allow_unsealed: bool = False) -> tuple
 def verify_branches(args, cfg: dict, generation: dict, receipt: dict, variants: list[str]) -> dict[str, str]:
     root = args.generation_dir / "ablations"
     common = read_json(root / "ablation_manifest.json")
+    positional = False
+    if args.kind == "matched":
+        _, context = invocation_context(args, cfg)
+        matched, positional = matched_index(args, generation, context)
+        if positional:
+            require(common == matched, "Branch index differs from the hash-anchored shared population index")
     require(common.get("sample_ids") == expected_ids(args), "Branch index requested IDs differ")
     snapshots = {}
     for variant in variants:
@@ -238,12 +304,18 @@ def verify_branches(args, cfg: dict, generation: dict, receipt: dict, variants: 
         require(child.get("status") == expected_status, f"Inconsistent branch status: {variant}")
         require(not missing or variant == "D0", f"Primary branch is incomplete: {variant}")
         graph_path = artifact(directory, child.get("base_graphs"), f"{variant}.base_graphs")
-        graph_population(graph_path, count, ids)
+        allow_unlabelled = False
         if args.kind == "matched" and variant in {"T", "D", "DR"}:
             source = {"T": "pre_realization_graphs", "D": "pre_refinement_graphs", "DR": "base_graphs"}[variant]
             artifact(args.generation_dir, generation.get(source), source)
             require(child["base_graphs"]["sha256"] == generation[source]["sha256"],
                     f"Branch {variant} differs from its hash-anchored parent population")
+            if positional:
+                require(child.get("identity_source") == POSITIONAL_IDS, f"Missing positional identity source: {variant}")
+                parent = child.get("source_artifact", {})
+                require(parent.get("path") == generation[source]["path"] and parent.get("sha256") == generation[source]["sha256"], f"Branch {variant} source identity differs")
+                allow_unlabelled = True
+        graph_population(graph_path, count, ids, allow_unlabelled=allow_unlabelled)
         if variant in receipt.get("branch_manifest_sha256", {}):
             require(sha256(child_path) == receipt["branch_manifest_sha256"][variant], f"Branch manifest changed after receipt: {variant}")
         if args.kind == "molecular":
@@ -259,7 +331,7 @@ def verify_branches(args, cfg: dict, generation: dict, receipt: dict, variants: 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("training", "generation", "branches", "begin", "seal"))
+    parser.add_argument("mode", choices=("training", "generation", "branches", "begin", "prepare", "seal"))
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--dataset", required=True)
@@ -281,6 +353,8 @@ def main(argv=None) -> int:
             require(not args.generation_dir.exists(), "Generation already exists; begin cannot authorize regeneration")
             _, context = invocation_context(args, cfg)
             write_json(args.generation_dir.parent / f"{args.generation_dir.name}.ablation_generation_intent.json", {"context": context, "config_file_sha256": sha256(args.config)})
+        elif args.mode == "prepare":
+            prepare_matched(args, cfg)
         elif args.mode == "seal":
             intent_path = args.generation_dir.parent / f"{args.generation_dir.name}.ablation_generation_intent.json"
             intent = read_json(intent_path)
@@ -295,6 +369,10 @@ def main(argv=None) -> int:
                 "config_file_sha256": intent.get("config_file_sha256"),
                 "generation_manifest_sha256": sha256(args.generation_dir / "manifest.json"),
                 "branch_manifest_sha256": branches,
+                **({
+                    "matched_ablation_manifest_sha256": sha256(args.generation_dir / MATCHED_INDEX),
+                    "ablation_manifest_sha256": sha256(args.generation_dir / "ablations" / "ablation_manifest.json"),
+                } if args.kind == "matched" and (args.generation_dir / MATCHED_INDEX).is_file() else {}),
                 "provenance": "Written only after a successfully completed, explicitly bracketed generation invocation",
             })
             intent_path.unlink()
@@ -308,8 +386,8 @@ def main(argv=None) -> int:
     except Absent as error:
         print(str(error), file=sys.stderr)
         return 3
-    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
-        print(f"Reuse rejected: {error}\nExisting artifacts were not modified. Choose a new run/generation tag for a different experiment.", file=sys.stderr)
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError, json.JSONDecodeError) as error:
+        print(f"Reuse rejected: {error}\nSaved checkpoints and parent populations were not regenerated. Retain the same tags when recovering a completed population; choose new tags only for a different experiment.", file=sys.stderr)
         return 2
 
 

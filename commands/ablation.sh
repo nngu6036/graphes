@@ -141,6 +141,7 @@ ensure_training_unlocked() {
 ensure_generation_unlocked() {
   local config="$1" train_config="$2" run_id="$3" gen_id="$4" kind="$5" allow_train="$6" allow_generate="$7"
   local status=0 run_dir="$OUTPUT_ROOT/grapher/$DATASET/$run_id"
+  local generation_dir="$run_dir/generations/$gen_id"
   if [[ "$DRY_RUN" == 1 ]]; then
     # Show both the validation and the conditional creation plan; do not probe
     # real output paths or infer that a cache exists during a dry run.
@@ -149,9 +150,16 @@ ensure_generation_unlocked() {
     if [[ "$allow_generate" == 1 ]]; then
       check_artifacts begin "$config" "$run_id" "$gen_id" "$kind"
       train_or_generate generate "$config" "$run_id" "$gen_id"
+      if [[ "$kind" == matched ]]; then check_artifacts prepare "$config" "$run_id" "$gen_id" "$kind"; fi
       check_artifacts seal "$config" "$run_id" "$gen_id" "$kind"
     fi
     return 0
+  fi
+  # A completed reverse population can outlive a failed branch export/seal.
+  # Its original intent permits recovery without repeating neural sampling.
+  if [[ "$kind" == matched && -d "$generation_dir" && -f "$generation_dir.ablation_generation_intent.json" ]]; then
+    check_artifacts prepare "$config" "$run_id" "$gen_id" "$kind" || return $?
+    check_artifacts seal "$config" "$run_id" "$gen_id" "$kind" || return $?
   fi
   if check_artifacts generation "$config" "$run_id" "$gen_id" "$kind"; then
     echo "Reusing verified population: $run_dir/generations/$gen_id"
@@ -162,6 +170,7 @@ ensure_generation_unlocked() {
   [[ "$allow_generate" == 1 ]] || { echo "Population absent and generation is disabled: $gen_id" >&2; return 3; }
   check_artifacts begin "$config" "$run_id" "$gen_id" "$kind" || return $?
   train_or_generate generate "$config" "$run_id" "$gen_id" || return $?
+  if [[ "$kind" == matched ]]; then check_artifacts prepare "$config" "$run_id" "$gen_id" "$kind" || return $?; fi
   check_artifacts seal "$config" "$run_id" "$gen_id" "$kind"
 }
 

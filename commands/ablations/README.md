@@ -23,8 +23,11 @@ sampling parameters remain in the explicit YAML files under
 T is threshold decoding. D is stochastic exact-degree decoding with temperature
 0.4. D0 uses temperature 0 with the same saved degree targets. TR and DR apply
 rewiring to the corresponding saved attributed or generic endpoint. The budget
-study uses 0 (D), 1 (R1), uniform 1–2 (R12), and uniform 1–4 (DR). These correspond
-to the paper's R0, R1, R2 and R3, respectively.
+study includes 0 (D), 1 (R1), uniform 1--2 (R12), and the saved per-graph DR
+budget. Current generic matched YAMLs allow DR budgets of 1--8 steps despite
+`B1to4` appearing in the training run names. Exported diagnostics retain the
+actual saved requested budgets; TR uses those same per-graph budgets when
+rewiring T. Run names do not override the recorded sampling settings.
 
 S0 is a separately trained checkpoint with the total topology-summary loss
 multiplier set to zero. D and S0 both use the stochastic exact-degree decoder
@@ -142,6 +145,44 @@ The subsequent study files reuse that saved population after validating its
 provenance and requested IDs. They do not create independent reverse trajectories
 for each comparison. A summary-supervision run separately prepares S0 as needed.
 
+### Resume a completed generic population after sealing fails
+
+An earlier generic producer completed reverse sampling but omitted the matched
+branch export and embedded graph sample IDs. A subsequent seal could therefore
+reject `base_graphs.pkl` at sample `41:0` after all 1,024 graphs had been saved.
+The missing matched export protocol also prevented the remaining branch checks
+from succeeding.
+
+Rerun the same study command with the same settings:
+
+```bash
+DO_TRAIN=1 bash commands/ablations/community_small/primary.sh
+```
+
+With verified reuse, `DO_TRAIN=1` reuses the compatible completed 200-epoch
+checkpoint; it trains only when the checkpoint is absent.
+
+The preparation step uses the saved threshold graphs (T), exact-degree graphs
+(D), final graphs (DR), continuous endpoints, projected degrees and summaries.
+It exports the missing controls from those endpoints and resumes verification
+without repeating reverse sampling. Existing parent pickles and the generation
+manifest retain their original bytes; matched provenance and branch records are
+written separately to `matched_ablation_manifest.json` and
+`ablations/ablation_manifest.json`. No overwrite, new generation tag or epoch
+change is needed for this recovery; the training budget remains 200 epochs.
+
+When an older generation manifest lacks effective sampler settings, recovery
+requires the original `.ablation_generation_intent.json` written by `begin` for
+that generation. Its configuration digest, file hash and training context must
+match the requested operation. Missing or conflicting evidence rejects recovery
+instead of inferring settings from the current YAML.
+
+Unlabelled T, D and DR graphs are associated with requested sample IDs only by
+the saved list order anchored to the verified parent file hashes and matched
+provenance. An embedded ID that conflicts with this order still fails. Derived
+TR, D0, R1 and R12 outputs carry explicit IDs and failure records; count, order,
+checkpoint, dataset and artifact checks remain mandatory.
+
 All generic studies use the same generation ID by default:
 
 ```text
@@ -186,18 +227,19 @@ GENERATION_TAG=paper_ablation_studies_v1 \
   bash commands/ablations/qm9/rewiring.sh
 ```
 
-For the complete statistical definitions, failure accounting, invariants and
-output layout, see `commands/ABLATION.md`.
+The summarizer records per-seed paired differences, explicit missing or failed
+controls, and separate report locations for each study.
 
 ## Verification
 
-The combined targeted suite passes **73 tests**. This includes dry runs of all
-ten study files; actual tiny CPU generic and S0 training/generation; and checks
-for stale settings, changed checkpoints/data, corrupt branch artifacts, partial
-controls and report isolation. Molecular reuse tests use saved-file protocol
-fixtures and do not constitute molecular neural-model or benchmark validation.
-All eleven shell files (the ten entry points plus the common runner) pass Bash
-syntax checks. Full benchmark experiments have not been run for this update.
+Regression tests use isolated synthetic checkpoints, split fingerprints, graph
+populations and matched sidecars to verify strict 200-epoch reuse, parent hash
+and ID association, changed provenance, corrupt or reordered artifacts, and
+recovery intent checks. Tiny saved-endpoint export tests exercise branch
+creation without reverse diffusion. A tiny evaluator run also checks the
+dataset-root override, recorded generic validity bounds, and their effect on
+the reported validity rate. These fixtures and shell syntax checks do not
+constitute a full training run or benchmark validation.
 
 ## Can exact-degree decoding be applied to attributed graphs?
 

@@ -3575,6 +3575,22 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     )
     realization_cfg = degree_constrained_realization.resolve_config(sample_cfg)
     realization_enabled = degree_constrained_realization.enabled(realization_cfg)
+    matched_cfg = sample_cfg.get("matched_ablation", {}) or {}
+    if not isinstance(matched_cfg, Mapping):
+        raise TypeError("sample.matched_ablation must be a mapping")
+    matched_enabled = bool(matched_cfg.get("enabled", False))
+    if matched_enabled:
+        # Check the export implementation before spending time on reverse sampling.
+        from grapher.models.grapher.matched_ablation import export_matched  # noqa: F401
+        if not realization_enabled or not bool(structure_summary_payload.get("enabled", False)):
+            raise ValueError("Matched ablations require exact-degree decoding and saved joint structure predictions")
+        if not bool(realization_cfg.get("save_threshold_control", True)):
+            raise ValueError("Matched ablations require save_threshold_control=true")
+        if bool(realization_cfg.get("candidate_selection", {}).get("enabled", False)):
+            raise ValueError("Matched ablations do not support summary-selected decoder candidates")
+        matched_refinement = options.get("graphlet_refinement", {}) or {}
+        if not bool(matched_refinement.get("enabled", False)) or str(matched_refinement.get("mode", "")).lower() != "stochastic_diversification":
+            raise ValueError("Matched ablations require stochastic graphlet diversification")
     realization_candidate_selection_enabled = bool(
         realization_enabled
         and (realization_cfg.get("candidate_selection", {}) or {}).get("enabled", False)
@@ -3744,6 +3760,8 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                         )
                     )
                     if bool(realization_cfg.get("save_threshold_control", True)):
+                        if matched_enabled:
+                            threshold_control.graph["sample_id"] = f"{request.generation_seed}:{len(graphs)}"
                         pre_realization_graphs.append(threshold_control)
                     projected_realization_degrees.append(projected_degree)
                     realization_row.update({
@@ -3754,6 +3772,8 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 else:
                     graph = threshold_graph
 
+                if matched_enabled:
+                    graph.graph["sample_id"] = f"{request.generation_seed}:{len(graphs)}"
                 graphs.append(graph)
                 continuous.append(matrix)
                 spectra.append(lam[row, :].detach().cpu().numpy().astype(np.float64))
@@ -4156,6 +4176,9 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
             "generation_seed": request.generation_seed,
             "num_requested": request.num_graphs,
             "num_generated": len(graphs),
+            "effective_sample_config": _jsonable(sample_cfg),
+            "sde": _jsonable(state["sde"]),
+            "generation_batch_size": batch_size,
             "duration_seconds": time.monotonic() - start,
             "base_graphs": {
                 "path": "base_graphs.pkl",

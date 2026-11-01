@@ -757,6 +757,8 @@ def _generic_graph_is_valid(
     *,
     require_connected: bool,
     reject_zero_degree: bool,
+    min_nodes: int | None = None,
+    max_nodes: int | None = None,
 ) -> bool:
     """GraphES generic-benchmark validity predicate.
 
@@ -771,6 +773,10 @@ def _generic_graph_is_valid(
         return False
     if graph.number_of_nodes() <= 0:
         return False
+    if min_nodes is not None and graph.number_of_nodes() < min_nodes:
+        return False
+    if max_nodes is not None and graph.number_of_nodes() > max_nodes:
+        return False
     if graph.is_directed() or graph.is_multigraph():
         return False
     if nx.number_of_selfloops(graph) != 0:
@@ -784,6 +790,10 @@ def _generic_graph_is_valid(
 
 def _resolve_generic_validity_protocol(
     dataset_config: Mapping[str, Any],
+    *,
+    require_connected: bool | None = None,
+    min_nodes: int | None = None,
+    max_nodes: int | None = None,
 ) -> dict[str, Any]:
     """Resolve generic validity rules from the pinned dataset configuration."""
 
@@ -799,7 +809,7 @@ def _resolve_generic_validity_protocol(
             filters = raw.get("filters", {}) or {}
             config_path = candidate
 
-    return {
+    protocol = {
         "mode": "prepared_dataset_contract",
         "dataset_config_path": str(config_path) if config_path is not None else None,
         "nonempty": True,
@@ -809,6 +819,18 @@ def _resolve_generic_validity_protocol(
         "require_connected": bool(filters.get("require_connected", False)),
         "reject_zero_degree": bool(filters.get("reject_zero_degree", False)),
     }
+    overrides = {
+        key: value for key, value in {
+            "require_connected": require_connected,
+            "min_nodes": min_nodes,
+            "max_nodes": max_nodes,
+        }.items() if value is not None
+    }
+    if overrides:
+        protocol.update(overrides)
+        protocol["mode"] = "prepared_dataset_contract_with_cli_overrides"
+        protocol["cli_overrides"] = overrides
+    return protocol
 
 
 def _frequency_tv(
@@ -1906,6 +1928,10 @@ def main() -> None:
     )
     parser.add_argument("--config", required=True)
     parser.add_argument(
+        "--dataset-root", type=Path, default=None,
+        help="Override dataset.root for prepared split loading and provenance checks.",
+    )
+    parser.add_argument(
         "--reference-split", choices=("val", "test"), default=None,
         help=("Reference graphs for all MMD rows. Overrides evaluation.reference_split; "
               "legacy configs default to test. Use val for weight selection."),
@@ -1918,6 +1944,18 @@ def main() -> None:
             "Generic-graph MMD convention. 'config' reads "
             "evaluation.generic_mmd_protocol (default: graphrnn)."
         ),
+    )
+    parser.add_argument(
+        "--generic-validity-require-connected", action="store_true", default=None,
+        help="Require connected generic graphs in addition to the dataset validity rules.",
+    )
+    parser.add_argument(
+        "--generic-validity-min-nodes", type=int, default=None,
+        help="Minimum generic graph node count for validity (positive integer).",
+    )
+    parser.add_argument(
+        "--generic-validity-max-nodes", type=int, default=None,
+        help="Maximum generic graph node count for validity (positive integer).",
     )
     parser.add_argument("--generated-dir", required=True)
     parser.add_argument(
@@ -2021,8 +2059,21 @@ def main() -> None:
     parser.add_argument("--columns", type=int, default=4, help=argparse.SUPPRESS)
     parser.add_argument("--dpi", type=int, default=300, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    for name in ("generic_validity_min_nodes", "generic_validity_max_nodes"):
+        value = getattr(args, name)
+        if value is not None and value <= 0:
+            parser.error(f"--{name.replace('_', '-')} must be a positive integer")
+    if (
+        args.generic_validity_min_nodes is not None
+        and args.generic_validity_max_nodes is not None
+        and args.generic_validity_min_nodes > args.generic_validity_max_nodes
+    ):
+        parser.error("--generic-validity-min-nodes must not exceed --generic-validity-max-nodes")
 
     config = load_yaml(args.config)
+    if args.dataset_root is not None:
+        config.setdefault("dataset", {})
+        config["dataset"] = {**(config["dataset"] or {}), "root": str(args.dataset_root)}
     reference_split = resolve_reference_split(config, args.reference_split)
     generated_dir = Path(args.generated_dir)
     (
@@ -2213,7 +2264,12 @@ def main() -> None:
         }
     molecular = is_molecular_evaluation(dataset_cfg, generated_graphs)
     generic_validity_protocol = (
-        _resolve_generic_validity_protocol(dataset_cfg) if not molecular else None
+        _resolve_generic_validity_protocol(
+            dataset_cfg,
+            require_connected=args.generic_validity_require_connected,
+            min_nodes=args.generic_validity_min_nodes,
+            max_nodes=args.generic_validity_max_nodes,
+        ) if not molecular else None
     )
     generic_validity_fn = None
     if generic_validity_protocol is not None:
@@ -2225,6 +2281,8 @@ def main() -> None:
             reject_zero_degree=bool(
                 generic_validity_protocol["reject_zero_degree"]
             ),
+            min_nodes=generic_validity_protocol.get("min_nodes"),
+            max_nodes=generic_validity_protocol.get("max_nodes"),
         )
     graphlet_options = {
         "k_min": int(evaluation_cfg.get("graphlet_k_min", 3)),
