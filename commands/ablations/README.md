@@ -183,6 +183,20 @@ provenance. An embedded ID that conflicts with this order still fails. Derived
 TR, D0, R1 and R12 outputs carry explicit IDs and failure records; count, order,
 checkpoint, dataset and artifact checks remain mandatory.
 
+### Exact-degree connectivity solver
+
+A generation that stopped with `remained disconnected after 16 connectivity-cut
+rounds` reached the cut-iteration cap while solving the connected exact-degree
+problem. At that cap, the solver now uses a single-commodity flow formulation
+to enforce connectivity with the same indexed degrees, edge scores and sampled
+Gumbel perturbation. The requested graph and its optimization objective remain
+fixed. Diagnostics record the connectivity method and the number of cut rounds.
+
+After updating, retry the same study command with the same settings. Completed
+checkpoints and saved populations remain available for verified reuse. Truly
+infeasible degree targets and solver timeouts remain errors; failed outputs
+retain their existing failure accounting.
+
 All generic studies use the same generation ID by default:
 
 ```text

@@ -12,7 +12,8 @@ three explicit stages:
 The stochastic stage uses perturb-and-MAP: independent Gumbel noise is added to
 normalized spectral edge scores, and a binary linear program selects the
 maximum-utility simple graph subject to exact node-degree constraints.  When
-requested, connectivity is enforced by iterative cut generation.
+requested, connectivity is enforced by component cuts, followed by an exact
+single-commodity flow formulation if the configured cut budget is exhausted.
 
 The procedure is a generation-time decoder.  It does not retrain the spectral
 model and it is not claimed to sample exactly from a Gibbs distribution over
@@ -37,10 +38,10 @@ from grapher.rewiring_mlp.generic.graphlets import (
 
 try:  # Imported lazily by the generation path, but explicit here for tests.
     from scipy.optimize import Bounds, LinearConstraint, milp
-    from scipy.sparse import coo_matrix, csr_matrix, vstack
+    from scipy.sparse import coo_matrix, csr_matrix, hstack, vstack
 except Exception as exc:  # pragma: no cover - exercised only in incomplete envs
     Bounds = LinearConstraint = milp = None  # type: ignore[assignment]
-    coo_matrix = csr_matrix = vstack = None  # type: ignore[assignment]
+    coo_matrix = csr_matrix = hstack = vstack = None  # type: ignore[assignment]
     _SCIPY_IMPORT_ERROR: Exception | None = exc
 else:
     _SCIPY_IMPORT_ERROR = None
@@ -548,6 +549,64 @@ def project_degree_sequence(
     )
 
 
+def _solve_connected_flow(
+    degree: np.ndarray,
+    edge_u: np.ndarray,
+    edge_v: np.ndarray,
+    objective: np.ndarray,
+    matrix: csr_matrix,
+    constraint_lb: np.ndarray,
+    constraint_ub: np.ndarray,
+    *,
+    config: Mapping[str, Any],
+):
+    """Solve the same edge objective with exact connectedness constraints.
+
+    Root zero supplies one unit to every other vertex. Nonnegative flows use
+    selected edges only, so every vertex must be reachable from the root. The
+    flows are continuous auxiliary variables with zero objective coefficients;
+    no edge scores, degrees, or random perturbations are changed.
+    """
+    n, edge_count = len(degree), len(edge_u)
+    flow_count = 2 * edge_count
+    variable_count = edge_count + flow_count
+    capacity = float(n - 1)
+    flow_columns = edge_count + np.arange(flow_count)
+    tails = np.concatenate((edge_u, edge_v))
+    heads = np.concatenate((edge_v, edge_u))
+    balance = coo_matrix(
+        (
+            np.concatenate((np.ones(flow_count), -np.ones(flow_count))),
+            (np.concatenate((tails, heads)), np.tile(flow_columns, 2)),
+        ),
+        shape=(n, variable_count),
+    ).tocsr()
+    # Each directed flow is bounded by (n - 1) times its undirected edge bit.
+    capacity_rows = coo_matrix(
+        (
+            np.tile((-capacity, 1.0), flow_count),
+            (
+                np.repeat(np.arange(flow_count), 2),
+                np.column_stack((np.tile(np.arange(edge_count), 2), flow_columns)).reshape(-1),
+            ),
+        ),
+        shape=(flow_count, variable_count),
+    ).tocsr()
+    padded = hstack((matrix, csr_matrix((matrix.shape[0], flow_count))), format="csr")
+    supply = -np.ones(n, dtype=np.float64)
+    supply[0] = capacity
+    return _solve_milp(
+        np.concatenate((objective, np.zeros(flow_count))),
+        np.concatenate((np.ones(edge_count, dtype=np.int8), np.zeros(flow_count, dtype=np.int8))),
+        np.zeros(variable_count),
+        np.concatenate((np.ones(edge_count), np.full(flow_count, capacity))),
+        vstack((padded, balance, capacity_rows), format="csr"),
+        np.concatenate((constraint_lb, supply, np.full(flow_count, -np.inf))),
+        np.concatenate((constraint_ub, supply, np.zeros(flow_count))),
+        config=config,
+    )
+
+
 def _solve_exact_degree_realization(
     degree: np.ndarray,
     normalized_scores: np.ndarray,
@@ -582,6 +641,7 @@ def _solve_exact_degree_realization(
 
     cut_rows: list[csr_matrix] = []
     cut_rounds = 0
+    flow_used = False
     result = None
     graph = None
     require_connected = bool(config.get("require_connected", True)) and n > 1
@@ -613,10 +673,21 @@ def _solve_exact_degree_realization(
         if not require_connected or nx.is_connected(graph):
             break
         if cut_rounds >= max_rounds:
-            raise RuntimeError(
-                "degree-constrained realization remained disconnected after "
-                f"{max_rounds} connectivity-cut rounds"
+            # The cut-round cap is not a proof that the target is infeasible.
+            # Finish the same optimization problem with compact flow constraints.
+            result = _solve_connected_flow(
+                degree, edge_u, edge_v, objective, matrix, lb, ub, config=config,
             )
+            flow_used = True
+            if not bool(result.success) or result.x is None:
+                raise RuntimeError(
+                    "connected exact-degree realization MILP failed: "
+                    f"status={getattr(result, 'status', None)} message={getattr(result, 'message', '')}"
+                )
+            graph = _solution_graph(n, edge_u, edge_v, np.asarray(result.x))
+            if not nx.is_connected(graph):
+                raise RuntimeError("Connected realization MILP returned a disconnected graph")
+            break
         new_rows = _connectivity_cut_rows(graph, edge_u, edge_v, edge_count)
         if not new_rows:
             raise RuntimeError("failed to construct connectivity cuts")
@@ -624,6 +695,9 @@ def _solve_exact_degree_realization(
         cut_rounds += 1
 
     assert graph is not None and result is not None
+    actual_degree = np.asarray([graph.degree(i) for i in range(n)], dtype=np.int64)
+    if not np.array_equal(actual_degree, degree):
+        raise RuntimeError("Exact-degree realization MILP violated the indexed degree constraints")
     chosen = np.asarray(result.x[:edge_count]) > 0.5
     return graph, {
         "solver_status": int(result.status),
@@ -633,6 +707,10 @@ def _solve_exact_degree_realization(
         "mip_node_count": int(getattr(result, "mip_node_count", 0) or 0),
         "connectivity_cut_rounds": int(cut_rounds),
         "connectivity_cuts": int(len(cut_rows)),
+        "connectivity_method": "single_commodity_flow" if flow_used else (
+            "component_cuts" if require_connected else "not_required"
+        ),
+        "connectivity_flow_used": flow_used,
         "selected_spectral_score_mean": (
             float(normalized_scores[chosen].mean()) if bool(chosen.any()) else 0.0
         ),
