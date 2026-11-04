@@ -183,6 +183,36 @@ provenance. An embedded ID that conflicts with this order still fails. Derived
 TR, D0, R1 and R12 outputs carry explicit IDs and failure records; count, order,
 checkpoint, dataset and artifact checks remain mandatory.
 
+### Resume a completed molecular population after sealing fails
+
+Earlier QM9 and ZINC producers also saved unlabelled graph lists. A completed
+10,000-molecule population could then fail sealing at sample `44:0`. With the
+original generation intent retained, rerun the study under its original settings
+and tag. For the completed QM9 seed 44 population, export, seal and evaluate the
+saved outputs with:
+
+```bash
+SEEDS=44 DO_GENERATE=0 bash commands/ablations/qm9/rewiring.sh
+```
+
+The ordinary command also resumes this recovery when generation is enabled.
+Preparation exports T from `pre_refinement_graphs.pkl` and TR from
+`base_graphs.pkl` as byte-identical copies. It records their parent hashes and
+ordered sample identities in `molecular_ablation_manifest.json` and the identical
+`ablations/ablation_manifest.json`, then seals the population for verified reuse.
+The existing graph pickles, generation manifest and trained checkpoint retain
+their original bytes. This recovery performs no neural training, reverse
+sampling, molecule correction or replacement draws, and preserves the requested
+10,000 outputs, including invalid molecules.
+
+Recovery requires the original `.ablation_generation_intent.json` to prove the
+configuration file hash, effective sampling settings and training/data context.
+The recorded 200-epoch checkpoint, decode modes and temperatures, attribute
+diffusion steps, RNG policy and rewiring settings must match. Unlabelled graphs
+receive positional identities only through verified parent hashes; conflicting
+embedded IDs, altered order, counts or hashes reject reuse. Keep the same seed,
+sample count, run template, dataset root and generation tag when retrying.
+
 ### Exact-degree connectivity solver
 
 A generation that stopped with `remained disconnected after 16 connectivity-cut
@@ -228,18 +258,12 @@ To request a separate population, use `GENERATION_TAG`; the corresponding S0
 override is `S0_GENERATION_TAG`. `REUSE=0` explicitly selects the legacy runner's
 creation/overwrite behavior instead of verified reuse.
 
-Existing generic generations from the preceding implementation can be checked
-using their saved effective configuration and parent/branch manifests. Earlier
-molecular generation manifests lack several effective continuous-sampler
-settings. Fresh runs through these commands record the invocation needed for
-verified reuse. A molecular population without that evidence cannot be certified
-as using the currently requested settings. To retain such an older population
-and generate a distinct one, select a new tag explicitly:
-
-```bash
-GENERATION_TAG=paper_ablation_studies_v1 \
-  bash commands/ablations/qm9/rewiring.sh
-```
+Existing generations are verified against their saved effective configuration
+and parent/branch manifests. An original pending generation intent supplies the
+missing provenance needed to complete export and sealing after the failures
+described above. A molecular population with neither a valid reuse receipt nor
+its matching original intent remains unverified and is retained for inspection.
+Verified recovery uses the existing population and generation tag.
 
 The summarizer records per-seed paired differences, explicit missing or failed
 controls, and separate report locations for each study.
@@ -252,8 +276,11 @@ and ID association, changed provenance, corrupt or reordered artifacts, and
 recovery intent checks. Tiny saved-endpoint export tests exercise branch
 creation without reverse diffusion. A tiny evaluator run also checks the
 dataset-root override, recorded generic validity bounds, and their effect on
-the reported validity rate. These fixtures and shell syntax checks do not
-constitute a full training run or benchmark validation.
+the reported validity rate. Molecular fixtures prepare and seal unlabelled T/TR
+parents, preserve their bytes, and reject conflicting identities, settings and
+provenance. A wrapper regression confirms recovery proceeds with generation
+disabled and never calls the neural runner. These fixtures and shell syntax
+checks do not constitute a full training run or benchmark validation.
 
 ## Can exact-degree decoding be applied to attributed graphs?
 

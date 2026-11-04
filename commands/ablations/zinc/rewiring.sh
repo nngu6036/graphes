@@ -4,8 +4,9 @@
 # Primary training YAML: configs/experiments/grapher_final/zinc_seed_${SEED}.yaml
 # Primary generation YAML: configs/experiments/grapher_paper_ablation/zinc_seed_${SEED}_paired.yaml
 # One attributed generation supplies paired T/TR endpoints. Exact-degree molecular
-# decoding is unsupported. Earlier molecular generations lacking a sampler receipt
-# require an explicitly chosen new GENERATION_TAG; existing outputs are retained.
+# decoding is unsupported. Completed populations with the original generation
+# intent resume export/sealing under the same tag, including with DO_GENERATE=0.
+# Missing or conflicting provenance rejects reuse and retains existing outputs.
 # REUSE=1 rejects incompatible saved artifacts; it never silently retrains or regenerates.
 # Study evaluations and summaries use separate subfolders, so other study reports are retained.
 set -euo pipefail

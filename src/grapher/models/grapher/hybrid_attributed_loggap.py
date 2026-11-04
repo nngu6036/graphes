@@ -1669,6 +1669,9 @@ def generate(
 
                 index = int(indices[row])
                 graph_index = len(graphs)
+                sample_id = f"{request.generation_seed}:{graph_index}"
+                graph.graph["sample_id"] = sample_id
+                topology_graph.graph["sample_id"] = sample_id
                 diagnostic = batch_attribute_rows[row]
                 diagnostic.update({
                     "graph_index": graph_index,
@@ -1796,6 +1799,7 @@ def generate(
                 rng=diversification_rng,
             )
             row["graph_index"] = graph_index
+            diversified.graph["sample_id"] = f"{request.generation_seed}:{graph_index}"
             diversified.graph["attributed_diversification"] = {
                 "mode": "stochastic_same_bond_diversification",
                 "requested_steps": int(row["requested_steps"]),
@@ -2080,6 +2084,9 @@ def generate(
                 "generation_seed": request.generation_seed,
                 "num_requested": request.num_graphs,
                 "num_generated": len(graphs),
+                "effective_sample_config": hierarchical._jsonable(sample_cfg),
+                "sde": hierarchical._jsonable(state["sde"]),
+                "generation_batch_size": batch_size,
                 "num_filtered": 0,
                 "num_topology_resampled": 0,
                 "duration_seconds": time.monotonic() - started,
@@ -2094,6 +2101,7 @@ def generate(
                 },
                 "sampling": {
                     "factorization": "p(A) p(X,R|A)",
+                    "threshold": threshold,
                     "topology": "Laplacian_log_gap_reverse_diffusion",
                     "eigenbasis_perturbation": basis_perturbation_aggregate,
                     "topology_auxiliary_supervision": [

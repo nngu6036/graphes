@@ -21,6 +21,7 @@ import yaml
 RECEIPT = "ablation_reuse_receipt.json"
 FORMAT = "graphes_ablation_reuse_receipt_v1"
 MATCHED_INDEX = "matched_ablation_manifest.json"
+MOLECULAR_INDEX = "molecular_ablation_manifest.json"
 POSITIONAL_IDS = "hash_anchored_parent_list_order"
 GENERATION_ONLY = {"sample", "graphlet_refinement", "attributed_diversification", "generation_batch_size", "runtime"}
 
@@ -210,13 +211,84 @@ def prepare_matched(args, cfg: dict) -> None:
     export_matched(args.generation_dir, cfg, context, checkpoint)
 
 
+def molecular_index(args, generation: dict, context: dict) -> tuple[dict, bool]:
+    """Bind saved attributed endpoint order to the verified T/TR population."""
+    path = args.generation_dir / MOLECULAR_INDEX
+    if not path.is_file():
+        return {}, False
+    common = read_json(path)
+    require(common.get("format") == "graphes_molecular_ablation_export_v1", "Unrecognized molecular export format")
+    provenance = common.get("provenance", {})
+    require(provenance.get("identity_scheme") == POSITIONAL_IDS, "Molecular export has no hash-anchored identity mapping")
+    require(provenance.get("source_generation_manifest_sha256") == sha256(args.generation_dir / "manifest.json"), "Molecular export source generation manifest changed")
+    subset(context, provenance, "molecular.export_context")
+    require(common.get("sample_ids") == expected_ids(args), "Molecular requested sample IDs differ")
+    require(common.get("generation_seed") == args.seed and common.get("num_requested") == args.num_samples, "Molecular generation seed/count differs")
+    require(set(common.get("branches", {})) == {"T", "TR"}, "Molecular export requires exactly the paired T/TR branches")
+    sources = provenance.get("source_artifacts")
+    require(isinstance(sources, dict), "Molecular export source artifact records are missing")
+    for name in ("base_graphs", "pre_refinement_graphs", "sampled_basis_indices"):
+        require(name in sources, f"Molecular export source is unrecorded: {name}")
+    for name, source in sources.items():
+        recorded = generation.get(name)
+        require(isinstance(source, dict) and isinstance(recorded, dict) and source.get("path") == recorded.get("path") and source.get("sha256") == recorded.get("sha256"), f"Molecular export source differs from generation: {name}")
+        artifact(args.generation_dir, source, f"molecular source {name}")
+    return common, True
+
+
+def molecular_sampling(args, cfg: dict, generation: dict) -> None:
+    sampling = generation.get("sampling", {})
+    require(not cfg.get("sample", {}).get("degree_constrained_realization", {}).get("enabled"), "Exact-degree molecular generation is unsupported")
+    require(sampling.get("generation_batch_size") == cfg.get("generation_batch_size"), "Molecular generation batch size differs")
+    require(sampling.get("separate_attribute_rng") == cfg.get("sample", {}).get("separate_attribute_rng"), "Attribute RNG policy differs")
+    for key in ("posthoc_repair", "filtering", "replacement_sampling"):
+        require(not sampling.get(key, False), f"Molecular raw population enables {key}")
+    for key in ("num_filtered", "num_topology_resampled"):
+        require(generation.get(key, 0) == 0, f"Molecular raw population has nonzero {key}")
+    subset(cfg.get("attributed_diversification"), sampling.get("attributed_diversification"), "generation.attributed_diversification")
+    for key, value in cfg.get("attributed", {}).get("decode", {}).items():
+        mapped = {"node_mode": "node_decode_mode", "edge_mode": "edge_decode_mode"}.get(key, key)
+        subset(value, sampling.get(mapped), f"generation.decode.{key}")
+    for key, target in (("steps", "attribute_diffusion_steps"), ("sample_steps", "attribute_sampling_steps")):
+        subset(cfg.get("attribute_diffusion", {}).get(key), sampling.get(target), f"generation.{target}")
+    if "effective_sample_config" in generation:
+        subset(cfg.get("sample", {}), generation["effective_sample_config"], "effective_sample_config")
+    if "sde" in generation:
+        subset(cfg.get("sde", {}), generation["sde"], "generation.sde")
+    if "generation_batch_size" in generation:
+        require(generation["generation_batch_size"] == cfg.get("generation_batch_size"), "Molecular recorded generation batch size differs")
+    if "threshold" in sampling:
+        subset(cfg.get("sample", {}).get("threshold", 0.5), sampling["threshold"], "generation.threshold")
+    artifact(args.generation_dir, generation.get("pre_refinement_graphs"), "molecular pre_refinement_graphs")
+
+
+def prepare_molecular(args, cfg: dict) -> None:
+    """Export the already-sampled attributed endpoints using their original intent."""
+    require(args.kind == "molecular", "Molecular preparation requires kind=molecular")
+    _, context = invocation_context(args, cfg)
+    intent_path = args.generation_dir.parent / f"{args.generation_dir.name}.ablation_generation_intent.json"
+    require(intent_path.is_file(), "Cannot recover molecular sampler provenance without the original generation intent; existing outputs are retained")
+    intent = read_json(intent_path)
+    require(intent.get("context") == context, "Original molecular generation intent configuration/checkpoint/training provenance differs")
+    require(intent.get("config_file_sha256") == sha256(args.config), "Original molecular generation intent configuration file changed")
+    generation = generation_identity(args, cfg, context)
+    molecular_sampling(args, cfg, generation)
+    from grapher.models.grapher.molecular_ablation import export_molecular
+    export_molecular(args.generation_dir, cfg, context)
+
+
 def verify_generation(args, cfg: dict, *, allow_unsealed: bool = False) -> tuple[dict, dict, dict]:
     directory = args.generation_dir
     if not directory.exists():
         raise Absent(f"Generation is absent: {directory}")
     trained, context = invocation_context(args, cfg)
     generation = generation_identity(args, cfg, context)
-    common, positional = matched_index(args, generation, context) if args.kind == "matched" else ({}, False)
+    if args.kind == "matched":
+        common, positional = matched_index(args, generation, context)
+    elif args.kind == "molecular":
+        common, positional = molecular_index(args, generation, context)
+    else:
+        common, positional = {}, False
     base = artifact(directory, generation.get("base_graphs"), "generation base_graphs")
     graph_population(base, args.num_samples, expected_ids(args), allow_unlabelled=positional or args.kind == "s0")
     artifact(directory, generation.get("sampled_basis_indices"), "sampled basis indices")
@@ -241,26 +313,24 @@ def verify_generation(args, cfg: dict, *, allow_unsealed: bool = False) -> tuple
             require(cfg.get("structure_summary", {}).get("loss_weight") == 0.0, "S0 must use zero topology-summary supervision")
             require(not cfg.get("graphlet_refinement", {}).get("enabled"), "S0 configuration enables rewiring")
     else:
-        require(not cfg.get("sample", {}).get("degree_constrained_realization", {}).get("enabled"), "Exact-degree molecular generation is unsupported")
-        require(sampling.get("generation_batch_size") == cfg.get("generation_batch_size"), "Molecular generation batch size differs")
-        require(sampling.get("separate_attribute_rng") == cfg.get("sample", {}).get("separate_attribute_rng"), "Attribute RNG policy differs")
-        subset(cfg.get("attributed_diversification"), sampling.get("attributed_diversification"), "generation.attributed_diversification")
-        for key, value in cfg.get("attributed", {}).get("decode", {}).items():
-            mapped = {"node_mode": "node_decode_mode", "edge_mode": "edge_decode_mode"}.get(key, key)
-            subset(value, sampling.get(mapped), f"generation.decode.{key}")
-        for key, target in (("steps", "attribute_diffusion_steps"), ("sample_steps", "attribute_sampling_steps")):
-            subset(cfg.get("attribute_diffusion", {}).get(key), sampling.get(target), f"generation.{target}")
-        artifact(directory, generation.get("pre_refinement_graphs"), "molecular pre_refinement_graphs")
+        molecular_sampling(args, cfg, generation)
+        if positional:
+            provenance = common.get("provenance", {})
+            subset(cfg["sample"], provenance.get("sample_config"), "molecular.sample_config")
+            subset(cfg["sde"], provenance.get("sde"), "molecular.sde")
+            require(provenance.get("generation_batch_size") == cfg.get("generation_batch_size"), "Molecular export batch size differs")
     receipt_path = directory / RECEIPT
     receipt = read_json(receipt_path) if receipt_path.is_file() else None
     if receipt is not None:
         require(receipt.get("context") == context, "Reuse receipt configuration/checkpoint/training provenance differs")
         require(receipt.get("generation_manifest_sha256") == sha256(directory / "manifest.json"), "Generation manifest changed after the reuse receipt")
         if positional:
-            require(receipt.get("matched_ablation_manifest_sha256") == sha256(directory / MATCHED_INDEX), "Matched index changed after the reuse receipt")
+            index_name = MATCHED_INDEX if args.kind == "matched" else MOLECULAR_INDEX
+            receipt_key = "matched_ablation_manifest_sha256" if args.kind == "matched" else "molecular_ablation_manifest_sha256"
+            require(receipt.get(receipt_key) == sha256(directory / index_name), "Population index changed after the reuse receipt")
             require(receipt.get("ablation_manifest_sha256") == sha256(directory / "ablations" / "ablation_manifest.json"), "Branch index changed after the reuse receipt")
     elif args.kind == "molecular" and not allow_unsealed:
-        raise ValueError("Legacy molecular manifest does not record the full continuous sampler and has no fresh-generation receipt. Existing output is retained; explicitly choose a new GENERATION_TAG to generate a verifiable population.")
+        raise ValueError("Molecular generation is not sealed. Resume with the original generation intent and the same tags to export and verify the saved endpoints; existing output is retained.")
     return generation, context, receipt or {}
 
 
@@ -273,6 +343,11 @@ def verify_branches(args, cfg: dict, generation: dict, receipt: dict, variants: 
         matched, positional = matched_index(args, generation, context)
         if positional:
             require(common == matched, "Branch index differs from the hash-anchored shared population index")
+    elif args.kind == "molecular":
+        _, context = invocation_context(args, cfg)
+        molecular, positional = molecular_index(args, generation, context)
+        if positional:
+            require(common == molecular, "Branch index differs from the hash-anchored molecular population index")
     require(common.get("sample_ids") == expected_ids(args), "Branch index requested IDs differ")
     snapshots = {}
     for variant in variants:
@@ -315,6 +390,16 @@ def verify_branches(args, cfg: dict, generation: dict, receipt: dict, variants: 
                 parent = child.get("source_artifact", {})
                 require(parent.get("path") == generation[source]["path"] and parent.get("sha256") == generation[source]["sha256"], f"Branch {variant} source identity differs")
                 allow_unlabelled = True
+        elif args.kind == "molecular":
+            require(variant in {"T", "TR"}, "Molecular branches must be T or TR")
+            source = "pre_refinement_graphs" if variant == "T" else "base_graphs"
+            artifact(args.generation_dir, generation.get(source), source)
+            require(child["base_graphs"]["sha256"] == generation[source]["sha256"], f"Molecular branch {variant} differs from its hash-anchored parent population")
+            if positional:
+                require(child.get("identity_source") == POSITIONAL_IDS, f"Missing molecular positional identity source: {variant}")
+                parent = child.get("source_artifact", {})
+                require(parent.get("path") == generation[source]["path"] and parent.get("sha256") == generation[source]["sha256"], f"Molecular branch {variant} source identity differs")
+                allow_unlabelled = True
         graph_population(graph_path, count, ids, allow_unlabelled=allow_unlabelled)
         if variant in receipt.get("branch_manifest_sha256", {}):
             require(sha256(child_path) == receipt["branch_manifest_sha256"][variant], f"Branch manifest changed after receipt: {variant}")
@@ -354,14 +439,17 @@ def main(argv=None) -> int:
             _, context = invocation_context(args, cfg)
             write_json(args.generation_dir.parent / f"{args.generation_dir.name}.ablation_generation_intent.json", {"context": context, "config_file_sha256": sha256(args.config)})
         elif args.mode == "prepare":
-            prepare_matched(args, cfg)
+            if args.kind == "molecular":
+                prepare_molecular(args, cfg)
+            else:
+                prepare_matched(args, cfg)
         elif args.mode == "seal":
             intent_path = args.generation_dir.parent / f"{args.generation_dir.name}.ablation_generation_intent.json"
             intent = read_json(intent_path)
             generation, context, _ = verify_generation(args, cfg, allow_unsealed=True)
             require(intent.get("context") == context, "Configuration/checkpoint changed during generation; refusing a reuse receipt")
             branches = {}
-            if args.kind == "matched":
+            if args.kind in {"matched", "molecular"}:
                 variants = list(read_json(args.generation_dir / "ablations" / "ablation_manifest.json").get("branches", {}))
                 branches = verify_branches(args, cfg, generation, {}, variants)
             write_json(args.generation_dir / RECEIPT, {
@@ -373,6 +461,10 @@ def main(argv=None) -> int:
                     "matched_ablation_manifest_sha256": sha256(args.generation_dir / MATCHED_INDEX),
                     "ablation_manifest_sha256": sha256(args.generation_dir / "ablations" / "ablation_manifest.json"),
                 } if args.kind == "matched" and (args.generation_dir / MATCHED_INDEX).is_file() else {}),
+                **({
+                    "molecular_ablation_manifest_sha256": sha256(args.generation_dir / MOLECULAR_INDEX),
+                    "ablation_manifest_sha256": sha256(args.generation_dir / "ablations" / "ablation_manifest.json"),
+                } if args.kind == "molecular" and (args.generation_dir / MOLECULAR_INDEX).is_file() else {}),
                 "provenance": "Written only after a successfully completed, explicitly bracketed generation invocation",
             })
             intent_path.unlink()

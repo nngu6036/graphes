@@ -150,14 +150,14 @@ ensure_generation_unlocked() {
     if [[ "$allow_generate" == 1 ]]; then
       check_artifacts begin "$config" "$run_id" "$gen_id" "$kind"
       train_or_generate generate "$config" "$run_id" "$gen_id"
-      if [[ "$kind" == matched ]]; then check_artifacts prepare "$config" "$run_id" "$gen_id" "$kind"; fi
+      if [[ "$kind" == matched || "$kind" == molecular ]]; then check_artifacts prepare "$config" "$run_id" "$gen_id" "$kind"; fi
       check_artifacts seal "$config" "$run_id" "$gen_id" "$kind"
     fi
     return 0
   fi
   # A completed reverse population can outlive a failed branch export/seal.
   # Its original intent permits recovery without repeating neural sampling.
-  if [[ "$kind" == matched && -d "$generation_dir" && -f "$generation_dir.ablation_generation_intent.json" ]]; then
+  if [[ ( "$kind" == matched || "$kind" == molecular ) && -d "$generation_dir" && -f "$generation_dir.ablation_generation_intent.json" ]]; then
     check_artifacts prepare "$config" "$run_id" "$gen_id" "$kind" || return $?
     check_artifacts seal "$config" "$run_id" "$gen_id" "$kind" || return $?
   fi
@@ -170,7 +170,7 @@ ensure_generation_unlocked() {
   [[ "$allow_generate" == 1 ]] || { echo "Population absent and generation is disabled: $gen_id" >&2; return 3; }
   check_artifacts begin "$config" "$run_id" "$gen_id" "$kind" || return $?
   train_or_generate generate "$config" "$run_id" "$gen_id" || return $?
-  if [[ "$kind" == matched ]]; then check_artifacts prepare "$config" "$run_id" "$gen_id" "$kind" || return $?; fi
+  if [[ "$kind" == matched || "$kind" == molecular ]]; then check_artifacts prepare "$config" "$run_id" "$gen_id" "$kind" || return $?; fi
   check_artifacts seal "$config" "$run_id" "$gen_id" "$kind"
 }
 
@@ -227,13 +227,17 @@ prepare_seed() {
     ensure_generation "$ablation_config" "$base_config" "$RUN" "$GEN_ID" "$kind" "$DO_TRAIN" "$DO_GENERATE" || return $?
   else
     if [[ "$DO_TRAIN" == 1 ]]; then train_or_generate train "$base_config" "$RUN" "$GEN_ID" || return $?; fi
-    if [[ "$DO_GENERATE" == 1 ]]; then train_or_generate generate "$ablation_config" "$RUN" "$GEN_ID" || return $?; fi
-  fi
-  if [[ "$IS_GENERIC" == 0 ]]; then
-    local export_args=("${OVERWRITE_ARGS[@]}")
-    [[ "$REUSE" == 0 ]] || export_args=()
-    run env PYTHONPATH=src "$PYTHON_BIN" scripts/export_grapher_ablation_views.py molecular \
-      --generation-dir "$GEN" "${export_args[@]}" || return $?
+    if [[ "$DO_GENERATE" == 1 ]]; then
+      if [[ "$IS_GENERIC" == 0 ]]; then check_artifacts begin "$ablation_config" "$RUN" "$GEN_ID" "$kind" || return $?; fi
+      train_or_generate generate "$ablation_config" "$RUN" "$GEN_ID" || return $?
+    fi
+    if [[ "$IS_GENERIC" == 0 ]]; then
+      if [[ "$DRY_RUN" == 1 || -f "$GEN.ablation_generation_intent.json" ]]; then
+        check_artifacts prepare "$ablation_config" "$RUN" "$GEN_ID" "$kind" || return $?
+        check_artifacts seal "$ablation_config" "$RUN" "$GEN_ID" "$kind" || return $?
+      fi
+      check_artifacts generation "$ablation_config" "$RUN" "$GEN_ID" "$kind" || return $?
+    fi
   fi
   if [[ "$REUSE" == 1 ]]; then
     local primary_variants=()
