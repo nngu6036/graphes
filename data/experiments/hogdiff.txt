@@ -4909,7 +4909,7 @@ Epsilon-novelty / held-out coverage curve
    0.5000heldout_test                       0.000000     1.000000
    0.5000d                                  0.158203     0.950000
 
-   
+
 #seed 41, DR
 Graph-distribution MMD against held-out test graphs (lower is better)
 Generic graph V.U.N.: benchmark validity, exact-isomorphism uniqueness/novelty, and combined VUN (higher is better)
@@ -6621,3 +6621,578 @@ Epsilon-novelty / held-out coverage curve
    0.5000train                              0.000000     1.000000
    0.5000heldout_test                       0.000000     1.000000
    0.5000d                                  0.136719     1.000000
+
+
+I Molecular rewiring QM9
+
+#seed 41, T
+Molecular evaluation
+  validity: 0.9949
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9949
+  validity_without_correction: 0.9949
+  fcd: 0.1882180180250721
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9949
+  num_invalid_generated_molecules: 51
+  num_valid_generated_molecules_with_projected_formal_charges: 9949
+  num_invalid_generated_molecules_after_projected_formal_charges: 51
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 0.0
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 51
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9667303246557443
+  unique_valid_count: 9618
+  novelty_rate: 0.38667082553545434
+  novel_unique_valid_count: 3719
+  nspdk_mmd: 0.0004707557019388632
+  nspdk_mmd_valid_only: 0.0004707557019388632
+  graphlet_histogram_mmd: 0.0001017894077952608
+  graphlet_selected_mass_mmd: 7.46296417997172e-08
+  graphlet_histogram_mmd_by_order: {'3': 0.00020303979411862016, '4': 0.00013354751992489255, '5': 9.479135260748173e-05}
+  graphlet_selected_mass_mmd_by_order: {'3': 1.2215419120664706e-08, '4': 1.2215419120664706e-08, '5': 2.5823677862746308e-08}
+  nspdk_proxy_mmd_all_generated: 1.5762089863960053e-05
+  nspdk_proxy_mmd_metric_source: 1.5149433497357407e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9949
+  fcd_generated_smiles_source: raw_valid
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9949,
+  "validity_without_correction": 0.9949,
+  "qed_mean": 0.4687212832661944,
+  "qed_std_within_run": 0.07165569113637704,
+  "qed_median": 0.4744095723700246,
+  "qed_q10": 0.372766210945221,
+  "qed_q90": 0.5546521156298386,
+  "qed_unique_valid_mean": 0.46867558161897505,
+  "num_unique_raw_valid": 9618,
+  "qed_yield": 0.46633080472153815,
+  "num_raw_valid_single_component": 9948,
+  "valid_single_component_yield": 0.9948,
+  "qed_single_component_mean": 0.46872531618285207,
+  "qed_ge_0p5_fraction_valid": 0.3441551914765303,
+  "qed_ge_0p5_yield_all": 0.3424,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": 0.0026210551742046895,
+  "qed_wasserstein_1": 0.002809944738924596
+}
+
+
+
+
+
+
+
+#seed 41, TR
+Molecular evaluation
+  validity: 0.9949
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9949
+  validity_without_correction: 0.9949
+  fcd: 0.29258056793791454
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9949
+  num_invalid_generated_molecules: 51
+  num_valid_generated_molecules_with_projected_formal_charges: 9949
+  num_invalid_generated_molecules_after_projected_formal_charges: 51
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 0.0
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 51
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9517539451201126
+  unique_valid_count: 9469
+  novelty_rate: 0.47375646847607983
+  novel_unique_valid_count: 4486
+  nspdk_mmd: 0.0005939985809065948
+  nspdk_mmd_valid_only: 0.0005939985809065948
+  graphlet_histogram_mmd: 9.935391264925819e-05
+  graphlet_selected_mass_mmd: 7.46296417997172e-08
+  graphlet_histogram_mmd_by_order: {'3': 0.00019890413173873078, '4': 0.00013469494551432426, '5': 9.249899555863195e-05}
+  graphlet_selected_mass_mmd_by_order: {'3': 1.2215419120664706e-08, '4': 1.2215419120664706e-08, '5': 2.5823677862746308e-08}
+  nspdk_proxy_mmd_all_generated: 1.796153630845657e-05
+  nspdk_proxy_mmd_metric_source: 1.7303212532239454e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9949
+  fcd_generated_smiles_source: raw_valid
+
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9949,
+  "validity_without_correction": 0.9949,
+  "qed_mean": 0.46541957472045714,
+  "qed_std_within_run": 0.07009896741299819,
+  "qed_median": 0.4724474069098396,
+  "qed_q10": 0.3693078776776424,
+  "qed_q90": 0.5493553141083629,
+  "qed_unique_valid_mean": 0.4651916163545143,
+  "num_unique_raw_valid": 9469,
+  "qed_yield": 0.4630459348893836,
+  "num_raw_valid_single_component": 9948,
+  "valid_single_component_yield": 0.9948,
+  "qed_single_component_mean": 0.4654232757403974,
+  "qed_ge_0p5_fraction_valid": 0.32143934063725,
+  "qed_ge_0p5_yield_all": 0.3198,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": -0.000680653371532558,
+  "qed_wasserstein_1": 0.002974860979521315
+}
+
+
+
+
+#seed 42, T
+Molecular evaluation
+  validity: 0.9951
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9951
+  validity_without_correction: 0.9951
+  fcd: 0.21160429649421886
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9951
+  num_invalid_generated_molecules: 49
+  num_valid_generated_molecules_with_projected_formal_charges: 9951
+  num_invalid_generated_molecules_after_projected_formal_charges: 49
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 0.0
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 49
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9696512913275048
+  unique_valid_count: 9649
+  novelty_rate: 0.4002487304383874
+  novel_unique_valid_count: 3862
+  nspdk_mmd: 0.00036989588626935366
+  nspdk_mmd_valid_only: 0.00036989588626935366
+  graphlet_histogram_mmd: 0.001015451464144057
+  graphlet_selected_mass_mmd: 7.809929813973326e-09
+  graphlet_histogram_mmd_by_order: {'3': 0.0009153318055055149, '4': 0.0009789364264500833, '5': 0.0010237186174268942}
+  graphlet_selected_mass_mmd_by_order: {'3': 4.554452370797435e-10, '4': 4.554452370797435e-10, '5': 5.124688229329877e-09}
+  nspdk_proxy_mmd_all_generated: 1.1921765406575545e-05
+  nspdk_proxy_mmd_metric_source: 1.1478325629399072e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9951
+  fcd_generated_smiles_source: raw_valid
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9951,
+  "validity_without_correction": 0.9951,
+  "qed_mean": 0.4708981909520019,
+  "qed_std_within_run": 0.07034614932581552,
+  "qed_median": 0.47565294909797884,
+  "qed_q10": 0.37726860145575475,
+  "qed_q90": 0.557137960659825,
+  "qed_unique_valid_mean": 0.47061354574537057,
+  "num_unique_raw_valid": 9649,
+  "qed_yield": 0.46859078981633956,
+  "num_raw_valid_single_component": 9949,
+  "valid_single_component_yield": 0.9949,
+  "qed_single_component_mean": 0.4709026448572457,
+  "qed_ge_0p5_fraction_valid": 0.3581549593005728,
+  "qed_ge_0p5_yield_all": 0.3564,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": 0.004797962860012217,
+  "qed_wasserstein_1": 0.005017424137081178
+}
+
+
+#seed 42, TR
+Molecular evaluation
+  validity: 0.9956
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9956
+  validity_without_correction: 0.9956
+  fcd: 0.24766187968352327
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9956
+  num_invalid_generated_molecules: 44
+  num_valid_generated_molecules_with_projected_formal_charges: 9956
+  num_invalid_generated_molecules_after_projected_formal_charges: 44
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 0.0
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 44
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9603254319003616
+  unique_valid_count: 9561
+  novelty_rate: 0.3744378203116829
+  novel_unique_valid_count: 3580
+  nspdk_mmd: 0.0007819701886206983
+  nspdk_mmd_valid_only: 0.0007819701886206983
+  graphlet_histogram_mmd: 0.0011486681670653809
+  graphlet_selected_mass_mmd: 2.0337789674584883e-08
+  graphlet_histogram_mmd_by_order: {'3': 0.0013038114830867809, '4': 0.0012025746483510513, '5': 0.0011355855225521072}
+  graphlet_selected_mass_mmd_by_order: {'3': 4.597547231810495e-09, '4': 4.53536319611203e-10, '5': 5.143936387952408e-09}
+  nspdk_proxy_mmd_all_generated: 3.512903268425085e-05
+  nspdk_proxy_mmd_metric_source: 3.423577467023539e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9956
+  fcd_generated_smiles_source: raw_valid
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9956,
+  "validity_without_correction": 0.9956,
+  "qed_mean": 0.4804995428659339,
+  "qed_std_within_run": 0.06856290945003768,
+  "qed_median": 0.48371917712528445,
+  "qed_q10": 0.39083465192154054,
+  "qed_q90": 0.5626179457130344,
+  "qed_unique_valid_mean": 0.48007645162837415,
+  "num_unique_raw_valid": 9561,
+  "qed_yield": 0.4783853448773254,
+  "num_raw_valid_single_component": 9953,
+  "valid_single_component_yield": 0.9953,
+  "qed_single_component_mean": 0.4805112130411717,
+  "qed_ge_0p5_fraction_valid": 0.4070912012856569,
+  "qed_ge_0p5_yield_all": 0.4053,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": 0.014399314773944183,
+  "qed_wasserstein_1": 0.014401769449629093
+}
+
+#seed 43, T
+
+#seed 43, TR
+Molecular evaluation
+  validity: 0.9956
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9956
+  validity_without_correction: 0.9956
+  fcd: 0.36199123366841945
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9956
+  num_invalid_generated_molecules: 44
+  num_valid_generated_molecules_with_projected_formal_charges: 9956
+  num_invalid_generated_molecules_after_projected_formal_charges: 44
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 0.0
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 44
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9415427882683809
+  unique_valid_count: 9374
+  novelty_rate: 0.4479411137187967
+  novel_unique_valid_count: 4199
+  nspdk_mmd: 0.001011185508878847
+  nspdk_mmd_valid_only: 0.001011185508878847
+  graphlet_histogram_mmd: 0.001170535949118312
+  graphlet_selected_mass_mmd: 2.0337789674584883e-08
+  graphlet_histogram_mmd_by_order: {'3': 0.0013009493052802412, '4': 0.0012238857303863426, '5': 0.001151072971541156}
+  graphlet_selected_mass_mmd_by_order: {'3': 4.597547231810495e-09, '4': 4.53536319611203e-10, '5': 5.143936387952408e-09}
+  nspdk_proxy_mmd_all_generated: 3.6647972847694204e-05
+  nspdk_proxy_mmd_metric_source: 3.577637059542331e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9956
+  fcd_generated_smiles_source: raw_valid
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9956,
+  "validity_without_correction": 0.9956,
+  "qed_mean": 0.4771198271363191,
+  "qed_std_within_run": 0.06686872020989895,
+  "qed_median": 0.480797282345652,
+  "qed_q10": 0.388707120779225,
+  "qed_q90": 0.557923815643077,
+  "qed_unique_valid_mean": 0.47633031373770063,
+  "num_unique_raw_valid": 9374,
+  "qed_yield": 0.47502049989692025,
+  "num_raw_valid_single_component": 9953,
+  "valid_single_component_yield": 0.9953,
+  "qed_single_component_mean": 0.47713047860893576,
+  "qed_ge_0p5_fraction_valid": 0.37856568903173965,
+  "qed_ge_0p5_yield_all": 0.3769,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": 0.01101959904432942,
+  "qed_wasserstein_1": 0.01113391081738423
+}
+
+#seed 44, T
+Molecular evaluation
+  validity: 0.9945
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9945
+  validity_without_correction: 0.9945
+  fcd: 0.3447579244492829
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9945
+  num_invalid_generated_molecules: 55
+  num_valid_generated_molecules_with_projected_formal_charges: 9945
+  num_invalid_generated_molecules_after_projected_formal_charges: 55
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 0.0
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 55
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.963298139768728
+  unique_valid_count: 9580
+  novelty_rate: 0.43569937369519834
+  novel_unique_valid_count: 4174
+  nspdk_mmd: 0.001182549142162665
+  nspdk_mmd_valid_only: 0.001182549142162665
+  graphlet_histogram_mmd: 0.009229993908620449
+  graphlet_selected_mass_mmd: 9.907773645956297e-08
+  graphlet_histogram_mmd_by_order: {'3': 0.008795193073457108, '4': 0.009094561066145701, '5': 0.009252512570984806}
+  graphlet_selected_mass_mmd_by_order: {'3': 4.59754700976589e-09, '4': 4.577436207853225e-10, '5': 8.143893248657719e-08}
+  nspdk_proxy_mmd_all_generated: 5.816950784457335e-05
+  nspdk_proxy_mmd_metric_source: 5.9621520656768124e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9945
+  fcd_generated_smiles_source: raw_valid
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9945,
+  "validity_without_correction": 0.9945,
+  "qed_mean": 0.46599703231201384,
+  "qed_std_within_run": 0.07469279868803086,
+  "qed_median": 0.47385693258307754,
+  "qed_q10": 0.36314503256744224,
+  "qed_q90": 0.5537428520904151,
+  "qed_unique_valid_mean": 0.4657222846028808,
+  "num_unique_raw_valid": 9580,
+  "qed_yield": 0.4634340486342983,
+  "num_raw_valid_single_component": 9945,
+  "valid_single_component_yield": 0.9945,
+  "qed_single_component_mean": 0.46599703231201384,
+  "qed_ge_0p5_fraction_valid": 0.3418803418803419,
+  "qed_ge_0p5_yield_all": 0.34,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": -0.00010319577997586205,
+  "qed_wasserstein_1": 0.0014541636451866043
+}
+
+#seed 44, TR
+Molecular evaluation
+  validity: 0.9945
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9945
+  validity_without_correction: 0.9945
+  fcd: 0.3690889699583835
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9945
+  num_invalid_generated_molecules: 55
+  num_valid_generated_molecules_with_projected_formal_charges: 9945
+  num_invalid_generated_molecules_after_projected_formal_charges: 55
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 0.0
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 55
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9539467068878834
+  unique_valid_count: 9487
+  novelty_rate: 0.5211341836196901
+  novel_unique_valid_count: 4944
+  nspdk_mmd: 0.001204737297060331
+  nspdk_mmd_valid_only: 0.001204737297060331
+  graphlet_histogram_mmd: 0.009230223288503758
+  graphlet_selected_mass_mmd: 9.907773645956297e-08
+  graphlet_histogram_mmd_by_order: {'3': 0.008773421922500857, '4': 0.009088039155850769, '5': 0.009251383920382938}
+  graphlet_selected_mass_mmd_by_order: {'3': 4.59754700976589e-09, '4': 4.577436207853225e-10, '5': 8.143893248657719e-08}
+  nspdk_proxy_mmd_all_generated: 5.960228576800621e-05
+  nspdk_proxy_mmd_metric_source: 6.104301335215612e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9945
+  fcd_generated_smiles_source: raw_valid
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9945,
+  "validity_without_correction": 0.9945,
+  "qed_mean": 0.46359698310869146,
+  "qed_std_within_run": 0.07290687721024618,
+  "qed_median": 0.4724912581066736,
+  "qed_q10": 0.3621706662367128,
+  "qed_q90": 0.5499117147484267,
+  "qed_unique_valid_mean": 0.4631790354085497,
+  "num_unique_raw_valid": 9487,
+  "qed_yield": 0.46104719970159286,
+  "num_raw_valid_single_component": 9945,
+  "valid_single_component_yield": 0.9945,
+  "qed_single_component_mean": 0.46359698310869146,
+  "qed_ge_0p5_fraction_valid": 0.32347913524384114,
+  "qed_ge_0p5_yield_all": 0.3217,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": -0.002503244983298236,
+  "qed_wasserstein_1": 0.002538949354718378
+}
+
+
+#seed 45, T
+Molecular evaluation
+  validity: 0.9957
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9957
+  validity_without_correction: 0.9957
+  fcd: 0.1993443757395177
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9957
+  num_invalid_generated_molecules: 43
+  num_valid_generated_molecules_with_projected_formal_charges: 9957
+  num_invalid_generated_molecules_after_projected_formal_charges: 43
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 0.0
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 43
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9701717384754444
+  unique_valid_count: 9660
+  novelty_rate: 0.42712215320910973
+  novel_unique_valid_count: 4126
+  nspdk_mmd: 0.0005222323849713861
+  nspdk_mmd_valid_only: 0.0005222323849713861
+  graphlet_histogram_mmd: 0.0023614814611587764
+  graphlet_selected_mass_mmd: 2.664860421219828e-08
+  graphlet_histogram_mmd_by_order: {'3': 0.002449098695672447, '4': 0.002413623097304418, '5': 0.0023499916372553553}
+  graphlet_selected_mass_mmd_by_order: {'3': 4.597547231810495e-09, '4': 4.597547231810495e-09, '5': 2.5869748121465364e-08}
+  nspdk_proxy_mmd_all_generated: 2.1990232430269633e-05
+  nspdk_proxy_mmd_metric_source: 2.2287744825535963e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9957
+  fcd_generated_smiles_source: raw_valid
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9957,
+  "validity_without_correction": 0.9957,
+  "qed_mean": 0.46797232234326,
+  "qed_std_within_run": 0.07301852422332145,
+  "qed_median": 0.4752481369515161,
+  "qed_q10": 0.37018161235551056,
+  "qed_q90": 0.5545254345494515,
+  "qed_unique_valid_mean": 0.46766740996236533,
+  "num_unique_raw_valid": 9660,
+  "qed_yield": 0.4659600413571815,
+  "num_raw_valid_single_component": 9957,
+  "valid_single_component_yield": 0.9957,
+  "qed_single_component_mean": 0.46797232234326,
+  "qed_ge_0p5_fraction_valid": 0.34488299688661245,
+  "qed_ge_0p5_yield_all": 0.3434,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": 0.0018720942512703287,
+  "qed_wasserstein_1": 0.002728777864995926
+}
+
+
+
+
+#seed 45, TR
+
+Molecular evaluation
+  validity: 0.9957
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9957
+  validity_without_correction: 0.9957
+  fcd: 0.3315392019859402
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9957
+  num_invalid_generated_molecules: 43
+  num_valid_generated_molecules_with_projected_formal_charges: 9957
+  num_invalid_generated_molecules_after_projected_formal_charges: 43
+  num_raw_invalid_resolved_by_projected_formal_charges: 0
+  projected_formal_charge_success_rate_on_raw_invalid: 0.0
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 43
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9509892537913026
+  unique_valid_count: 9469
+  novelty_rate: 0.5116696588868941
+  novel_unique_valid_count: 4845
+  nspdk_mmd: 0.0006660806128420358
+  nspdk_mmd_valid_only: 0.0006660806128420358
+  graphlet_histogram_mmd: 0.002387259466055669
+  graphlet_selected_mass_mmd: 2.664860421219828e-08
+  graphlet_histogram_mmd_by_order: {'3': 0.002440851224843499, '4': 0.002422895354922572, '5': 0.0023794184671033225}
+  graphlet_selected_mass_mmd_by_order: {'3': 4.597547231810495e-09, '4': 4.597547231810495e-09, '5': 2.5869748121465364e-08}
+  nspdk_proxy_mmd_all_generated: 2.425723957106116e-05
+  nspdk_proxy_mmd_metric_source: 2.4598715545271456e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9957
+  fcd_generated_smiles_source: raw_valid
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9957,
+  "validity_without_correction": 0.9957,
+  "qed_mean": 0.4661917139766099,
+  "qed_std_within_run": 0.07170291648816568,
+  "qed_median": 0.47442925718609175,
+  "qed_q10": 0.36901207949478404,
+  "qed_q90": 0.55016924840953,
+  "qed_unique_valid_mean": 0.46532816044406927,
+  "num_unique_raw_valid": 9469,
+  "qed_yield": 0.46418708960650973,
+  "num_raw_valid_single_component": 9957,
+  "valid_single_component_yield": 0.9957,
+  "qed_single_component_mean": 0.4661917139766099,
+  "qed_ge_0p5_fraction_valid": 0.33594456161494424,
+  "qed_ge_0p5_yield_all": 0.3345,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": 9.148588462021268e-05,
+  "qed_wasserstein_1": 0.002699902111119111
+}
