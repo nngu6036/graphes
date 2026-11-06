@@ -196,6 +196,22 @@ SEEDS=44 DO_GENERATE=0 bash commands/ablations/qm9/rewiring.sh
 ```
 
 The ordinary command also resumes this recovery when generation is enabled.
+For a completed ZINC seed 41 population, use the same recovery with its study:
+
+```bash
+SEEDS=41 DO_GENERATE=0 bash commands/ablations/zinc/rewiring.sh
+```
+
+An absent `ablations/ablation_manifest.json` after generation means the paired
+views have not been exported successfully. Molecular `seal` now performs this
+required export itself when both export indices are absent, so a separate
+`prepare` step is optional. It validates the original generation intent's context
+and configuration file hash before creating the views or receipt. Complete
+existing exports are verified and retained; partial or corrupt exports are
+rejected without rewriting them. If a completed receipt already exists, a
+leftover intent permits only verification and removal of that intent. Missing
+indices or changed branch manifests remain errors under the receipt's hashes.
+
 Preparation exports T from `pre_refinement_graphs.pkl` and TR from
 `base_graphs.pkl` as byte-identical copies. It records their parent hashes and
 ordered sample identities in `molecular_ablation_manifest.json` and the identical
@@ -278,7 +294,9 @@ creation without reverse diffusion. A tiny evaluator run also checks the
 dataset-root override, recorded generic validity bounds, and their effect on
 the reported validity rate. Molecular fixtures prepare and seal unlabelled T/TR
 parents, preserve their bytes, and reject conflicting identities, settings and
-provenance. A wrapper regression confirms recovery proceeds with generation
+provenance. Direct-seal fixtures cover QM9 and ZINC, including an absent prepare
+step, invalid intent, incomplete indices and unchanged complete exports.
+A wrapper regression confirms recovery proceeds with generation
 disabled and never calls the neural runner. These fixtures and shell syntax
 checks do not constitute a full training run or benchmark validation.
 

@@ -13,6 +13,7 @@ import unittest
 from argparse import Namespace
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import networkx as nx
 import yaml
@@ -28,18 +29,22 @@ SPEC.loader.exec_module(checker)
 
 
 class MolecularPopulationReuseTests(unittest.TestCase):
+    dataset_id = "qm9"
+    serialized_id = "qm9_attributed"
+    seed = 44
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="molecular-ablation-reuse-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.run = self.root / "runs" / "seed_44_qm9_grapher_final_B1to4_g345_v2"
+        self.run = self.root / "runs" / f"seed_{self.seed}_{self.dataset_id}_grapher_final_B1to4_g345_v2"
         self.train = self.run / "train"
         checkpoint = self.train / "checkpoints" / "grapher.pt"
         checkpoint.parent.mkdir(parents=True)
         # Export and verification must never need to load a neural checkpoint.
         checkpoint.write_bytes(b"synthetic final 200-epoch checkpoint; not a torch payload")
         dataset_root = self.root / "prepared"
-        dataset = dataset_root / "qm9_attributed"
+        dataset = dataset_root / self.serialized_id
         dataset.mkdir(parents=True)
         for split in ("train", "val", "test"):
             (dataset / f"{split}.pkl").write_bytes(f"synthetic {split}".encode())
@@ -76,14 +81,14 @@ class MolecularPopulationReuseTests(unittest.TestCase):
             for split in ("train", "val", "test")
         }
         self.training_manifest = {
-            "model_id": "grapher", "run_id": self.run.name, "train_seed": 44,
+            "model_id": "grapher", "run_id": self.run.name, "train_seed": self.seed,
             "checkpoint": {
                 "path": "checkpoints/grapher.pt", "sha256": checker.sha256(checkpoint),
             },
             "options": copy.deepcopy(self.options),
             "checkpoint_selection": {"kind": "final_configured_epoch", "epoch": 200},
             "dataset": {
-                "benchmark_id": "qm9", "serialized_id": "qm9_attributed",
+                "benchmark_id": self.dataset_id, "serialized_id": self.serialized_id,
                 "split_sha256": split_hashes,
                 "fingerprint": checker.digest({
                     split: {"path": f"{split}.pkl", "sha256": split_hashes[split]}
@@ -92,14 +97,14 @@ class MolecularPopulationReuseTests(unittest.TestCase):
             },
         }
         checker.write_json(self.train / "manifest.json", self.training_manifest)
-        self.generation = self.run / "generations" / "paper_ablation_v1_seed_44_n_2"
+        self.generation = self.run / "generations" / f"paper_ablation_v1_seed_{self.seed}_n_2"
         self.generation.mkdir(parents=True)
         self.args = Namespace(
-            run_dir=self.run, config=self.config, dataset="qm9",
-            serialized_dataset="qm9_attributed", dataset_root=dataset_root, seed=44,
+            run_dir=self.run, config=self.config, dataset=self.dataset_id,
+            serialized_dataset=self.serialized_id, dataset_root=dataset_root, seed=self.seed,
             generation_dir=self.generation, num_samples=2, kind="molecular",
         )
-        self.ids = ["44:0", "44:1"]
+        self.ids = [f"{self.seed}:0", f"{self.seed}:1"]
         self.parent_records = {}
         for name, stage in (("pre_refinement_graphs", "T"), ("base_graphs", "TR")):
             path = self.generation / f"{name}.pkl"
@@ -115,7 +120,7 @@ class MolecularPopulationReuseTests(unittest.TestCase):
         decode = self.options["attributed"]["decode"]
         self.manifest = {
             "model_id": "grapher", "run_id": self.run.name,
-            "generation_id": self.generation.name, "generation_seed": 44,
+            "generation_id": self.generation.name, "generation_seed": self.seed,
             "num_requested": 2, "num_generated": 2,
             "variant": self.options["variant"],
             "checkpoint": {"sha256": checker.sha256(checkpoint)},
@@ -174,8 +179,8 @@ class MolecularPopulationReuseTests(unittest.TestCase):
     def invoke(self, mode: str, *extra: str) -> tuple[int, str]:
         arguments = [
             mode, "--run-dir", str(self.run), "--config", str(self.config),
-            "--dataset", "qm9", "--serialized-dataset", "qm9_attributed",
-            "--dataset-root", str(self.args.dataset_root), "--seed", "44",
+            "--dataset", self.dataset_id, "--serialized-dataset", self.serialized_id,
+            "--dataset-root", str(self.args.dataset_root), "--seed", str(self.seed),
             "--generation-dir", str(self.generation), "--num-samples", "2",
             "--kind", "molecular", *extra,
         ]
@@ -203,6 +208,169 @@ class MolecularPopulationReuseTests(unittest.TestCase):
     def write_common(self, common: dict) -> None:
         checker.write_json(self.generation / "molecular_ablation_manifest.json", common)
         checker.write_json(self.generation / "ablations" / "ablation_manifest.json", common)
+
+    def label_parent_populations(self) -> None:
+        for source, stage in (("pre_refinement_graphs", "T"), ("base_graphs", "TR")):
+            graphs = self.molecules(stage)
+            for graph, sample_id in zip(graphs, self.ids):
+                graph.graph["sample_id"] = sample_id
+            self.rewrite_parent(source, graphs)
+
+    def seal_and_restore_original_intent(self) -> None:
+        original_intent = self.intent.read_bytes()
+        result, output = self.invoke("seal")
+        self.assertEqual(result, 0, output)
+        self.intent.write_bytes(original_intent)
+
+    def assert_direct_seal_preserves_parents(self) -> None:
+        original = self.snapshot()
+        self.assertFalse((self.generation / "ablations").exists())
+        with patch("torch.load", side_effect=AssertionError("seal loaded a neural checkpoint")):
+            result, output = self.invoke("seal")
+        self.assertEqual(result, 0, output)
+        self.assertFalse(self.intent.exists())
+        common = checker.read_json(self.generation / "molecular_ablation_manifest.json")
+        self.assertEqual(common["sample_ids"], self.ids)
+        self.assertEqual(
+            common, checker.read_json(self.generation / "ablations" / "ablation_manifest.json")
+        )
+        self.assertTrue((self.generation / checker.RECEIPT).is_file())
+        result, output = self.invoke("branches", "--variants", "T", "TR")
+        self.assertEqual(result, 0, output)
+        after = self.snapshot()
+        for path, content in original.items():
+            if not path.endswith(".ablation_generation_intent.json"):
+                self.assertEqual(after[path], content, path)
+
+    def test_seal_exports_missing_molecular_views_without_a_prepare_call(self) -> None:
+        self.assert_direct_seal_preserves_parents()
+
+    def test_zinc_seed_41_seal_exports_missing_views_without_a_prepare_call(self) -> None:
+        zinc = MolecularPopulationReuseTests(
+            "test_seal_exports_missing_molecular_views_without_a_prepare_call"
+        )
+        zinc.dataset_id = "zinc"
+        zinc.serialized_id = "zinc"
+        zinc.seed = 41
+        self.addCleanup(zinc.doCleanups)
+        zinc.setUp()
+        zinc.assert_direct_seal_preserves_parents()
+
+    def test_labelled_zinc_producer_seals_missing_views_with_recorded_sampler(self) -> None:
+        zinc = MolecularPopulationReuseTests(
+            "test_seal_exports_missing_molecular_views_without_a_prepare_call"
+        )
+        zinc.dataset_id = "zinc"
+        zinc.serialized_id = "zinc"
+        zinc.seed = 41
+        self.addCleanup(zinc.doCleanups)
+        zinc.setUp()
+        zinc.label_parent_populations()
+        zinc.manifest.update({
+            "effective_sample_config": copy.deepcopy(zinc.options["sample"]),
+            "sde": copy.deepcopy(zinc.options["sde"]),
+            "generation_batch_size": zinc.options["generation_batch_size"],
+        })
+        zinc.write_generation()
+        zinc.assert_direct_seal_preserves_parents()
+
+    def test_seal_without_original_intent_rejects_before_export_writes(self) -> None:
+        self.intent.unlink()
+        original = self.snapshot()
+        result, output = self.invoke("seal")
+        self.assertEqual(result, 2, output)
+        self.assertIn("intent", output.lower())
+        self.assertEqual(original, self.snapshot())
+
+    def test_seal_with_wrong_intent_context_rejects_before_export_writes(self) -> None:
+        intent = checker.read_json(self.intent)
+        intent["context"]["config_semantic_sha256"] = "different original configuration"
+        checker.write_json(self.intent, intent)
+        original = self.snapshot()
+        result, output = self.invoke("seal")
+        self.assertEqual(result, 2, output)
+        self.assertEqual(original, self.snapshot())
+
+    def test_seal_with_wrong_configuration_file_hash_rejects_before_export_writes(self) -> None:
+        intent = checker.read_json(self.intent)
+        intent["config_file_sha256"] = "different original file"
+        checker.write_json(self.intent, intent)
+        original = self.snapshot()
+        result, output = self.invoke("seal")
+        self.assertEqual(result, 2, output)
+        self.assertEqual(original, self.snapshot())
+
+    def test_seal_rejects_an_incomplete_existing_export_without_rewriting_it(self) -> None:
+        self.prepare()
+        index = self.generation / "ablations" / "ablation_manifest.json"
+        index.unlink()
+        original = self.snapshot()
+        result, output = self.invoke("seal")
+        self.assertEqual(result, 2, output)
+        self.assertFalse(index.exists())
+        self.assertEqual(original, self.snapshot())
+
+    def test_seal_rejects_a_corrupt_existing_index_without_rewriting_it(self) -> None:
+        self.prepare()
+        index = self.generation / "ablations" / "ablation_manifest.json"
+        index.write_text("{invalid existing index", encoding="utf-8")
+        original = self.snapshot()
+        result, output = self.invoke("seal")
+        self.assertEqual(result, 2, output)
+        self.assertEqual(original, self.snapshot())
+
+    def test_seal_keeps_an_existing_complete_export_unchanged(self) -> None:
+        self.prepare()
+        original = {
+            str(path.relative_to(self.root)): (path.read_bytes(), path.stat().st_mtime_ns)
+            for path in self.root.rglob("*") if path.is_file() and path != self.intent
+        }
+        result, output = self.invoke("seal")
+        self.assertEqual(result, 0, output)
+        for name, (content, modified_ns) in original.items():
+            path = self.root / name
+            self.assertEqual(path.read_bytes(), content, name)
+            self.assertEqual(path.stat().st_mtime_ns, modified_ns, name)
+
+    def test_completed_receipt_and_leftover_intent_only_remove_the_intent(self) -> None:
+        self.label_parent_populations()
+        self.seal_and_restore_original_intent()
+        original = {
+            str(path.relative_to(self.root)): (path.read_bytes(), path.stat().st_mtime_ns)
+            for path in self.root.rglob("*") if path.is_file() and path != self.intent
+        }
+        result, output = self.invoke("seal")
+        self.assertEqual(result, 0, output)
+        self.assertFalse(self.intent.exists())
+        for name, (content, modified_ns) in original.items():
+            path = self.root / name
+            self.assertEqual(path.read_bytes(), content, name)
+            self.assertEqual(path.stat().st_mtime_ns, modified_ns, name)
+
+    def test_completed_receipt_never_authorizes_reconstruction_of_deleted_indices(self) -> None:
+        self.label_parent_populations()
+        self.seal_and_restore_original_intent()
+        (self.generation / "molecular_ablation_manifest.json").unlink()
+        (self.generation / "ablations" / "ablation_manifest.json").unlink()
+        original = self.snapshot()
+        for mode in ("prepare", "seal"):
+            with self.subTest(mode=mode):
+                result, output = self.invoke(mode)
+                self.assertEqual(result, 2, output)
+                self.assertEqual(original, self.snapshot())
+
+    def test_completed_receipt_rejects_changed_branch_manifest_without_rewriting_it(self) -> None:
+        self.label_parent_populations()
+        self.seal_and_restore_original_intent()
+        path = self.generation / "ablations" / "T" / "manifest.json"
+        child = checker.read_json(path)
+        child["unrecorded_extra_field"] = "changed after receipt"
+        checker.write_json(path, child)
+        original = self.snapshot()
+        result, output = self.invoke("seal")
+        self.assertEqual(result, 2, output)
+        self.assertIn("Branch manifest changed after receipt", output)
+        self.assertEqual(original, self.snapshot())
 
     def test_original_intent_recovers_and_seals_unlabelled_population(self) -> None:
         original = self.snapshot()

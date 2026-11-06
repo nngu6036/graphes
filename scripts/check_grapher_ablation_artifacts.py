@@ -324,6 +324,15 @@ def verify_generation(args, cfg: dict, *, allow_unsealed: bool = False) -> tuple
     if receipt is not None:
         require(receipt.get("context") == context, "Reuse receipt configuration/checkpoint/training provenance differs")
         require(receipt.get("generation_manifest_sha256") == sha256(directory / "manifest.json"), "Generation manifest changed after the reuse receipt")
+        for key, relative in (
+            ("matched_ablation_manifest_sha256", MATCHED_INDEX),
+            ("molecular_ablation_manifest_sha256", MOLECULAR_INDEX),
+            ("ablation_manifest_sha256", "ablations/ablation_manifest.json"),
+        ):
+            if key in receipt:
+                path = directory / relative
+                require(path.is_file(), f"Sealed population index is missing: {relative}")
+                require(receipt[key] == sha256(path), f"Sealed population index changed: {relative}")
         if positional:
             index_name = MATCHED_INDEX if args.kind == "matched" else MOLECULAR_INDEX
             receipt_key = "matched_ablation_manifest_sha256" if args.kind == "matched" else "molecular_ablation_manifest_sha256"
@@ -414,6 +423,74 @@ def verify_branches(args, cfg: dict, generation: dict, receipt: dict, variants: 
     return snapshots
 
 
+def prepare_population(args, cfg: dict) -> None:
+    if (args.generation_dir / RECEIPT).is_file():
+        # Preparation may be called by an older shell before it calls seal.
+        # A sealed population must be verified rather than reconstructed.
+        generation, _, receipt = verify_generation(args, cfg, allow_unsealed=True)
+        if args.kind in {"matched", "molecular"}:
+            variants = list(read_json(args.generation_dir / "ablations" / "ablation_manifest.json").get("branches", {}))
+            verify_branches(args, cfg, generation, receipt, variants)
+        return
+    if args.kind == "molecular":
+        prepare_molecular(args, cfg)
+    else:
+        prepare_matched(args, cfg)
+
+
+def seal_generation(args, cfg: dict) -> None:
+    """Finish missing branch exports before certifying a completed generation.
+
+    A long-running shell may have loaded an older preparation sequence. Sealing
+    therefore owns this prerequisite, while the original intent must authorize
+    every write and conflicting partial exports must continue to fail closed.
+    """
+    intent_path = args.generation_dir.parent / f"{args.generation_dir.name}.ablation_generation_intent.json"
+    intent = read_json(intent_path)
+    _, expected_context = invocation_context(args, cfg)
+    require(intent.get("context") == expected_context, "Configuration/checkpoint changed during generation; refusing a reuse receipt")
+    require(intent.get("config_file_sha256") == sha256(args.config), "Original generation intent configuration file changed; refusing a reuse receipt")
+    if (args.generation_dir / RECEIPT).is_file():
+        # A crash after writing the receipt may leave the original intent.
+        # Verify its existing hashes instead of rebuilding or replacing them.
+        generation, context, receipt = verify_generation(args, cfg, allow_unsealed=True)
+        require(intent.get("context") == context, "Configuration/checkpoint changed during generation; refusing a reuse receipt")
+        if args.kind in {"matched", "molecular"}:
+            variants = list(read_json(args.generation_dir / "ablations" / "ablation_manifest.json").get("branches", {}))
+            verify_branches(args, cfg, generation, receipt, variants)
+        intent_path.unlink()
+        return
+    if args.kind in {"matched", "molecular"}:
+        index_name = MATCHED_INDEX if args.kind == "matched" else MOLECULAR_INDEX
+        generation = generation_identity(args, cfg, expected_context)
+        native_matched = args.kind == "matched" and (generation.get("matched_ablation", {}) or {}).get("enabled") is True
+        if not native_matched and (not (args.generation_dir / index_name).is_file() or not (args.generation_dir / "ablations" / "ablation_manifest.json").is_file()):
+            print(f"Preparing saved {args.kind} branch views before sealing; parent samples are reused.", flush=True)
+            prepare_population(args, cfg)
+    generation, context, _ = verify_generation(args, cfg, allow_unsealed=True)
+    require(intent.get("context") == context, "Configuration/checkpoint changed during generation; refusing a reuse receipt")
+    branches = {}
+    if args.kind in {"matched", "molecular"}:
+        variants = list(read_json(args.generation_dir / "ablations" / "ablation_manifest.json").get("branches", {}))
+        branches = verify_branches(args, cfg, generation, {}, variants)
+    write_json(args.generation_dir / RECEIPT, {
+        "format": FORMAT, "context": context,
+        "config_file_sha256": intent.get("config_file_sha256"),
+        "generation_manifest_sha256": sha256(args.generation_dir / "manifest.json"),
+        "branch_manifest_sha256": branches,
+        **({
+            "matched_ablation_manifest_sha256": sha256(args.generation_dir / MATCHED_INDEX),
+            "ablation_manifest_sha256": sha256(args.generation_dir / "ablations" / "ablation_manifest.json"),
+        } if args.kind == "matched" and (args.generation_dir / MATCHED_INDEX).is_file() else {}),
+        **({
+            "molecular_ablation_manifest_sha256": sha256(args.generation_dir / MOLECULAR_INDEX),
+            "ablation_manifest_sha256": sha256(args.generation_dir / "ablations" / "ablation_manifest.json"),
+        } if args.kind == "molecular" and (args.generation_dir / MOLECULAR_INDEX).is_file() else {}),
+        "provenance": "Written only after a successfully completed, explicitly bracketed generation invocation",
+    })
+    intent_path.unlink()
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("training", "generation", "branches", "begin", "prepare", "seal"))
@@ -439,35 +516,9 @@ def main(argv=None) -> int:
             _, context = invocation_context(args, cfg)
             write_json(args.generation_dir.parent / f"{args.generation_dir.name}.ablation_generation_intent.json", {"context": context, "config_file_sha256": sha256(args.config)})
         elif args.mode == "prepare":
-            if args.kind == "molecular":
-                prepare_molecular(args, cfg)
-            else:
-                prepare_matched(args, cfg)
+            prepare_population(args, cfg)
         elif args.mode == "seal":
-            intent_path = args.generation_dir.parent / f"{args.generation_dir.name}.ablation_generation_intent.json"
-            intent = read_json(intent_path)
-            generation, context, _ = verify_generation(args, cfg, allow_unsealed=True)
-            require(intent.get("context") == context, "Configuration/checkpoint changed during generation; refusing a reuse receipt")
-            branches = {}
-            if args.kind in {"matched", "molecular"}:
-                variants = list(read_json(args.generation_dir / "ablations" / "ablation_manifest.json").get("branches", {}))
-                branches = verify_branches(args, cfg, generation, {}, variants)
-            write_json(args.generation_dir / RECEIPT, {
-                "format": FORMAT, "context": context,
-                "config_file_sha256": intent.get("config_file_sha256"),
-                "generation_manifest_sha256": sha256(args.generation_dir / "manifest.json"),
-                "branch_manifest_sha256": branches,
-                **({
-                    "matched_ablation_manifest_sha256": sha256(args.generation_dir / MATCHED_INDEX),
-                    "ablation_manifest_sha256": sha256(args.generation_dir / "ablations" / "ablation_manifest.json"),
-                } if args.kind == "matched" and (args.generation_dir / MATCHED_INDEX).is_file() else {}),
-                **({
-                    "molecular_ablation_manifest_sha256": sha256(args.generation_dir / MOLECULAR_INDEX),
-                    "ablation_manifest_sha256": sha256(args.generation_dir / "ablations" / "ablation_manifest.json"),
-                } if args.kind == "molecular" and (args.generation_dir / MOLECULAR_INDEX).is_file() else {}),
-                "provenance": "Written only after a successfully completed, explicitly bracketed generation invocation",
-            })
-            intent_path.unlink()
+            seal_generation(args, cfg)
         else:
             generation, _, receipt = verify_generation(args, cfg)
             if args.mode == "branches":
