@@ -54,6 +54,56 @@ done
 
 echo "CatFlow community_small loop finished."
 
+#seed 41
+Graph-distribution MMD against held-out test graphs (lower is better)
+Generic graph V.U.N.: benchmark validity, exact-isomorphism uniqueness/novelty, and combined VUN (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split and VUN is the fraction simultaneously valid, unique, and novel.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty         VUN
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      1.000000      0.800000      0.600000    0.600000
+catflow_to_test                     0.070935          0.776307      0.398033        0.348231        0.556224      0.916992      1.000000      1.000000    0.916992
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+catflow                           1.000000      1.000000     1.000000    1.000000      1.000000
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.640625        0.000000          0.000000
+heldout_test                        0.600000     0.800000        0.208778          0.257440
+catflow                             1.000000     1.000000        0.485965          0.476190
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.400000
+   0.0000heldout_test                       0.600000     1.000000
+   0.0000catflow                            1.000000     0.000000
+   0.0100train                              0.000000     0.400000
+   0.0100heldout_test                       0.600000     1.000000
+   0.0100catflow                            1.000000     0.000000
+   0.0250train                              0.000000     0.400000
+   0.0250heldout_test                       0.600000     1.000000
+   0.0250catflow                            1.000000     0.000000
+   0.0500train                              0.000000     0.400000
+   0.0500heldout_test                       0.600000     1.000000
+   0.0500catflow                            1.000000     0.000000
+   0.1000train                              0.000000     0.400000
+   0.1000heldout_test                       0.600000     1.000000
+   0.1000catflow                            1.000000     0.000000
+   0.2000train                              0.000000     0.500000
+   0.2000heldout_test                       0.500000     1.000000
+   0.2000catflow                            1.000000     0.000000
+   0.3000train                              0.000000     0.500000
+   0.3000heldout_test                       0.500000     1.000000
+   0.3000catflow                            1.000000     0.000000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000catflow                            0.218750     1.000000
+
+
 #Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
 WL novelty against the complete training split (candidate population only; higher is better)
@@ -205,11 +255,58 @@ Epsilon-novelty / held-out coverage curve
    0.5000catflow                            0.215820     1.000000
 
 
+#seed 45
+Graph-distribution MMD against held-out test graphs (lower is better)
+Generic graph V.U.N.: benchmark validity, exact-isomorphism uniqueness/novelty, and combined VUN (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split and VUN is the fraction simultaneously valid, unique, and novel.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty         VUN
+train_to_test                       0.004733          0.009889      0.000399        0.006979        0.010610      1.000000      0.800000      0.600000    0.600000
+catflow_to_test                     0.069217          0.800353      0.414244        0.351266        0.564724      0.911133      1.000000      1.000000    0.911133
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.640625    0.000000      0.803125
+heldout_test                      0.600000      0.600000     0.800000    0.803125      0.000000
+catflow                           1.000000      1.000000     1.000000    1.000000      1.000000
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.640625        0.000000          0.000000
+heldout_test                        0.600000     0.800000        0.208778          0.257440
+catflow                             1.000000     1.000000        0.484774          0.474882
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.400000
+   0.0000heldout_test                       0.600000     1.000000
+   0.0000catflow                            1.000000     0.000000
+   0.0100train                              0.000000     0.400000
+   0.0100heldout_test                       0.600000     1.000000
+   0.0100catflow                            1.000000     0.000000
+   0.0250train                              0.000000     0.400000
+   0.0250heldout_test                       0.600000     1.000000
+   0.0250catflow                            1.000000     0.000000
+   0.0500train                              0.000000     0.400000
+   0.0500heldout_test                       0.600000     1.000000
+   0.0500catflow                            1.000000     0.000000
+   0.1000train                              0.000000     0.400000
+   0.1000heldout_test                       0.600000     1.000000
+   0.1000catflow                            1.000000     0.000000
+   0.2000train                              0.000000     0.500000
+   0.2000heldout_test                       0.500000     1.000000
+   0.2000catflow                            1.000000     0.000000
+   0.3000train                              0.000000     0.500000
+   0.3000heldout_test                       0.500000     1.000000
+   0.3000catflow                            1.000000     0.000000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000catflow                            0.226562     1.000000
+
 2. CatFlow / Ego-small
 ======================
 
-2.1 Seed 42
------------
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
@@ -261,6 +358,55 @@ done
 
 echo "CatFlow ego_small loop finished."
 
+#seed 41
+Graph-distribution MMD against held-out test graphs (lower is better)
+Generic graph V.U.N.: benchmark validity, exact-isomorphism uniqueness/novelty, and combined VUN (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split and VUN is the fraction simultaneously valid, unique, and novel.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty         VUN
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000    0.325000
+catflow_to_test                     0.138556          0.075637      0.037536        0.183278        0.080506      0.750000      0.594727      0.872070    0.428711
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+catflow                           0.872070      0.872070     0.594727    0.911133      0.875000
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.546875        0.000000          0.000000
+heldout_test                        0.375000     0.700000        0.162295          0.000000
+catflow                             0.872070     0.594727        0.443379          0.492347
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.625000
+   0.0000heldout_test                       0.375000     1.000000
+   0.0000catflow                            0.872070     0.275000
+   0.0100train                              0.000000     0.625000
+   0.0100heldout_test                       0.375000     1.000000
+   0.0100catflow                            0.872070     0.275000
+   0.0250train                              0.000000     0.625000
+   0.0250heldout_test                       0.375000     1.000000
+   0.0250catflow                            0.872070     0.275000
+   0.0500train                              0.000000     0.625000
+   0.0500heldout_test                       0.375000     1.000000
+   0.0500catflow                            0.872070     0.275000
+   0.1000train                              0.000000     0.625000
+   0.1000heldout_test                       0.375000     1.000000
+   0.1000catflow                            0.872070     0.275000
+   0.2000train                              0.000000     0.625000
+   0.2000heldout_test                       0.375000     1.000000
+   0.2000catflow                            0.847656     0.400000
+   0.3000train                              0.000000     0.625000
+   0.3000heldout_test                       0.375000     1.000000
+   0.3000catflow                            0.845703     0.400000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000catflow                            0.377930     0.950000
+   
 #Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
 WL novelty against the complete training split (candidate population only; higher is better)
@@ -410,53 +556,175 @@ Epsilon-novelty / held-out coverage curve
    0.5000heldout_test                       0.000000     1.000000
    0.5000catflow                            0.368164     0.925000
 
+#seed 45
+Graph-distribution MMD against held-out test graphs (lower is better)
+Generic graph V.U.N.: benchmark validity, exact-isomorphism uniqueness/novelty, and combined VUN (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split and VUN is the fraction simultaneously valid, unique, and novel.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty         VUN
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000    0.325000
+catflow_to_test                     0.127392          0.078902      0.037347        0.194560        0.071345      0.729492      0.623047      0.877930    0.426758
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+catflow                           0.877930      0.877930     0.623047    0.908203      0.891406
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.546875        0.000000          0.000000
+heldout_test                        0.375000     0.700000        0.162295          0.000000
+catflow                             0.877930     0.623047        0.448872          0.492205
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.625000
+   0.0000heldout_test                       0.375000     1.000000
+   0.0000catflow                            0.877930     0.275000
+   0.0100train                              0.000000     0.625000
+   0.0100heldout_test                       0.375000     1.000000
+   0.0100catflow                            0.877930     0.275000
+   0.0250train                              0.000000     0.625000
+   0.0250heldout_test                       0.375000     1.000000
+   0.0250catflow                            0.877930     0.275000
+   0.0500train                              0.000000     0.625000
+   0.0500heldout_test                       0.375000     1.000000
+   0.0500catflow                            0.877930     0.275000
+   0.1000train                              0.000000     0.625000
+   0.1000heldout_test                       0.375000     1.000000
+   0.1000catflow                            0.877930     0.275000
+   0.2000train                              0.000000     0.625000
+   0.2000heldout_test                       0.375000     1.000000
+   0.2000catflow                            0.860352     0.275000
+   0.3000train                              0.000000     0.625000
+   0.3000heldout_test                       0.375000     1.000000
+   0.3000catflow                            0.858398     0.275000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000catflow                            0.403320     0.925000
+
 3. CatFlow / QM9
 ================
 
-Dataset identifier in the baseline commands: qm9. Requested samples per run: 10000.
-
-Selected results overview
--------------------------
-
-Values retain their original precision and scale; rates have not been converted to percentages. Full recorded
-molecular fields and any supplied QED output appear below each run.
-
-Metric                                            Run label 42           Run label 43           Run label 44
----------------------------------------  ---------------------  ---------------------  ---------------------
-num_generated_graphs                                     10000                  10000                  10000
-validity                                                0.9327                 0.9484                  0.946
-validity_without_correction                             0.9327                 0.9484                  0.946
-validity_with_projected_formal_charges                  0.9506                 0.9618                 0.9603
-validity_with_correction                                   1.0                    1.0                    1.0
-uniqueness_rate                             0.9824166398627641     0.9815478700970055     0.9799154334038055
-novelty_rate                                0.6051511513696388     0.5697711891717693     0.5644012944983818
-nspdk_mmd                                0.0004800525614200496  0.0004585720759938798  0.0004347261367592483
-nspdk_mmd_valid_only                     0.0004800525614200496  0.0004585720759938798  0.0004347261367592483
-fcd                                          0.837292325596195     0.5837904729231269     0.5712547118525002
-metric_molecule_source                               raw_valid              raw_valid              raw_valid
-hogdiff_compatible_distribution_metrics                  False                  False                  False
-fcd_generated_smiles_source                          raw_valid              raw_valid              raw_valid
-qed_mean                                   0.46235175304017395     0.4646153039727859     0.4616053200386356
-qed_std_within_run                         0.07093589141596898    0.07077375887249673    0.07136798652664553
-qed_yield                                  0.43123548006056944     0.4406411542877895     0.4366786327565473
-
-3.1 Seed 42
------------
-
-Run ID: seed_42. Source lines: 218-328.
-
-Source notes applying to this run: N1. See Source notes at the end of this file.
-
-Environment and run settings
+#seed 41
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
+RUN=seed_41
+N=10000
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage train \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 41 \
+   --overwrite \
+  --run-id "$RUN" \
+  --device gpu
+
+PYTHONPATH=src python scripts/run_catflow_baseline.py \
+  --stage generate \
+  --dataset qm9 \
+  --common-config configs/baselines/common_qm9.yaml \
+  --wrapper-config configs/baselines/catflow_qm9.yaml \
+  --seed-id 41 \
+  --run-id "$RUN" \
+  --num-samples "$N" \
+  --device gpu
+
+GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_41_n_${N}"
+
+PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --dataset-root outputs/datasets \
+  --dataset qm9_attributed  \
+  --reference-split test \
+  --train-split train \
+  --require-fcd \
+  --output-dir "$GEN_DIR/evaluation_molecules"
+
+PYTHONHASHSEED=41 PYTHONPATH=src \
+python scripts/evaluate_qed_research.py \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --reference-graphs outputs/datasets/qm9_attributed/test.pkl \
+  --molecular-report "$GEN_DIR/evaluation_molecules/molecular_evaluation_metrics.json" \
+  --evaluator scripts/evaluate_generated_molecules.py \
+  --expected-num-generated 10000 \
+  --thresholds 0.5 0.7 \
+  --output-dir "$GEN_DIR/evaluation_qed"
+
+
+Molecular evaluation
+  validity: 0.9318
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9481
+  validity_without_correction: 0.9318
+  fcd: 0.8039248834855428
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9318
+  num_invalid_generated_molecules: 682
+  num_valid_generated_molecules_with_projected_formal_charges: 9481
+  num_invalid_generated_molecules_after_projected_formal_charges: 519
+  num_raw_invalid_resolved_by_projected_formal_charges: 163
+  projected_formal_charge_success_rate_on_raw_invalid: 0.23900293255131966
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 682
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.982828933247478
+  unique_valid_count: 9158
+  novelty_rate: 0.6203319502074689
+  novel_unique_valid_count: 5681
+  nspdk_mmd: 0.00044394413856874517
+  nspdk_mmd_valid_only: 0.00044394413856874517
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.041700997597376e-05
+  nspdk_proxy_mmd_metric_source: 1.631398074980417e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9318
+  fcd_generated_smiles_source: raw_valid
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9318,
+  "validity_without_correction": 0.9318,
+  "qed_mean": 0.4621715394588451,
+  "qed_std_within_run": 0.07063808440173198,
+  "qed_median": 0.47033621772518386,
+  "qed_q10": 0.3667197954295109,
+  "qed_q90": 0.5451549910214956,
+  "qed_unique_valid_mean": 0.4620587108462134,
+  "num_unique_raw_valid": 9158,
+  "qed_yield": 0.4306514404677515,
+  "num_raw_valid_single_component": 9006,
+  "valid_single_component_yield": 0.9006,
+  "qed_single_component_mean": 0.4627513788832586,
+  "qed_ge_0p5_fraction_valid": 0.31004507405022536,
+  "qed_ge_0p5_yield_all": 0.2889,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": -0.003928688633144606,
+  "qed_wasserstein_1": 0.004108009687385157
+}
+
+#seed 42
+
+export CATFLOW=/home/quang/CatFlow
+export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_42
 N=10000
-
-1. Training
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -468,8 +736,6 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
-2. Generation
-
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset qm9 \
@@ -480,11 +746,7 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
-Generation directory
-
 GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_42_n_${N}"
-
-Molecular evaluation command
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -495,8 +757,6 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
 
-QED evaluation command
-
 PYTHONHASHSEED=42 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
@@ -506,8 +766,6 @@ python scripts/evaluate_qed_research.py \
   --expected-num-generated 10000 \
   --thresholds 0.5 0.7 \
   --output-dir "$GEN_DIR/evaluation_qed"
-
-Recorded molecular evaluation
 
 Metric                                                                 Recorded value
 --------------------------------------------------------------  ---------------------
@@ -573,22 +831,13 @@ Recorded QED output
   "qed_wasserstein_1": 0.003797303227597176
 }
 
-3.2 Seed 43
------------
-
-Run ID: seed_43. Source lines: 329-437.
-
-Source notes applying to this run: N1. See Source notes at the end of this file.
-
-Environment and run settings
+#seed 43
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_43
 N=10000
-
-1. Training
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -600,8 +849,6 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
-2. Generation
-
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset qm9 \
@@ -612,11 +859,7 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
-Generation directory
-
 GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_43_n_${N}"
-
-Molecular evaluation command
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -627,8 +870,6 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
 
-QED evaluation command
-
 PYTHONHASHSEED=43 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
@@ -638,8 +879,6 @@ python scripts/evaluate_qed_research.py \
   --expected-num-generated 10000 \
   --thresholds 0.5 0.7 \
   --output-dir "$GEN_DIR/evaluation_qed"
-
-Recorded molecular evaluation
 
 Metric                                                                 Recorded value
 --------------------------------------------------------------  ---------------------
@@ -677,8 +916,6 @@ fcd_num_reference_molecules                                                     
 fcd_num_valid_generated_molecules                                                9484
 fcd_generated_smiles_source                                                 raw_valid
 
-Recorded QED output
-
 {
   "num_generated_graphs": 10000,
   "num_raw_valid": 9484,
@@ -705,22 +942,13 @@ Recorded QED output
   "qed_wasserstein_1": 0.002864823245703269
 }
 
-3.3 Seed 44
------------
-
-Run ID: seed_44. Source lines: 438-546.
-
-Source notes applying to this run: N1. See Source notes at the end of this file.
-
-Environment and run settings
+#seed 44
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_44
 N=10000
-
-1. Training
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -732,8 +960,6 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
-2. Generation
-
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset qm9 \
@@ -744,11 +970,7 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
-Generation directory
-
 GEN_DIR="outputs/baselines/catflow/qm9/$RUN/generations/seed_44_n_${N}"
-
-Molecular evaluation command
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -759,8 +981,6 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
 
-QED evaluation command
-
 PYTHONHASHSEED=44 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
@@ -770,8 +990,6 @@ python scripts/evaluate_qed_research.py \
   --expected-num-generated 10000 \
   --thresholds 0.5 0.7 \
   --output-dir "$GEN_DIR/evaluation_qed"
-
-Recorded molecular evaluation
 
 Metric                                                                  Recorded value
 --------------------------------------------------------------  ----------------------
@@ -837,52 +1055,78 @@ Recorded QED output
   "qed_wasserstein_1": 0.004590680167462394
 }
 
+#seed 45
+"correction_success_rate_on_raw_invalid": 1.0,
+    "fcd": 0.6586294012992724,
+    "fcd_generated_smiles_source": "raw_valid",
+    "fcd_num_reference_molecules": 12997,
+    "fcd_num_valid_generated_molecules": 9254,
+    "graphlet_histogram_mmd": null,
+    "graphlet_histogram_mmd_by_order": {},
+    "graphlet_selected_mass_mmd": null,
+    "graphlet_selected_mass_mmd_by_order": {},
+    "hogdiff_compatible_distribution_metrics": false,
+    "metric_molecule_source": "raw_valid",
+    "novel_unique_valid_count": 5557,
+    "novelty_rate": 0.6094538275937705,
+    "nspdk_mmd": 0.0004161057106013499,
+    "nspdk_mmd_valid_only": 0.0004161057106013499,
+    "nspdk_proxy_mmd_all_generated": 9.938217733458306e-06,
+    "nspdk_proxy_mmd_metric_source": 1.7645878909496382e-05,
+    "num_generated_graphs": 10000,
+    "num_invalid_generated_molecules": 746,
+    "num_invalid_generated_molecules_after_correction": 0,
+    "num_invalid_generated_molecules_after_projected_formal_charges": 578,
+    "num_molecules_corrected_to_valid": 746,
+    "num_raw_invalid_resolved_by_projected_formal_charges": 168,
+    "num_valid_generated_molecules": 9254,
+    "num_valid_generated_molecules_with_correction": 10000,
+    "num_valid_generated_molecules_with_projected_formal_charges": 9422,
+    "projected_formal_charge_success_rate_on_raw_invalid": 0.225201072386059,
+    "unique_valid_count": 9118,
+    "uniqueness_rate": 0.9853036524746056,
+    "validity": 0.9254,
+    "validity_with_correction": 1.0,
+    "validity_with_projected_formal_charges": 0.9422,
+    "validity_without_correction": 0.9254
+
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9254,
+  "validity_without_correction": 0.9254,
+  "qed_mean": 0.46227307118873323,
+  "qed_std_within_run": 0.07154863970510689,
+  "qed_median": 0.4703717495850222,
+  "qed_q10": 0.366575325313026,
+  "qed_q90": 0.5471518852064475,
+  "qed_unique_valid_mean": 0.4621165167628607,
+  "num_unique_raw_valid": 9118,
+  "qed_yield": 0.4277875000780534,
+  "num_raw_valid_single_component": 8941,
+  "valid_single_component_yield": 0.8941,
+  "qed_single_component_mean": 0.4630436963407974,
+  "qed_ge_0p5_fraction_valid": 0.3119732007780419,
+  "qed_ge_0p5_yield_all": 0.2887,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": -0.003827156903256468,
+  "qed_wasserstein_1": 0.00389964686188104
+}
+
 4. CatFlow / ZINC
 =================
 
-Dataset identifier in the baseline commands: zinc. Requested samples per run: 10000.
-
-Selected results overview
--------------------------
-
-Values retain their original precision and scale; rates have not been converted to percentages. Full recorded
-molecular fields and any supplied QED output appear below each run.
-
-Metric                                           Run label 42          Run label 43          Run label 44
----------------------------------------  --------------------  --------------------  --------------------
-num_generated_graphs                                    10000                 10000                 10000
-validity                                               0.4099                0.3671                0.3609
-validity_without_correction                            0.4099                0.3671                0.3609
-validity_with_projected_formal_charges                 0.5181                0.4669                0.4627
-validity_with_correction                                  1.0                   1.0                   1.0
-uniqueness_rate                                           1.0                   1.0                   1.0
-novelty_rate                                              1.0                   1.0                   1.0
-nspdk_mmd                                0.009921937321674667  0.010118090997241714  0.009389614848765332
-nspdk_mmd_valid_only                     0.009921937321674667  0.010118090997241714  0.009389614848765332
-fcd                                         23.07606680411766    22.873311002479497    22.708756120735785
-metric_molecule_source                              raw_valid             raw_valid             raw_valid
-hogdiff_compatible_distribution_metrics                 False                 False                 False
-fcd_generated_smiles_source                         raw_valid             raw_valid             raw_valid
-qed_mean                                   0.6176919180753229    0.6270842477578126    0.6317913751825793
-qed_std_within_run                         0.1644316516181064    0.1617477185898616   0.15808984210824872
-qed_yield                                  0.2531919172190747   0.23020262735189384   0.22801350730339254
-
-4.1 Seed 42
------------
-
-Run ID: seed_42. Source lines: 547-655.
-
-Source notes applying to this run: N1. See Source notes at the end of this file.
-
-Environment and run settings
+#seed 42
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_42
 N=10000
-
-1. Training
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -894,8 +1138,6 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
-2. Generation
-
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset zinc \
@@ -906,11 +1148,7 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
-Generation directory
-
 GEN_DIR="outputs/baselines/catflow/zinc/$RUN/generations/seed_42_n_${N}"
-
-Molecular evaluation command
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -920,8 +1158,6 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
-
-QED evaluation command
 
 PYTHONHASHSEED=42 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
@@ -999,22 +1235,13 @@ Recorded QED output
   "qed_wasserstein_1": 0.11746777086937793
 }
 
-4.2 Seed 43
------------
-
-Run ID: seed_43. Source lines: 656-765.
-
-Source notes applying to this run: N1. See Source notes at the end of this file.
-
-Environment and run settings
+#seed 43
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_43
 N=10000
-
-1. Training
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -1026,8 +1253,6 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
-2. Generation
-
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset zinc \
@@ -1038,11 +1263,7 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
-Generation directory
-
 GEN_DIR="outputs/baselines/catflow/zinc/$RUN/generations/seed_43_n_${N}"
-
-Molecular evaluation command
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -1052,8 +1273,6 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
-
-QED evaluation command
 
 PYTHONHASHSEED=43 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
@@ -1131,22 +1350,13 @@ Recorded QED output
   "qed_wasserstein_1": 0.10807544118688833
 }
 
-4.3 Seed 44
------------
-
-Run ID: seed_44. Source lines: 766-873.
-
-Source notes applying to this run: N1. See Source notes at the end of this file.
-
-Environment and run settings
+#seed 44
 
 export CATFLOW=/home/quang/CatFlow
 export CATFLOW_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
 
 RUN=seed_44
 N=10000
-
-1. Training
 
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage train \
@@ -1158,8 +1368,6 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --run-id "$RUN" \
   --device gpu
 
-2. Generation
-
 PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --stage generate \
   --dataset zinc \
@@ -1170,11 +1378,7 @@ PYTHONPATH=src python scripts/run_catflow_baseline.py \
   --num-samples "$N" \
   --device gpu
 
-Generation directory
-
 GEN_DIR="outputs/baselines/catflow/zinc/$RUN/generations/seed_44_n_${N}"
-
-Molecular evaluation command
 
 PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --generated-dir "$GEN_DIR" \
@@ -1184,8 +1388,6 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --train-split train \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
-
-QED evaluation command
 
 PYTHONHASHSEED=44 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
@@ -1262,17 +1464,3 @@ Recorded QED output
   "qed_mean_minus_reference": -0.10336831376212152,
   "qed_wasserstein_1": 0.10336831376212165
 }
-
-Source notes
-============
-
-These annotations describe the supplied record only. No source command, metric value, dataset setting, or
-report association has been repaired or independently verified.
-
-N1. Molecular graphlet fields
------------------------------
-
-Every supplied QM9 and ZINC molecular report records graphlet_histogram_mmd and graphlet_selected_mass_mmd as
-None, and both per-order dictionaries as {}. These literals are retained rather than replaced with zero or
-inferred values.
-
