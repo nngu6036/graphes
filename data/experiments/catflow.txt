@@ -406,7 +406,7 @@ Epsilon-novelty / held-out coverage curve
    0.5000train                              0.000000     1.000000
    0.5000heldout_test                       0.000000     1.000000
    0.5000catflow                            0.377930     0.950000
-   
+
 #Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
 WL novelty against the complete training split (candidate population only; higher is better)
@@ -1119,6 +1119,69 @@ Recorded QED output
 
 4. CatFlow / ZINC
 =================
+
+#seed 41
+Molecular evaluation
+  validity: 0.8168
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.8829
+  validity_without_correction: 0.8168
+  fcd: 15.45432045374222
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 8168
+  num_invalid_generated_molecules: 1832
+  num_valid_generated_molecules_with_projected_formal_charges: 8829
+  num_invalid_generated_molecules_after_projected_formal_charges: 1171
+  num_raw_invalid_resolved_by_projected_formal_charges: 661
+  projected_formal_charge_success_rate_on_raw_invalid: 0.36080786026200873
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 1832
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 1.0
+  unique_valid_count: 8168
+  novelty_rate: 1.0
+  novel_unique_valid_count: 8168
+  nspdk_mmd: 0.0037060417137503928
+  nspdk_mmd_valid_only: 0.0037060417137503928
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 0.00013045948197138577
+  nspdk_proxy_mmd_metric_source: 0.00013227120036266311
+  fcd_num_reference_molecules: 23728
+  fcd_num_valid_generated_molecules: 8168
+  fcd_generated_smiles_source: raw_valid
+
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 8168,
+  "validity_without_correction": 0.8168,
+  "qed_mean": 0.6857090155642346,
+  "qed_std_within_run": 0.13591867342111702,
+  "qed_median": 0.7144500788426205,
+  "qed_q10": 0.4914138392534858,
+  "qed_q90": 0.833796399264908,
+  "qed_unique_valid_mean": 0.6857090155642346,
+  "num_unique_raw_valid": 8168,
+  "qed_yield": 0.5600871239128647,
+  "num_raw_valid_single_component": 6454,
+  "valid_single_component_yield": 0.6454,
+  "qed_single_component_mean": 0.6863184719177025,
+  "qed_ge_0p5_fraction_valid": 0.8942213516160626,
+  "qed_ge_0p5_yield_all": 0.7304,
+  "qed_ge_0p7_fraction_valid": 0.5429725759059746,
+  "qed_ge_0p7_yield_all": 0.4435,
+  "reference_num_graphs": 24887,
+  "reference_num_raw_valid": 23728,
+  "reference_qed_mean": 0.7512321466819076,
+  "qed_mean_minus_reference": -0.06552313111767305,
+  "qed_wasserstein_1": 0.06552313111767293
+}
 
 #seed 42
 
