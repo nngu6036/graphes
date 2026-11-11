@@ -13,7 +13,9 @@ indices and reserves edge class zero for a non-edge.  QM9 supports all four
 bond classes directly.  The attached DeFoG ZINC model has only the three
 Kekule bond classes, so aromatic ZINC inputs are deterministically kekulized
 from their recorded source SMILES and checked against the input graph before
-they are serialized.
+they are serialized. ZINC source charges and stereochemistry remain available
+for chemical verification but are audited as metadata omitted from its existing
+categorical graph state. All source fragments and graph positions are retained.
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ EDGE_VOCABULARIES: dict[str, tuple[int, ...]] = {
 }
 BOND_ORDERS = {1: 1.0, 2: 2.0, 3: 3.0, 4: 1.5}
 QM9_PROJECTION_POLICY = "audit_and_project_from_categorical_graph_state_v1"
+ZINC_PROJECTION_POLICY = "audit_source_metadata_to_categorical_graph_state_v1"
 
 QM9_PROCESSED_FILES = {
     "train": "proc_tr_no_h.pt",
@@ -249,7 +252,9 @@ def _bond_type(edge_data: Mapping[str, Any], *, graph_label: str) -> int:
     return bond_type
 
 
-def _validate_graph(graph: Any, *, graph_label: str) -> tuple[list[Any], dict[Any, int]]:
+def _validate_graph(
+    graph: Any, *, graph_label: str, require_connected: bool = True
+) -> tuple[list[Any], dict[Any, int]]:
     import networkx as nx
 
     if not isinstance(graph, nx.Graph):
@@ -260,7 +265,7 @@ def _validate_graph(graph: Any, *, graph_label: str) -> tuple[list[Any], dict[An
         raise ValueError(f"{graph_label} has no nodes.")
     if nx.number_of_selfloops(graph):
         raise ValueError(f"{graph_label} contains a self-loop.")
-    if graph.number_of_nodes() > 1 and not nx.is_connected(graph):
+    if require_connected and graph.number_of_nodes() > 1 and not nx.is_connected(graph):
         raise ValueError(f"{graph_label} is disconnected.")
     nodes = list(graph.nodes())
     if len(nodes) != len(set(nodes)):
@@ -287,31 +292,16 @@ def _prepared_zinc_molecule(source_smiles: str, Chem: Any) -> Any:
     if molecule is None:
         raise ValueError("RDKit could not parse graph.source_smiles.")
     Chem.SanitizeMol(molecule)
-    fragments = tuple(Chem.GetMolFrags(molecule, asMols=True, sanitizeFrags=True))
+    fragments = Chem.GetMolFrags(molecule)
     if not fragments:
         raise ValueError("graph.source_smiles contains no molecular fragment.")
-    if len(fragments) > 1:
-        molecule = max(
-            enumerate(fragments),
-            key=lambda item: (
-                int(item[1].GetNumHeavyAtoms()),
-                int(item[1].GetNumAtoms()),
-                -item[0],
-            ),
-        )[1]
+    # Canonical GraphER ZINC preserves all fragments and projects source charge
+    # and stereo out of the serialized categorical state. Retain those source
+    # properties here so RDKit can verify and kekulize the original chemistry;
+    # clearing formal charges would change valence and aromaticity semantics.
     molecule = Chem.RemoveHs(molecule, sanitize=True)
-    charged_atoms = [
-        (int(atom.GetIdx()), int(atom.GetFormalCharge()))
-        for atom in molecule.GetAtoms()
-        if int(atom.GetFormalCharge()) != 0
-    ]
-    if charged_atoms:
-        raise ValueError(
-            "DeFoG's ZINC atom state does not represent formal charge; "
-            f"source_smiles contains charged atoms {charged_atoms}."
-        )
-    Chem.RemoveStereochemistry(molecule)
     Chem.SanitizeMol(molecule)
+    Chem.AssignStereochemistry(molecule, cleanIt=True, force=True)
     return molecule
 
 
@@ -335,8 +325,8 @@ def _zinc_kekule_edges(
     source_smiles = graph.graph.get("source_smiles")
     if not source_smiles:
         raise ValueError(
-            f"{graph_label} has no source_smiles; verifying that formal charge "
-            "and the project graph agree with DeFoG's ZINC state is impossible."
+            f"{graph_label} has no source_smiles; verifying the categorical "
+            "graph and auditing projected source state is impossible."
         )
     try:
         from rdkit import Chem
@@ -361,6 +351,23 @@ def _zinc_kekule_edges(
             f"{graph_label} source_smiles atom order does not match the serialized "
             "GraphER node order."
         )
+    projection = {
+        "policy": ZINC_PROJECTION_POLICY,
+        "projected_formal_charge_atoms": [
+            [int(atom.GetIdx()), int(atom.GetFormalCharge())]
+            for atom in molecule.GetAtoms() if int(atom.GetFormalCharge()) != 0
+        ],
+        "projected_chiral_atoms": [
+            int(atom.GetIdx()) for atom in molecule.GetAtoms()
+            if int(atom.GetChiralTag()) != 0
+        ],
+        "projected_stereo_bonds": [
+            int(bond.GetIdx()) for bond in molecule.GetBonds()
+            if int(bond.GetStereo()) != 0
+        ],
+        "source_fragment_count": len(Chem.GetMolFrags(molecule)),
+    }
+    Chem.RemoveStereochemistry(molecule)
 
     # Canonical ZINC preparation already stores explicit Kekule bonds. Match
     # that representation before comparing: parsing SMILES perceives aromatic
@@ -384,6 +391,7 @@ def _zinc_kekule_edges(
         return (
             {edge: _edge_class("zinc", value) for edge, value in input_edges.items()},
             {
+                **projection,
                 "aromatic_bonds_input": 0,
                 "source_smiles_used": True,
                 "kekulized": False,
@@ -405,6 +413,7 @@ def _zinc_kekule_edges(
     return (
         output_edges,
         {
+            **projection,
             "aromatic_bonds_input": aromatic_count,
             "source_smiles_used": True,
             "kekulized": True,
@@ -460,6 +469,8 @@ def _convert_split(
     projected_stereochemistry_graphs = 0
     projected_chiral_atoms = 0
     projected_stereo_bonds = 0
+    fragmented_graphs = 0
+    source_fragments = 0
     input_digest = hashlib.sha256()
     output_digest = hashlib.sha256()
 
@@ -470,7 +481,9 @@ def _convert_split(
     for index, graph in enumerate(graphs):
         graph_label = f"{split}[{index}]"
         try:
-            nodes, node_positions = _validate_graph(graph, graph_label=graph_label)
+            nodes, node_positions = _validate_graph(
+                graph, graph_label=graph_label, require_connected=dataset != "zinc"
+            )
             atom_numbers = [
                 _atomic_number(graph.nodes[node], graph_label=graph_label)
                 for node in nodes
@@ -501,6 +514,11 @@ def _convert_split(
                 source_smiles_used += int(zinc_record["source_smiles_used"])
                 kekulized_graphs += int(zinc_record["kekulized"])
                 aromatic_bonds_input += int(zinc_record["aromatic_bonds_input"])
+                charge_projection = zinc_record["projected_formal_charge_atoms"]
+                chiral_projection = zinc_record["projected_chiral_atoms"]
+                bond_stereo_projection = zinc_record["projected_stereo_bonds"]
+                fragmented_graphs += int(zinc_record["source_fragment_count"] > 1)
+                source_fragments += int(zinc_record["source_fragment_count"])
             else:
                 output_edges = {
                     edge: _edge_class(dataset, value)
@@ -514,13 +532,13 @@ def _convert_split(
                     graph,
                     graph_label=graph_label,
                 )
-                projected_formal_charge_graphs += int(bool(charge_projection))
-                projected_formal_charge_atoms += len(charge_projection)
-                projected_stereochemistry_graphs += int(
-                    bool(chiral_projection) or bool(bond_stereo_projection)
-                )
-                projected_chiral_atoms += len(chiral_projection)
-                projected_stereo_bonds += len(bond_stereo_projection)
+            projected_formal_charge_graphs += int(bool(charge_projection))
+            projected_formal_charge_atoms += len(charge_projection)
+            projected_stereochemistry_graphs += int(
+                bool(chiral_projection) or bool(bond_stereo_projection)
+            )
+            projected_chiral_atoms += len(chiral_projection)
+            projected_stereo_bonds += len(bond_stereo_projection)
 
             row: list[int] = []
             col: list[int] = []
@@ -598,6 +616,14 @@ def _convert_split(
                     ),
                 }
             )
+            if dataset == "zinc":
+                model_view.graph.update({
+                    "zinc_source_state_projection_policy": ZINC_PROJECTION_POLICY,
+                    "projected_formal_charge_atoms": charge_projection,
+                    "projected_chiral_atoms": chiral_projection,
+                    "projected_stereo_bonds": bond_stereo_projection,
+                    "source_fragment_count": zinc_record["source_fragment_count"],
+                })
             model_view_graphs.append(model_view)
 
             node_counts.append(len(nodes))
@@ -669,6 +695,20 @@ def _convert_split(
                 "stereo_bonds": projected_stereo_bonds,
             }
             if dataset == "qm9"
+            else None
+        ),
+        "zinc_source_state_projection": (
+            {
+                "policy": ZINC_PROJECTION_POLICY,
+                "formal_charge_graphs": projected_formal_charge_graphs,
+                "formal_charge_atoms": projected_formal_charge_atoms,
+                "stereochemistry_graphs": projected_stereochemistry_graphs,
+                "chiral_atoms": projected_chiral_atoms,
+                "stereo_bonds": projected_stereo_bonds,
+                "fragmented_graphs": fragmented_graphs,
+                "source_fragments": source_fragments,
+            }
+            if dataset == "zinc"
             else None
         ),
     }
@@ -777,7 +817,14 @@ def main() -> None:
                 "formal_charge": (
                     "audit_and_project_at_qm9_preparation"
                     if args.dataset == "qm9"
-                    else "reject_nonzero"
+                    else "audit_source_metadata_projected_at_zinc_preparation"
+                ),
+                "serialized_nonzero_formal_charge": "reject",
+                "zinc_fragments": (
+                    "preserve_all_source_fragments" if args.dataset == "zinc" else None
+                ),
+                "zinc_source_state_projection_policy": (
+                    ZINC_PROJECTION_POLICY if args.dataset == "zinc" else None
                 ),
                 "node_stereochemistry": (
                     "audit_and_project_at_qm9_preparation"

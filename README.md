@@ -223,3 +223,70 @@ REFERENCE_SPLIT=val commands/community_small_degree_constrained_realization.sh
 
 See `STOCHASTIC_DEGREE_CONSTRAINED_SPECTRAL_REALIZATION.md` for the objective,
 constraints, limitations, and diagnostics.
+
+## DeFoG on the prepared ZINC splits
+
+The ZINC categorical state uses nine atom classes and single/double/triple
+bonds. Formal charges and stereochemistry in `source_smiles` are audited while
+the source molecule is sanitized and kekulized, then omitted from the model's
+categorical state. Charged molecules and all their source fragments remain in
+their original split and order. The converter verifies exact source atom order
+and bonds, records the projection in its manifest and model-view graphs, and
+rejects inconsistent source metadata or nonzero charge serialized on a node.
+It preserves the prepared input pickle files.
+
+Set the existing DeFoG checkout and its interpreter, then choose the run:
+
+```bash
+export DEFOG=/path/to/DeFoG
+export DEFOG_PYTHON=/path/to/defog-environment/bin/python
+export PYTHONPATH=src
+SEED=41
+DEVICE=cuda:0
+N=10000
+RUN="seed_${SEED}"
+GEN_ID="seed_${SEED}_n_${N}"
+```
+
+Train with the explicit 200-epoch baseline config:
+
+```bash
+python scripts/run_defog_baseline.py \
+  --stage train --dataset zinc \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/defog_zinc.yaml \
+  --dataset-root outputs/datasets --serialized-dataset zinc \
+  --output-root outputs/baselines --seed-id "$SEED" \
+  --run-id "$RUN" --device "$DEVICE"
+```
+
+Generate the requested population from that run:
+
+```bash
+python scripts/run_defog_baseline.py \
+  --stage generate --dataset zinc \
+  --common-config configs/baselines/common_zinc.yaml \
+  --wrapper-config configs/baselines/defog_zinc.yaml \
+  --dataset-root outputs/datasets --serialized-dataset zinc \
+  --output-root outputs/baselines --seed-id "$SEED" \
+  --generation-seed "$SEED" --run-id "$RUN" \
+  --generation-id "$GEN_ID" --num-samples "$N" --device "$DEVICE"
+```
+
+Use the same `GEN_DIR` variable for every evaluation path:
+
+```bash
+GEN_DIR="outputs/baselines/defog/zinc/$RUN/generations/$GEN_ID"
+python scripts/evaluate_generated_molecules.py \
+  --generated-dir "$GEN_DIR" \
+  --generated-graphs "$GEN_DIR/base_graphs.pkl" \
+  --dataset-root outputs/datasets --dataset zinc \
+  --reference-split test --train-split train \
+  --strict-raw-metrics --metric-molecule-source raw_valid \
+  --nspdk-backend eden --nspdk-complexity 4 \
+  --nspdk-bond-label-mode hogdiff --require-fcd --fcd-device "$DEVICE" \
+  --output-dir "$GEN_DIR/evaluation_molecules_test"
+```
+
+A PyG `torch-scatter` import warning is separate from the source-SMILES charge
+rejection, which occurs during dataset conversion before DeFoG training.

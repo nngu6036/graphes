@@ -604,8 +604,69 @@ Epsilon-novelty / held-out coverage curve
 3. DeFoG / QM9
 ==============
 
-3.1 Seed 42
------------
+#seed 41
+Molecular evaluation
+  validity: 0.9817
+  validity_with_correction: 1.0
+  validity_with_projected_formal_charges: 0.9865
+  validity_without_correction: 0.9817
+  fcd: 0.20064252643745917
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9817
+  num_invalid_generated_molecules: 183
+  num_valid_generated_molecules_with_projected_formal_charges: 9865
+  num_invalid_generated_molecules_after_projected_formal_charges: 135
+  num_raw_invalid_resolved_by_projected_formal_charges: 48
+  projected_formal_charge_success_rate_on_raw_invalid: 0.26229508196721313
+  num_valid_generated_molecules_with_correction: 10000
+  num_invalid_generated_molecules_after_correction: 0
+  num_molecules_corrected_to_valid: 183
+  correction_success_rate_on_raw_invalid: 1.0
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9667922990730365
+  unique_valid_count: 9491
+  novelty_rate: 0.35233378990622694
+  novel_unique_valid_count: 3344
+  nspdk_mmd: 0.0008477062940549391
+  nspdk_mmd_valid_only: 0.0008477062940549391
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 1.9147395746942715e-05
+  nspdk_proxy_mmd_metric_source: 1.8020768122135017e-05
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9817
+  fcd_generated_smiles_source: raw_valid
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9817,
+  "validity_without_correction": 0.9817,
+  "qed_mean": 0.46320320712558494,
+  "qed_std_within_run": 0.07017945055871053,
+  "qed_median": 0.46869523050556605,
+  "qed_q10": 0.36780194436113656,
+  "qed_q90": 0.5489009806326818,
+  "qed_unique_valid_mean": 0.46316010392973983,
+  "num_unique_raw_valid": 9491,
+  "qed_yield": 0.45472658843518793,
+  "num_raw_valid_single_component": 9766,
+  "valid_single_component_yield": 0.9766,
+  "qed_single_component_mean": 0.4631484538061183,
+  "qed_ge_0p5_fraction_valid": 0.30253641642049506,
+  "qed_ge_0p5_yield_all": 0.297,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": -0.002897020966404762,
+  "qed_wasserstein_1": 0.0038325531061983156
+}
+
+
+#seed 42
 
 export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
@@ -716,8 +777,7 @@ Molecular evaluation
   "qed_wasserstein_1": 0.0012799096198541282
 }
 
-3.2 Seed 43
------------
+#seed 43
 
 export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
@@ -828,9 +888,7 @@ Molecular evaluation
   "qed_wasserstein_1": 0.0066129762747806995
 }
 
-3.3 Seed 44
------------
-
+#seed 44
 
 export DEFOG=/home/quang/DeFoG
 export DEFOG_PYTHON=/home/quang/miniconda3/envs/defog/bin/python
@@ -942,6 +1000,67 @@ QED output
   "qed_wasserstein_1": 0.0037893091903754526
 }
 
+#seed 45
+Molecular evaluation
+  validity: 0.9889
+  validity_with_correction: 0.9998
+  validity_with_projected_formal_charges: 0.9924
+  validity_without_correction: 0.9889
+  fcd: 0.101754995004665
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9889
+  num_invalid_generated_molecules: 111
+  num_valid_generated_molecules_with_projected_formal_charges: 9924
+  num_invalid_generated_molecules_after_projected_formal_charges: 76
+  num_raw_invalid_resolved_by_projected_formal_charges: 35
+  projected_formal_charge_success_rate_on_raw_invalid: 0.3153153153153153
+  num_valid_generated_molecules_with_correction: 9998
+  num_invalid_generated_molecules_after_correction: 2
+  num_molecules_corrected_to_valid: 109
+  correction_success_rate_on_raw_invalid: 0.9819819819819819
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9686520376175548
+  unique_valid_count: 9579
+  novelty_rate: 0.35108048856874413
+  novel_unique_valid_count: 3363
+  nspdk_mmd: 0.00025368543078060153
+  nspdk_mmd_valid_only: 0.00025368543078060153
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 3.1037793389246847e-06
+  nspdk_proxy_mmd_metric_source: 3.0192806720521796e-06
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9889
+  fcd_generated_smiles_source: raw_valid
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9889,
+  "validity_without_correction": 0.9889,
+  "qed_mean": 0.4671822547332592,
+  "qed_std_within_run": 0.07295641444400974,
+  "qed_median": 0.47409193385298387,
+  "qed_q10": 0.36744271418271846,
+  "qed_q90": 0.5548981343538528,
+  "qed_unique_valid_mean": 0.46723945290118113,
+  "num_unique_raw_valid": 9579,
+  "qed_yield": 0.46199653170572047,
+  "num_raw_valid_single_component": 9843,
+  "valid_single_component_yield": 0.9843,
+  "qed_single_component_mean": 0.4671766597353724,
+  "qed_ge_0p5_fraction_valid": 0.33683891192233795,
+  "qed_ge_0p5_yield_all": 0.3331,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": 0.0010820266412694957,
+  "qed_wasserstein_1": 0.0012005986820661223
+}
 
 4. DeFoG / ZINC
 ===============

@@ -347,6 +347,55 @@ done
 
 echo "DiGress ego_small loop finished."
 
+#seed 41
+Graph-distribution MMD against held-out test graphs (lower is better)
+Generic graph V.U.N.: benchmark validity, exact-isomorphism uniqueness/novelty, and combined VUN (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split and VUN is the fraction simultaneously valid, unique, and novel.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty         VUN
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000    0.325000
+digress_to_test                     0.017919          0.018893      0.009230        0.012322        0.005596      1.000000      0.289062      0.332031    0.250977
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+digress                           0.332031      0.332031     0.289062    0.418945      0.607617
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.546875        0.000000          0.000000
+heldout_test                        0.375000     0.700000        0.162295          0.000000
+digress                             0.332031     0.289062        0.141063          0.000000
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.625000
+   0.0000heldout_test                       0.375000     1.000000
+   0.0000digress                            0.332031     0.700000
+   0.0100train                              0.000000     0.625000
+   0.0100heldout_test                       0.375000     1.000000
+   0.0100digress                            0.332031     0.700000
+   0.0250train                              0.000000     0.625000
+   0.0250heldout_test                       0.375000     1.000000
+   0.0250digress                            0.332031     0.700000
+   0.0500train                              0.000000     0.625000
+   0.0500heldout_test                       0.375000     1.000000
+   0.0500digress                            0.332031     0.700000
+   0.1000train                              0.000000     0.625000
+   0.1000heldout_test                       0.375000     1.000000
+   0.1000digress                            0.332031     0.700000
+   0.2000train                              0.000000     0.625000
+   0.2000heldout_test                       0.375000     1.000000
+   0.2000digress                            0.332031     0.700000
+   0.3000train                              0.000000     0.625000
+   0.3000heldout_test                       0.375000     1.000000
+   0.3000digress                            0.332031     0.700000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000digress                            0.027344     1.000000
+
 #Seed 42
 Graph-distribution MMD against held-out test graphs (lower is better)
 Generic graph V.U.N.: validity, WL uniqueness, WL novelty (higher is better)
@@ -496,6 +545,55 @@ Epsilon-novelty / held-out coverage curve
    0.5000heldout_test                       0.000000     1.000000
    0.5000digress                            0.027344     1.000000
  
+#seed 45
+Graph-distribution MMD against held-out test graphs (lower is better)
+Generic graph V.U.N.: benchmark validity, exact-isomorphism uniqueness/novelty, and combined VUN (higher is better)
+V.U.N. describes held-out graphs for train_to_* rows and candidate graphs for model rows; novelty uses the complete training split and VUN is the fraction simultaneously valid, unique, and novel.
+Comparison                        Degree MMD    Clustering MMD     Orbit MMD    Spectral MMD    Graphlet MMD      Validity    Uniqueness       Novelty         VUN
+train_to_test                       0.012987          0.027056      0.008995        0.010686        0.001697      1.000000      0.700000      0.375000    0.325000
+digress_to_test                     0.015753          0.018319      0.007776        0.009562        0.003411      0.999023      0.303711      0.325195    0.260742
+
+Exact topology-support diagnostics (attributes ignored)
+Population                        WL novel   Exact novel   Iso unique   TV->train   TV->heldout
+train                             0.000000      0.000000     0.546875    0.000000      0.614062
+heldout_test                      0.375000      0.375000     0.700000    0.614062      0.000000
+digress                           0.325195      0.325195     0.303711    0.402344      0.590625
+Exact novelty = fraction of graphs not isomorphic to any training graph; TV=0 means identical empirical isomorphism-class frequencies.
+
+Generic topology diversity diagnostics (attributes ignored)
+Population                       Exact novel   Iso unique   Mean NN-train   Median NN-train
+train                               0.000000     0.546875        0.000000          0.000000
+heldout_test                        0.375000     0.700000        0.162295          0.000000
+digress                             0.325195     0.303711        0.140467          0.000000
+Exact novelty detects unseen isomorphism classes; iso uniqueness measures distinct classes within a population; NN-train is a graded [0,1] structural pseudodistance to the nearest training graph.
+
+Epsilon-novelty / held-out coverage curve
+  epsilonPopulation                        eps novel     coverage
+   0.0000train                              0.000000     0.625000
+   0.0000heldout_test                       0.375000     1.000000
+   0.0000digress                            0.325195     0.725000
+   0.0100train                              0.000000     0.625000
+   0.0100heldout_test                       0.375000     1.000000
+   0.0100digress                            0.325195     0.725000
+   0.0250train                              0.000000     0.625000
+   0.0250heldout_test                       0.375000     1.000000
+   0.0250digress                            0.325195     0.725000
+   0.0500train                              0.000000     0.625000
+   0.0500heldout_test                       0.375000     1.000000
+   0.0500digress                            0.325195     0.725000
+   0.1000train                              0.000000     0.625000
+   0.1000heldout_test                       0.375000     1.000000
+   0.1000digress                            0.325195     0.725000
+   0.2000train                              0.000000     0.625000
+   0.2000heldout_test                       0.375000     1.000000
+   0.2000digress                            0.324219     0.725000
+   0.3000train                              0.000000     0.625000
+   0.3000heldout_test                       0.375000     1.000000
+   0.3000digress                            0.321289     0.725000
+   0.5000train                              0.000000     1.000000
+   0.5000heldout_test                       0.000000     1.000000
+   0.5000digress                            0.040039     1.000000
+
 3. QM9
 
 export DIGRESS=/home/quang/DiGress
