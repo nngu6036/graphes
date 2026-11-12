@@ -96,8 +96,14 @@ def _generic_metrics(report: Mapping[str, Any]) -> tuple[dict, dict, dict]:
     metrics["graphlet_mmd"] = _finite(row.get("graphlet_history_mmd"))
     metrics["novelty_wl_rate"] = _finite(row.get("novelty_rate"))
     metrics["uniqueness_wl_rate"] = _finite(row.get("uniqueness_rate"))
-    pct = _finite(row.get("joint_vun_percent"))
-    metrics["joint_vun_rate"] = None if pct is None else pct / 100.0
+    # The current generic evaluator writes exact V.U.N. as a *fraction* under
+    # valid_unique_novel_rate. The older joint_vun_percent field, when present,
+    # is a percentage. Handle both without silently dropping all V.U.N. cells.
+    vun_rate = _finite(row.get("valid_unique_novel_rate"))
+    if vun_rate is None:
+        pct = _finite(row.get("joint_vun_percent"))
+        vun_rate = None if pct is None else pct / 100.0
+    metrics["joint_vun_rate"] = vun_rate
     exact_container = _mapping(report.get("generic_exact_isomorphism_diagnostics"))
     diversity_container = _mapping(report.get("generic_diversity_diagnostics"))
     exact = _population_row(exact_container.get("population_metrics"), stage)
