@@ -596,6 +596,9 @@ Epsilon-novelty / held-out coverage curve
 
 3. QM9
 
+
+#seed 42
+
 export DIGRESS=/home/quang/DiGress
 export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
 
@@ -702,6 +705,9 @@ Molecular evaluation
   "qed_mean_minus_reference": -0.0014482849562992284,
   "qed_wasserstein_1": 0.0015190995537858005
 }
+
+
+#seed 43
 
 export DIGRESS=/home/quang/DiGress
 export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
@@ -812,6 +818,7 @@ Molecular evaluation
 }
 
 
+#seed 44
 
 export DIGRESS=/home/quang/DiGress
 export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
@@ -919,6 +926,67 @@ Molecular evaluation
   "reference_qed_mean": 0.4661002280919897,
   "qed_mean_minus_reference": -0.0015470050889057618,
   "qed_wasserstein_1": 0.001671738622702459
+}
+
+#seed 41
+Molecular evaluation
+  validity: 0.992
+  validity_with_correction: 0.9997
+  validity_with_projected_formal_charges: 0.9944
+  validity_without_correction: 0.992
+  fcd: 0.11729072582794231
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9920
+  num_invalid_generated_molecules: 80
+  num_valid_generated_molecules_with_projected_formal_charges: 9944
+  num_invalid_generated_molecules_after_projected_formal_charges: 56
+  num_raw_invalid_resolved_by_projected_formal_charges: 24
+  projected_formal_charge_success_rate_on_raw_invalid: 0.3
+  num_valid_generated_molecules_with_correction: 9997
+  num_invalid_generated_molecules_after_correction: 3
+  num_molecules_corrected_to_valid: 77
+  correction_success_rate_on_raw_invalid: 0.9625
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9715725806451613
+  unique_valid_count: 9638
+  novelty_rate: 0.3531853081552189
+  novel_unique_valid_count: 3404
+  nspdk_mmd: 0.00036178904702033424
+  nspdk_mmd_valid_only: 0.00036178904702033424
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 6.5613569005546926e-06
+  nspdk_proxy_mmd_metric_source: 6.7432330023407175e-06
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9920
+  fcd_generated_smiles_source: raw_valid
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9920,
+  "validity_without_correction": 0.992,
+  "qed_mean": 0.4682400397926058,
+  "qed_std_within_run": 0.07326131603973425,
+  "qed_median": 0.4753464862552858,
+  "qed_q10": 0.3699650376406298,
+  "qed_q90": 0.5547415559670338,
+  "qed_unique_valid_mean": 0.46803839959125254,
+  "num_unique_raw_valid": 9638,
+  "qed_yield": 0.4644941194742666,
+  "num_raw_valid_single_component": 9885,
+  "valid_single_component_yield": 0.9885,
+  "qed_single_component_mean": 0.4683441969959547,
+  "qed_ge_0p5_fraction_valid": 0.3482862903225806,
+  "qed_ge_0p5_yield_all": 0.3455,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": 0.002139811700616112,
+  "qed_wasserstein_1": 0.0025223081052175617
 }
 
 4. ZINC
