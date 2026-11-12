@@ -397,6 +397,8 @@ def validate_options(options: Mapping[str, Any]) -> None:
                 "attribute_summary.typed_degree.histogram_weight must be finite and non-negative"
             )
     attr = dict(options.get("attributed", {}) or {})
+    if str(attr.get("spectral_context", "summary_log_gap")) not in {"summary_log_gap", "none"}:
+        raise ValueError("attributed.spectral_context must be summary_log_gap or none")
     for key in ("node_attribute", "edge_attribute"):
         if not attr.get(key):
             raise ValueError(f"attributed.{key} is required")
@@ -440,6 +442,8 @@ def _model_config(options: Mapping[str, Any], max_nodes: int, vocab: GraphCatego
                 "topology_summary.degree.max_degree cannot exceed model.max_nodes - 1"
             )
     return {
+        "detach_topology_summary_encoder": bool((options.get("topology_summary", {}) or {}).get("detach_encoder", False)),
+        "attribute_spectral_context": str((options.get("attributed", {}) or {}).get("spectral_context", "summary_log_gap")),
         "max_nodes": int(max_nodes),
         "max_feat_num": max_feat_num,
         "hidden_dim": int(raw.get("hidden_dim", 32)),
@@ -481,6 +485,8 @@ class AttributedSpectrumPPGNScore(nn.Module):
         topology_orbit_width: int,
         topology_degree_bins: int = 0,
         typed_degree_bins: int = 0,
+        detach_topology_summary_encoder: bool = False,
+        attribute_spectral_context: str = "summary_log_gap",
         ppgn_hidden_dim: int = 64,
         ppgn_depth: int = 4,
         ppgn_residual_scale: float = 0.1,
@@ -489,6 +495,10 @@ class AttributedSpectrumPPGNScore(nn.Module):
         **_: Any,
     ) -> None:
         super().__init__()
+        self.detach_topology_summary_encoder = bool(detach_topology_summary_encoder)
+        if attribute_spectral_context not in {"summary_log_gap", "none"}:
+            raise ValueError("attribute_spectral_context must be summary_log_gap or none")
+        self.attribute_spectral_context = str(attribute_spectral_context)
         self.max_feat_num = int(max_feat_num)
         self.max_nodes = int(max_nodes)
         self.node_classes = int(node_classes)
@@ -752,6 +762,10 @@ class AttributedSpectrumPPGNScore(nn.Module):
         node_attr: torch.Tensor | None = None,
         edge_attr: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # The existing spectral side-channel is the summary readout log-gap vector.
+        # Atom/bond logits already use local topology features, not eigenvalues.
+        if self.attribute_spectral_context == "none":
+            eigenvalues = torch.zeros_like(eigenvalues)
         binary, node, _sp, base = self._base_parts(x, adj, flags)
         node_attr, edge_attr = self.masked_attribute_inputs(
             flags, binary, node_attr=node_attr, edge_attr=edge_attr
@@ -780,19 +794,20 @@ class AttributedSpectrumPPGNScore(nn.Module):
         shared, _pair_h, _binary = self._encode_topology(
             x, adj, flags, eigenvalues
         )
+        summary_shared = shared.detach() if self.detach_topology_summary_encoder else shared
         outputs = {
             "spectrum": self.spectrum_final(shared),
-            "topology_graphlet_logits": self.topology_graphlet_logits(shared),
-            "topology_graphlet_mass_logits": self.topology_graphlet_mass_logits(shared),
+            "topology_graphlet_logits": self.topology_graphlet_logits(summary_shared),
+            "topology_graphlet_mass_logits": self.topology_graphlet_mass_logits(summary_shared),
         }
         if self.topology_clustering_logits is not None:
-            outputs["topology_clustering_logits"] = self.topology_clustering_logits(shared)
+            outputs["topology_clustering_logits"] = self.topology_clustering_logits(summary_shared)
         if self.topology_orbit_histogram_logits is not None:
-            outputs["topology_orbit_histogram_logits"] = self.topology_orbit_histogram_logits(shared)
-            outputs["topology_orbit_log_total_raw"] = self.topology_orbit_log_total_raw(shared)
+            outputs["topology_orbit_histogram_logits"] = self.topology_orbit_histogram_logits(summary_shared)
+            outputs["topology_orbit_log_total_raw"] = self.topology_orbit_log_total_raw(summary_shared)
         if self.topology_degree_histogram_logits is not None:
             outputs["topology_degree_histogram_logits"] = (
-                self.topology_degree_histogram_logits(shared)
+                self.topology_degree_histogram_logits(summary_shared)
             )
         for name, value in outputs.items():
             if not torch.isfinite(value).all():

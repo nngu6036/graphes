@@ -78,7 +78,7 @@ from grapher.models.dhvae_hh.degree_vae import (
 from grapher.models.artifacts import ArtifactLayout
 from grapher.models.base import GenerateRequest, GenerationArtifacts, TrainRequest, TrainingArtifacts
 from grapher.models.errors import ArtifactCollisionError
-from grapher.models.grapher import degree_constrained_realization, eigenbasis_perturbation
+from grapher.models.grapher import degree_constrained_realization, eigenbasis_perturbation, basis_sampling_ablation
 from grapher.utils.networkx_pickle import load_trusted_networkx_pickle
 
 
@@ -344,6 +344,7 @@ def _resolved_structure_summary_config(options: Mapping[str, Any]) -> dict[str, 
         return {
             "enabled": True,
             "loss_weight": float(raw_structure.get("loss_weight", 0.10)),
+            "detach_encoder": bool(raw_structure.get("detach_encoder", False)),
             "graphlet": {
                 "enabled": bool(graphlet.get("enabled", True)),
                 "orders": list(graphlet.get("orders", [3, 4, 5])),
@@ -969,6 +970,7 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         clustering_bins: int = 0,
         orbit_width: int = 0,
         degree_bins: int = 0,
+        detach_summary_encoder: bool = False,
         ppgn_hidden_dim: int = 64,
         ppgn_depth: int = 4,
         ppgn_residual_scale: float = 0.1,
@@ -979,6 +981,7 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
         del hidden_dim, depth  # DenseGCN-only width/depth; retained in model config for parity.
         self.max_feat_num = int(max_feat_num)
         self.max_nodes = int(max_nodes)
+        self.detach_summary_encoder = bool(detach_summary_encoder)
         self.graphlet_slices = tuple((int(a), int(b)) for a, b in graphlet_slices)
         if not self.graphlet_slices:
             raise ValueError("graphlet_slices must be non-empty")
@@ -1077,18 +1080,20 @@ class GSDMSpectrumGraphletPPGNScore(nn.Module):
     ) -> dict[str, torch.Tensor]:
         del eigenvectors
         shared = self._encode(x, adj, flags, eigenvalues)
+        # S4 trains readouts while blocking their gradient into shared features.
+        summary_shared = shared.detach() if self.detach_summary_encoder else shared
         outputs = {
             "spectrum": self.spectrum_final(shared),
-            "graphlet_logits": self.graphlet_logits(shared),
-            "graphlet_mass_logits": self.graphlet_mass_logits(shared),
+            "graphlet_logits": self.graphlet_logits(summary_shared),
+            "graphlet_mass_logits": self.graphlet_mass_logits(summary_shared),
         }
         if self.clustering_logits is not None:
-            outputs["clustering_logits"] = self.clustering_logits(shared)
+            outputs["clustering_logits"] = self.clustering_logits(summary_shared)
         if self.orbit_histogram_logits is not None and self.orbit_log_total_raw is not None:
-            outputs["orbit_histogram_logits"] = self.orbit_histogram_logits(shared)
-            outputs["orbit_log_total_raw"] = self.orbit_log_total_raw(shared)
+            outputs["orbit_histogram_logits"] = self.orbit_histogram_logits(summary_shared)
+            outputs["orbit_log_total_raw"] = self.orbit_log_total_raw(summary_shared)
         if self.degree_histogram_logits is not None:
-            outputs["degree_histogram_logits"] = self.degree_histogram_logits(shared)
+            outputs["degree_histogram_logits"] = self.degree_histogram_logits(summary_shared)
         for name, value in outputs.items():
             if not torch.isfinite(value).all():
                 raise FloatingPointError(f"Non-finite {name} from PPGN spectrum/graphlet score")
@@ -1364,6 +1369,7 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
         clustering_bins: int = 0,
         orbit_width: int = 0,
         degree_bins: int = 0,
+        detach_summary_encoder: bool = False,
     ) -> None:
         super().__init__(
             max_feat_num=max_feat_num,
@@ -1394,6 +1400,7 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
             self.layers = nn.ModuleList(layers)
             fdim = node_input_dim + int(depth) * int(hidden_dim)
             self.node_final = MLP(fdim, 2 * fdim, int(max_feat_num), 3)
+        self.detach_summary_encoder = bool(detach_summary_encoder)
         self.graphlet_slices = tuple((int(a), int(b)) for a, b in graphlet_slices)
         if not self.graphlet_slices:
             raise ValueError("graphlet_slices must be non-empty")
@@ -1460,18 +1467,20 @@ class GSDMSpectrumGraphletScore(GSDMSpectrumScore):
     ) -> dict[str, torch.Tensor]:
         del eigenvectors
         shared = self._encode(x, adj, flags, eigenvalues)
+        # S4 trains readouts while blocking their gradient into shared features.
+        summary_shared = shared.detach() if self.detach_summary_encoder else shared
         outputs = {
             "spectrum": self.spectrum_final(shared),
-            "graphlet_logits": self.graphlet_logits(shared),
-            "graphlet_mass_logits": self.graphlet_mass_logits(shared),
+            "graphlet_logits": self.graphlet_logits(summary_shared),
+            "graphlet_mass_logits": self.graphlet_mass_logits(summary_shared),
         }
         if self.clustering_logits is not None:
-            outputs["clustering_logits"] = self.clustering_logits(shared)
+            outputs["clustering_logits"] = self.clustering_logits(summary_shared)
         if self.orbit_histogram_logits is not None and self.orbit_log_total_raw is not None:
-            outputs["orbit_histogram_logits"] = self.orbit_histogram_logits(shared)
-            outputs["orbit_log_total_raw"] = self.orbit_log_total_raw(shared)
+            outputs["orbit_histogram_logits"] = self.orbit_histogram_logits(summary_shared)
+            outputs["orbit_log_total_raw"] = self.orbit_log_total_raw(summary_shared)
         if self.degree_histogram_logits is not None:
-            outputs["degree_histogram_logits"] = self.degree_histogram_logits(shared)
+            outputs["degree_histogram_logits"] = self.degree_histogram_logits(summary_shared)
         return outputs
 
     def forward(
@@ -2392,6 +2401,7 @@ def _model_config(options: Mapping[str, Any], max_nodes: int) -> dict[str, Any]:
     node_backbone = str(raw.get("node_backbone", legacy_backbone)).lower()
     spectrum_backbone = str(raw.get("spectrum_backbone", legacy_backbone)).lower()
     return {
+        "detach_summary_encoder": bool(_resolved_structure_summary_config(options).get("detach_encoder", False)),
         "max_nodes": int(max_nodes),
         "max_feat_num": int(max_feat_num),
         "hidden_dim": int(raw.get("hidden_dim", 32)),
@@ -2453,6 +2463,7 @@ def _build_models(
     if graphlet_slices:
         summary_meta = dict(summary_meta or {})
         summary_head_kwargs = {
+            "detach_summary_encoder": bool(cfg.get("detach_summary_encoder", False)),
             "clustering_bins": (
                 int(summary_meta.get("clustering_bins", 0))
                 if bool(summary_meta.get("clustering_enabled", False)) else 0
@@ -3514,6 +3525,7 @@ def sample_batch(
 
 
 def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manifest: Mapping[str, Any], options: Mapping[str, Any]) -> GenerationArtifacts:
+    from . import paper_measurement
     validate_options(options)
     if state.get("format") not in SUPPORTED_CHECKPOINT_FORMATS:
         raise RuntimeError(
@@ -3554,6 +3566,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     basis_n = torch.tensor(np.asarray(state["basis_num_nodes"]), dtype=torch.long)
     if len(basis_adj) == 0:
         raise RuntimeError("Checkpoint has an empty training basis bank")
+    donor_schedule = basis_sampling_ablation.resolve_schedule(sample_cfg, basis_n.numpy(), request.num_graphs)
     batch_size = int(options.get("generation_batch_size", 128))
     rng = np.random.default_rng(request.generation_seed)
     generator = torch.Generator(device=device).manual_seed(request.generation_seed)
@@ -3631,22 +3644,25 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
     with torch.no_grad():
         while len(graphs) < request.num_graphs:
             b = min(batch_size, request.num_graphs - len(graphs))
-            indices = rng.integers(0, len(basis_adj), size=b)
+            paper_measurement.attempted(b)
+            indices = basis_sampling_ablation.select_indices(rng, len(basis_adj), b, len(graphs), donor_schedule)
             donor_adj = basis_adj[indices]
             donor_n = basis_n[indices]
             eigenbasis_override = None
             base_u = None
+            base_lam = None
             batch_basis_rows: list[dict[str, Any]] = []
             if basis_perturbation_enabled:
                 donor_adj_device = donor_adj.to(device)
                 donor_n_device = donor_n.to(device)
-                base_u = _laplacian_eigh_padded(donor_adj_device, donor_n_device)[1]
+                base_lam, base_u = _laplacian_eigh_padded(donor_adj_device, donor_n_device)
                 if str(basis_perturbation_cfg["stage"]) == "reverse":
                     eigenbasis_override, batch_basis_rows = eigenbasis_perturbation.perturb_laplacian_basis(
                         base_u,
                         donor_n_device,
                         config=basis_perturbation_cfg,
                         rng=basis_perturbation_rng,
+                        eigenvalues=base_lam,
                     )
                 else:
                     eigenbasis_override = base_u
@@ -3705,6 +3721,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     donor_n.to(device),
                     config=basis_perturbation_cfg,
                     rng=basis_perturbation_rng,
+                    eigenvalues=base_lam,
                 )
                 decode_operator = reconstruct_adjacency(decode_u, lam)
                 soft = _operator_to_adjacency_state(
@@ -3721,11 +3738,12 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 n = int(donor_n[row].item())
                 matrix = soft[row, :n, :n].detach().cpu().numpy().astype(np.float64)
                 np.fill_diagonal(matrix, 0.0)
-                discrete = matrix > threshold
-                np.fill_diagonal(discrete, False)
-                threshold_graph = nx.from_numpy_array(
-                    discrete.astype(np.int8), create_using=nx.Graph
-                )
+                with paper_measurement.stage("topology_decode"):
+                    discrete = matrix > threshold
+                    np.fill_diagonal(discrete, False)
+                    threshold_graph = nx.from_numpy_array(
+                        discrete.astype(np.int8), create_using=nx.Graph
+                    )
 
                 lap = None
                 if spectral_operator == "combinatorial_laplacian":
@@ -3775,6 +3793,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                 if matched_enabled:
                     graph.graph["sample_id"] = f"{request.generation_seed}:{len(graphs)}"
                 graphs.append(graph)
+                paper_measurement.completed()
                 continuous.append(matrix)
                 spectra.append(lam[row, :].detach().cpu().numpy().astype(np.float64))
                 basis_indices.append(int(idx))
@@ -4327,6 +4346,7 @@ def generate(wrapper, request: GenerateRequest, state: Mapping[str, Any], manife
                     else "training_split_empirical"
                 ),
                 "eigenbasis_perturbation": basis_perturbation_aggregate,
+                "basis_ablation": dict(sample_cfg.get("basis_ablation", {}) or {}),
                 "reverse_process": "coupled_VP_spectral_predictor_corrector",
                 "topology_decoder": (
                     "stochastic_degree_constrained_summary_selected_realization"

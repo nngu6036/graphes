@@ -63,7 +63,7 @@ from .attribute_decoding import (
 )
 from .categorical.noise import MarginalNoise, cosine_alpha_bar, draw_categories
 from .typed_degree_summary import TypedDegreeHistogramBasis
-from . import attributed_diversification, eigenbasis_perturbation
+from . import attributed_diversification, eigenbasis_perturbation, basis_sampling_ablation
 from .vanilla_gsdm import (
     _EMA,
     _fit_laplacian_log_gap_stats,
@@ -283,6 +283,8 @@ class HybridAttributedSpectrumPPGNScore(hierarchical.AttributedSpectrumPPGNScore
             raise ValueError("Hybrid attribute diffusion requires explicit categorical states")
         if attribute_time is None or attribute_time.shape != (flags.shape[0],):
             raise ValueError("attribute_time must have shape [B]")
+        if self.attribute_spectral_context == "none":
+            eigenvalues = torch.zeros_like(eigenvalues)
         binary, node, _sp, base = self._base_parts(x, adj, flags)
         node = torch.cat((node, node_attr), dim=-1)
         pair = torch.cat((base, self._diag_pair(node), edge_attr), dim=-1)
@@ -866,6 +868,17 @@ def train(
         shuffle=False,
     )
     model_x, model_lam = _build_models(model_cfg, topology_meta, attribute_meta, device)
+    frozen_topology = None
+    if bool((options.get("train", {}) or {}).get("attribute_only", False)):
+        from grapher.experiments.learning_ablation import initialize_frozen_topology
+        frozen_topology = initialize_frozen_topology(
+            model_x, model_lam, options=options, dataset_fingerprint=fingerprint,
+            train_seed=request.run.train_seed, model_config=model_cfg,
+            topology_meta=topology_meta, spectral_transform=spectral_transform,
+            basis_adjacencies=train_base[1].numpy(), basis_num_nodes=train_base[3].numpy(),
+        )
+        # Carry the immutable topology transform rather than fitting an alternate one.
+        spectral_transform = copy.deepcopy(frozen_topology["spectral_transform"])
     sde_x, sde_lam = _make_sdes(options, device)
     _, node_noise, bond_noise = _attribute_noise_models(
         diffusion_schema, diffusion_cfg, device
@@ -1090,6 +1103,15 @@ def train(
             "train_seed": request.run.train_seed,
             "reference_contract": reference_contract,
         }
+        if frozen_topology is not None:
+            from grapher.experiments.learning_ablation import assert_frozen_topology
+            state["learning_ablation"] = assert_frozen_topology(model_x, model_lam, frozen_topology)
+            # Frozen parameters retain the reference EMA as well as raw weights.
+            state["ema_x_state"] = frozen_topology["ema_x_state"]
+            for key, value in frozen_topology["ema_topology_state"].items():
+                state["ema_spectrum_state"][key] = value
+            state["basis_adjacencies"] = frozen_topology["basis_adjacencies"]
+            state["basis_num_nodes"] = frozen_topology["basis_num_nodes"]
         torch.save(state, checkpoint_path)
         resolved = copy.deepcopy(dict(options))
         resolved["model"] = dict(resolved["model"])
@@ -1138,6 +1160,8 @@ def train(
             },
             "test_used_for_training": False,
         }
+        if frozen_topology is not None:
+            manifest["learning_ablation"] = copy.deepcopy(state["learning_ablation"])
         _write_json(staging / "manifest.json", manifest)
         if layout.train_dir.exists():
             shutil.rmtree(layout.train_dir)
@@ -1412,6 +1436,7 @@ def generate(
     manifest: Mapping[str, Any],
     options: Mapping[str, Any],
 ) -> GenerationArtifacts:
+    from . import paper_measurement
     del manifest
     validate_options(options)
     if state.get("format") != CHECKPOINT_FORMAT:
@@ -1467,6 +1492,7 @@ def generate(
     basis_n = torch.tensor(
         np.asarray(state["basis_num_nodes"]), dtype=torch.long
     )
+    donor_schedule = basis_sampling_ablation.resolve_schedule(sample_cfg, basis_n.numpy(), request.num_graphs)
     spectral_transform = dict(state["spectral_transform"])
     threshold = float(sample_cfg.get("threshold", 0.5))
     attr_cfg = copy.deepcopy(dict(state["attributed_config"]))
@@ -1509,22 +1535,25 @@ def generate(
     with torch.no_grad():
         while len(graphs) < request.num_graphs:
             b = min(batch_size, request.num_graphs - len(graphs))
-            indices = rng.integers(0, len(basis_adj), size=b)
+            paper_measurement.attempted(b)
+            indices = basis_sampling_ablation.select_indices(rng, len(basis_adj), b, len(graphs), donor_schedule)
             donor_adj = basis_adj[indices]
             donor_n = basis_n[indices]
             eigenbasis_override = None
             base_u = None
+            base_lam = None
             batch_basis_rows: list[dict[str, Any]] = []
             if basis_perturbation_enabled:
                 donor_adj_device = donor_adj.to(device)
                 donor_n_device = donor_n.to(device)
-                base_u = _laplacian_eigh_padded(donor_adj_device, donor_n_device)[1]
+                base_lam, base_u = _laplacian_eigh_padded(donor_adj_device, donor_n_device)
                 if str(basis_perturbation_cfg["stage"]) == "reverse":
                     eigenbasis_override, batch_basis_rows = eigenbasis_perturbation.perturb_laplacian_basis(
                         base_u,
                         donor_n_device,
                         config=basis_perturbation_cfg,
                         rng=basis_perturbation_rng,
+                        eigenvalues=base_lam,
                     )
                 else:
                     eigenbasis_override = base_u
@@ -1553,6 +1582,7 @@ def generate(
                     donor_n.to(device),
                     config=basis_perturbation_cfg,
                     rng=basis_perturbation_rng,
+                    eigenvalues=base_lam,
                 )
                 decoded_operator = reconstruct_adjacency(u, lam)
                 soft = _operator_to_adjacency_state(
@@ -1575,14 +1605,15 @@ def generate(
                 spectral_operator="combinatorial_laplacian",
                 spectral_transform=spectral_transform,
             )
-            eye = torch.eye(nmax, device=device, dtype=torch.bool).unsqueeze(0)
-            discrete = (
-                (soft > threshold)
-                & ~eye
-                & flags.bool().unsqueeze(1)
-                & flags.bool().unsqueeze(2)
-            )
-            discrete = discrete | discrete.transpose(1, 2)
+            with paper_measurement.stage("topology_decode"):
+                eye = torch.eye(nmax, device=device, dtype=torch.bool).unsqueeze(0)
+                discrete = (
+                    (soft > threshold)
+                    & ~eye
+                    & flags.bool().unsqueeze(1)
+                    & flags.bool().unsqueeze(2)
+                )
+                discrete = discrete | discrete.transpose(1, 2)
             state_hashes = [
                 hierarchical._tensor_state_digest(
                     sample_x[row],
@@ -1640,9 +1671,10 @@ def generate(
             for row in range(b):
                 size = int(donor_n[row])
                 topology_matrix = discrete[row, :size, :size]
-                topology_graph = nx.from_numpy_array(
-                    topology_matrix.cpu().numpy().astype(np.int8)
-                )
+                with paper_measurement.stage("topology_decode"):
+                    topology_graph = nx.from_numpy_array(
+                        topology_matrix.cpu().numpy().astype(np.int8)
+                    )
                 graph = nx.Graph()
                 for node in range(size):
                     graph.add_node(
@@ -1702,6 +1734,7 @@ def generate(
                     "posthoc_repair": False,
                 }
                 graphs.append(graph)
+                paper_measurement.completed()
                 topology_graphs.append(topology_graph)
                 matrix = soft[row, :size, :size].cpu().numpy().astype(np.float64)
                 np.fill_diagonal(matrix, 0)
@@ -2104,6 +2137,7 @@ def generate(
                     "threshold": threshold,
                     "topology": "Laplacian_log_gap_reverse_diffusion",
                     "eigenbasis_perturbation": basis_perturbation_aggregate,
+                "basis_ablation": dict(sample_cfg.get("basis_ablation", {}) or {}),
                     "topology_auxiliary_supervision": [
                         "topology_only_connected_induced_graphlets_"
                         + "_".join(

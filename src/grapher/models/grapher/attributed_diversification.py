@@ -127,11 +127,11 @@ def validate_options(cfg: Mapping[str, Any]) -> None:
         )
     if not bool(cfg.get("strict_same_bond", True)):
         raise ValueError("Attributed diversification requires strict_same_bond=true")
-    if not bool(cfg.get("preserve_neighbor_atom_type_by_bond_type", True)):
-        raise ValueError(
-            "Strict molecular diversification requires "
-            "preserve_neighbor_atom_type_by_bond_type=true"
-        )
+    # M1 explicitly relaxes only the neighbor-atom/bond environment mask.
+    # Same-bond swaps still preserve indexed degrees, bond-type degrees,
+    # weighted valence, atom labels, simplicity, and connectivity.
+    if type(cfg.get("preserve_neighbor_atom_type_by_bond_type", True)) is not bool:
+        raise ValueError("preserve_neighbor_atom_type_by_bond_type must be boolean")
     if not bool(cfg.get("verify_bond_valence_preservation", True)):
         raise ValueError(
             "Strict molecular diversification requires "
@@ -675,7 +675,7 @@ def diversify_same_bond_graph(
         energy, candidate, key, action, parts, candidate_counts = candidate_rows[choice]
         if not typed_invariant_matches_graph(candidate, invariant):
             raise AssertionError("Same-bond swap changed indexed node/typed-degree invariant")
-        if _neighbor_atom_bond_signature(
+        if bool(cfg.get("preserve_neighbor_atom_type_by_bond_type", True)) and _neighbor_atom_bond_signature(
             candidate,
             node_attribute=str(vocabulary.node_attribute),
             edge_attribute=str(vocabulary.edge_attribute),
@@ -723,7 +723,7 @@ def diversify_same_bond_graph(
         )
         == neighbor_atom_bond_invariant
     )
-    if not neighbor_preserved:
+    if bool(cfg.get("preserve_neighbor_atom_type_by_bond_type", True)) and not neighbor_preserved:
         raise AssertionError(
             "Attributed diversification violated neighbor-atom-type-by-bond-type preservation"
         )
@@ -788,6 +788,6 @@ def diversify_same_bond_graph(
         "candidate_search_totals": dict(search_totals),
         "target_scope": "frozen_topology_and_typed_summary_heads",
         "strict_same_bond": True,
-        "preserve_neighbor_atom_type_by_bond_type": True,
+        "preserve_neighbor_atom_type_by_bond_type": bool(cfg.get("preserve_neighbor_atom_type_by_bond_type", True)),
         "verify_bond_valence_preservation": True,
     }

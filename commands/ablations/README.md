@@ -371,3 +371,8 @@ The attached older “Hybrid Target Summary” manuscript describes a degree/typ
 signature generator and a Havel–Hakimi or typed source constructor. The current
 spectral implementation instead obtains the ordinary target from the generated
 Laplacian diagonal. These are distinct source-generation designs.
+
+
+## Completing the paper audit
+
+See `docs/PAPER_EXPERIMENT_RUNBOOK.md` and `bash commands/paper_missing.sh --help` for the complete missing-experiment matrix. New learning controls use T and B=0; the existing summary-supervision commands above remain D versus D-based S0. The new budget sweep covers both T and D, and the temperature sweep derives D and DR at every temperature. Molecular A1/A2 automatically include a matched attribute-only A0 reference. Run-plan previews do not create artifacts.

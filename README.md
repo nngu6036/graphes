@@ -1,5 +1,11 @@
 # GraphES
 
+## Paper completion experiments
+
+The missing-report workflow is documented in [docs/PAPER_EXPERIMENT_RUNBOOK.md](docs/PAPER_EXPERIMENT_RUNBOOK.md). Preview any experiment with `bash commands/paper_missing.sh <experiment>`; add `--execute` to run it. The new workflow implements the paper's T/B=0 learning controls and matched T/D/TR/DR comparisons. The older main commands described below retain their recorded generic exact-degree profile.
+
+The attached current GraphES configurations use 200 epochs. The paper's 10,000-epoch description and some baseline fairness annotations require explicit reconciliation. New controls preserve the 200-epoch protocol and existing artifact checks. `docs/paper_missing_cells.json` maps all 254 original pending cells; the five QM9 S3 cells are N/A because degree supervision is already disabled.
+
 GraphES is the final spectral graph generator in this repository. The main generic-graph profile combines:
 
 - full Laplacian log-gap spectral diffusion;
