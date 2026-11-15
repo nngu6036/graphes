@@ -424,14 +424,30 @@ def assert_frozen_topology(model_x: Any, model_lam: Any, frozen: Mapping[str, An
 
 
 def verify_attribute_population(generation_dir: Path, reference: Mapping[str, Any]) -> dict[str, Any]:
-    """Prove A1/A2 used the same ordered topology states, donors and sample IDs."""
+    """Prove attribute controls reused the sealed topology population in order.
+
+    Some historical molecular references saved their topology graphs before
+    graph-level sample IDs were added.  Only an entirely unlabelled *parent*
+    population may use the manifest-bound generation seed and graph position
+    as its logical IDs.  Newly generated attribute controls must always carry
+    the explicit, correctly ordered IDs in both saved graph populations.
+    """
     import pickle
 
     parent = Path(reference["generation_dir"])
     if sha256(parent / "manifest.json") != reference["generation_manifest_sha256"]:
         raise ValueError("Parent generation changed after training")
+    # The manifest digest alone does not protect files that may have changed
+    # without updating the manifest.  Revalidate the parent pickle as well,
+    # especially before allowing a missing-ID legacy reference.
+    parent_manifest = _read_json(parent / "manifest.json")
+    parent_hashes = verify_manifest_files(parent, parent_manifest)
     child_manifest = _read_json(generation_dir / "manifest.json")
-    verify_manifest_files(generation_dir, child_manifest)
+    child_hashes = verify_manifest_files(generation_dir, child_manifest)
+    if not {"topology_graphs", "topology_pairing", "sampled_basis_indices"}.issubset(parent_hashes):
+        raise ValueError("Parent generation lacks hashed ordered-topology evidence")
+    if not {"base_graphs", "topology_graphs", "topology_pairing", "sampled_basis_indices"}.issubset(child_hashes):
+        raise ValueError("Attribute control lacks hashed ordered-topology evidence")
     parent_pair = _read_json(parent / "topology_pairing.json")
     child_pair = _read_json(generation_dir / "topology_pairing.json")
     for key in ("hash_inputs", "per_graph_sha256", "batch_size", "generation_seed"):
@@ -440,21 +456,34 @@ def verify_attribute_population(generation_dir: Path, reference: Mapping[str, An
     if sha256(generation_dir / "sampled_basis_indices.pkl") != reference["sampled_basis_indices_sha256"]:
         raise ValueError("Attribute control did not preserve the ordered donor IDs")
     n = int(reference["num_requested"])
-    def topology_signature(path: Path):
+    def topology_signature(path: Path, *, legacy_reference: bool = False):
         with path.open("rb") as handle:
             graphs = pickle.load(handle)
         if len(graphs) != n:
-            raise ValueError("Attribute population size changed")
+            raise ValueError(f"Attribute population size changed: {path}")
+        # Accept only the historical parent format where *every* topology
+        # graph lacks its sample ID.  Mixed IDs, duplicates, wrong IDs, and
+        # absent IDs in child outputs remain hard failures.
+        implicit_parent_ids = legacy_reference and all(
+            graph.graph.get("sample_id") is None for graph in graphs
+        )
         signatures = []
         for index, graph in enumerate(graphs):
             sample_id = f"{reference['generation_seed']}:{index}"
-            if graph.graph.get("sample_id") != sample_id:
-                raise ValueError("Missing, reordered or duplicated requested sample ID")
+            actual_id = graph.graph.get("sample_id")
+            if not implicit_parent_ids and actual_id != sample_id:
+                raise ValueError(
+                    f"Missing, reordered or duplicated requested sample ID in "
+                    f"{path.name} at index {index}: expected {sample_id!r}, "
+                    f"got {actual_id!r}"
+                )
             signatures.append((sample_id, sorted(graph.nodes()), sorted(tuple(sorted(edge)) for edge in graph.edges())))
-        return signatures
-    parent_sig = topology_signature(parent / "topology_graphs.pkl")
-    child_sig = topology_signature(generation_dir / "topology_graphs.pkl")
-    final_sig = topology_signature(generation_dir / "base_graphs.pkl")
+        return signatures, implicit_parent_ids
+    parent_sig, parent_ids_implicit = topology_signature(
+        parent / "topology_graphs.pkl", legacy_reference=True
+    )
+    child_sig, _ = topology_signature(generation_dir / "topology_graphs.pkl")
+    final_sig, _ = topology_signature(generation_dir / "base_graphs.pkl")
     if child_sig != parent_sig or final_sig != parent_sig:
         raise ValueError("Attribute control changed at least one fixed topology")
     return {
@@ -462,4 +491,10 @@ def verify_attribute_population(generation_dir: Path, reference: Mapping[str, An
         "donor_ids_verified": True, "continuous_topology_state_hashes_verified": True,
         "num_matched": n, "reference_generation": str(parent),
         "reference_checkpoint_sha256": reference["checkpoint_sha256"],
+        "reference_sample_id_policy": (
+            "manifest_sealed_implicit_order" if parent_ids_implicit
+            else "explicit_graph_metadata"
+        ),
+        "legacy_reference_sample_ids_inferred_from_order": bool(parent_ids_implicit),
+        "reference_topology_graphs_sha256": parent_hashes["topology_graphs"],
     }
