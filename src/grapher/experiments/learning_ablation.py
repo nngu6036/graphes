@@ -164,6 +164,96 @@ def verify_manifest_files(directory: Path, manifest: Mapping[str, Any]) -> dict[
     return hashes
 
 
+def _reference_attribute_sample_config(
+    generation_dir: Path,
+    generation_manifest: Mapping[str, Any],
+    *,
+    dataset: str,
+    seed: int,
+    n: int,
+    checkpoint_sha256: str,
+    training_manifest_sha256: str,
+) -> tuple[dict[str, Any], str, dict[str, str]]:
+    """Recover a parent sample policy only from cryptographically bound evidence.
+
+    New parent manifests record `effective_sample_config` directly. Older
+    molecular manifests may omit it, but their sealed molecular export records
+    the original generation config and binds it to the unmodified parent
+    manifest, checkpoint, training manifest, and requested sample IDs.
+    """
+    sampling = generation_manifest.get("sampling")
+    if not isinstance(sampling, Mapping) or sampling.get("separate_attribute_rng") is not True:
+        raise ValueError("A controls require sampling.separate_attribute_rng=true in the parent generation manifest")
+
+    recorded = generation_manifest.get("effective_sample_config")
+    provenance_hashes: dict[str, str] = {}
+    if recorded is not None:
+        if not isinstance(recorded, Mapping) or not recorded:
+            raise ValueError("Parent effective_sample_config is empty or malformed")
+        sample = dict(recorded)
+        source = "generation_manifest"
+    else:
+        index_path = generation_dir / "molecular_ablation_manifest.json"
+        receipt_path = generation_dir / "ablation_reuse_receipt.json"
+        if not index_path.is_file() or not receipt_path.is_file():
+            raise ValueError(
+                "Legacy molecular reference lacks effective_sample_config and "
+                "the sealed molecular export/receipt needed to recover it; "
+                "regenerate under a fresh generation tag"
+            )
+        index = _read_json(index_path)
+        receipt = _read_json(receipt_path)
+        index_hash = sha256(index_path)
+        receipt_hash = sha256(receipt_path)
+        generation_hash = sha256(generation_dir / "manifest.json")
+        if index.get("format") != "graphes_molecular_ablation_export_v1" or receipt.get("format") != "graphes_ablation_reuse_receipt_v1":
+            raise ValueError("Legacy molecular reference has an unrecognized export or reuse receipt")
+        if (
+            receipt.get("generation_manifest_sha256") != generation_hash
+            or receipt.get("molecular_ablation_manifest_sha256") != index_hash
+        ):
+            raise ValueError("Legacy molecular export/receipt hashes no longer match the parent generation")
+        provenance = index.get("provenance")
+        context = receipt.get("context")
+        if not isinstance(provenance, Mapping) or not isinstance(context, Mapping):
+            raise ValueError("Legacy molecular reference has no recorded generation context")
+        if provenance.get("source_generation_manifest_sha256") != generation_hash:
+            raise ValueError("Legacy molecular export does not identify the parent manifest")
+        # The export records the original invocation context in full. The
+        # receipt must repeat it, including the sealed configuration digest.
+        if any(provenance.get(key) != value for key, value in context.items()):
+            raise ValueError("Legacy molecular export and reuse receipt disagree on generation provenance")
+        expected = {
+            "kind": "molecular",
+            "dataset": dataset,
+            "seed": seed,
+            "num_samples": n,
+            "run_id": generation_dir.parent.parent.name,
+            "generation_id": generation_dir.name,
+            "checkpoint_sha256": checkpoint_sha256,
+            "training_manifest_sha256": training_manifest_sha256,
+        }
+        if any(context.get(key) != value for key, value in expected.items()):
+            raise ValueError("Legacy molecular export does not match the selected reference run/seed/checkpoint")
+        recorded = provenance.get("sample_config")
+        if not isinstance(recorded, Mapping) or not recorded:
+            raise ValueError("Legacy molecular export has no recorded sample configuration")
+        sample = dict(recorded)
+        source = "sealed_molecular_ablation_export"
+        provenance_hashes = {
+            "molecular_ablation_manifest.json": index_hash,
+            "ablation_reuse_receipt.json": receipt_hash,
+        }
+
+    if sample.get("separate_attribute_rng") is not True:
+        raise ValueError("A controls require a recorded separate topology/attribute RNG policy")
+    if sample.get("use_ema") is not False:
+        raise ValueError("A controls require an explicitly recorded sample.use_ema=false")
+    if "threshold" in sampling and "threshold" in sample and float(sampling["threshold"]) != float(sample["threshold"]):
+        raise ValueError("Reference threshold differs between the generation record and recovered sample config")
+    return sample, source, provenance_hashes
+
+
 def require_attribute_reference(run_dir: Path, generation_dir: Path, *, dataset: str, seed: int, n: int) -> dict[str, Any]:
     """Fail before expensive work unless A controls have an immutable parent."""
     checkpoint = run_dir / "train" / "checkpoints" / "grapher.pt"
@@ -189,9 +279,10 @@ def require_attribute_reference(run_dir: Path, generation_dir: Path, *, dataset:
     pairing = _read_json(generation_dir / "topology_pairing.json")
     if pairing.get("checkpoint_sha256") != actual_sha or len(pairing.get("per_graph_sha256", [])) != n:
         raise ValueError("Reference topology pairing does not identify the reference checkpoint/population")
-    sample = dict(gen_manifest.get("effective_sample_config", {}) or {})
-    if not sample or not bool(sample.get("separate_attribute_rng", True)):
-        raise ValueError("A controls require a recorded separate topology/attribute RNG policy")
+    sample, sample_source, sample_provenance_hashes = _reference_attribute_sample_config(
+        generation_dir, gen_manifest, dataset=dataset, seed=seed, n=n,
+        checkpoint_sha256=actual_sha, training_manifest_sha256=sha256(train_manifest_path),
+    )
     if bool((sample.get("eigenbasis_perturbation", {}) or {}).get("enabled", False)) or sample.get("basis_ablation"):
         raise ValueError("A controls require the unperturbed reference donor policy")
     if bool(sample.get("use_ema", False)):
@@ -206,6 +297,8 @@ def require_attribute_reference(run_dir: Path, generation_dir: Path, *, dataset:
         "sampled_basis_indices_sha256": sha256(generation_dir / "sampled_basis_indices.pkl"),
         "batch_size": int(pairing["batch_size"]),
         "effective_sample_config": sample,
+        "effective_sample_config_source": sample_source,
+        "effective_sample_config_provenance_sha256": sample_provenance_hashes,
         "dataset_fingerprint": train_manifest["dataset"]["fingerprint"],
         "generation_seed": seed, "num_requested": n,
     }
@@ -250,6 +343,11 @@ def initialize_frozen_topology(model_x: Any, model_lam: Any, *, options: Mapping
     for name, expected_key in (("manifest.json", "generation_manifest_sha256"), ("topology_pairing.json", "topology_pairing_sha256"), ("sampled_basis_indices.pkl", "sampled_basis_indices_sha256")):
         if sha256(parent_generation / name) != reference[expected_key]:
             raise ValueError(f"Reference generation changed after preflight: {name}")
+    for name, expected_hash in dict(reference.get("effective_sample_config_provenance_sha256", {}) or {}).items():
+        if name not in {"molecular_ablation_manifest.json", "ablation_reuse_receipt.json"}:
+            raise ValueError(f"Unknown attribute reference provenance artifact: {name}")
+        if sha256(parent_generation / name) != expected_hash:
+            raise ValueError(f"Reference sample configuration provenance changed after preflight: {name}")
     manifest = _read_json(Path(reference["training_manifest"]))
     if manifest.get("dataset", {}).get("fingerprint") != dataset_fingerprint or int(manifest.get("train_seed", -1)) != train_seed:
         raise ValueError("Frozen reference dataset fingerprint or seed differs from attribute training")

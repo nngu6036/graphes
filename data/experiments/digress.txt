@@ -989,6 +989,69 @@ Molecular evaluation
   "qed_wasserstein_1": 0.0025223081052175617
 }
 
+#seed 45
+Molecular evaluation
+  validity: 0.9903
+  validity_with_correction: 0.9994
+  validity_with_projected_formal_charges: 0.9927
+  validity_without_correction: 0.9903
+  fcd: 0.11657310450262415
+  num_generated_graphs: 10000
+  num_valid_generated_molecules: 9903
+  num_invalid_generated_molecules: 97
+  num_valid_generated_molecules_with_projected_formal_charges: 9927
+  num_invalid_generated_molecules_after_projected_formal_charges: 73
+  num_raw_invalid_resolved_by_projected_formal_charges: 24
+  projected_formal_charge_success_rate_on_raw_invalid: 0.24742268041237114
+  num_valid_generated_molecules_with_correction: 9994
+  num_invalid_generated_molecules_after_correction: 6
+  num_molecules_corrected_to_valid: 91
+  correction_success_rate_on_raw_invalid: 0.9381443298969072
+  metric_molecule_source: raw_valid
+  hogdiff_compatible_distribution_metrics: False
+  uniqueness_rate: 0.9668787236191053
+  unique_valid_count: 9575
+  novelty_rate: 0.3587467362924282
+  novel_unique_valid_count: 3435
+  nspdk_mmd: 0.0003051449088402671
+  nspdk_mmd_valid_only: 0.0003051449088402671
+  graphlet_histogram_mmd: None
+  graphlet_selected_mass_mmd: None
+  graphlet_histogram_mmd_by_order: {}
+  graphlet_selected_mass_mmd_by_order: {}
+  nspdk_proxy_mmd_all_generated: 6.602542455914696e-06
+  nspdk_proxy_mmd_metric_source: 6.5865851720208105e-06
+  fcd_num_reference_molecules: 12997
+  fcd_num_valid_generated_molecules: 9903
+  fcd_generated_smiles_source: raw_valid
+
+
+{
+  "num_generated_graphs": 10000,
+  "num_raw_valid": 9903,
+  "validity_without_correction": 0.9903,
+  "qed_mean": 0.4697599095400074,
+  "qed_std_within_run": 0.07362756050618918,
+  "qed_median": 0.47698277254120264,
+  "qed_q10": 0.3675123778605084,
+  "qed_q90": 0.5573631246354435,
+  "qed_unique_valid_mean": 0.4696377173872664,
+  "num_unique_raw_valid": 9575,
+  "qed_yield": 0.46520323841746847,
+  "num_raw_valid_single_component": 9872,
+  "valid_single_component_yield": 0.9872,
+  "qed_single_component_mean": 0.46987388063781127,
+  "qed_ge_0p5_fraction_valid": 0.3605977986468747,
+  "qed_ge_0p5_yield_all": 0.3571,
+  "qed_ge_0p7_fraction_valid": 0.0,
+  "qed_ge_0p7_yield_all": 0.0,
+  "reference_num_graphs": 13083,
+  "reference_num_raw_valid": 12997,
+  "reference_qed_mean": 0.4661002280919897,
+  "qed_mean_minus_reference": 0.0036596814480177042,
+  "qed_wasserstein_1": 0.003776921972485546
+}
+
 4. ZINC
 export DIGRESS=/home/quang/DiGress
 export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python

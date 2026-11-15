@@ -824,26 +824,26 @@ Molecular evaluation
   "num_generated_graphs": 10000,
   "num_raw_valid": 9951,
   "validity_without_correction": 0.9951,
-  "qed_mean": 0.46889688002679736,
-  "qed_std_within_run": 0.06923625840334198,
-  "qed_median": 0.4744095723700246,
-  "qed_q10": 0.3752111180468269,
-  "qed_q90": 0.5537047777736457,
-  "qed_unique_valid_mean": 0.4685298653513943,
-  "num_unique_raw_valid": 9585,
-  "qed_yield": 0.4665992853146685,
+  "qed_mean": 0.4674999372943928,
+  "qed_std_within_run": 0.06822037762053787,
+  "qed_median": 0.4736337165467067,
+  "qed_q10": 0.3743582746459879,
+  "qed_q90": 0.5506050401421895,
+  "qed_unique_valid_mean": 0.4668698317247274,
+  "num_unique_raw_valid": 9461,
+  "qed_yield": 0.46520918760165186,
   "num_raw_valid_single_component": 9949,
   "valid_single_component_yield": 0.9949,
-  "qed_single_component_mean": 0.46890093161805474,
-  "qed_ge_0p5_fraction_valid": 0.3385589388001206,
-  "qed_ge_0p5_yield_all": 0.3369,
+  "qed_single_component_mean": 0.46750370806491803,
+  "qed_ge_0p5_fraction_valid": 0.32770575821525477,
+  "qed_ge_0p5_yield_all": 0.3261,
   "qed_ge_0p7_fraction_valid": 0.0,
   "qed_ge_0p7_yield_all": 0.0,
   "reference_num_graphs": 13083,
   "reference_num_raw_valid": 12997,
   "reference_qed_mean": 0.4661002280919897,
-  "qed_mean_minus_reference": 0.002796651934807659,
-  "qed_wasserstein_1": 0.0036857615705377118
+  "qed_mean_minus_reference": 0.001399709202403121,
+  "qed_wasserstein_1": 0.00416619588628271
 }
 
 # Seed 42, pre rewiring 
@@ -852,7 +852,7 @@ Molecular evaluation
   validity_with_correction: 1.0
   validity_with_projected_formal_charges: 0.9951
   validity_without_correction: 0.9951
-  fcd: 0.21160429649429702
+  fcd: 0.21160429649421886
   num_generated_graphs: 10000
   num_valid_generated_molecules: 9951
   num_invalid_generated_molecules: 49
@@ -882,7 +882,7 @@ Molecular evaluation
   fcd_num_valid_generated_molecules: 9951
   fcd_generated_smiles_source: raw_valid
 
-  {
+{
   "num_generated_graphs": 10000,
   "num_raw_valid": 9951,
   "validity_without_correction": 0.9951,
