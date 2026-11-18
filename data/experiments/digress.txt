@@ -1053,6 +1053,9 @@ Molecular evaluation
 }
 
 4. ZINC
+
+#seed 42
+
 export DIGRESS=/home/quang/DiGress
 export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
 
@@ -1161,7 +1164,7 @@ Molecular evaluation
   "qed_wasserstein_1": 0.014885955572543408
 }
 
-
+#seed 43
 export DIGRESS=/home/quang/DiGress
 export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
 
@@ -1271,6 +1274,7 @@ Molecular evaluation
   "qed_wasserstein_1": 0.008908368338239514
 }
 
+#seed 44
 
 export DIGRESS=/home/quang/DiGress
 export DIGRESS_PYTHON=/home/quang/miniconda3/envs/digress/bin/python
@@ -1309,7 +1313,7 @@ PYTHONPATH=src python scripts/evaluate_generated_molecules.py \
   --require-fcd \
   --output-dir "$GEN_DIR/evaluation_molecules"
 
-PYTHONHASHSEED=42 PYTHONPATH=src \
+PYTHONHASHSEED=44 PYTHONPATH=src \
 python scripts/evaluate_qed_research.py \
   --generated-graphs "$GEN_DIR/base_graphs.pkl" \
   --reference-graphs outputs/datasets/zinc/test.pkl \
